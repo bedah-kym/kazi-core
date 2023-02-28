@@ -1,8 +1,11 @@
 # Mathia-project
+<a href="https://github.com/betawayz/Mathia-project/files/10849020/MATHIA_PROJECT.pdf">[MATHIA_PROJECT.pdf]</a>
+
 
 <h3>PROJECT OVERVIEW</h3>
     <strong>Project design </strong>
-    <img src = " " alt="">
+    <img src = "https://user-images.githubusercontent.com/126449163/221824961-245b8321-c4a4-4ce7-b68c-fd545f24b4fb.png" alt="">
+    
 <p>MATHIA AI project's main goal is to produce lifelike consciousness, the project will require a combination of multisensory input ie sound and video, machine learning algorithms, and hormonal design. The AI will need to be trained on different types of data, including input, output, and modified input/output, to produce a realistic sensory output in real-time. Additionally, the AI will need to be designed with an interface that allows for wake, sleep, and stop modes, as well as the ability to connect to other modules and handle massive amounts of data. </p>
 
 <p>Educating MATHIA like a child would require a gestation period over a specified amount of time, during which the AI will be exposed to different types of data, including stories, music, and philosophical concepts. The data will be crystallized and stored permanently to serve as the AI's base memory, which will never be modified by anyone.</p>

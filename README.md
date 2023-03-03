@@ -16,7 +16,17 @@
   <li><strong>Google Cloud Vision API</strong>: This is a tool that enables developers to understand the content of an image by encapsulating powerful machine learning models in an easy to use REST API, it quickly classifies images into thousands of categories (e.g., "sailboat", "lion", "Eiffel Tower"), detects individual objects and faces within images, and finds and reads printed words contained within images user can build metadata on image catalog, moderate offensive content, or enable emotion recognition through image sentiment analysis.</li>
   <li><strong> Natural Language Tool Kit  (ntlk) </strong>natural language processing using statistical NLP, which combines computer algorithms with machine learning and deep learning models to automatically extract, classify, and label elements of text and voice data and then assign a statistical likelihood to each possible meaning of those elements
   <li><strong>Django Rest Framework</strong> : this is a REST API framework build on django using python, it is a powerfull api which can interface with micro computers like raspberry-pi and arduino.It allows for easy intergration of the Mathia AI with user friendly interface like react for a web app or android for a mobile portable use.</li>
-    <li> <strong> AWS SageMaker </strong> is a cloud service to intergrate with Tensorflow to allow for the massive hardware requirements that comes with training and tuning MATHIA AI. Image Containers with scripts made with Tensorflow can be deployed to AWS sagemaker with a training job for real-time inference</li>
+    <img src= "https://user-images.githubusercontent.com/126449163/222651399-6be15e82-d53a-4df9-8244-c95fb7bfc1ed.png">
+    <li> <strong> AWS SageMaker </strong> is a cloud service to intergrate with Tensorflow to allow for the massive hardware requirements that comes with training and tuning MATHIA AI. Image Containers with scripts made with Tensorflow can be deployed to AWS sagemaker with a training job for real-time inference</li> 
+    <img src="https://user-images.githubusercontent.com/126449163/222651187-6619300e-d06b-48ee-8569-032d02718384.png">
+   <li><strong>Amazon Polly </strong> Amazon Polly uses deep learning technologies to synthesize natural-sounding human speech, so you can convert articles to speech. With dozens of lifelike voices across a broad set of languages also to build speech-activated applications.Polly will assist in making Mathia sound life-like and tell stories with
+   relevant emotion and tones.</li>
+   <img src="https://user-images.githubusercontent.com/126449163/222650197-790b2151-20d4-4954-b49c-3ad76c1dc66f.png">
+   <li><strong>Amazon Relational Database Service</strong> (Amazon RDS) is a collection of managed services that makes it simple to set up, operate, and scale databases in the cloud.It bosts of support for the following databases, MySQL, MariaDB, PostgreSQL, Oracle, and SQL Server.This ervice is important so that during development, different developers can use a syncronised database </li>
+   <img src="https://user-images.githubusercontent.com/126449163/222653278-b306f071-9469-4451-a441-fa618922bb5b.png"
+
+
+
 </ol>
 
 <h4>MILESTONES OVERVIEW </h4> 

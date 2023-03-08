@@ -158,7 +158,7 @@ body{
     width: 0;
     position: absolute;
     pointer-events: none;
-    border-bottom-color: #efefef;
+    border-bottom-color:#4f4086;
     border-width: 10px;
     margin-left: -10px
 }
@@ -169,7 +169,7 @@ body{
 }
 
 .chat .chat-history .other-message:after {
-    border-bottom-color: #e8f1f3;
+    border-bottom-color: #a1d88c;
     left: 93%
 }
 

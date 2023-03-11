@@ -158,13 +158,19 @@
             var data = JSON.parse(e.data);   
             var message = data['message'];
             var author = data['author'];
-        
+            var time = Date(message.timestamp).slice(15,-31);
+            var time2 = Date(message.timestamp).slice(0,-48);
+            
             var msgListTag = document.createElement('li');
             var msgDivTag = document.createElement('div');
+            var msgdivtag = document.createElement('p');
             var msgSpanTag = document.createElement('span');
+            var msgpTag = document.createElement('div');
             var msgTextTag = document.createElement('div');
-            var pTag = document.createElement('p');
-            pTag.textContent = message.content; 
+            msgTextTag.innerHTML= message.content; 
+            msgpTag.innerHTML = time2;
+            msgpTag.innerHTML += " "; 
+            msgpTag.innerHTML += time;
 
 
             if (message.author === username){
@@ -172,11 +178,13 @@
                 msgDivTag.className ='message-data text-right';
                 msgSpanTag.className ='message-data-time';
                 msgTextTag.className ='message other-message float-right';
-                msgListTag.appendChild(msgDivTag)
-                msgDivTag.appendChild(msgSpanTag)
-                msgSpanTag.appendChild(msgTextTag)
-                msgTextTag.appendChild(pTag)
-
+                msgpTag.className = 'time-sender';
+                msgListTag.appendChild(msgDivTag);
+                msgDivTag.appendChild(msgpTag);
+                msgpTag.appendChild(msgdivtag);
+                msgDivTag.appendChild(msgSpanTag);
+                msgSpanTag.appendChild(msgTextTag);
+                //msgSpanTag.appendChild(msgpTag)
             }
             else{
                 
@@ -184,14 +192,18 @@
                 msgDivTag.className ='message-data';
                 msgSpanTag.className ='message-data-time';
                 msgTextTag.className ='message my-message';
-                msgListTag.appendChild(msgDivTag)
-                msgDivTag.appendChild(msgSpanTag)
-                msgSpanTag.appendChild(msgTextTag)
-                msgTextTag.appendChild(pTag)
+                msgpTag.className = 'time-sender';
+                msgListTag.appendChild(msgDivTag);
+                msgDivTag.appendChild(msgpTag);
+                msgpTag.appendChild(msgdivtag);
+                msgDivTag.appendChild(msgSpanTag);
+                msgSpanTag.appendChild(msgTextTag);
+                
             }   
             document.querySelector('#top-chat').appendChild(msgListTag);
-        };  
+            
         
+        };
         chatSocket.onclose = function(e) {
             console.error('Chat socket closed unexpectedly');
         };

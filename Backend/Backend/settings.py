@@ -114,6 +114,7 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 
+
 STATIC_URL = 'static/'
 LOGIN_REDIRECT_URL = 'chatbot:bot-home'
 LOGIN_URL='users:login'

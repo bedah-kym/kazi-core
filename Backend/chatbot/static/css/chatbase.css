@@ -120,15 +120,20 @@ body{
     color: #434651;
     padding-left: 6px
 }
+.time-sender{
+    font-size:small;
+}
 
 .chat .chat-history .message {
     color: #444;
-    padding: 18px 20px;
+    padding: 8px 23px;
     line-height: 26px;
     font-size: 16px;
-    border-radius: 7px;
+    border-radius: 20px;
     display: inline-block;
-    position: relative
+    position: relative;
+    min-width:25%;
+    max-width:50%;
 }
 
 .chat .chat-history .message:after {
@@ -165,16 +170,17 @@ body{
 
 .chat .chat-history .other-message {
     background: #c6dfa6;
-    text-align: right
+    text-align: right;
 }
 
 .chat .chat-history .other-message:after {
     border-bottom-color: #a1d88c;
-    left: 93%
+    left: 76%;
 }
 
 .chat .chat-message {
-    padding: 20px
+    padding: 20px;
+    
 }
 
 .online,

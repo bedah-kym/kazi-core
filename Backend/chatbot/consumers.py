@@ -1,5 +1,6 @@
 import json
 from asgiref.sync import async_to_sync
+from django.utils import timezone
 from channels.generic.websocket import WebsocketConsumer
 from .models import Message
 from django.contrib.auth import get_user_model
@@ -33,7 +34,7 @@ class ChatConsumer(WebsocketConsumer):
     def new_message(self,data):
         author = data['from']
         author_user=user.objects.filter(username=author)[0]
-        message=Message.objects.create(author=author_user,content=data['message'])
+        message=Message.objects.create(author=author_user,content=data['message'],timestamp=timezone.now())
         content={
             "command":"new_message",
             "message":self.message_to_json(message)

@@ -104,21 +104,8 @@
 </div>
 <div class="chat-history">
 <ul id="top-chat" class="m-b-0">
-<li class="clearfix">
-<div class="message-data text-right">
-<span class="message-data-time">10:10 AM, Today</span>
-<img src="https://bootdey.com/img/Content/avatar/avatar7.png" alt="avatar">
-</div>
-<div class="message other-message float-right"> test 2</div>
-</li>
 
-<li class="clearfix">
-<div class="message-data">
-<span class="message-data-time">10:15 AM, Today</span>
-</div>
-<div  class="message my-message">betaways </div>
 
-</li>
 </ul>
 </div>
 <div class="chat-message clearfix">
@@ -159,7 +146,7 @@
             var data = JSON.parse(e.data); 
             console.log(data)
             if (data['command'] == 'messages'){
-                for(let i=0;i<data['messages'].length;i++){
+                for(let i=(data['messages'].length)-1;i>0;i--){
                     createMessage(data['messages'][i]);
                 }
             }else if (data['command'] == 'new_message'){
@@ -170,8 +157,10 @@
         function createMessage(data){  
            var message = data;
            var author = data['author'];
-           var time = Date(message.timestamp).slice(15,-31);
-           var time2 = Date(message.timestamp).slice(0,-48);
+           var time3 = data['timestamp'];
+           var time = (message.timestamp).slice(10,-16);
+           //var time2 = (message.timestamp).slice();
+           console.log(time3,time)
            
            var msgListTag = document.createElement('li');
            var msgDivTag = document.createElement('div');
@@ -180,8 +169,8 @@
            var msgpTag = document.createElement('div');
            var msgTextTag = document.createElement('div');
            msgTextTag.innerHTML= message.content; 
-           msgpTag.innerHTML = time2;
-           msgpTag.innerHTML += " "; 
+           //msgpTag.innerHTML = time2;
+           //msgpTag.innerHTML += " "; 
            msgpTag.innerHTML += time;
 
 

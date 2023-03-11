@@ -95,9 +95,10 @@
 <a href="javascript:void(0);" class="btn btn-outline-secondary"><i class="fa fa-camera"></i></a>
 <a href="javascript:void(0);" class="btn btn-outline-primary"><i class="fa fa-image"></i></a>
 <a href="javascript:void(0);" class="btn btn-outline-info"><i class="fa fa-cogs"></i></a>
-<a href="javascript:void(0);" class="btn btn-outline-warning"><i class="fa fa-question"></i></a>
+
 {%endcomment%}
-<a href="{%url 'users:logout' %}"class="btn btn-outline-danger"><span>logout</span><img src="https://img.icons8.com/ios/50/null/login-rounded-right--v1.png"/></a>
+<button onclick="FetchMessages()" class="btn btn-outline-warning p-2 m-2">Get all messages <i class="fa fa-question"></i></button>
+<a href="{%url 'users:logout' %}"class="btn btn-outline-danger p-1 m-1"><span>logout</span><img class="p-1"style=""src="https://img.icons8.com/ios/50/null/login-rounded-right--v1.png"/></a>
 </div>
 </div>
 </div>
@@ -155,55 +156,70 @@
         );
         
         chatSocket.onmessage = function(e) {
-            var data = JSON.parse(e.data);   
-            var message = data['message'];
-            var author = data['author'];
-            var time = Date(message.timestamp).slice(15,-31);
-            var time2 = Date(message.timestamp).slice(0,-48);
-            
-            var msgListTag = document.createElement('li');
-            var msgDivTag = document.createElement('div');
-            var msgdivtag = document.createElement('p');
-            var msgSpanTag = document.createElement('span');
-            var msgpTag = document.createElement('div');
-            var msgTextTag = document.createElement('div');
-            msgTextTag.innerHTML= message.content; 
-            msgpTag.innerHTML = time2;
-            msgpTag.innerHTML += " "; 
-            msgpTag.innerHTML += time;
-
-
-            if (message.author === username){
-                msgListTag.className ='clearfix';
-                msgDivTag.className ='message-data text-right';
-                msgSpanTag.className ='message-data-time';
-                msgTextTag.className ='message other-message float-right';
-                msgpTag.className = 'time-sender';
-                msgListTag.appendChild(msgDivTag);
-                msgDivTag.appendChild(msgpTag);
-                msgpTag.appendChild(msgdivtag);
-                msgDivTag.appendChild(msgSpanTag);
-                msgSpanTag.appendChild(msgTextTag);
-                //msgSpanTag.appendChild(msgpTag)
+            var data = JSON.parse(e.data); 
+            console.log(data)
+            if (data['command'] == 'messages'){
+                for(let i=0;i<data['messages'].length;i++){
+                    createMessage(data['messages'][i]);
+                }
+            }else if (data['command'] == 'new_message'){
+                createMessage(data['message']);
             }
-            else{
-                
-                msgListTag.className ='clearfix';
-                msgDivTag.className ='message-data';
-                msgSpanTag.className ='message-data-time';
-                msgTextTag.className ='message my-message';
-                msgpTag.className = 'time-sender';
-                msgListTag.appendChild(msgDivTag);
-                msgDivTag.appendChild(msgpTag);
-                msgpTag.appendChild(msgdivtag);
-                msgDivTag.appendChild(msgSpanTag);
-                msgSpanTag.appendChild(msgTextTag);
-                
-            }   
-            document.querySelector('#top-chat').appendChild(msgListTag);
-            
-        
+
         };
+        function createMessage(data){  
+           var message = data;
+           var author = data['author'];
+           var time = Date(message.timestamp).slice(15,-31);
+           var time2 = Date(message.timestamp).slice(0,-48);
+           
+           var msgListTag = document.createElement('li');
+           var msgDivTag = document.createElement('div');
+           var msgdivtag = document.createElement('p');
+           var msgSpanTag = document.createElement('span');
+           var msgpTag = document.createElement('div');
+           var msgTextTag = document.createElement('div');
+           msgTextTag.innerHTML= message.content; 
+           msgpTag.innerHTML = time2;
+           msgpTag.innerHTML += " "; 
+           msgpTag.innerHTML += time;
+
+
+           if (message.author === username){
+               msgListTag.className ='clearfix';
+               msgDivTag.className ='message-data text-right';
+               msgSpanTag.className ='message-data-time';
+               msgTextTag.className ='message other-message float-right';
+               msgpTag.className = 'time-sender';
+               msgListTag.appendChild(msgDivTag);
+               msgDivTag.appendChild(msgpTag);
+               msgpTag.appendChild(msgdivtag);
+               msgDivTag.appendChild(msgSpanTag);
+               msgSpanTag.appendChild(msgTextTag);
+               //msgSpanTag.appendChild(msgpTag)
+           }
+           else{
+               
+               msgListTag.className ='clearfix';
+               msgDivTag.className ='message-data';
+               msgSpanTag.className ='message-data-time';
+               msgTextTag.className ='message my-message';
+               msgpTag.className = 'time-sender';
+               msgListTag.appendChild(msgDivTag);
+               msgDivTag.appendChild(msgpTag);
+               msgpTag.appendChild(msgdivtag);
+               msgDivTag.appendChild(msgSpanTag);
+               msgSpanTag.appendChild(msgTextTag);
+               
+           }   
+           document.querySelector('#top-chat').appendChild(msgListTag);
+           
+       };
+
+        function FetchMessages(){
+            chatSocket.send(JSON.stringify({"command":"fetch_messages"}));
+        };
+
         chatSocket.onclose = function(e) {
             console.error('Chat socket closed unexpectedly');
         };

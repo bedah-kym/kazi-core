@@ -11,6 +11,7 @@ class ChatConsumer(WebsocketConsumer):
     def fetch_messages(self,data):
         messages = Message.last10messages()
         content = {
+            "command":"messages",
             "messages":self.messages_to_json(messages)
         }
         self.send_message(content)
@@ -41,7 +42,7 @@ class ChatConsumer(WebsocketConsumer):
         self.send_chat_message(content)
 
     command = {
-        "fetch_massages":fetch_messages,
+        "fetch_messages":fetch_messages,
         "new_message":new_message
     }
     def connect(self):

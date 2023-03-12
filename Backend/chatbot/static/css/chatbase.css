@@ -122,6 +122,19 @@ body{
 }
 .time-sender{
     font-size:small;
+    font-family: math;
+}
+.time-left{
+    font-size:small;
+    font-family: math;
+    margin-left: -10px;
+}
+.user-name{
+    margin-bottom: -8px;
+    font-size: small;
+    font-family: ui-sans-serif;
+    font-style: italic;
+    color: rgb(132, 41, 216);
 }
 
 .chat .chat-history .message {
@@ -237,6 +250,18 @@ body{
     .chat-app .chat-history {
         height: 300px;
         overflow-x: auto
+    }
+    .time-sender{
+        font-size:x-small;
+        margin-right:48px;
+        font-family: math;
+        margin-bottom:-3px
+    }
+    .time-left{
+        font-size:x-small;
+        margin-left:48px;
+        font-family: math;
+        margin-bottom:-3px
     }
 }
 

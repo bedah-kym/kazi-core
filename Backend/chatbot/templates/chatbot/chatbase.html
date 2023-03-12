@@ -35,7 +35,7 @@
 
 <div class="about">
 <div class="name">MATHIA</div>
-<div class="status"> <i class="fa fa-circle offline"></i> left 7 mins ago </div>
+<div class="status"> <i class="fa fa-circle online"></i> Active </div>
 </div>
 </li>
 <!--
@@ -87,7 +87,7 @@
 </a>
 <div class="chat-about">
 <h6 class="m-b-0">{{request.user}}</h6>
-<small>Last seen: 2 hours ago</small>
+<div class="status"> <i class="fa fa-circle online"></i> online </div>
 </div>
 </div>
 <div class="col-lg-6 hidden-sm text-right">
@@ -169,8 +169,7 @@
            var msgpTag = document.createElement('div');
            var msgTextTag = document.createElement('div');
            msgTextTag.innerHTML= message.content; 
-           //msgpTag.innerHTML = time2;
-           //msgpTag.innerHTML += " "; 
+           msgdivtag.innerHTML = author; 
            msgpTag.innerHTML += time;
 
 
@@ -180,12 +179,12 @@
                msgSpanTag.className ='message-data-time';
                msgTextTag.className ='message other-message float-right';
                msgpTag.className = 'time-sender';
+               msgdivtag.className = 'user-name';
                msgListTag.appendChild(msgDivTag);
                msgDivTag.appendChild(msgpTag);
-               msgpTag.appendChild(msgdivtag);
                msgDivTag.appendChild(msgSpanTag);
                msgSpanTag.appendChild(msgTextTag);
-               //msgSpanTag.appendChild(msgpTag)
+               msgTextTag.appendChild(msgdivtag);
            }
            else{
                
@@ -193,12 +192,13 @@
                msgDivTag.className ='message-data';
                msgSpanTag.className ='message-data-time';
                msgTextTag.className ='message my-message';
-               msgpTag.className = 'time-sender';
+               msgpTag.className = 'time-left';
+               msgdivtag.className = 'user-name';
                msgListTag.appendChild(msgDivTag);
                msgDivTag.appendChild(msgpTag);
-               msgpTag.appendChild(msgdivtag);
                msgDivTag.appendChild(msgSpanTag);
                msgSpanTag.appendChild(msgTextTag);
+               msgTextTag.appendChild(msgdivtag);
                
            }   
            document.querySelector('#top-chat').appendChild(msgListTag);

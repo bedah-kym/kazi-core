@@ -1,4 +1,4 @@
-from django.shortcuts import render,redirect,get_object_or_404
+from django.shortcuts import render,redirect,get_object_or_404,get_list_or_404
 from django.urls import reverse
 from django.contrib.auth.decorators import login_required
 from django.utils.safestring import mark_safe
@@ -7,11 +7,13 @@ import json
 
 @login_required
 def home(request,room_name):
+    chatrooms = Chatroom.objects.all()
     return render(
         request,"chatbot/chatbase.html",
         {
         "room_name":mark_safe(json.dumps(room_name)),
-        "username":mark_safe(json.dumps(request.user.username))
+        "username":mark_safe(json.dumps(request.user.username)),
+        "chatrooms":chatrooms
         }
     )
 
@@ -29,3 +31,6 @@ def get_last_10messages(chatid):
 def get_current_chatroom(chatid):
     chatroom = get_object_or_404(Chatroom,id=chatid)
     return chatroom
+
+def get_chatroom_participants(chatroom):
+    return chatroom.participants.all()

@@ -2,9 +2,9 @@ import json
 from asgiref.sync import async_to_sync
 from django.utils import timezone
 from channels.generic.websocket import WebsocketConsumer
-from .models import Message,Chatroom,Member
+from .models import Message,Member
 from django.contrib.auth import get_user_model
-from .views import get_last_10messages,get_current_chatroom
+from .views import get_last_10messages,get_current_chatroom,get_chatroom_participants
 
 user=get_user_model()
 
@@ -12,7 +12,6 @@ class ChatConsumer(WebsocketConsumer):
 
     def fetch_messages(self,data):
         messages = get_last_10messages(chatid=data['chatid'])
-        print(messages)
         content = {
             "command":"messages",
             "messages":self.messages_to_json(messages)
@@ -40,13 +39,28 @@ class ChatConsumer(WebsocketConsumer):
         member_user = Member.objects.filter(User=member_user_id)[0]
         message=Message.objects.create(member=member_user,content=data['message'],timestamp=timezone.now())
         current_chat = get_current_chatroom(chatid=data['chatid'])
-        current_chat.chats.add(message)
-        content={
-            "command":"new_message",
-            "message":self.message_to_json(message)
-        }
-        
-        self.send_chat_message(content)
+        room_members = get_chatroom_participants(current_chat)
+        if member_user in room_members:
+            current_chat.chats.add(message)
+            current_chat.save()
+            content={
+                "command":"new_message",
+                "message":self.message_to_json(message),  
+            }
+            
+            self.send_chat_message(content)
+        else:
+            
+            message={
+                'member':'system error',
+                'content':"sorry you arent authorized to chat here",
+                'timestamp':str(message.timestamp)
+            }
+            content={
+                "command":"new_message",
+                "message":message,  
+            }
+            self.send_chat_message(content)
 
     command = {
         "fetch_messages":fetch_messages,

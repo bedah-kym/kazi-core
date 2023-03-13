@@ -3,16 +3,24 @@ from django.contrib.auth import get_user_model
 
 user=get_user_model()
 
+class Member(models.Model):
+    User = models.ForeignKey(user,on_delete=models.CASCADE)
+    def __str__(self):
+        return self.User.username
+
 class Message(models.Model):
-    author = models.ForeignKey(user,on_delete=models.CASCADE)
+    member = models.ForeignKey(Member,null=True,on_delete=models.CASCADE)
     content = models.TextField()
     timestamp = models.DateTimeField(null=False)
 
     def __str__(self):
-        return self.author.username
+        return self.content
     
-    def last10messages():
-        return Message.objects.order_by('-timestamp').all()[:10]
+class Chatroom(models.Model):
+    participants = models.ManyToManyField(Member)
+    chats = models.ManyToManyField(Message,blank=True)
 
+    def __str__(self):
+        return "{}".format(self.pk)
 
 

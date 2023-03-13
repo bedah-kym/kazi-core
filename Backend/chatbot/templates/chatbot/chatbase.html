@@ -33,19 +33,26 @@
 <li class="clearfix">
 <img src="https://bootdey.com/img/Content/avatar/avatar1.png" alt="avatar">
 
+<a herf="#">
 <div class="about">
-<div class="name">MATHIA</div>
+<div class="name">MATHIA live chat</div>
 <div class="status"> <i class="fa fa-circle online"></i> Active </div>
 </div>
+</a>
 </li>
-<!--
+<li class="clearable-file-input">
+</li>
+
 <li class="clearfix active">
 <img src="https://bootdey.com/img/Content/avatar/avatar2.png" alt="avatar">
+<a href="#">
 <div class="about">
-<div class="name">Aiden Chavez</div>
+<div class="name">MATHIA TEST ROOM</div>
 <div class="status"> <i class="fa fa-circle online"></i> online </div>
 </div>
+</a>
 </li>
+<!--
 <li class="clearfix">
 <img src="https://bootdey.com/img/Content/avatar/avatar3.png" alt="avatar">
 <div class="about">
@@ -133,6 +140,7 @@
     
     <script>
         var roomName = {{room_name}};
+        console.log("room",roomName)
         var username = {{username}};
         var chatSocket = new ReconnectingWebSocket(
             'ws://'
@@ -146,7 +154,7 @@
             var data = JSON.parse(e.data); 
             console.log(data)
             if (data['command'] == 'messages'){
-                for(let i=(data['messages'].length)-1;i>0;i--){
+                for(let i=(data['messages'].length)-1;i>=0;i--){
                     createMessage(data['messages'][i]);
                 }
             }else if (data['command'] == 'new_message'){
@@ -156,7 +164,7 @@
         };
         function createMessage(data){  
            var message = data;
-           var author = data['author'];
+           var author = data['member'];
            var time3 = data['timestamp'];
            var time = (message.timestamp).slice(10,-16);
            //var time2 = (message.timestamp).slice();
@@ -173,7 +181,7 @@
            msgpTag.innerHTML += time;
 
 
-           if (message.author === username){
+           if (message.member === username){
                msgListTag.className ='clearfix';
                msgDivTag.className ='message-data text-right';
                msgSpanTag.className ='message-data-time';
@@ -206,7 +214,13 @@
        };
 
         function FetchMessages(){
-            chatSocket.send(JSON.stringify({"command":"fetch_messages"}));
+            chatSocket.send(JSON.stringify(
+                {
+                    "command":"fetch_messages",
+                    "chatid":roomName
+                }
+                )
+            );
         };
 
         chatSocket.onclose = function(e) {
@@ -226,7 +240,8 @@
             chatSocket.send(JSON.stringify({
                 'message': message,
                 'from':username,
-                'command':'new_message'
+                'command':'new_message',
+                "chatid":roomName
             }));
             messageInputDom.value = '';
         };

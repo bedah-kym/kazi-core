@@ -11,6 +11,7 @@ body{
     border-radius: .55rem;
     position: relative;
     width: 100%;
+    min-height:400px;
     box-shadow: 0 1px 2px 0 rgb(0 0 0 / 10%);
 }
 .chat-app .people-list {
@@ -120,15 +121,33 @@ body{
     color: #434651;
     padding-left: 6px
 }
+.time-sender{
+    font-size:small;
+    font-family: math;
+}
+.time-left{
+    font-size:small;
+    font-family: math;
+    margin-left: -10px;
+}
+.user-name{
+    margin-bottom: -8px;
+    font-size: small;
+    font-family: ui-sans-serif;
+    font-style: italic;
+    color: rgb(132, 41, 216);
+}
 
 .chat .chat-history .message {
     color: #444;
-    padding: 18px 20px;
+    padding: 8px 23px;
     line-height: 26px;
     font-size: 16px;
-    border-radius: 7px;
+    border-radius: 20px;
     display: inline-block;
-    position: relative
+    position: relative;
+    min-width:25%;
+    max-width:50%;
 }
 
 .chat .chat-history .message:after {
@@ -165,16 +184,17 @@ body{
 
 .chat .chat-history .other-message {
     background: #c6dfa6;
-    text-align: right
+    text-align: right;
 }
 
 .chat .chat-history .other-message:after {
     border-bottom-color: #a1d88c;
-    left: 93%
+    left: 76%;
 }
 
 .chat .chat-message {
-    padding: 20px
+    padding: 20px;
+    
 }
 
 .online,
@@ -231,6 +251,18 @@ body{
     .chat-app .chat-history {
         height: 300px;
         overflow-x: auto
+    }
+    .time-sender{
+        font-size:x-small;
+        margin-right:48px;
+        font-family: math;
+        margin-bottom:-3px
+    }
+    .time-left{
+        font-size:x-small;
+        margin-left:48px;
+        font-family: math;
+        margin-bottom:-3px
     }
 }
 

@@ -1,16 +1,19 @@
 import json
 from asgiref.sync import async_to_sync
+from django.utils import timezone
 from channels.generic.websocket import WebsocketConsumer
-from .models import Message
+from .models import Message,Member
 from django.contrib.auth import get_user_model
+from .views import get_last_10messages,get_current_chatroom,get_chatroom_participants
 
 user=get_user_model()
 
 class ChatConsumer(WebsocketConsumer):
 
     def fetch_messages(self,data):
-        messages = Message.last10messages()
+        messages = get_last_10messages(chatid=data['chatid'])
         content = {
+            "command":"messages",
             "messages":self.messages_to_json(messages)
         }
         self.send_message(content)
@@ -23,25 +26,44 @@ class ChatConsumer(WebsocketConsumer):
 
     def message_to_json(self,message):
         return{
-            'author':message.author.username,
+            'member':message.member.User.username,
             'content':message.content,
             'timestamp':str(message.timestamp)
         }
 
     
     def new_message(self,data):
-        author = data['from']
-        author_user=user.objects.filter(username=author)[0]
-        message=Message.objects.create(author=author_user,content=data['message'])
-        content={
-            "command":"new_message",
-            "message":self.message_to_json(message)
-        }
-        
-        self.send_chat_message(content)
+        member = data['from']
+        member_user=user.objects.filter(username=member)[0]
+        member_user_id = member_user.id
+        member_user = Member.objects.filter(User=member_user_id)[0]
+        message=Message.objects.create(member=member_user,content=data['message'],timestamp=timezone.now())
+        current_chat = get_current_chatroom(chatid=data['chatid'])
+        room_members = get_chatroom_participants(current_chat)
+        if member_user in room_members:
+            current_chat.chats.add(message)
+            current_chat.save()
+            content={
+                "command":"new_message",
+                "message":self.message_to_json(message),  
+            }
+            
+            self.send_chat_message(content)
+        else:
+            
+            message={
+                'member':'system error',
+                'content':"sorry you arent authorized to chat here",
+                'timestamp':str(message.timestamp)
+            }
+            content={
+                "command":"new_message",
+                "message":message,  
+            }
+            self.send_chat_message(content)
 
     command = {
-        "fetch_massages":fetch_messages,
+        "fetch_messages":fetch_messages,
         "new_message":new_message
     }
     def connect(self):

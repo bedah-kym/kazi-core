@@ -5,9 +5,13 @@
 __pycache__
 
 db.sqlite3
+<<<<<<< HEAD
+=======
+
+>>>>>>> master
 # Backup files #
 *.bak
-
+*.sqlite3
 # If you are using PyCharm #
 # User-specific stuff
 .idea/**/workspace.xml
@@ -134,3 +138,4 @@ GitHub.sublime-settings
 !.vscode/launch.json
 !.vscode/extensions.json
 .history
+Backend/db.sqlite3

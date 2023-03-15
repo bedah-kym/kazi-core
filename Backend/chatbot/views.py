@@ -8,18 +8,21 @@ import json
 @login_required
 def home(request,room_name):
     chatrooms = Chatroom.objects.all()
+    room = Chatroom.objects.get(id=room_name)
+    room_members = room.participants.all()
     return render(
         request,"chatbot/chatbase.html",
         {
         "room_name":mark_safe(json.dumps(room_name)),
         "username":mark_safe(json.dumps(request.user.username)),
-        "chatrooms":chatrooms
+        "chatrooms":chatrooms,
+        "room_members":room_members
         }
     )
 
 def welcomepage(request):
     if request.user.is_authenticated:
-        return redirect(reverse("chatbot:bot-home",kwargs={"room_name":"mathia"}))
+        return redirect(reverse("chatbot:bot-home",kwargs={"room_name":2}))
     return redirect("users:login")
 
 

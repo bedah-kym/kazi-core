@@ -101,9 +101,15 @@
 <img src="https://bootdey.com/img/Content/avatar/avatar2.png" alt="avatar">
 </a>
 <div class="chat-about">
-<h6 class="m-b-0">{{request.user}}</h6>
+<h6 class="m-b-0">ROOM {{room_name}}</h6>
 <div class="status"> <i class="fa fa-circle online"></i> online </div>
 </div>
+</div>
+<div style="background:antiquewhite" class="col-lg-6 hidden-sm ">
+    <h6 style"text-align:left;font-family:cursive;">members</h6>
+    {% for member in room_members%}
+        <ol class="btn"><img src="https://bootdey.com/img/Content/avatar/avatar2.png" alt="avatar">{{member}}</ol>
+    {% endfor %}
 </div>
 <div class="col-lg-6 hidden-sm text-right">
 {%comment%}
@@ -158,6 +164,7 @@
             + roomName
             + '/'
         );
+        console.log(chatSocket)
         
         chatSocket.onmessage = function(e) {
             var data = JSON.parse(e.data); 
@@ -173,6 +180,7 @@
         };
         function createMessage(data){  
            var message = data;
+           
            var author = data['member'];
            var time3 = data['timestamp'];
            var time = (message.timestamp).slice(10,-16);

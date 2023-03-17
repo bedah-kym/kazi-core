@@ -3,9 +3,10 @@ from django.urls import reverse
 from django.contrib.auth.decorators import login_required
 from django.utils.safestring import mark_safe
 from .models import Chatroom
+from Api.models import MathiaReply
 import json 
 
-@login_required
+#@login_required
 def home(request,room_name):
     chatrooms = Chatroom.objects.all()
     room = Chatroom.objects.get(id=room_name)
@@ -37,3 +38,13 @@ def get_current_chatroom(chatid):
 
 def get_chatroom_participants(chatroom):
     return chatroom.participants.all()
+
+def get_mathia_reply():#should return the json/dict message like in chatsocket
+    content = MathiaReply.objects.all()[::1]
+    return {
+                'message': content.message,
+                'from': content.sender,
+                'command':content.command,
+                "chatid": content.chatid
+            }
+

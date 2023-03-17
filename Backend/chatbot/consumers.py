@@ -4,7 +4,11 @@ from django.utils import timezone
 from channels.generic.websocket import WebsocketConsumer
 from .models import Message,Member
 from django.contrib.auth import get_user_model
-from .views import get_last_10messages,get_current_chatroom,get_chatroom_participants
+from .views import(get_last_10messages,
+                   get_current_chatroom,
+                   get_chatroom_participants,
+                   get_mathia_reply,
+                   )
 
 user=get_user_model()
 
@@ -30,6 +34,7 @@ class ChatConsumer(WebsocketConsumer):
             'content':message.content,
             'timestamp':str(message.timestamp)
         }
+    
 
     
     def new_message(self,data):
@@ -83,9 +88,19 @@ class ChatConsumer(WebsocketConsumer):
             self.room_group_name, self.channel_name
         )
                                                  
-    def receive(self, text_data):       # Receive message from WebSocket
+    def receive(self, text_data):
+        # Receive message from WebSocket
         data = json.loads(text_data)
-        self.command[data["command"]](self,data)
+        if data["command"] == 'new_message':
+            user = data["from"]
+            if  user == "mathia":
+                reply = json.loads(get_mathia_reply())
+                self.command[reply["command"]](self,reply)
+            else:
+                self.command[data["command"]](self,data)
+        else:
+            self.command[data["command"]](self,data)
+
 
     def send_chat_message(self,message):              # Send message to room group
         async_to_sync(self.channel_layer.group_send)(

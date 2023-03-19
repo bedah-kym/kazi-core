@@ -22,7 +22,7 @@ def auth():
 def get():
     #token=auth()
     strtoken='1e51e8f61c30893852b4e42aac3bb252aa24bee0'
-    endpoint = "http://127.0.0.1:8000/api/getreplies/"
+    endpoint = "http://127.0.0.1:8000/api/getreplies/3/"
     headers={"Authorization":f"token {strtoken}"}
     response = requests.get(endpoint,headers=headers)
     return response.json()

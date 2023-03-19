@@ -7,5 +7,5 @@ class MathiaReply(models.Model):
     command = models.TextField()
     chatid = models.IntegerField()
 
-    def __str__(self):
+    def __repr__(self):
         return "{}".format(self.message)

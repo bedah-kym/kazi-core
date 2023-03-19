@@ -39,12 +39,17 @@ def get_current_chatroom(chatid):
 def get_chatroom_participants(chatroom):
     return chatroom.participants.all()
 
+
 def get_mathia_reply():#should return the json/dict message like in chatsocket
-    content = MathiaReply.objects.all()[::1]
+    content = MathiaReply.objects.last()
+    message = content.message
+    sender = content.sender
+    command = content.command
+    chatid = content.chatid
     return {
-                'message': content.message,
-                'from': content.sender,
-                'command':content.command,
-                "chatid": content.chatid
+                'message': message,
+                'from': sender,
+                'command':command,
+                "chatid": chatid
             }
 

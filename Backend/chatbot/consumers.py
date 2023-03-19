@@ -3,6 +3,9 @@ from asgiref.sync import async_to_sync
 from django.utils import timezone
 from channels.generic.websocket import WebsocketConsumer
 from .models import Message,Member
+from Api.models import MathiaReply
+from django.db.models.signals import post_save
+from django.dispatch import receiver
 from django.contrib.auth import get_user_model
 from .views import(get_last_10messages,
                    get_current_chatroom,
@@ -87,22 +90,22 @@ class ChatConsumer(WebsocketConsumer):
         async_to_sync(self.channel_layer.group_discard)(
             self.room_group_name, self.channel_name
         )
-                                                 
+           
     def receive(self, text_data):
         # Receive message from WebSocket
-        data = json.loads(text_data)
-        if data["command"] == 'new_message':
-            user = data["from"]
-            if  user == "mathia":
-                reply = json.loads(get_mathia_reply())
+        data = json.loads(text_data) 
+        senders=['betawaysadmin','test3','test2','Huges']
+        if data['command'] != "fetch_messages":
+            if data['from'] in senders:  
+                self.command[data["command"]](self,data)
+                reply = get_mathia_reply()
                 self.command[reply["command"]](self,reply)
             else:
-                self.command[data["command"]](self,data)
+                self.command[reply["command"]](self,reply)
         else:
             self.command[data["command"]](self,data)
 
-
-    def send_chat_message(self,message):              # Send message to room group
+    def send_chat_message(self,message):     # Send message to room group
         async_to_sync(self.channel_layer.group_send)(
             self.room_group_name, {
             "type": "chat_message",

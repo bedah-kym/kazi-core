@@ -21,7 +21,6 @@
 
 <div onload="changemode()" id="mode" class="card chat-app">
 <div id="plist" class="people-list">
-
 <div class="input-group">
 <div class="input-group-prepend">
 <span class="input-group-text"><i class="fa fa-search"></i></span>
@@ -29,7 +28,9 @@
 <input type="text" class="form-control" placeholder="Search...">
 </div>
 
-<ul class="list-unstyled chat-list mt-2 mb-0">
+<ul class="list-unstyled chat-list p-2 mt-2 mb-0">
+
+</li>
 {% for chatroom in chatrooms %}
     {% if chatroom.id != 2 %}
         <li class="clearfix active">
@@ -101,11 +102,22 @@
 <img src="https://bootdey.com/img/Content/avatar/avatar2.png" alt="avatar">
 </a>
 <div class="chat-about">
-<h6 class="m-b-0">{{request.user}}</h6>
+<h6 class="m-b-0">ROOM {{room_name}}</h6>
 <div class="status"> <i class="fa fa-circle online"></i> online </div>
 </div>
+<div class= "text-right">
+    <button class="toggle-btn "> 
+        <span class="hamburger"> </span> 
+    </button>
 </div>
-<div class="col-lg-6 hidden-sm text-right">
+</div>
+<div style="background:antiquewhite" class="col-lg-6 hidden-sm ">
+    <h6 style"text-align:left;font-family:cursive;">members</h6>
+    {% for member in room_members%}
+        <ol class="btn"><img src="https://bootdey.com/img/Content/avatar/avatar2.png" alt="avatar">{{member}}</ol>
+    {% endfor %}
+</div>
+<div style="display:contents" class="col-lg-6 hidden-sm text-right">
 {%comment%}
 <a href="javascript:void(0);" class="btn btn-outline-secondary"><i class="fa fa-camera"></i></a>
 <a href="javascript:void(0);" class="btn btn-outline-primary"><i class="fa fa-image"></i></a>
@@ -113,7 +125,7 @@
 
 {%endcomment%}
 <button onclick="FetchMessages()" class="btn btn-outline-warning p-2 m-2">Get all messages <i class="fa fa-question"></i></button>
-<a href="{%url 'users:logout' %}"class="btn btn-outline-danger p-1 m-1"><span>logout</span><img class="p-1"style=""src="https://img.icons8.com/ios/50/null/login-rounded-right--v1.png"/></a>
+<a href="{%url 'users:logout' %}"class="btn btn-outline-danger p-1 m-1"><img class="p-1"style="max-width:31px;"src="https://img.icons8.com/ios/50/null/login-rounded-right--v1.png"/><span style="padding:inherit">logout</span></a>
 </div>
 </div>
 </div>
@@ -140,6 +152,7 @@
 </div>
 </div>
 </div>
+<script src="{% static 'js/main.js'%}"></script>
 <script src="https://code.jquery.com/jquery-1.10.2.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
@@ -161,6 +174,7 @@
             + roomName
             + '/'
         );
+        console.log(chatSocket)
         
         chatSocket.onmessage = function(e) {
 <<<<<<< HEAD
@@ -202,11 +216,10 @@
         };
         function createMessage(data){  
            var message = data;
+           
            var author = data['member'];
            var time3 = data['timestamp'];
            var time = (message.timestamp).slice(10,-16);
-           //var time2 = (message.timestamp).slice();
-           //console.log(time3,time)
            
            var msgListTag = document.createElement('li');
            var msgDivTag = document.createElement('div');
@@ -217,7 +230,6 @@
            msgTextTag.innerHTML= message.content; 
            msgdivtag.innerHTML = author; 
            msgpTag.innerHTML += time;
-
 
            if (message.member === username){
                msgListTag.className ='clearfix';
@@ -255,7 +267,8 @@
             chatSocket.send(JSON.stringify(
                 {
                     "command":"fetch_messages",
-                    "chatid":roomName
+                    "chatid":roomName,
+                    
                 }
                 )
             );

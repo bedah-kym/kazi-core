@@ -1,4 +1,6 @@
-
+html{
+    scroll-behavior: smooth;
+}
 body{
     background-color: #4bcca1;
     margin-top:20px;
@@ -22,6 +24,7 @@ body{
     padding: 20px;
     z-index: 7
 }
+
 
 .chat-app .chat {
     margin-left: 280px;
@@ -238,20 +241,92 @@ body{
 }
 
 @media only screen and (max-width: 767px) {
+    /*.row {
+        display: -ms-flexbox;
+        display: flex;
+        -ms-flex-wrap: wrap;
+        flex-wrap: wrap;
+        margin-right: -15px;
+        margin-left: -15px;
+    } */
+    .form-control{
+        max-width: 50%;
+    }
+    body {
+        background-color: #f8f9fa;
+        margin-top: 14px;
+    }
     .chat-app .people-list {
-        height: 465px;
-        width: 100%;
-        overflow-x: auto;
+        position: fixed;
+        top: 0;
+        bottom: 0;
         background: #fff;
-        left: -400px;
-        display: none
+        left: 0;
+        right: 0;
+        z-index: 100;
+        width: auto;
+        transform: translateX(100%);
+        transition: transform 250ms cubic-bezier(0.19, 1, 0.22, 1);
     }
-    .chat-app .people-list.open {
-        left: 0
+    .people-open .people-list{
+        transform: translateX(0%);
     }
+    .people-open .toggle-btn{
+        position: fixed;
+        
+    }
+    .people-open .hamburger{
+        transform: rotate(.625turn);
+    }
+    .people-open .hamburger::before{
+        transform: rotate(90deg) translate(-6px);
+    }
+    .people-open .hamburger::after{
+        opacity:0 ;
+    }
+    .people-open .form-control{
+        max-width: 50%;
+    }
+    .toggle-btn{
+        padding:1em;
+        border-style:none;
+        background: border-box;
+        cursor: pointer;
+        z-index: 1000;
+        position: absolute;
+        right:28px;
+    }
+    .hamburger {
+        display:block;
+        position: relative;
+    
+    }
+    .hamburger,
+    .hamburger::before,
+    .hamburger::after{
+        background :#131212;
+        width:1em;
+        height: 2px;
+        border-radius:0.5em;
+        transition: transform 250ms ease-in-out;
+        
+    }
+    .hamburger::before,
+    .hamburger::after{
+        content: '';
+        right: 0;
+        left: 0;
+        position:absolute;
+    }
+
+    .hamburger::before{top:6px;}
+    .hamburger::after{bottom: 6px;}
+
     .chat-app .chat {
         margin: 0
     }
+    
+
     .chat-app .chat .chat-header {
         border-radius: 0.55rem 0.55rem 0 0
     }

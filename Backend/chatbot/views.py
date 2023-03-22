@@ -3,23 +3,27 @@ from django.urls import reverse
 from django.contrib.auth.decorators import login_required
 from django.utils.safestring import mark_safe
 from .models import Chatroom
+from Api.models import MathiaReply
 import json 
 
-@login_required
+#@login_required
 def home(request,room_name):
     chatrooms = Chatroom.objects.all()
+    room = Chatroom.objects.get(id=room_name)
+    room_members = room.participants.all()
     return render(
         request,"chatbot/chatbase.html",
         {
         "room_name":mark_safe(json.dumps(room_name)),
         "username":mark_safe(json.dumps(request.user.username)),
-        "chatrooms":chatrooms
+        "chatrooms":chatrooms,
+        "room_members":room_members
         }
     )
 
 def welcomepage(request):
     if request.user.is_authenticated:
-        return redirect(reverse("chatbot:bot-home",kwargs={"room_name":"mathia"}))
+        return redirect(reverse("chatbot:bot-home",kwargs={"room_name":2}))
     return redirect("users:login")
 
 
@@ -34,3 +38,18 @@ def get_current_chatroom(chatid):
 
 def get_chatroom_participants(chatroom):
     return chatroom.participants.all()
+
+
+def get_mathia_reply():#should return the json/dict message like in chatsocket
+    content = MathiaReply.objects.last()
+    message = content.message
+    sender = content.sender
+    command = content.command
+    chatid = content.chatid
+    return {
+                'message': message,
+                'from': sender,
+                'command':command,
+                "chatid": chatid
+            }
+

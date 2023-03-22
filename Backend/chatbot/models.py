@@ -24,3 +24,4 @@ class Chatroom(models.Model):
         return "{}".format(self.pk)
 
 
+

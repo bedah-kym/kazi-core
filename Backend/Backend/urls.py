@@ -15,9 +15,15 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path,include
+from rest_framework.urlpatterns import format_suffix_patterns
+from rest_framework.authtoken.views import obtain_auth_token
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('chatbot/',include('chatbot.urls')),
     path('accounts/',include('users.urls')),
+    path('api/',include('Api.urls')),
+    path('auth/', obtain_auth_token),
+    path('api-auth/', include('rest_framework.urls')),
 ]
+urlpatterns = format_suffix_patterns(urlpatterns)

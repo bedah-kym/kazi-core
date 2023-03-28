@@ -13,7 +13,7 @@ body{
     border-radius: .55rem;
     position: relative;
     width: 100%;
-    min-height:400px;
+    min-height:450px;
     box-shadow: 0 1px 2px 0 rgb(0 0 0 / 10%);
 }
 .chat-app .people-list {
@@ -78,7 +78,7 @@ body{
 }
 
 .chat .chat-header {
-    padding: 15px 20px;
+    padding: 38px 20px;
     border-bottom: 2px solid #f4f7f6
 }
 
@@ -249,8 +249,13 @@ body{
         margin-right: -15px;
         margin-left: -15px;
     } */
+    .chat .chat-header {
+        padding: 15px 20px;
+        border-bottom: 2px solid #f4f7f6
+    }
+
     .form-control{
-        max-width: 50%;
+        max-width: 100%;
     }
     body {
         background-color: #f8f9fa;
@@ -273,6 +278,7 @@ body{
     }
     .people-open .toggle-btn{
         position: fixed;
+        right: 10px;
         
     }
     .people-open .hamburger{
@@ -284,8 +290,8 @@ body{
     .people-open .hamburger::after{
         opacity:0 ;
     }
-    .people-open .form-control{
-        max-width: 50%;
+    .people-open #search{
+        max-width: 70%;
     }
     .toggle-btn{
         padding:1em;

@@ -25,10 +25,10 @@
 <div class="input-group-prepend">
 <span class="input-group-text"><i class="fa fa-search"></i></span>
 </div>
-<input type="text" class="form-control" placeholder="Search...">
+<input type="text" class="form-control" id="search" placeholder="Search...">
 </div>
 
-<ul class="list-unstyled chat-list p-2 mt-2 mb-0">
+<ul class="list-unstyled chat-list p-2 mt-2 mb-2">
 
 </li>
 {% for chatroom in chatrooms %}
@@ -60,7 +60,9 @@
         
 
 {%endfor%}
-
+<li>
+    <a href="{%url 'users:logout' %}"class="btn btn-outline-danger p-1 m-1"><img class="p-1"style="max-width:31px;"src="https://img.icons8.com/ios/50/null/login-rounded-right--v1.png"/><span style="padding:inherit">logout</span></a>
+</li>
 <!--
 <li class="clearfix">
 <img src="https://bootdey.com/img/Content/avatar/avatar3.png" alt="avatar">
@@ -111,8 +113,8 @@
     </button>
 </div>
 </div>
-<div style="background:antiquewhite" class="col-lg-6 hidden-sm ">
-    <h6 style"text-align:left;font-family:cursive;">members</h6>
+<div style="background:antiquewhite;overflow-x: scroll;display: inline-flex;" class="col-lg-6 hidden-sm ">
+    <!--<h6 style"text-align:left;font-family:cursive;">members</h6>-->
     {% for member in room_members%}
         <ol class="btn"><img src="https://bootdey.com/img/Content/avatar/avatar2.png" alt="avatar">{{member}}</ol>
     {% endfor %}
@@ -125,7 +127,6 @@
 
 {%endcomment%}
 <button onclick="FetchMessages()" class="btn btn-outline-warning p-2 m-2">Get all messages <i class="fa fa-question"></i></button>
-<a href="{%url 'users:logout' %}"class="btn btn-outline-danger p-1 m-1"><img class="p-1"style="max-width:31px;"src="https://img.icons8.com/ios/50/null/login-rounded-right--v1.png"/><span style="padding:inherit">logout</span></a>
 </div>
 </div>
 </div>

@@ -17,7 +17,7 @@ user=get_user_model()
 
 class ChatConsumer(WebsocketConsumer):
 
-    def fetch_messages(self,data):
+    def fetch_messages(self,data):#you can still fetch messages if you arent a group member
         messages = get_last_10messages(chatid=data['chatid'])
         content = {
             "command":"messages",
@@ -42,9 +42,16 @@ class ChatConsumer(WebsocketConsumer):
     
     def new_message(self,data):
         member = data['from']
-        member_user=user.objects.filter(username=member)[0]
-        member_user_id = member_user.id
-        member_user = Member.objects.filter(User=member_user_id)[0]
+        try:
+            member_user=user.objects.filter(username=member)[0]
+            member_user_id = member_user.id
+            member_user = Member.objects.filter(User=member_user_id)[0]
+        except IndexError:
+            self.send_chat_message({
+                'member':'security system ',
+                'content':"sorry you are not assigned to any group",
+                'timestamp':str(timezone.now())
+            })
         message=Message.objects.create(member=member_user,content=data['message'],timestamp=timezone.now())
         current_chat = get_current_chatroom(chatid=data['chatid'])
         room_members = get_chatroom_participants(current_chat)
@@ -60,7 +67,7 @@ class ChatConsumer(WebsocketConsumer):
         else:
             
             message={
-                'member':'system error',
+                'member':'security system ',
                 'content':"sorry you arent authorized to chat here",
                 'timestamp':str(message.timestamp)
             }
@@ -98,10 +105,17 @@ class ChatConsumer(WebsocketConsumer):
         if data['command'] != "fetch_messages":
             if data['from'] in senders:  
                 self.command[data["command"]](self,data)
-                reply = get_mathia_reply()
-                self.command[reply["command"]](self,reply)
+                member = data['from']
+                member_user=user.objects.filter(username=member)[0]
+                member_user_id = member_user.id
+                member_user = Member.objects.filter(User=member_user_id)[0]
+                current_chat = get_current_chatroom(chatid=data['chatid'])
+                room_members = get_chatroom_participants(current_chat)
+                if member_user in room_members:
+                    reply = get_mathia_reply()
+                    self.command[reply["command"]](self,reply)
             else:
-                self.command[reply["command"]](self,reply)
+                self.command[data["command"]](self,data)
         else:
             self.command[data["command"]](self,data)
 

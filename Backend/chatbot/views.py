@@ -2,11 +2,11 @@ from django.shortcuts import render,redirect,get_object_or_404,get_list_or_404
 from django.urls import reverse
 from django.contrib.auth.decorators import login_required
 from django.utils.safestring import mark_safe
-from .models import Chatroom
+from .models import Chatroom,Member
 from Api.models import MathiaReply
 import json 
 
-#@login_required
+@login_required
 def home(request,room_name):
     chatrooms = Chatroom.objects.all()
     room = Chatroom.objects.get(id=room_name)
@@ -40,7 +40,7 @@ def get_chatroom_participants(chatroom):
     return chatroom.participants.all()
 
 
-def get_mathia_reply():#should return the json/dict message like in chatsocket
+def get_mathia_reply():#should return the dict message like in chatsocket
     content = MathiaReply.objects.last()
     message = content.message
     sender = content.sender
@@ -51,5 +51,5 @@ def get_mathia_reply():#should return the json/dict message like in chatsocket
                 'from': sender,
                 'command':command,
                 "chatid": chatid
-            }
+    }
 

@@ -161,7 +161,10 @@
     <script src="{% static 'js/reconnecting-websocket.min.js'%}"></script>
     
     <script>
+<<<<<<< HEAD
+=======
         
+>>>>>>> chats
         var roomName = {{room_name}};
         console.log("room",roomName)
         var username = {{username}};
@@ -175,6 +178,7 @@
         console.log(chatSocket)
         
         chatSocket.onmessage = function(e) {
+<<<<<<< HEAD
             var data = JSON.parse(e.data); 
             console.log(data)
             if (data['command'] == 'messages'){
@@ -183,6 +187,31 @@
                 }
             }else if (data['command'] == 'new_message'){
                 createMessage(data['message']);
+=======
+            var data = JSON.parse(e.data);   
+            var message = data['message'];
+            var author = data['author'];
+            console.log(data)
+        
+            var msgListTag = document.createElement('li');
+            var msgDivTag = document.createElement('div');
+            var msgSpanTag = document.createElement('span');
+            var msgTextTag = document.createElement('div');
+            var pTag = document.createElement('p');
+            pTag.textContent = message.content; 
+
+
+            if (message.author === username){
+                msgListTag.className ='clearfix';
+                msgDivTag.className ='message-data text-right';
+                msgSpanTag.className ='message-data-time';
+                msgTextTag.className ='message other-message float-right';
+                msgListTag.appendChild(msgDivTag)
+                msgDivTag.appendChild(msgSpanTag)
+                msgSpanTag.appendChild(msgTextTag)
+                msgTextTag.appendChild(pTag)
+
+>>>>>>> fa1fd3f49283043cea7fae3b6955242be4fc3079
             }
 
         };

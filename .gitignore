@@ -5,7 +5,10 @@
 __pycache__
 
 db.sqlite3
+<<<<<<< HEAD
+=======
 
+>>>>>>> master
 # Backup files #
 *.bak
 *.sqlite3

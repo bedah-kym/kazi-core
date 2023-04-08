@@ -1,0 +1,17 @@
+
+THIS APP IS COMPROMISED OF WEBSOCKETS INSIDE A REGULAR DJANGO PLATFORM HELPED BY A REST API TO
+TALK TO THE REST OF THE WORLD.
+
+when you send a text in the chatroom the JavaScript in the browser gets the details like the chatroom ,user,message and 
+paases it to the websocket (consumers.py) which parses the data and creates a new message.
+
+The new message is saved then displayed back to the user inthe chatroom, you wouldnt want to send a text an not see it.
+now remember when the message was given to the websocket consumer? the function to recieve the data did some checks to
+see if the sender is not mathia but is part of the allowed senders. if true it calls the get mathia reply which gets the 
+mathia reply and makes a new message from it and saves it.
+
+now since mathia isnt inside the app but on a different platform the apps needs to communicate through API calls.
+when you send the message in the chatroom there was a signal which sent a post request (with your sent message inside) to the chatbots API.
+the chatbot api recieves it then returns a reply by sending a post request with the answer to the chatapp API.
+
+we hope to make this flow more efficient and secure as well as add functionality to send and recieve audio/visual data.

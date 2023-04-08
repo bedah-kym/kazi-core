@@ -3,7 +3,7 @@ from .models import Chatroom,Message,Member
 
 
 class ChatroomSerializer(serializers.ModelSerializer):
-    #username = serializers.SerializerMethodField(read_only=True)
+    text = serializers.CharField(source= "content",read_only=True)
     class Meta:
         model = Chatroom
         fields =[
@@ -12,9 +12,10 @@ class ChatroomSerializer(serializers.ModelSerializer):
         model = Message
         fields =[
             'member',
-            'content',
+            'text',
             'timestamp',
         ]
+
 
     """
         model = Member

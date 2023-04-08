@@ -15,6 +15,8 @@ from .views import(get_last_10messages,
 
 user=get_user_model()
 
+#SEE DOCS.TXT  FOR DETAILS ON HOW ALL THIS WORKS
+
 class ChatConsumer(WebsocketConsumer):
 
     def fetch_messages(self,data):#you can still fetch messages if you arent a group member
@@ -39,7 +41,6 @@ class ChatConsumer(WebsocketConsumer):
         }
     
 
-    
     def new_message(self,data):
         member = data['from']
         try:
@@ -133,3 +134,5 @@ class ChatConsumer(WebsocketConsumer):
         message = event["message"]
         # Send message to WebSocket
         self.send(text_data=json.dumps(message))
+
+

@@ -9,7 +9,7 @@ from .models import MathiaReply
 class CreateReply(generics.ListCreateAPIView):
     queryset = MathiaReply.objects.all()
     serializer_class = MathiaReplySerializer
-    permission_classes =[IsStaffEditorPermissions]
+    #permission_classes =[IsStaffEditorPermissions]
 
 class GetMessage(generics.RetrieveAPIView):
     serializer_class = ChatroomSerializer

@@ -6,6 +6,7 @@ from .models import Chatroom,Member
 from Api.models import MathiaReply
 import json 
 
+
 @login_required
 def home(request,room_name):
     chatrooms = Chatroom.objects.all()
@@ -41,6 +42,7 @@ def get_chatroom_participants(chatroom):
 
 
 def get_mathia_reply():#should return the dict message like in chatsocket
+    
     content = MathiaReply.objects.last()
     message = content.message
     sender = content.sender

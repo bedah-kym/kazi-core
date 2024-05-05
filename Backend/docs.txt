@@ -3,15 +3,31 @@ THIS APP IS COMPROMISED OF WEBSOCKETS INSIDE A REGULAR DJANGO PLATFORM HELPED BY
 TALK TO THE REST OF THE WORLD.
 
 when you send a text in the chatroom the JavaScript in the browser gets the details like the chatroom ,user,message and 
-paases it to the websocket (consumers.py) which parses the data and creates a new message.
+paases it to the websocket into the backend function(consumers.py) which does a few checks eg permissions and also checks
+if the message is a reply or from the user.(this comes in hand when say you want to make the messages appear on the left
+for the reply and you message on the left also its important so the app dosent try to reply to itself when talking to the bot api) 
+the data and creates a new message.
 
-The new message is saved then displayed back to the user inthe chatroom, you wouldnt want to send a text an not see it.
+The new message is saved then displayed back to the user inthe chatroom, you wouldnt want to send a text and not see it.
 now remember when the message was given to the websocket consumer? the function to recieve the data did some checks to
-see if the sender is not mathia but is part of the allowed senders. if true it calls the get mathia reply which gets the 
-mathia reply and makes a new message from it and saves it.
+see if the sender is not mathia but is part of the allowed senders. if true it calls the get_mathia_reply() which gets the 
+mathia reply from the bot api and makes a new message from it and saves it.
 
 now since mathia isnt inside the app but on a different platform the apps needs to communicate through API calls.
 when you send the message in the chatroom there was a signal which sent a post request (with your sent message inside) to the chatbots API.
 the chatbot api recieves it then returns a reply by sending a post request with the answer to the chatapp API.
 
 we hope to make this flow more efficient and secure as well as add functionality to send and recieve audio/visual data.
+
+    NEW FEATURES IN DEVELOPMENT FOR THE CHATROOM 
+- added emojis next feature is to add event listener so i can put a button to show the list then on send it dissapears
+- its a chatroom so you dont have to chat with the bot you can chat with the members i want the bot option to be either 
+turned on/off or in a separate chatroom.
+- iwant to add an image upload button next to the emojis so you can send pictures and the bot using a computer vision model 
+be able to identify stuff like google images.
+-we can add facial recognition functionality to see if its posible to send selfies to the bot if possible use a generative model to 
+help the bot use visual answers.
+- it would be cool if you could talk to the bot instead of texting we can use nlp so that we can transcribe what the user says into a text 
+bubble then the bot can send an audio reply this seems far fetched but it a good thought.
+-the ui needs some work not the best currently but we can add some react if its posible or even just style it better.
+all in all the platform should be easy to use, responsive, fast and feature rich so as to accomodate a full range of the ai capabilities.

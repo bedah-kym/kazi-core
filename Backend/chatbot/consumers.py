@@ -40,8 +40,11 @@ class ChatConsumer(WebsocketConsumer):
             'timestamp':str(message.timestamp)
         }
     
-
     def new_message(self,data):
+        """ here we use chatterbot logic to parse the data from the recieve func, we first check if the sender is authorised
+        to post in the chatroom if not send a system warning message else convert message from py to json then send it to the 
+        webscket for the ui
+        """
         member = data['from']
         try:
             member_user=user.objects.filter(username=member)[0]
@@ -65,8 +68,7 @@ class ChatConsumer(WebsocketConsumer):
             }
             
             self.send_chat_message(content)
-        else:
-            
+        else: 
             message={
                 'member':'security system ',
                 'content':"sorry you arent authorized to chat here",
@@ -100,21 +102,28 @@ class ChatConsumer(WebsocketConsumer):
         )
            
     def receive(self, text_data):
-        # Receive message from WebSocket
         data = json.loads(text_data) 
-        senders=['betawaysadmin','test3','test2','Huges']
+       
+        current_chat = get_current_chatroom(chatid=data['chatid'])
+        room_members = get_chatroom_participants(current_chat)
+        
         if data['command'] != "fetch_messages":
-            if data['from'] in senders:  
+             # Receive message from WebSocket then check if the command is a fetch messages if so just invoke the command else
+            if data['from']!= "mathia": 
+                #if the command is a new message check the senders list (wich should be a func) to make sure its not mathia
+                #so we dont end up having a feedback loop of the bot replying to itself
                 self.command[data["command"]](self,data)
+                #if its not the bots message create the message so it shows on the ui then send a copy to mathia after some security checks
                 member = data['from']
                 member_user=user.objects.filter(username=member)[0]
                 member_user_id = member_user.id
                 member_user = Member.objects.filter(User=member_user_id)[0]
-                current_chat = get_current_chatroom(chatid=data['chatid'])
-                room_members = get_chatroom_participants(current_chat)
                 if member_user in room_members:
+                    
                     reply = get_mathia_reply()
                     self.command[reply["command"]](self,reply)
+                    #after the reply send it  to the websocket to be dispalyed in the ui this logic also means you can send 
+                    #the message to the chatroom but wont get a mathia reply ,infact you get a system warning message
             else:
                 self.command[data["command"]](self,data)
         else:

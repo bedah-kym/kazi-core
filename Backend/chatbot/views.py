@@ -2,7 +2,7 @@ from django.shortcuts import render,redirect,get_object_or_404,get_list_or_404
 from django.urls import reverse
 from django.contrib.auth.decorators import login_required
 from django.utils.safestring import mark_safe
-from .models import Chatroom,Member
+from .models import Chatroom,Message
 from Api.models import MathiaReply
 import json 
 
@@ -41,7 +41,7 @@ def get_chatroom_participants(chatroom):
     return chatroom.participants.all()
 
 
-def get_mathia_reply():#should return the dict message like in chatsocket
+"""def get_mathia_reply():#should return the dict message like in chatsocket
     
     content = MathiaReply.objects.last()
     message = content.message
@@ -53,5 +53,24 @@ def get_mathia_reply():#should return the dict message like in chatsocket
                 'from': sender,
                 'command':command,
                 "chatid": chatid
-    }
+    }"""
 
+def get_mathia_reply():#should return the dict message like in chatsocket
+    import requests
+    text=Message.objects.last()
+    text= text.content
+    url= 'https://www.botlibre.com/rest/json/chat'
+    r = requests.post(url,json=(
+        {"application":"2127403001275571408", "instance":"165","message":text}
+        ))
+    reply=r.json()
+    message = reply['message']
+    sender = 'mathia'
+    command = "new_message"
+    chatid = 3
+    return {
+                'message': message,
+                'from': sender,
+                'command':command,
+                "chatid": chatid
+    }

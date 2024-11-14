@@ -19,6 +19,20 @@ body {
     box-shadow: 0 1px 2px 0 rgb(0 0 0 / 10%);
 }
 
+.icon-container {
+    display: flex;
+    padding: 5px;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.left-icon,
+.right-icon {
+    width: 15%;
+    color: #131212;
+    font-size: larger;
+}
+
 .chat-app .people-list {
     width: 280px;
     position: absolute;
@@ -369,20 +383,20 @@ body {
     }
 
     .chat-app .chat-history {
-        height: 300px;
+        height: 400px;
         overflow-x: auto
     }
 
     .time-sender {
-        font-size: x-small;
-        margin-right: 48px;
+        font-size: small;
+        margin-right: 60px;
         font-family: math;
         margin-bottom: -3px
     }
 
     .time-left {
-        font-size: x-small;
-        margin-left: 48px;
+        font-size: small;
+        margin-left: 50px;
         font-family: math;
         margin-bottom: -3px
     }

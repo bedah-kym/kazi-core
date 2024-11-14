@@ -1,147 +1,169 @@
 import json
-from asgiref.sync import async_to_sync
+from asgiref.sync import sync_to_async
 from django.utils import timezone
-from channels.generic.websocket import WebsocketConsumer
-from .models import Message,Member
-from Api.models import MathiaReply
-from django.db.models.signals import post_save
-from django.dispatch import receiver
+from channels.generic.websocket import AsyncWebsocketConsumer
+from .models import Message, Member, Chatroom
 from django.contrib.auth import get_user_model
-from .views import(get_last_10messages,
-                   get_current_chatroom,
-                   get_chatroom_participants,
-                   get_mathia_reply,
-                   )
 
-user=get_user_model()
+User = get_user_model()
 
-#SEE DOCS.TXT  FOR DETAILS ON HOW ALL THIS WORKS
-
-class ChatConsumer(WebsocketConsumer):
-
-    def fetch_messages(self,data):#you can still fetch messages if you arent a group member
-        messages = get_last_10messages(chatid=data['chatid'])
-        content = {
-            "command":"messages",
-            "messages":self.messages_to_json(messages)
-        }
-        self.send_message(content)
-
-    def messages_to_json(self,messages):
-        result =[]
-        for message in messages:
-            result.append(self.message_to_json(message))
-        return result
-
-    def message_to_json(self,message):
-        return{
-            'member':message.member.User.username,
-            'content':message.content,
-            'timestamp':str(message.timestamp)
-        }
-    
-    def new_message(self,data):
-        """ here we use chatterbot logic to parse the data from the recieve func, we first check if the sender is authorised
-        to post in the chatroom if not send a system warning message else convert message from py to json then send it to the 
-        webscket for the ui
-        """
-        member = data['from']
-        try:
-            member_user=user.objects.filter(username=member)[0]
-            member_user_id = member_user.id
-            member_user = Member.objects.filter(User=member_user_id)[0]
-        except IndexError:
-            self.send_chat_message({
-                'member':'security system ',
-                'content':"sorry you are not assigned to any group",
-                'timestamp':str(timezone.now())
-            })
-        message=Message.objects.create(member=member_user,content=data['message'],timestamp=timezone.now())
-        current_chat = get_current_chatroom(chatid=data['chatid'])
-        room_members = get_chatroom_participants(current_chat)
-        if member_user in room_members:
-            current_chat.chats.add(message)
-            current_chat.save()
-            content={
-                "command":"new_message",
-                "message":self.message_to_json(message),  
-            }
-            
-            self.send_chat_message(content)
-        else: 
-            message={
-                'member':'security system ',
-                'content':"sorry you arent authorized to chat here",
-                'timestamp':str(message.timestamp)
-            }
-            content={
-                "command":"new_message",
-                "message":message,  
-            }
-            self.send_chat_message(content)
-
-    command = {
-        "fetch_messages":fetch_messages,
-        "new_message":new_message
-    }
-    def connect(self):
+class ChatConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
         self.room_name = self.scope["url_route"]["kwargs"]["room_name"]
-        self.room_group_name = "chat_%s" % self.room_name
+        self.room_group_name = f"chat_{self.room_name}"
+        await self.channel_layer.group_add(self.room_group_name, self.channel_name)
+        await self.accept()
 
-        # Join room group
-        async_to_sync(self.channel_layer.group_add)(
-            self.room_group_name, self.channel_name
-        )
+    async def disconnect(self, close_code):
+        await self.channel_layer.group_discard(self.room_group_name, self.channel_name)
 
-        self.accept()
+    async def receive(self, text_data):
+        try:
+            data = json.loads(text_data)
+            command = data.get("command", None)
 
-    def disconnect(self, close_code):
-        # Leave room group
-        async_to_sync(self.channel_layer.group_discard)(
-            self.room_group_name, self.channel_name
-        )
-           
-    def receive(self, text_data):
-        data = json.loads(text_data) 
-       
-        current_chat = get_current_chatroom(chatid=data['chatid'])
-        room_members = get_chatroom_participants(current_chat)
-        
-        if data['command'] != "fetch_messages":
-             # Receive message from WebSocket then check if the command is a fetch messages if so just invoke the command else
-            if data['from']!= "mathia": 
-                #if the command is a new message check the senders list (wich should be a func) to make sure its not mathia
-                #so we dont end up having a feedback loop of the bot replying to itself
-                self.command[data["command"]](self,data)
-                #if its not the bots message create the message so it shows on the ui then send a copy to mathia after some security checks
-                member = data['from']
-                member_user=user.objects.filter(username=member)[0]
-                member_user_id = member_user.id
-                member_user = Member.objects.filter(User=member_user_id)[0]
-                if member_user in room_members:
-                    
-                    reply = get_mathia_reply()
-                    self.command[reply["command"]](self,reply)
-                    #after the reply send it  to the websocket to be dispalyed in the ui this logic also means you can send 
-                    #the message to the chatroom but wont get a mathia reply ,infact you get a system warning message
+            if command == "fetch_messages":
+                await self.fetch_messages(data)
+            elif command == "new_message":
+                await self.new_message(data)
             else:
-                self.command[data["command"]](self,data)
-        else:
-            self.command[data["command"]](self,data)
+                await self.send_message({
+                    'member': 'system',
+                    'content': f"Unknown command: {command}",
+                    'timestamp': str(timezone.now())
+                })
+        except Exception as e:
+            print(f"Error in receive: {str(e)}")
+            await self.send_message({
+                'member': 'system',
+                'content': "An error occurred processing your request",
+                'timestamp': str(timezone.now())
+            })
 
-    def send_chat_message(self,message):     # Send message to room group
-        async_to_sync(self.channel_layer.group_send)(
-            self.room_group_name, {
-            "type": "chat_message",
-            "message": message
+    async def fetch_messages(self, data):
+        try:
+            messages = await self.get_last_10_messages(data['chatid'])
+            messages_json = [await self.message_to_json(message) for message in messages]
+            content = {
+                "command": "messages",
+                "messages": messages_json
+            }
+            await self.send_message(content)
+        except Exception as e:
+            print(f"Error in fetch_messages: {str(e)}")
+            await self.send_message({
+                'member': 'system',
+                'content': "Error fetching messages",
+                'timestamp': str(timezone.now())
+            })
+
+    async def new_message(self, data):
+        try:
+            member_username = data['from']
+            
+            # Get user
+            get_user = sync_to_async(User.objects.filter(username=member_username).first)
+            member_user = await get_user()
+            
+            if not member_user:
+                await self.send_chat_message({
+                    'member': 'security system',
+                    'content': "User not found.",
+                    'timestamp': str(timezone.now())
+                })
+                return
+
+            # here i see if the user is a member which will be used for group memebership
+            get_member = sync_to_async(Member.objects.filter(User=member_user).first)
+            member = await get_member()
+            
+            if not member:
+                await self.send_chat_message({
+                    'member': 'security system',
+                    'content': "Not a member of any group.",
+                    'timestamp': str(timezone.now())
+                })
+                return
+
+            # Create a message using data from the websocket
+            create_message = sync_to_async(Message.objects.create)
+            message = await create_message(
+                member=member,
+                content=data['message'],
+                timestamp=timezone.now()
+            )
+
+            # Get chatroom and participants 
+            current_chat = await self.get_current_chatroom(data['chatid'])
+            if not current_chat:
+                await self.send_chat_message({
+                    'member': 'security system',
+                    'content': "Chatroom not found.",
+                    'timestamp': str(timezone.now())
+                })
+                return
+
+            room_members = await self.get_chatroom_participants(current_chat)
+            
+            if member in room_members:
+                await sync_to_async(current_chat.chats.add)(message)
+                await sync_to_async(current_chat.save)()
+                
+                message_json = await self.message_to_json(message)
+                content = {
+                    "command": "new_message",
+                    "message": message_json
+                }
+                await self.send_chat_message(content)
+            else:
+                await self.send_chat_message({
+                    'member': 'security system',
+                    'content': "Not authorized for this chat.",
+                    'timestamp': str(timezone.now())
+                })
+        except Exception as e:
+            print(f"Error in new_message: {str(e)}")
+            await self.send_chat_message({
+                'member': 'security system',
+                'content': "Error processing message",
+                'timestamp': str(timezone.now())
+            })
+
+    async def send_chat_message(self, message):
+        await self.channel_layer.group_send(
+            self.room_group_name,
+            {
+                "type": "chat_message",
+                "message": message
             }
         )
-    def send_message(self,message):
-        self.send(text_data=json.dumps(message))
-    
-    def chat_message(self, event):          # Receive message from room group
-        message = event["message"]
-        # Send message to WebSocket
-        self.send(text_data=json.dumps(message))
 
+    async def chat_message(self, event):
+        await self.send(text_data=json.dumps(event["message"]))
 
+    async def send_message(self, message):
+        await self.send(text_data=json.dumps(message))
+
+    @classmethod
+    async def get_last_10_messages(cls, chatid):
+        messages = Message.objects.filter(chatroom__id=chatid).order_by('-timestamp')[:10]
+        return await sync_to_async(list)(messages)
+
+    @classmethod
+    async def get_current_chatroom(cls, chatid):
+        get_chatroom = sync_to_async(Chatroom.objects.filter(id=chatid).first)
+        return await get_chatroom()
+
+    @classmethod
+    async def get_chatroom_participants(cls, chat):
+        participants = chat.participants.all()
+        return await sync_to_async(list)(participants)
+
+    async def message_to_json(self, message):
+        get_username = sync_to_async(lambda: message.member.User.username)
+        username = await get_username()
+        return {
+            'member': username,
+            'content': message.content,
+            'timestamp': str(message.timestamp)
+        }

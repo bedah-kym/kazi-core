@@ -103,13 +103,14 @@
                                             alt="avatar"><small style="display:table-caption">{{member}}</small></ol>
                                     {% endfor %}
                                 </div>
-                                <div style="display:contents" class="col-lg-6 hidden-sm text-right">
+                                <div class="icon-container col-lg-6 hidden-sm text-right">
 
-                                    <a href="javascript:void(0);" class="btn btn-outline-secondary p-2 "><i
+                                    <a href="javascript:void(0);" class="left-icon btn btn-outline-secondary p-2 "><i
                                             class="fa fa-camera"></i></a>
 
-                                    <a href="javascript:void(0);" class="btn btn-outline-primary p-2"><i
-                                            class="fa fa-microphone" aria-hidden="true"></i></a>
+                                    <input type="file" id="fileInput" style="display:none;">
+                                    <button id="upload" class="right-icon btn btn-outline-primary p-2"><i
+                                            class="fa fa-upload" aria-hidden="true"></i></button>
 
                                 </div>
 
@@ -299,25 +300,29 @@
         }));
         messageInputDom.value = '';
     };
+    document.querySelector('#upload').addEventListener('click', function () {
+        document.querySelector('#fileInput').click();
+    });
+
+    document.querySelector('#fileInput').addEventListener('change', function (event) {
+        const file = event.target.files[0];
+        const reader = new FileReader();
+        reader.onload = function (e) {
+            chatSocket.send(JSON.stringify({
+                'message': `<img src="${e.target.result}" />`,
+                'from': username,
+                'command': 'new_message',
+                "chatid": roomName
+            }));
+
+        };
+        reader.readAsDataURL(file);
+    });
 </script>
 <script src="https://cdn.jsdelivr.net/npm/emoji-mart@latest/dist/browser.js"></script>
 
 <script>
-    /* function simulateTyping() {
-     const chatContainer = document.getElementsByClassName('clearfix');
-     
-     const typingBubble = document.createElement('div');
-     typingBubble.classList.add('chat-bubble');
-     typingBubble.classList.add('receiver'); // Assuming the typing indicator is from the receiver
-     
-     const typingText = document.createElement('span');
-     typingText.textContent = 'Typing...';
-     typingText.classList.add('typing-animation');
-     
-     typingBubble.appendChild(typingText);
-     
-     chatContainer.appendChild(typingBubble);
- };*/
+
     document.addEventListener('DOMContentLoaded', function () {
         const pickerOptions = {
             onEmojiSelect: function (emoji) {

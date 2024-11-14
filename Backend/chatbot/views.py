@@ -55,7 +55,11 @@ def get_chatroom_participants(chatroom):
                 "chatid": chatid
     }"""
 
-def get_mathia_reply():#should return the dict message like in chatsocket
+def get_mathia_reply():
+    """ this is a feature to connect a bot for a specific room using botlibre api so
+    users can talk to this bot.
+    """
+    #should return the dict message like in chatsocket
     import requests
     text=Message.objects.last()
     text= text.content

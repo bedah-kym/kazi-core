@@ -1,10 +1,14 @@
-from django.shortcuts import render,redirect,get_object_or_404,get_list_or_404
+from django.shortcuts import render,redirect,get_object_or_404
 from django.urls import reverse
 from django.contrib.auth.decorators import login_required
 from django.utils.safestring import mark_safe
 from .models import Chatroom,Message
-from Api.models import MathiaReply
 import json 
+from django.http import JsonResponse
+
+from django.conf import settings
+import os
+
 
 
 @login_required
@@ -21,6 +25,33 @@ def home(request,room_name):
         "room_members":room_members
         }
     )
+
+
+def upload_file(request):
+    if request.method == 'POST':
+        try:
+            # Retrieve the uploaded file from the request
+            uploaded_file = request.FILES.get('file')
+
+            if not uploaded_file:
+                return JsonResponse({'error': 'No file provided'}, status=400)
+
+            # Save the file to the uploads directory
+            file_path = os.path.join(settings.MEDIA_ROOT, uploaded_file.name)
+            with open(file_path, 'wb+') as destination:
+                for chunk in uploaded_file.chunks():
+                    destination.write(chunk)
+
+            # Construct the file URL
+            file_url = os.path.join(settings.MEDIA_URL, uploaded_file.name)
+
+            # Return the file URL in the JSON response
+            return JsonResponse({'fileUrl': file_url}, status=200)
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=500)
+    else:
+        return JsonResponse({'error': 'Invalid request method'}, status=405)
+
 
 def welcomepage(request):
     if request.user.is_authenticated:

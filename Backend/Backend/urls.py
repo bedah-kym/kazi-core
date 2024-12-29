@@ -17,6 +17,10 @@ from django.contrib import admin
 from django.urls import path,include
 from rest_framework.urlpatterns import format_suffix_patterns
 from rest_framework.authtoken.views import obtain_auth_token
+from django.conf import settings
+from django.conf.urls.static import static
+
+from chatbot.views import upload_file
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -25,5 +29,9 @@ urlpatterns = [
     path('api/',include('Api.urls')),
     path('auth/', obtain_auth_token),
     path('api-auth/', include('rest_framework.urls')),
+    path('uploads/', upload_file, name='upload_file'),
 ]
 urlpatterns = format_suffix_patterns(urlpatterns)
+
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

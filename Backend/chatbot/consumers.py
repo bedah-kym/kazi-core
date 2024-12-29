@@ -2,6 +2,8 @@ import json
 from asgiref.sync import sync_to_async
 from django.utils import timezone
 from channels.generic.websocket import AsyncWebsocketConsumer
+from django.core.files.storage import default_storage
+from django.core.files.base import ContentFile
 from .models import Message, Member, Chatroom
 from django.contrib.auth import get_user_model
 
@@ -26,6 +28,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 await self.fetch_messages(data)
             elif command == "new_message":
                 await self.new_message(data)
+            elif command == "file_message":
+                await self.file_message(data)
             else:
                 await self.send_message({
                     'member': 'system',
@@ -60,11 +64,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
     async def new_message(self, data):
         try:
             member_username = data['from']
-            
-            # Get user
             get_user = sync_to_async(User.objects.filter(username=member_username).first)
             member_user = await get_user()
-            
+
             if not member_user:
                 await self.send_chat_message({
                     'member': 'security system',
@@ -73,10 +75,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 })
                 return
 
-            # here i see if the user is a member which will be used for group memebership
             get_member = sync_to_async(Member.objects.filter(User=member_user).first)
             member = await get_member()
-            
+
             if not member:
                 await self.send_chat_message({
                     'member': 'security system',
@@ -85,7 +86,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 })
                 return
 
-            # Create a message using data from the websocket
             create_message = sync_to_async(Message.objects.create)
             message = await create_message(
                 member=member,
@@ -93,7 +93,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 timestamp=timezone.now()
             )
 
-            # Get chatroom and participants 
             current_chat = await self.get_current_chatroom(data['chatid'])
             if not current_chat:
                 await self.send_chat_message({
@@ -104,11 +103,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 return
 
             room_members = await self.get_chatroom_participants(current_chat)
-            
+
             if member in room_members:
                 await sync_to_async(current_chat.chats.add)(message)
                 await sync_to_async(current_chat.save)()
-                
+
                 message_json = await self.message_to_json(message)
                 content = {
                     "command": "new_message",
@@ -126,6 +125,78 @@ class ChatConsumer(AsyncWebsocketConsumer):
             await self.send_chat_message({
                 'member': 'security system',
                 'content': "Error processing message",
+                'timestamp': str(timezone.now())
+            })
+
+    async def file_message(self, data):
+        try:
+            member_username = data['from']
+            get_user = sync_to_async(User.objects.filter(username=member_username).first)
+            member_user = await get_user()
+
+            if not member_user:
+                await self.send_chat_message({
+                    'member': 'security system',
+                    'content': "User not found.",
+                    'timestamp': str(timezone.now())
+                })
+                return
+
+            get_member = sync_to_async(Member.objects.filter(User=member_user).first)
+            member = await get_member()
+
+            if not member:
+                await self.send_chat_message({
+                    'member': 'security system',
+                    'content': "Not a member of any group.",
+                    'timestamp': str(timezone.now())
+                })
+                return
+
+            file_data = data['file_data']
+            file_name = data['file_name']
+            file_path = default_storage.save(file_name, ContentFile(file_data.split(';base64,')[1].encode('utf-8')))
+            file_url = default_storage.url(file_path)
+
+            create_message = sync_to_async(Message.objects.create)
+            message = await create_message(
+                member=member,
+                content=f"<a href='{file_url}' target='_blank'>{file_name}</a>",
+                timestamp=timezone.now()
+            )
+
+            current_chat = await self.get_current_chatroom(data['chatid'])
+            if not current_chat:
+                await self.send_chat_message({
+                    'member': 'security system',
+                    'content': "Chatroom not found.",
+                    'timestamp': str(timezone.now())
+                })
+                return
+
+            room_members = await self.get_chatroom_participants(current_chat)
+
+            if member in room_members:
+                await sync_to_async(current_chat.chats.add)(message)
+                await sync_to_async(current_chat.save)()
+
+                message_json = await self.message_to_json(message)
+                content = {
+                    "command": "new_message",
+                    "message": message_json
+                }
+                await self.send_chat_message(content)
+            else:
+                await self.send_chat_message({
+                    'member': 'security system',
+                    'content': "Not authorized for this chat.",
+                    'timestamp': str(timezone.now())
+                })
+        except Exception as e:
+            print(f"Error in file_message: {str(e)}")
+            await self.send_chat_message({
+                'member': 'security system',
+                'content': "Error processing file message",
                 'timestamp': str(timezone.now())
             })
 

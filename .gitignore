@@ -4,6 +4,7 @@
 *.pyc
 __pycache__
 
+mathia
 Backend/db.sqlite3
 # Backup files #
 *.bak
@@ -134,10 +135,6 @@ GitHub.sublime-settings
 !.vscode/launch.json
 !.vscode/extensions.json
 .history
-Backend/db.sqlite3
-Backend/chatbot/static/images/
-Backend/db.sqlite3
-Backend/db.sqlite3
-Backend/db.sqlite3
-Backend/docs.txt
-Backend/chatbot/templates/chatbot/chatbase.html
+
+Backend/uploads/
+

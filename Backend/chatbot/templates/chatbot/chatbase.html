@@ -108,10 +108,15 @@
                                     <a href="javascript:void(0);" class="left-icon btn btn-outline-secondary p-2 "><i
                                             class="fa fa-camera"></i></a>
 
-                                    <input type="file" id="fileInput" style="display:none;">
-                                    <button id="upload" class="right-icon btn btn-outline-primary p-2"><i
-                                            class="fa fa-upload" aria-hidden="true"></i></button>
+                                    <!-- File Input for uploading files -->
+                                    <input type="file" id="fileInput" style="display: none;"
+                                        accept="image/*, .pdf, .doc, .docx, .txt">
 
+                                    <!-- Button to trigger file input -->
+                                    <button id="upload" class="right-icon btn btn-outline-primary p-2">
+                                        <i class="fa fa-upload" aria-hidden="true"></i>
+                                    </button>
+                                    
                                 </div>
 
                             </div>
@@ -278,6 +283,17 @@
         );
     };
 
+    function getCookie(name) {
+    const cookies = document.cookie.split(';');
+    for (let cookie of cookies) {
+        cookie = cookie.trim();
+        if (cookie.startsWith(name + '=')) {
+            return cookie.substring(name.length + 1);
+        }
+    }
+    return null;
+}
+
     chatSocket.onclose = function (e) {
         console.error('Chat socket closed unexpectedly');
     };
@@ -306,20 +322,59 @@
 
     document.querySelector('#fileInput').addEventListener('change', function (event) {
         const file = event.target.files[0];
-        const reader = new FileReader();
-        reader.onload = function (e) {
-            chatSocket.send(JSON.stringify({
-                'message': `<img src="${e.target.result}" />`,
-                'from': username,
-                'command': 'new_message',
-                "chatid": roomName
-            }));
 
-        };
-        reader.readAsDataURL(file);
+        if (!file) return; // Exit if no file selected
+
+        const fileType = file.type;
+        const csrfToken = getCookie('csrftoken');
+
+        // Check if the file is an image
+        if (fileType.startsWith('image/')) {
+            const reader = new FileReader();
+            reader.onload = function (e) {
+                chatSocket.send(JSON.stringify({
+                    'message': `<img src="${e.target.result}" alt="uploaded image" />`,
+                    'from': username,
+                    'command': 'new_message',
+                    "chatid": roomName
+                }));
+            };
+            reader.readAsDataURL(file);
+        }
+        // Check if the file is a document
+        else if (fileType === 'application/pdf' || fileType === 'application/msword' ||
+            fileType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+            fileType === 'text/plain') {
+            const formData = new FormData();
+            formData.append('file', file);
+
+            fetch('/uploads/', { 
+                method: 'POST',
+                body: formData,
+                headers: {
+                    'X-CSRFToken': csrfToken
+                }
+            })
+                .then(response => response.json())
+                .then(data => {
+                    chatSocket.send(JSON.stringify({
+                        'message': `<a href="${data.fileUrl}" target="_blank">${file.name}</a>`,
+                        'from': username,
+                        'command': 'new_message',
+                        "chatid": roomName
+                    }));
+                })
+                .catch(error => console.error('Error uploading file:', error));
+        } else {
+            alert('Unsupported file type.');
+        }
     });
 </script>
 <script src="https://cdn.jsdelivr.net/npm/emoji-mart@latest/dist/browser.js"></script>
+<script>
+
+
+</script>
 
 <script>
 

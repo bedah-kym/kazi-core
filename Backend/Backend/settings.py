@@ -9,7 +9,7 @@ https://docs.djangoproject.com/en/4.1/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/4.1/ref/settings/
 """
-
+import os    
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -117,7 +117,8 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
-
+MEDIA_URL = '/uploads/'  # Base URL for media files
+MEDIA_ROOT = os.path.join(BASE_DIR, 'uploads')  # Directory to store uploaded files
 
 STATIC_URL = 'static/'
 LOGIN_REDIRECT_URL = 'chatbot:redirect_to_home'

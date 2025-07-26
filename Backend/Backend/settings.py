@@ -162,3 +162,14 @@ REST_FRAMEWORK = {
     "PAGE_SIZE": 5
 }
 
+# Cache configuration for rate limiting
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'unique-snowflake',
+    }
+}
+
+# Chat rate limit (messages per minute)
+CHAT_RATE_LIMIT = 30
+

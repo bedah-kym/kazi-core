@@ -296,6 +296,26 @@
             width: 0%;
             transition: width 0.3s ease;
         }
+
+        .file-preview .preview-content {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100px;
+            margin-bottom: 10px;
+        }
+
+        .file-preview .preview-content img {
+            max-height: 100px;
+            max-width: 100%;
+            border-radius: 8px;
+        }
+
+        .file-preview .preview-content video {
+            max-height: 100px;
+            max-width: 100%;
+            border-radius: 8px;
+        }
     </style>
 
 </head>
@@ -323,8 +343,8 @@
                             <a href="{% url 'chatbot:bot-home' chatroom.id %}"
                                 class="text-decoration-none {% if chatroom.id == room_name %}text-white{% else %}text-dark{% endif %}">
                                 <div class="d-flex align-items-center">
-                                    <img src="https://bootdey.com/img/Content/avatar/avatar1.png" class="avatar-img me-2"
-                                        alt="avatar">
+                                    <img src="https://bootdey.com/img/Content/avatar/avatar1.png"
+                                        class="avatar-img me-2" alt="avatar">
                                     <div>
                                         <div class="fw-bold">MATHIA ROOM{{chatroom.id}} (TEST ROOM)</div>
                                         <div class="small">
@@ -340,8 +360,8 @@
                             <a href="{% url 'chatbot:bot-home' chatroom.id %}"
                                 class="text-decoration-none {% if chatroom.id == room_name %}text-white{% else %}text-dark{% endif %}">
                                 <div class="d-flex align-items-center">
-                                    <img src="https://bootdey.com/img/Content/avatar/avatar1.png" class="avatar-img me-2"
-                                        alt="avatar">
+                                    <img src="https://bootdey.com/img/Content/avatar/avatar1.png"
+                                        class="avatar-img me-2" alt="avatar">
                                     <div>
                                         <div class="fw-bold">MATHIA ROOM{{chatroom.id}} (LIVE CHAT ROOM)</div>
                                         <div class="small">
@@ -396,10 +416,9 @@
                     <ul id="top-chat" class="list-unstyled mb-0">
                         <!-- Messages will be inserted here -->
                     </ul>
-                    <div class="typing-indicator">
-                        <span></span>
-                        <span></span>
-                        <span></span>
+                    <div class="typing-indicator" id="typing-indicator" style="display:none;">
+                        <em id="typing-user" class="user-name"></em>
+                        <span></span><span></span><span></span>
                     </div>
                 </div>
 
@@ -446,35 +465,43 @@
         );
 
         // Initialize chat connection
-        chatSocket.onopen = function(e) {
+        chatSocket.onopen = function (e) {
             FetchMessages();
         };
 
-        chatSocket.onclose = function(e) {
+        chatSocket.onclose = function (e) {
             console.error('Chat socket closed unexpectedly');
         };
 
         // Message handling functions
         function createMessage(data) {
+            if (!data || !data.member || !data.content || !data.timestamp) {
+                console.error('Invalid message data:', data);
+                return;
+            }
             const chatHistory = document.querySelector('.chat-history');
             var message = data;
             var author = data['member'];
             var time = (message.timestamp).slice(10, -16);
-
+            var formattedTime = new Date(message.timestamp).toLocaleTimeString(); // New line added for formatted time
+            time = `<span class="time-sender">${formattedTime}</span>`;
             var msgListTag = document.createElement('li');
+            msgListTag.classList.add(message.member === username ? 'my' : 'other');
+
+
             var msgDivTag = document.createElement('div');
             var msgdivtag = document.createElement('p');
             var msgSpanTag = document.createElement('span');
             var msgpTag = document.createElement('div');
             var msgTextTag = document.createElement('div');
-            
+
             msgTextTag.innerHTML = message.content;
             msgdivtag.innerHTML = author;
             msgpTag.innerHTML += time;
 
             msgListTag.className = 'clearfix';
             msgListTag.id = 'tracker';
-            
+
             if (message.member === username) {
                 msgDivTag.className = 'message-data text-right';
                 msgTextTag.className = 'message my-message float-right';
@@ -484,10 +511,10 @@
                 msgTextTag.className = 'message other-message';
                 msgpTag.className = 'time-left';
             }
-            
+
             msgdivtag.className = 'user-name';
             msgSpanTag.className = 'message-data-time';
-            
+
             msgListTag.appendChild(msgDivTag);
             msgDivTag.appendChild(msgpTag);
             msgDivTag.appendChild(msgSpanTag);
@@ -536,7 +563,7 @@
 
         // Event listeners
         let typingTimer;
-        document.querySelector('#chat-message-input').addEventListener('input', function() {
+        document.querySelector('#chat-message-input').addEventListener('input', function () {
             chatSocket.send(JSON.stringify({
                 'command': 'typing',
                 'from': username,
@@ -544,13 +571,14 @@
             }));
         });
 
-        document.querySelector('#chat-message-input').addEventListener('keyup', function(e) {
+
+        document.querySelector('#chat-message-input').addEventListener('keyup', function (e) {
             if (e.keyCode === 13) {
                 document.querySelector('#chat-message-submit').click();
             }
         });
 
-        document.querySelector('#chat-message-submit').addEventListener('click', function(e) {
+        document.querySelector('#chat-message-submit').addEventListener('click', function (e) {
             var messageInputDom = document.querySelector('#chat-message-input');
             var message = messageInputDom.value;
             if (message.trim()) {
@@ -565,11 +593,11 @@
         });
 
         // File handling
-        document.querySelector('#upload').addEventListener('click', function() {
+        document.querySelector('#upload').addEventListener('click', function () {
             document.querySelector('#fileInput').click();
         });
 
-        document.querySelector('#fileInput').addEventListener('change', function(event) {
+        document.querySelector('#fileInput').addEventListener('change', function (event) {
             const file = event.target.files[0];
             if (!file) return;
 
@@ -585,7 +613,7 @@
 
             if (file.type.startsWith('image/')) {
                 const reader = new FileReader();
-                reader.onload = function(e) {
+                reader.onload = function (e) {
                     previewContent.innerHTML = `<img src="${e.target.result}" alt="preview">`;
                 };
                 reader.readAsDataURL(file);
@@ -601,7 +629,7 @@
             const progressInterval = setInterval(() => {
                 progress += 10;
                 progressBar.style.width = `${progress}%`;
-                
+
                 if (progress >= 100) {
                     clearInterval(progressInterval);
                     setTimeout(() => {
@@ -617,35 +645,37 @@
                     'X-CSRFToken': csrfToken
                 }
             })
-            .then(response => response.json())
-            .then(data => {
-                chatSocket.send(JSON.stringify({
-                    'message': file.type.startsWith('image/') 
-                        ? `<img src="${data.fileUrl}" alt="uploaded image" />`
-                        : `<a href="${data.fileUrl}" target="_blank">${file.name}</a>`,
-                    'from': username,
-                    'command': 'new_message',
-                    "chatid": roomName
-                }));
-            })
-            .catch(error => console.error('Error uploading file:', error));
+                .then(response => response.json())
+                .then(data => {
+                    chatSocket.send(JSON.stringify({
+                        'message': file.type.startsWith('image/')
+                            ? `<img src="${data.fileUrl}" alt="uploaded image" />`
+                            : `<a href="${data.fileUrl}" target="_blank">${file.name}</a>`,
+                        'from': username,
+                        'command': 'new_message',
+                        "chatid": roomName
+                    }));
+                })
+                .catch(error => console.error('Error uploading file:', error));
         });
 
-        document.querySelector('.close-preview').addEventListener('click', function() {
+        document.querySelector('.close-preview').addEventListener('click', function () {
             document.querySelector('.file-preview').style.display = 'none';
             document.querySelector('#fileInput').value = '';
         });
 
         // WebSocket message handling
-        chatSocket.onmessage = function(e) {
+        chatSocket.onmessage = function (e) {
             var data = JSON.parse(e.data);
-            
-            if (data['command'] === 'typing' && data['from'] !== username) {
-                showTypingIndicator();
+
+            if (data.command === 'typing' && data.from !== username) {
+                document.getElementById('typing-user').textContent = data.from;
+                showTypingIndicator();            // simply shows the full line
                 clearTimeout(typingTimer);
                 typingTimer = setTimeout(hideTypingIndicator, 3000);
             }
-            else if (data['command'] == 'messages' ) {
+
+            else if (data['command'] == 'messages') {
                 for (let i = (data['messages'].length) - 1; i >= 0; i--) {
                     createMessage(data['messages'][i]);
                 }
@@ -658,9 +688,9 @@
         };
 
         // Emoji picker initialization
-        document.addEventListener('DOMContentLoaded', function() {
+        document.addEventListener('DOMContentLoaded', function () {
             const pickerOptions = {
-                onEmojiSelect: function(emoji) {
+                onEmojiSelect: function (emoji) {
                     var input = document.getElementById('chat-message-input');
                     input.value += emoji.native;
                     toggleEmojiPicker();
@@ -689,4 +719,5 @@
         const savedTheme = localStorage.getItem('theme') || 'light';
         document.body.setAttribute('data-theme', savedTheme);
     </script>
+
 </html>

@@ -168,7 +168,7 @@ body {
 }
 
 .chat .chat-history .message {
-    color: #444;
+    color: #1b1e21;
     padding: 5px 29px;
     line-height: 17px;
     font-size: 16px;
@@ -178,7 +178,6 @@ body {
     position: relative;
     min-width: 25%;
     max-width: 70%;
-    border: outset;
     border-color: #3a1e11;
 
 }
@@ -198,7 +197,7 @@ body {
 }
 
 .chat .chat-history .my-message {
-    background: aliceblue;
+    background: #ECECEC;
     border: inset;
     border-color: maroon;
 
@@ -219,7 +218,7 @@ body {
 }
 
 .chat .chat-history .other-message {
-    background: antiquewhite;
+    background: #25D366;
     text-align: right;
     font-family: 'Trebuchet MS', 'Lucida Sans Unicode', 'Lucida Grande', 'Lucida Sans', Arial, sans-serif;
 }
@@ -232,6 +231,11 @@ body {
 .chat .chat-message {
     padding: 20px;
 
+}
+
+.chat .chat-history .message-data img {
+    border-radius: 10px;
+    min-width: 100%;
 }
 
 .online,

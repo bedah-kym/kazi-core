@@ -1,4 +1,4 @@
-{%load static %}
+{% load static %}
 {% load humanize %}
 <!DOCTYPE html>
 <html lang="en">
@@ -9,138 +9,423 @@
 
     <title>MATHIA chat</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@4.5.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="{% static 'css/chatbase.css' %}" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --primary-color: #4f8cff;
+            --secondary-color: #6c757d;
+            --bg-light: #f8f9fa;
+            --chat-bg: #ffffff;
+            --text-color: #000;
+        }
+
+        [data-theme="dark"] {
+            --primary-color: #3a6ea5;
+            --secondary-color: #3c4043;
+            --bg-light: #202124;
+            --chat-bg: #303134;
+            --text-color: #e8eaed;
+        }
+
+        body {
+            background-color: var(--bg-light);
+            color: var(--text-color);
+            height: 100vh;
+            transition: background-color 0.3s, color 0.3s;
+        }
+
+        .chat-container {
+            max-height: 100vh;
+            background: var(--chat-bg);
+            box-shadow: 0 0 15px rgba(0, 0, 0, 0.1);
+            border-radius: 15px;
+            transition: background 0.3s;
+        }
+
+        .people-list {
+            background: #fff;
+            border-right: 1px solid #eee;
+            height: 100vh;
+        }
+
+        .chat-list li {
+            padding: 10px;
+            border-radius: 10px;
+            margin: 5px 0;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .chat-list li:hover {
+            background: var(--bg-light);
+        }
+
+        .chat-list .active {
+            background: var(--primary-color);
+            color: white;
+        }
+
+        .chat-header {
+            background: var(--chat-bg);
+            border-bottom: 1px solid #eee;
+            padding: 15px;
+            transition: background 0.3s;
+        }
+
+        .chat-history {
+            height: calc(100vh - 180px);
+            overflow-y: auto;
+            padding: 20px;
+            background: var(--bg-light);
+            transition: background 0.3s;
+        }
+
+        .message {
+            padding: 12px 18px;
+            border-radius: 18px;
+            margin-bottom: 15px;
+            max-width: 70%;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+            position: relative;
+        }
+
+        .my-message {
+            background: var(--primary-color);
+            color: white;
+            margin-left: auto;
+            border-bottom-right-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+
+        .other-message {
+            background: white;
+            color: #333;
+            margin-right: auto;
+            border-bottom-left-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+
+        [data-theme="dark"] .other-message {
+            background: #424242;
+            color: #fff;
+        }
+
+        .message-data {
+            margin-bottom: 8px;
+        }
+
+        .user-name {
+            font-size: 0.85em;
+            margin-top: 5px;
+            opacity: 0.8;
+        }
+
+        .time-sender,
+        .time-left {
+            font-size: 0.75em;
+            opacity: 0.7;
+        }
+
+        /* Ensure images in chat are properly sized */
+        .message img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 10px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+
+        .chat-message {
+            padding: 15px;
+            background: var(--chat-bg);
+            border-top: 1px solid #eee;
+            transition: background 0.3s;
+        }
+
+        #chat-message-input {
+            border-radius: 20px;
+            padding: 10px 20px;
+        }
+
+        #chat-message-submit {
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            padding: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--primary-color);
+            color: white;
+        }
+
+        .avatar-img {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            object-fit: cover;
+        }
+
+        em-emoji-picker {
+            position: absolute;
+            bottom: 70px;
+            right: 20px;
+            z-index: 1000;
+        }
+
+        .dark-mode-toggle {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            z-index: 1000;
+            background: var(--primary-color);
+            color: var(--text-color);
+            border: none;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        .dark-mode-toggle:hover {
+            background: var(--secondary-color);
+        }
+
+        .typing-indicator {
+            background-color: var(--bg-light);
+            padding: 8px;
+            border-radius: 15px;
+            display: none;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .typing-indicator span {
+            height: 8px;
+            width: 8px;
+            margin: 0 2px;
+            background-color: #90949c;
+            display: block;
+            border-radius: 50%;
+            opacity: 0.4;
+            animation: typing 1s infinite;
+        }
+
+        .typing-indicator span:nth-child(1) {
+            animation-delay: 0s;
+        }
+
+        .typing-indicator span:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        .typing-indicator span:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+
+        @keyframes typing {
+            0% {
+                transform: scale(1);
+            }
+
+            50% {
+                transform: scale(1.5);
+            }
+
+            100% {
+                transform: scale(1);
+            }
+        }
+
+        .file-preview {
+            position: fixed;
+            bottom: 80px;
+            right: 20px;
+            max-width: 300px;
+            background: var(--chat-bg);
+            border-radius: 10px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+            padding: 10px;
+            display: none;
+            z-index: 1000;
+        }
+
+        .file-preview img {
+            max-width: 100%;
+            border-radius: 8px;
+        }
+
+        .file-preview .file-info {
+            display: flex;
+            align-items: center;
+            margin-top: 8px;
+        }
+
+        .file-preview .file-name {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .file-preview .close-preview {
+            background: none;
+            border: none;
+            color: #666;
+            cursor: pointer;
+            padding: 5px;
+        }
+
+        .upload-progress {
+            height: 4px;
+            width: 100%;
+            background: #eee;
+            border-radius: 2px;
+            overflow: hidden;
+            margin-top: 8px;
+        }
+
+        .upload-progress-bar {
+            height: 100%;
+            background: var(--primary-color);
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+    </style>
 
 </head>
 
 <body>
-    <link href="https://maxcdn.bootstrapcdn.com/font-awesome/4.7.0/css/font-awesome.min.css" rel="stylesheet" />
-
-
-    <div class="container" style="max-width:fit-content;padding:0;">
-        <div class="row clearfix">
-            <div class="col-lg-12">
-
-                <div onload="changemode()" id="mode" class="card chat-app">
-                    <div id="plist" class="people-list">
-                        <div class="input-group">
-                            <div class="input-group-prepend">
-                                <span class="input-group-text"><i class="fa fa-search"></i></span>
-                            </div>
-                            <input type="text" class="form-control" id="search" placeholder="Search message..">
-                        </div>
-
-                        <ul class="list-unstyled chat-list p-2 mt-2 mb-2">
-
-                            </li>
-                            {% for chatroom in chatrooms %}
-                            {% if chatroom.id != 2 %}
-                            <li class="clearfix active">
-                                <img src="https://bootdey.com/img/Content/avatar/avatar1.png" alt="avatar">
-                                <a href="{% url 'chatbot:bot-home' chatroom.id %}">
-                                    <div class="about">
-                                        <div class="name">MATHIA ROOM{{chatroom.id}} (TEST ROOM)</div>
-                                        <div class="status"> <i class="fa fa-circle online"></i> online </div>
-                                    </div>
-                                </a>
-                            </li>
-                            <li>
-                            </li>
-                            {%else%}
-                            <li class="clearfix active">
-                                <img src="https://bootdey.com/img/Content/avatar/avatar1.png" alt="avatar">
-                                <a href="{% url 'chatbot:bot-home' chatroom.id %}">
-                                    <div class="about">
-                                        <div class="name">MATHIA ROOM{{chatroom.id}} (LIVE CHAT ROOM) </div>
-                                        <div class="status"> <i class="fa fa-circle online"></i> online </div>
-                                    </div>
-                                </a>
-                            </li>
-                            <li>
-                            </li>
-                            {%endif%}
-
-
-                            {%endfor%}
-                            <li>
-                                <a href="{%url 'users:logout' %}" class="btn btn-outline-danger p-1 m-1"><img
-                                        class="p-1" style="max-width:31px;"
-                                        src="https://img.icons8.com/ios/50/null/login-rounded-right--v1.png" /><span
-                                        style="padding:inherit">logout</span></a>
-                                <a href="javascript:void(0);" style="float:right;" class="btn btn-outline-none"><i
-                                        class="fa fa-cog fa-spin fa-2x fa-fw"></i></a>
-
-                            </li>
-
-
-                            </li>
-                        </ul>
-
+    <button class="dark-mode-toggle" id="darkModeToggle" aria-label="Toggle dark mode">
+        <i class="fas fa-moon"></i>
+    </button>
+    <div class="container-fluid p-0">
+        <div class="row g-0">
+            <div class="col-md-4 col-lg-3 people-list">
+                <div class="p-3">
+                    <div class="input-group mb-3">
+                        <span class="input-group-text bg-light border-0">
+                            <i class="fas fa-search text-muted"></i>
+                        </span>
+                        <input type="text" class="form-control border-0 bg-light" id="search"
+                            placeholder="Search messages...">
                     </div>
-                    <div class="chat">
-                        <div class="chat-header clearfix">
-                            <div class="row">
-                                <div class="col-lg-6">
-                                    <a href="javascript:void(0);" data-toggle="modal" data-target="#view_info">
-                                        <img src="https://bootdey.com/img/Content/avatar/avatar2.png" alt="avatar">
-                                    </a>
-                                    <div class="chat-about">
-                                        <h6 class="m-b-0">ROOM {{room_name}}</h6>
-                                        <div class="status"> <i class="fa fa-circle online"></i> online </div>
+
+                    <ul class="list-unstyled chat-list">
+                        {% for chatroom in chatrooms %}
+                        {% if chatroom.id != 2 %}
+                        <li class="clearfix {% if chatroom.id == room_name %}active{% endif %}">
+                            <a href="{% url 'chatbot:bot-home' chatroom.id %}"
+                                class="text-decoration-none {% if chatroom.id == room_name %}text-white{% else %}text-dark{% endif %}">
+                                <div class="d-flex align-items-center">
+                                    <img src="https://bootdey.com/img/Content/avatar/avatar1.png" class="avatar-img me-2"
+                                        alt="avatar">
+                                    <div>
+                                        <div class="fw-bold">MATHIA ROOM{{chatroom.id}} (TEST ROOM)</div>
+                                        <div class="small">
+                                            <i class="fas fa-circle text-success me-1"></i>
+                                            online
+                                        </div>
                                     </div>
-                                    <div class="text-right">
-                                        <button class="toggle-btn ">
-                                            <span class="hamburger"> </span>
-                                        </button>
+                                </div>
+                            </a>
+                        </li>
+                        {% else %}
+                        <li class="clearfix {% if chatroom.id == room_name %}active{% endif %}">
+                            <a href="{% url 'chatbot:bot-home' chatroom.id %}"
+                                class="text-decoration-none {% if chatroom.id == room_name %}text-white{% else %}text-dark{% endif %}">
+                                <div class="d-flex align-items-center">
+                                    <img src="https://bootdey.com/img/Content/avatar/avatar1.png" class="avatar-img me-2"
+                                        alt="avatar">
+                                    <div>
+                                        <div class="fw-bold">MATHIA ROOM{{chatroom.id}} (LIVE CHAT ROOM)</div>
+                                        <div class="small">
+                                            <i class="fas fa-circle text-success me-1"></i>
+                                            online
+                                        </div>
                                     </div>
                                 </div>
-                                <div style="background:antiquewhite;overflow-x: scroll;display: inline-flex;"
-                                    class="col-lg-6 hidden-sm ">
-                                    <!--<h6 style"text-align:left;font-family:cursive;">members</h6>-->
-                                    {% for member in room_members%}
-                                    <ol class="btn"><img src="https://bootdey.com/img/Content/avatar/avatar2.png"
-                                            alt="avatar"><small style="display:table-caption">{{member}}</small></ol>
-                                    {% endfor %}
+                            </a>
+                        </li>
+                        {% endif %}
+                        {% endfor %}
+                    </ul>
+
+                    <div class="d-flex justify-content-between align-items-center mt-3">
+                        <a href="{% url 'users:logout' %}" class="btn btn-outline-danger">
+                            <i class="fas fa-sign-out-alt me-2"></i>Logout
+                        </a>
+                        <button class="btn btn-link text-muted">
+                            <i class="fas fa-cog fa-spin"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-8 col-lg-9 chat-container">
+                <div class="chat-header">
+                    <div class="row align-items-center">
+                        <div class="col-8">
+                            <div class="d-flex align-items-center">
+                                <img src="https://bootdey.com/img/Content/avatar/avatar2.png" class="avatar-img me-3"
+                                    alt="avatar">
+                                <div>
+                                    <h6 class="mb-0">ROOM {{room_name}}</h6>
+                                    <div class="small text-muted">
+                                        <i class="fas fa-circle text-success me-1"></i>
+                                        online
+                                    </div>
                                 </div>
-                                <div class="icon-container col-lg-6 hidden-sm text-right">
-
-                                    <a href="javascript:void(0);" class="left-icon btn btn-outline-secondary p-2 "><i
-                                            class="fa fa-camera"></i></a>
-
-                                    <!-- File Input for uploading files -->
-                                    <input type="file" id="fileInput" style="display: none;"
-                                        accept="image/*, .pdf, .doc, .docx, .txt">
-
-                                    <!-- Button to trigger file input -->
-                                    <button id="upload" class="right-icon btn btn-outline-primary p-2">
-                                        <i class="fa fa-upload" aria-hidden="true"></i>
-                                    </button>
-                                    
-                                </div>
-
                             </div>
                         </div>
-                        <div class="chat-history" style="background-image: url('{% static 'images/chatbg.jpg' %}');">
-                            <ul id="top-chat" class="m-b-0">
-
-                            </ul>
+                        <div class="col-4 text-end">
+                            <button class="btn btn-light me-2" id="upload">
+                                <i class="fas fa-upload"></i>
+                            </button>
+                            <input type="file" id="fileInput" class="d-none" accept="image/*, .pdf, .doc, .docx, .txt">
                         </div>
-                        <div class="chat-message clearfix">
-                            <div class="input-group mb-0">
-                                <div class="input-group-prepend">
-                                    <span class="input-group-append"><button id="emoji" class="btn btn-outline p-2"><i
-                                                class="fa fa-meh-o fa-lg" aria-hidden="true"></i></button></span>
+                    </div>
+                </div>
 
-                                </div>
+                <div class="chat-history">
+                    <ul id="top-chat" class="list-unstyled mb-0">
+                        <!-- Messages will be inserted here -->
+                    </ul>
+                    <div class="typing-indicator">
+                        <span></span>
+                        <span></span>
+                        <span></span>
+                    </div>
+                </div>
 
-                                <input class="form-control" id="chat-message-input" type="text" size="100">
-                                <button id="chat-message-submit" class="btn p-2">
-                                    <i class="fa fa-send"></i></button>
-                                <br>
+                <div class="file-preview">
+                    <div class="preview-content"></div>
+                    <div class="file-info">
+                        <div class="file-name"></div>
+                        <button class="close-preview">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    <div class="upload-progress">
+                        <div class="upload-progress-bar"></div>
+                    </div>
+                </div>
 
-                            </div>
-                        </div>
+                <div class="chat-message">
+                    <div class="input-group">
+                        <button id="emoji" class="btn btn-light">
+                            <i class="far fa-smile"></i>
+                        </button>
+                        <input type="text" class="form-control" id="chat-message-input"
+                            placeholder="Type your message...">
+                        <button class="btn btn-primary" id="chat-message-submit">
+                            <i class="fas fa-paper-plane"></i>
+                        </button>
                     </div>
                 </div>
             </div>
@@ -148,260 +433,260 @@
     </div>
     <script src="{% static 'js/main.js'%}"></script>
     <script src="https://code.jquery.com/jquery-1.10.2.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.0/dist/js/bootstrap.bundle.min.js"></script>
-</body>
-<script src="{% static 'js/reconnecting-websocket.js'%}"></script>
-<script src="{% static 'js/reconnecting-websocket.min.js'%}"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{% static 'js/reconnecting-websocket.js'%}"></script>
+    <script src="{% static 'js/reconnecting-websocket.min.js'%}"></script>
+    <script src="https://cdn.jsdelivr.net/npm/emoji-mart@latest/dist/browser.js"></script>
 
-<script>
-    var roomName = {{ room_name }};
-    console.log("room", roomName)
-    var username = {{ username }};
-    var chatSocket = new ReconnectingWebSocket(
-        'ws://'
-        + window.location.host
-        + '/ws/chat/'
-        + roomName
-        + '/'
-    );
-    console.log('chatting..')
+    <script>
+        var roomName = {{ room_name }};
+        var username = {{ username }};
+        var chatSocket = new ReconnectingWebSocket(
+            'ws://' + window.location.host + '/ws/chat/' + roomName + '/'
+        );
 
-    chatSocket.onopen = function (e) {
-        FetchMessages();
+        // Initialize chat connection
+        chatSocket.onopen = function(e) {
+            FetchMessages();
+        };
 
-    };
-    function scrollToLastMessage() {
-        const elements = document.querySelectorAll('#tracker');
-        if (elements.length > 0) {
-            const lastElement = elements[elements.length - 1];
-            lastElement.scrollIntoView();
-            console.log(elements.length)
-        } else {
-            console.log(elements.length)
-        }
-    }
+        chatSocket.onclose = function(e) {
+            console.error('Chat socket closed unexpectedly');
+        };
 
-    chatSocket.onmessage = function (e) {
-        var data = JSON.parse(e.data);
-
-        if (data['command'] == 'messages') {
-            for (let i = (data['messages'].length) - 1; i >= 0; i--) {
-                createMessage(data['messages'][i]);
-            }
-            scrollToLastMessage();
-        }
-        else if (data['command'] == 'new_message') {
-            createMessage(data['message']);
-            var data = JSON.parse(e.data);
-            var message = data['message'];
-            var author = data['author'];
-
+        // Message handling functions
+        function createMessage(data) {
+            const chatHistory = document.querySelector('.chat-history');
+            var message = data;
+            var author = data['member'];
+            var time = (message.timestamp).slice(10, -16);
 
             var msgListTag = document.createElement('li');
             var msgDivTag = document.createElement('div');
+            var msgdivtag = document.createElement('p');
             var msgSpanTag = document.createElement('span');
+            var msgpTag = document.createElement('div');
             var msgTextTag = document.createElement('div');
-            var pTag = document.createElement('p');
-            pTag.textContent = message.content;
-
-
-            if (message.author === username) {
-                msgListTag.className = 'clearfix';
-                msgListTag.id = 'tracker';
-                msgDivTag.className = 'message-data text-right';
-                msgSpanTag.className = 'message-data-time';
-                msgTextTag.className = 'message other-message float-right';
-                msgListTag.appendChild(msgDivTag)
-                msgDivTag.appendChild(msgSpanTag)
-                msgSpanTag.appendChild(msgTextTag)
-                msgTextTag.appendChild(pTag)
-
-            }
-        }
-
-    };
-    function createMessage(data) {
-        const chatHistory = document.querySelector('.chat-history');
-        var message = data;
-        var author = data['member'];
-        var time3 = data['timestamp'];
-        var time = (message.timestamp).slice(10, -16);
-
-        var msgListTag = document.createElement('li');
-        var msgDivTag = document.createElement('div');
-        var msgdivtag = document.createElement('p');
-        var msgSpanTag = document.createElement('span');
-        var msgpTag = document.createElement('div');
-        var msgTextTag = document.createElement('div');
-        msgTextTag.innerHTML = message.content;
-        msgdivtag.innerHTML = author;
-        msgpTag.innerHTML += time;
-
-        if (message.member === username) {
-            msgListTag.className = 'clearfix';
-            msgListTag.id = 'tracker'
-            msgDivTag.className = 'message-data text-right';
-            msgSpanTag.className = 'message-data-time';
-            msgTextTag.className = 'message other-message float-right';
-            msgpTag.className = 'time-sender';
-            msgdivtag.className = 'user-name';
-            msgListTag.appendChild(msgDivTag);
-            msgDivTag.appendChild(msgpTag);
-            msgDivTag.appendChild(msgSpanTag);
-            msgSpanTag.appendChild(msgTextTag);
-            msgTextTag.appendChild(msgdivtag);
-        }
-        else {
+            
+            msgTextTag.innerHTML = message.content;
+            msgdivtag.innerHTML = author;
+            msgpTag.innerHTML += time;
 
             msgListTag.className = 'clearfix';
             msgListTag.id = 'tracker';
-            msgDivTag.className = 'message-data';
-            msgSpanTag.className = 'message-data-time';
-            msgTextTag.className = 'message my-message';
-            msgpTag.className = 'time-left';
+            
+            if (message.member === username) {
+                msgDivTag.className = 'message-data text-right';
+                msgTextTag.className = 'message my-message float-right';
+                msgpTag.className = 'time-sender';
+            } else {
+                msgDivTag.className = 'message-data';
+                msgTextTag.className = 'message other-message';
+                msgpTag.className = 'time-left';
+            }
+            
             msgdivtag.className = 'user-name';
+            msgSpanTag.className = 'message-data-time';
+            
             msgListTag.appendChild(msgDivTag);
             msgDivTag.appendChild(msgpTag);
             msgDivTag.appendChild(msgSpanTag);
             msgSpanTag.appendChild(msgTextTag);
             msgTextTag.appendChild(msgdivtag);
 
+            document.querySelector('#top-chat').appendChild(msgListTag);
+            chatHistory.scrollTop = chatHistory.scrollHeight;
         }
-        document.querySelector('#top-chat').appendChild(msgListTag);
-        chatHistory.scrollTop = chatHistory.scrollHeight;
 
-    };
-
-    function FetchMessages() {
-        chatSocket.send(JSON.stringify(
-            {
+        function FetchMessages() {
+            chatSocket.send(JSON.stringify({
                 "command": "fetch_messages",
-                "chatid": roomName,
+                "chatid": roomName
+            }));
+        }
 
+        function scrollToLastMessage() {
+            const elements = document.querySelectorAll('#tracker');
+            if (elements.length > 0) {
+                const lastElement = elements[elements.length - 1];
+                lastElement.scrollIntoView();
             }
-        )
-        );
-    };
-
-    function getCookie(name) {
-    const cookies = document.cookie.split(';');
-    for (let cookie of cookies) {
-        cookie = cookie.trim();
-        if (cookie.startsWith(name + '=')) {
-            return cookie.substring(name.length + 1);
         }
-    }
-    return null;
-}
 
-    chatSocket.onclose = function (e) {
-        console.error('Chat socket closed unexpectedly');
-    };
-
-    document.querySelector('#chat-message-input').focus();
-    document.querySelector('#chat-message-input').onkeyup = function (e) {
-        if (e.keyCode === 13) {  // enter, return
-            document.querySelector('#chat-message-submit').click();
+        // Typing indicator functions
+        function showTypingIndicator() {
+            document.querySelector('.typing-indicator').style.display = 'flex';
         }
-    };
 
-    document.querySelector('#chat-message-submit').onclick = function (e) {
-        var messageInputDom = document.querySelector('#chat-message-input');
-        var message = messageInputDom.value;
-        chatSocket.send(JSON.stringify({
-            'message': message,
-            'from': username,
-            'command': 'new_message',
-            "chatid": roomName
-        }));
-        messageInputDom.value = '';
-    };
-    document.querySelector('#upload').addEventListener('click', function () {
-        document.querySelector('#fileInput').click();
-    });
+        function hideTypingIndicator() {
+            document.querySelector('.typing-indicator').style.display = 'none';
+        }
 
-    document.querySelector('#fileInput').addEventListener('change', function (event) {
-        const file = event.target.files[0];
+        // Utility functions
+        function getCookie(name) {
+            const cookies = document.cookie.split(';');
+            for (let cookie of cookies) {
+                cookie = cookie.trim();
+                if (cookie.startsWith(name + '=')) {
+                    return cookie.substring(name.length + 1);
+                }
+            }
+            return null;
+        }
 
-        if (!file) return; // Exit if no file selected
+        // Event listeners
+        let typingTimer;
+        document.querySelector('#chat-message-input').addEventListener('input', function() {
+            chatSocket.send(JSON.stringify({
+                'command': 'typing',
+                'from': username,
+                "chatid": roomName
+            }));
+        });
 
-        const fileType = file.type;
-        const csrfToken = getCookie('csrftoken');
+        document.querySelector('#chat-message-input').addEventListener('keyup', function(e) {
+            if (e.keyCode === 13) {
+                document.querySelector('#chat-message-submit').click();
+            }
+        });
 
-        // Check if the file is an image
-        if (fileType.startsWith('image/')) {
-            const reader = new FileReader();
-            reader.onload = function (e) {
+        document.querySelector('#chat-message-submit').addEventListener('click', function(e) {
+            var messageInputDom = document.querySelector('#chat-message-input');
+            var message = messageInputDom.value;
+            if (message.trim()) {
                 chatSocket.send(JSON.stringify({
-                    'message': `<img src="${e.target.result}" alt="uploaded image" />`,
+                    'message': message,
                     'from': username,
                     'command': 'new_message',
                     "chatid": roomName
                 }));
-            };
-            reader.readAsDataURL(file);
-        }
-        // Check if the file is a document
-        else if (fileType === 'application/pdf' || fileType === 'application/msword' ||
-            fileType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
-            fileType === 'text/plain') {
+                messageInputDom.value = '';
+            }
+        });
+
+        // File handling
+        document.querySelector('#upload').addEventListener('click', function() {
+            document.querySelector('#fileInput').click();
+        });
+
+        document.querySelector('#fileInput').addEventListener('change', function(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const filePreview = document.querySelector('.file-preview');
+            const previewContent = filePreview.querySelector('.preview-content');
+            const fileName = filePreview.querySelector('.file-name');
+            const progressBar = filePreview.querySelector('.upload-progress-bar');
+
+            fileName.textContent = file.name;
+            previewContent.innerHTML = '';
+            progressBar.style.width = '0%';
+            filePreview.style.display = 'block';
+
+            if (file.type.startsWith('image/')) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    previewContent.innerHTML = `<img src="${e.target.result}" alt="preview">`;
+                };
+                reader.readAsDataURL(file);
+            } else {
+                previewContent.innerHTML = `<i class="fas fa-file fa-3x"></i>`;
+            }
+
             const formData = new FormData();
             formData.append('file', file);
+            const csrfToken = getCookie('csrftoken');
 
-            fetch('/uploads/', { 
+            let progress = 0;
+            const progressInterval = setInterval(() => {
+                progress += 10;
+                progressBar.style.width = `${progress}%`;
+                
+                if (progress >= 100) {
+                    clearInterval(progressInterval);
+                    setTimeout(() => {
+                        filePreview.style.display = 'none';
+                    }, 500);
+                }
+            }, 200);
+
+            fetch('/uploads/', {
                 method: 'POST',
                 body: formData,
                 headers: {
                     'X-CSRFToken': csrfToken
                 }
             })
-                .then(response => response.json())
-                .then(data => {
-                    chatSocket.send(JSON.stringify({
-                        'message': `<a href="${data.fileUrl}" target="_blank">${file.name}</a>`,
-                        'from': username,
-                        'command': 'new_message',
-                        "chatid": roomName
-                    }));
-                })
-                .catch(error => console.error('Error uploading file:', error));
-        } else {
-            alert('Unsupported file type.');
-        }
-    });
-</script>
-<script src="https://cdn.jsdelivr.net/npm/emoji-mart@latest/dist/browser.js"></script>
-<script>
+            .then(response => response.json())
+            .then(data => {
+                chatSocket.send(JSON.stringify({
+                    'message': file.type.startsWith('image/') 
+                        ? `<img src="${data.fileUrl}" alt="uploaded image" />`
+                        : `<a href="${data.fileUrl}" target="_blank">${file.name}</a>`,
+                    'from': username,
+                    'command': 'new_message',
+                    "chatid": roomName
+                }));
+            })
+            .catch(error => console.error('Error uploading file:', error));
+        });
 
+        document.querySelector('.close-preview').addEventListener('click', function() {
+            document.querySelector('.file-preview').style.display = 'none';
+            document.querySelector('#fileInput').value = '';
+        });
 
-</script>
-
-<script>
-
-    document.addEventListener('DOMContentLoaded', function () {
-        const pickerOptions = {
-            onEmojiSelect: function (emoji) {
-                var input = document.getElementById('chat-message-input');
-                input.value += emoji.native;
-                toggleEmojiPicker();
+        // WebSocket message handling
+        chatSocket.onmessage = function(e) {
+            var data = JSON.parse(e.data);
+            
+            if (data['command'] === 'typing' && data['from'] !== username) {
+                showTypingIndicator();
+                clearTimeout(typingTimer);
+                typingTimer = setTimeout(hideTypingIndicator, 3000);
             }
-        }
-        const picker = new EmojiMart.Picker(pickerOptions)
-        picker.style.display = 'none';
-        document.body.appendChild(picker)
-        document.getElementById('emoji').addEventListener('click', toggleEmojiPicker);
+            else if (data['command'] == 'messages' ) {
+                for (let i = (data['messages'].length) - 1; i >= 0; i--) {
+                    createMessage(data['messages'][i]);
+                }
+                scrollToLastMessage();
+            }
+            else if (data['command'] == 'new_message') {
+                createMessage(data['message']);
+                scrollToLastMessage();
+            }
+        };
+
+        // Emoji picker initialization
+        document.addEventListener('DOMContentLoaded', function() {
+            const pickerOptions = {
+                onEmojiSelect: function(emoji) {
+                    var input = document.getElementById('chat-message-input');
+                    input.value += emoji.native;
+                    toggleEmojiPicker();
+                }
+            }
+            const picker = new EmojiMart.Picker(pickerOptions)
+            picker.style.display = 'none';
+            document.body.appendChild(picker)
+            document.getElementById('emoji').addEventListener('click', toggleEmojiPicker);
+        });
 
         function toggleEmojiPicker() {
             const element = document.querySelector('em-emoji-picker');
-            if (element.style.display === 'none') {
-                // If the element is currently hidden, show it
-                element.style.display = ''; // Use the default display value
-            } else {
-                // If the element is currently visible, hide it
-                element.style.display = 'none';
-            }
+            element.style.display = element.style.display === 'none' ? '' : 'none';
         }
-    });
-</script>
 
+        // Dark mode
+        const toggleButton = document.getElementById('darkModeToggle');
+        toggleButton.addEventListener('click', () => {
+            const currentTheme = document.body.getAttribute('data-theme');
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+            document.body.setAttribute('data-theme', newTheme);
+            localStorage.setItem('theme', newTheme);
+        });
+
+        const savedTheme = localStorage.getItem('theme') || 'light';
+        document.body.setAttribute('data-theme', savedTheme);
+    </script>
 </html>

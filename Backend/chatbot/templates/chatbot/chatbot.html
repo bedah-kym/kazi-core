@@ -1,0 +1,288 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MATHIA Chat</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --chat-primary: #6c5ce7;
+            --chat-secondary: #a8a4e6;
+            --chat-background: #f8f9fa;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            height: 100vh;
+            margin: 0;
+            overflow: hidden;
+        }
+
+        .chat-container {
+            max-width: 1200px;
+            height: 100vh;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .chat-header {
+            padding: 1.5rem;
+            background: white;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+            border-radius: 16px 16px 0 0;
+        }
+
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1.5rem;
+            scroll-behavior: smooth;
+        }
+
+        .message {
+            display: flex;
+            margin-bottom: 1.5rem;
+            opacity: 0;
+            transform: translateY(20px);
+            animation: fadeIn 0.3s ease forwards;
+        }
+
+        @keyframes fadeIn {
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .message-content {
+            max-width: 80%;
+            padding: 1rem;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+        }
+
+        .user-message {
+            justify-content: flex-end;
+        }
+
+        .user-message .message-content {
+            background: var(--chat-primary);
+            color: white;
+            border-radius: 12px 12px 0 12px;
+        }
+
+        .bot-message {
+            justify-content: flex-start;
+        }
+
+        .bot-message .message-content {
+            background: white;
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            border-radius: 12px 12px 12px 0;
+        }
+
+        .chat-input {
+            padding: 1.5rem;
+            background: white;
+            border-top: 1px solid rgba(0, 0, 0, 0.1);
+            border-radius: 0 0 16px 16px;
+        }
+
+        .input-group {
+            background: var(--chat-background);
+            border-radius: 12px;
+            padding: 0.5rem;
+        }
+
+        .form-control {
+            border: none;
+            background: transparent;
+            box-shadow: none !important;
+            font-size: 1rem;
+            padding: 0.5rem 1rem;
+        }
+
+        .btn-send {
+            background: var(--chat-primary);
+            border: none;
+            border-radius: 8px;
+            padding: 0.7rem 1.5rem;
+            color: white;
+            transition: all 0.3s ease;
+        }
+
+        .btn-send:hover {
+            background: #5d4adb;
+            transform: translateY(-2px);
+        }
+
+        .typing-indicator {
+            display: flex;
+            padding: 0.5rem;
+            gap: 0.3rem;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .typing-indicator.active {
+            opacity: 1;
+        }
+
+        .typing-dot {
+            width: 8px;
+            height: 8px;
+            background: var(--chat-secondary);
+            border-radius: 50%;
+            animation: typingBounce 1s infinite;
+        }
+
+        .typing-dot:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        .typing-dot:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+
+        @keyframes typingBounce {
+
+            0%,
+            60%,
+            100% {
+                transform: translateY(0);
+            }
+
+            30% {
+                transform: translateY(-4px);
+            }
+        }
+
+        .feedback-buttons {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 0.5rem;
+        }
+
+        .feedback-btn {
+            background: none;
+            border: 1px solid var(--chat-secondary);
+            border-radius: 20px;
+            padding: 0.3rem 0.8rem;
+            font-size: 0.9rem;
+            color: var(--chat-primary);
+            transition: all 0.2s ease;
+        }
+
+        .feedback-btn:hover {
+            background: var(--chat-primary);
+            color: white;
+            border-color: var(--chat-primary);
+        }
+
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            .chat-container {
+                border-radius: 0;
+                height: 100vh;
+            }
+
+            .message-content {
+                max-width: 90%;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="chat-container">
+        <div class="chat-header">
+            <h4 class="m-0">
+                <i class="fas fa-robot me-2"></i>
+                MATHIA Chat
+            </h4>
+        </div>
+
+        <div class="chat-messages" id="chat-messages">
+            <!-- Messages will be dynamically inserted here -->
+        </div>
+
+        <div class="typing-indicator" id="typing-indicator">
+            <div class="typing-dot"></div>
+            <div class="typing-dot"></div>
+            <div class="typing-dot"></div>
+        </div>
+
+        <div class="chat-input">
+            <div class="input-group">
+                <input type="text" class="form-control" id="user-input" placeholder="Type your message...">
+                <button class="btn btn-send" type="button" id="send-button">
+                    <i class="fas fa-paper-plane me-1"></i>
+                    Send
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // Keep existing WebSocket connection code
+        // ...existing code...
+
+        function appendMessage(message, isUser = false) {
+            const messagesDiv = document.getElementById('chat-messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${isUser ? 'user-message' : 'bot-message'}`;
+
+            const content = document.createElement('div');
+            content.className = 'message-content';
+            content.textContent = message;
+
+            messageDiv.appendChild(content);
+
+            if (!isUser) {
+                const feedback = document.createElement('div');
+                feedback.className = 'feedback-buttons';
+                feedback.innerHTML = `
+                    <button class="feedback-btn" onclick="provideFeedback(true)">
+                        <i class="fas fa-thumbs-up"></i>
+                    </button>
+                    <button class="feedback-btn" onclick="provideFeedback(false)">
+                        <i class="fas fa-thumbs-down"></i>
+                    </button>
+                `;
+                messageDiv.appendChild(feedback);
+            }
+
+            messagesDiv.appendChild(messageDiv);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        function showTypingIndicator() {
+            document.getElementById('typing-indicator').classList.add('active');
+        }
+
+        function hideTypingIndicator() {
+            document.getElementById('typing-indicator').classList.remove('active');
+        }
+
+        function provideFeedback(isPositive) {
+            // Implement feedback functionality
+            console.log(`Feedback: ${isPositive ? 'positive' : 'negative'}`);
+        }
+
+        // ... rest of your existing WebSocket code ...
+    </script>
+</body>
+
+</html>

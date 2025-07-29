@@ -238,6 +238,30 @@ body {
     min-width: 100%;
 }
 
+.status-dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #ccc;
+    transition: background 0.3s;
+}
+
+.status-dot.online {
+    background: #4caf50;
+}
+
+.status-dot.offline {
+    background: #f44336;
+}
+
+/* smaller for sidebar if you like */
+.sidebar-dot {
+    width: 8px;
+    height: 8px;
+    margin-left: 4px;
+}
+
 .online,
 .offline,
 .me {

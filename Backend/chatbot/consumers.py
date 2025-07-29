@@ -8,6 +8,8 @@ from django.core.files.base import ContentFile
 from .models import Message, Member, Chatroom
 from django.contrib.auth import get_user_model
 import os
+from django_redis import get_redis_connection
+from django.core.cache import cache
 from base64 import b64encode, b64decode
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.exceptions import InvalidKey
@@ -29,40 +31,63 @@ class ChatConsumer(AsyncWebsocketConsumer):
         self.last_key_rotation = timezone.now()
 
     async def connect(self):
-        print("--- Attempting to connect... ---")
-        try:
-            print("[1] Checking authentication...")
-            if not self.scope["user"].is_authenticated:
-                print("   -> Authentication FAILED.")
-                await self.close(code=4001)
-                return
-            print("   -> Authentication SUCCEEDED.")
+        # 1. Auth check
+        if not self.scope["user"].is_authenticated:
+            await self.close(code=4001)
+            return
 
-            self.room_name = self.scope["url_route"]["kwargs"]["room_name"]
-            self.room_group_name = f"chat_{self.room_name}"
-            print(f"[2] Set room name to '{self.room_name}'.")
+        # 2. Room setup
+        self.room_name       = self.scope["url_route"]["kwargs"]["room_name"]
+        self.room_group_name = f"chat_{self.room_name}"
 
-            print("[3] Initializing secure session...")
-            # Pass room_name to initialize_secure_session
-            initialized = await self.initialize_secure_session(self.room_name)
-            if not initialized:
-                print("   -> Secure session initialization FAILED.")
-                await self.close(code=4002)
-                return
-            print("   -> Secure session initialization SUCCEEDED.")
+        # 3. Secure session init
+        initialized = await self.initialize_secure_session(self.room_name)
+        if not initialized:
+            await self.close(code=4002)
+            return
+        # 4. Check if the room exists
+        current_chat = await self.get_current_chatroom(self.room_name)
+        if not current_chat:
+            await self.close(code=4003)
+            return
+        # 4. Join group
+        await self.channel_layer.group_add(self.room_group_name, self.channel_name)
 
-            print("[4] Adding to channel layer group...")
-            await self.channel_layer.group_add(self.room_group_name, self.channel_name)
-            print("   -> Added to group successfully.")
+        # presence via Redis SET
+        redis = get_redis_connection("default")  # low-level redis-py client
+        key = f"online:{self.room_group_name}"
+        user = self.scope["user"].username
+        await sync_to_async(redis.sadd)(key, user)
+        
+        # Broadcast to others that you’re online
+        await self.channel_layer.group_send(
+            self.room_group_name,
+            {
+                "type": "presence_update",
+                "user": self.scope["user"].username,
+                "status": "online",
+            }
+        )
+        
+        await self.accept()
+        
+        redis = get_redis_connection("default")
+        key = f"online:{self.room_group_name}"
+        raw = await sync_to_async(redis.smembers)(key)
+        online_users = [u.decode() if isinstance(u, bytes) else u for u in raw]
 
-            print("[5] Accepting connection...")
-            await self.accept()
-            print("--- CONNECTION SUCCEEDED ---")
+        await self.send(text_data=json.dumps({
+            "command": "presence_snapshot",
+            "online": online_users,
+        }))
 
-        except Exception as e:
-            print(f"!!! AN EXCEPTION OCCURRED IN connect: {e}")
-            traceback.print_exc() # This will print the full error
-            await self.close(code=4000)
+        
+    async def presence_update(self, event):
+        await self.send_message({
+            "command": "presence",
+            "user":    event["user"],
+            "status":  event["status"],
+        })
 
     @sync_to_async
     def get_chatroom_key(self, room_id):
@@ -164,7 +189,23 @@ class ChatConsumer(AsyncWebsocketConsumer):
             return None
 
     async def disconnect(self, close_code):
+        # 1. Leave the chat group
         await self.channel_layer.group_discard(self.room_group_name, self.channel_name)
+
+        # 2. Remove from Redis set of online users
+        cache_key = f"online:{self.room_group_name}"
+        redis = get_redis_connection("default")
+        await sync_to_async(redis.srem)(cache_key, self.scope["user"].username)
+
+        # 3. Broadcast offline status
+        await self.channel_layer.group_send(
+            self.room_group_name,
+            {
+                "type": "presence_update",
+                "user":   self.scope["user"].username,
+                "status": "offline",
+            }
+        )
 
     async def receive(self, text_data):
         try:

@@ -98,6 +98,13 @@ DATABASES = {
     }
 }
 
+CACHES = {
+  "default": {
+    "BACKEND": "django_redis.cache.RedisCache",
+    "LOCATION": "redis://127.0.0.1:6379/1",
+    "OPTIONS": {"CLIENT_CLASS": "django_redis.client.DefaultClient"},
+  }
+}
 
 # Password validation
 # https://docs.djangoproject.com/en/4.1/ref/settings/#auth-password-validators
@@ -162,13 +169,7 @@ REST_FRAMEWORK = {
     "PAGE_SIZE": 5
 }
 
-# Cache configuration for rate limiting
-CACHES = {
-    'default': {
-        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
-        'LOCATION': 'unique-snowflake',
-    }
-}
+
 
 # Chat rate limit (messages per minute)
 CHAT_RATE_LIMIT = 30

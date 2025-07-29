@@ -316,6 +316,30 @@
             max-width: 100%;
             border-radius: 8px;
         }
+
+        .status-dot {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #ccc;
+            transition: background 0.3s;
+        }
+
+        .status-dot.online {
+            background: #4caf50;
+        }
+
+        .status-dot.offline {
+            background: #f44336;
+        }
+
+        /* smaller for sidebar if you like */
+        .sidebar-dot {
+            width: 8px;
+            height: 8px;
+            margin-left: 4px;
+        }
     </style>
 
 </head>
@@ -346,10 +370,10 @@
                                     <img src="https://bootdey.com/img/Content/avatar/avatar1.png"
                                         class="avatar-img me-2" alt="avatar">
                                     <div>
-                                        <div class="fw-bold">{{room_member}}</div>
-                                        <div class="small">
-                                            <i class="fas fa-circle text-success me-1"></i>
-                                            online
+                                        <div class="fw-bold">
+                                            {{ room_member }}
+                                            <span class="status-dot offline sidebar-dot"
+                                                data-user="{{ room_member }}"></span>
                                         </div>
                                     </div>
                                 </div>
@@ -395,10 +419,9 @@
                                 <img src="https://bootdey.com/img/Content/avatar/avatar2.png" class="avatar-img me-3"
                                     alt="avatar">
                                 <div>
-                                    <h6 class="mb-0">{{ room_member }}</h6>
-                                    <div class="small text-muted">
-                                        <i class="fas fa-circle text-success me-1"></i>
-                                        online
+                                    <div class="d-flex align-items-center">
+                                        <h6 class="mb-0 me-2">{{ room_member }}</h6>
+                                        <span id="header-presence" class="status-dot offline"></span>
                                     </div>
                                 </div>
                             </div>
@@ -458,8 +481,9 @@
     <script src="https://cdn.jsdelivr.net/npm/emoji-mart@latest/dist/browser.js"></script>
 
     <script>
-        var roomName = {{ room_name }};
-        var username = {{ username }};
+        var roomName = {{ room_name }}; // Ensure room_name is properly formatted
+        var username = {{ username }}; // Ensure username is properly formatted
+        var otherUser = '{{ room_member }}'; // room_member is the other user's name
         var chatSocket = new ReconnectingWebSocket(
             'ws://' + window.location.host + '/ws/chat/' + roomName + '/'
         );
@@ -684,6 +708,50 @@
             else if (data['command'] == 'new_message') {
                 createMessage(data['message']);
                 scrollToLastMessage();
+            }
+            else if (data.command === 'presence') {
+                const who = data.user;
+                const state = data.status; // "online" or "offline"
+
+                // 1) Header: only if this is the current partner
+                if (who === otherUser) {
+                    const dot = document.getElementById('header-presence');
+                    dot.classList.toggle('online', state === 'online');
+                    dot.classList.toggle('offline', state === 'offline');
+                }
+
+                // 2) Sidebar: update any .sidebar-dot[data-user="…"]
+                document.querySelectorAll(`.sidebar-dot[data-user="${who}"]`)
+                    .forEach(el => {
+                        el.classList.toggle('online', state === 'online');
+                        el.classList.toggle('offline', state === 'offline');
+                    });
+            }
+            else if (data.command === 'presence_snapshot') {
+                const online = new Set(data.online || []);
+
+                // header dot
+                const headerDot = document.getElementById('header-presence');
+                if (headerDot && otherUser) {
+                    const on = online.has(otherUser);
+                    headerDot.classList.toggle('online', on);
+                    headerDot.classList.toggle('offline', !on);
+                }
+
+                // sidebar dots
+                document.querySelectorAll('.sidebar-dot[data-user]').forEach(el => {
+                    const who = el.dataset.user;
+                    const on = online.has(who);
+                    el.classList.toggle('online', on);
+                    el.classList.toggle('offline', !on);
+                });
+            }
+
+            else if (data.command === 'error') {
+                console.error('Error from server:', data.message);
+            }
+            else {
+                console.warn('Unknown command:', data);
             }
         };
 

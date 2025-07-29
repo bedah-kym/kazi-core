@@ -1,4 +1,5 @@
 import json
+import traceback
 from asgiref.sync import sync_to_async
 from django.utils import timezone
 from channels.generic.websocket import AsyncWebsocketConsumer
@@ -16,37 +17,77 @@ logger = logging.getLogger(__name__)
 User = get_user_model()
 
 class ChatConsumer(AsyncWebsocketConsumer):
+    # Define constants for key rotation
+    KEY_ROTATION_INTERVAL = 36000 * 10 # Rotate key every 100 hours
+    MESSAGES_BEFORE_ROTATION = 1000 # Rotate key after 1000 messages
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.session_key = None
-        self.aes_gcm = None
+        self.aes_gcm = None 
+        # Initialize key rotation attributes
         self.messages_since_rotation = 0
         self.last_key_rotation = timezone.now()
-        self.KEY_ROTATION_INTERVAL = 3600  # 1 hour
-        self.MESSAGES_BEFORE_ROTATION = 100
 
     async def connect(self):
+        print("--- Attempting to connect... ---")
         try:
-            # Verify authentication
+            print("[1] Checking authentication...")
             if not self.scope["user"].is_authenticated:
+                print("   -> Authentication FAILED.")
                 await self.close(code=4001)
                 return
+            print("   -> Authentication SUCCEEDED.")
 
-            # Initialize secure session
-            await self.initialize_secure_session()
-            
             self.room_name = self.scope["url_route"]["kwargs"]["room_name"]
             self.room_group_name = f"chat_{self.room_name}"
+            print(f"[2] Set room name to '{self.room_name}'.")
+
+            print("[3] Initializing secure session...")
+            # Pass room_name to initialize_secure_session
+            initialized = await self.initialize_secure_session(self.room_name)
+            if not initialized:
+                print("   -> Secure session initialization FAILED.")
+                await self.close(code=4002)
+                return
+            print("   -> Secure session initialization SUCCEEDED.")
+
+            print("[4] Adding to channel layer group...")
             await self.channel_layer.group_add(self.room_group_name, self.channel_name)
+            print("   -> Added to group successfully.")
+
+            print("[5] Accepting connection...")
             await self.accept()
+            print("--- CONNECTION SUCCEEDED ---")
+
         except Exception as e:
-            logger.error(f"Connection error: {str(e)}")
+            print(f"!!! AN EXCEPTION OCCURRED IN connect: {e}")
+            traceback.print_exc() # This will print the full error
             await self.close(code=4000)
 
-    async def initialize_secure_session(self):
-        """Initialize encryption for the session"""
-        self.session_key = AESGCM.generate_key(bit_length=256)
-        self.aes_gcm = AESGCM(self.session_key)
+    @sync_to_async
+    def get_chatroom_key(self, room_id):
+        """Fetches the Chatroom and its encryption key from the database."""
+        try:
+            chatroom = Chatroom.objects.get(id=room_id)
+            return chatroom.encryption_key
+        except Chatroom.DoesNotExist:
+            logger.error(f"Chatroom with id {room_id} not found.")
+            return None
+
+    async def initialize_secure_session(self, room_id):
+        """Initialize encryption using the chatroom's shared key."""
+        encoded_key = await self.get_chatroom_key(room_id)
+
+        if not encoded_key:
+            return False
+
+        try:
+            session_key = b64decode(encoded_key.encode('utf-8'))
+            self.aes_gcm = AESGCM(session_key)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to create AESGCM instance from key: {e}")
+            return False
 
     async def encrypt_message(self, message_data):
         """Encrypt message data with proper base64 handling"""
@@ -111,6 +152,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     None
                 )
                 return json.loads(decrypted_data.decode('utf-8'))
+            except InvalidKey:
+                logger.error("Decryption failed: Invalid key or MAC.")
+                return None
             except Exception as e:
                 logger.error(f"Decryption operation failed: {str(e)}")
                 return None
@@ -159,17 +203,17 @@ class ChatConsumer(AsyncWebsocketConsumer):
     async def fetch_messages(self, data):
         try:
             messages = await self.get_last_10_messages(data['chatid'])
-            messages_json = [await self.message_to_json(message) for message in messages]
-            content = {
-                "command": "messages",
-                "messages": messages_json
-            }
-            await self.send_message(content)
+            # Let message_to_json handle decryption & formatting
+            messages_json = [await self.message_to_json(m) for m in messages]
+            await self.send_message({
+                'command': 'messages',
+                'messages': messages_json
+            })
         except Exception as e:
             logger.error(f"Error in fetch_messages: {str(e)}")
             await self.send_message({
                 'member': 'system',
-                'content': "Error fetching messages",
+                'content': 'Error fetching messages',
                 'timestamp': str(timezone.now())
             })
 
@@ -361,9 +405,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
             })
 
             create_message = sync_to_async(Message.objects.create)
+            # Store payload for file messages as well
+            payload = json.dumps({
+                'data':     encrypted_message['data'],
+                'nonce':    encrypted_message['nonce'],
+            })
             message = await create_message(
-                member=member,
-                content=encrypted_message['data'],
+                member=member_user,
+                content=payload,
                 timestamp=timezone.now()
             )
 
@@ -378,7 +427,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
             room_members = await self.get_chatroom_participants(current_chat)
 
-            if member in room_members:
+            if member_user in room_members:
                 await sync_to_async(current_chat.chats.add)(message)
                 await sync_to_async(current_chat.save)()
 
@@ -446,55 +495,41 @@ class ChatConsumer(AsyncWebsocketConsumer):
         
         if ((current_time - self.last_key_rotation).seconds >= self.KEY_ROTATION_INTERVAL or 
             self.messages_since_rotation >= self.MESSAGES_BEFORE_ROTATION):
-            await self.initialize_secure_session()
+            # Pass the current room_name to re-initialize the secure session
+            await self.initialize_secure_session(self.room_name)
             self.last_key_rotation = current_time
             self.messages_since_rotation = 0
 
     async def message_to_json(self, message):
-        """Convert message to JSON with improved decryption error handling"""
+        """Decrypts message content before sending to the client."""
         try:
-            get_username = sync_to_async(lambda: message.member.User.username)
-            username = await get_username()
-            
-            # Handle legacy messages that might not be encrypted
-            content = message.content
-            if isinstance(content, str):
-                try:
-                    # Try to parse as JSON first
-                    msg_data = None
-                    try:
-                        parsed = json.loads(content)
-                        if isinstance(parsed, dict) and 'data' in parsed and 'nonce' in parsed:
-                            msg_data = parsed        
-                        else:
-                            # Try the content itself as the encrypted data
-                            decrypted = await self.decrypt_message(content, content)
-                            if decrypted:
-                                content = decrypted.get('content', content)
-                    except json.JSONDecodeError:
-                        # Try direct decryption as fallback
-                        decrypted = await self.decrypt_message(content, content)
-                        if decrypted:
-                            content = decrypted.get('content', content)
+            username = await sync_to_async(lambda: message.member.User.username)()
+            final_content = "Error: Could not decrypt message." # default error message
 
-                    # Handle properly formatted encrypted message
-                    if msg_data:
-                        decrypted = await self.decrypt_message(msg_data['data'], msg_data['nonce'])
-                        if decrypted:
-                            content = decrypted.get('content', content)
+            db_content = message.content
+            try:
+                # The content from DB should be a JSON string with 'data' and 'nonce'
+                parsed_payload = json.loads(db_content)
+                if isinstance(parsed_payload, dict) and 'data' in parsed_payload and 'nonce' in parsed_payload:
+                    # Decrypt the payload from the database
+                    decrypted_payload = await self.decrypt_message(parsed_payload['data'], parsed_payload['nonce'])
+                    # The decrypted content is also a dict, get the actual message from it
+                    if decrypted_payload and 'content' in decrypted_payload:
+                        final_content = decrypted_payload['content']
+                else:
+                    # This handles old messages that might not be encrypted
+                    final_content = db_content
+            except (json.JSONDecodeError, TypeError):
+                # This handles the case where the content is not JSON (e.g., old plaintext messages)
+                final_content = db_content
 
-                except Exception as e:
-                    logger.debug(f"Decryption attempt failed: {str(e)}")
-                    # Keep original content if decryption fails
-                    pass
-            
             return {
                 'member': username,
-                'content': content,
+                'content': final_content,
                 'timestamp': str(message.timestamp)
             }
         except Exception as e:
-            logger.error(f"Error in message_to_json: {str(e)}")
+            logger.error(f"Error in message_to_json: {e}")
             return {
                 'member': 'system',
                 'content': 'Error processing message',

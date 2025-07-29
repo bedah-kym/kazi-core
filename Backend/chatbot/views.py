@@ -16,13 +16,15 @@ def home(request,room_name):
     chatrooms = Chatroom.objects.all()
     room = Chatroom.objects.get(id=room_name)
     room_members = room.participants.all()
+    # each room has two members the user and the other user we need to get the name of the other user to display
+    other_member = room_members.exclude(User=request.user).first()
     return render(
         request,"chatbot/chatbase.html",
         {
         "room_name":mark_safe(json.dumps(room_name)),
         "username":mark_safe(json.dumps(request.user.username)),
         "chatrooms":chatrooms,
-        "room_members":room_members
+        "room_member":other_member if other_member else "Unknown User",
         }
     )
 

@@ -5,538 +5,11 @@
 
 <head>
     <meta charset="utf-8">
-
-
     <title>MATHIA chat</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-    <style>
-        :root {
-            --primary-color: #4f8cff;
-            --secondary-color: #6c757d;
-            --bg-light: #f8f9fa;
-            --chat-bg: #ffffff;
-            --text-color: #000;
-        }
-
-        [data-theme="dark"] {
-            --primary-color: #3a6ea5;
-            --secondary-color: #3c4043;
-            --bg-light: #202124;
-            --chat-bg: #303134;
-            --text-color: #e8eaed;
-        }
-
-        body {
-            background-color: var(--bg-light);
-            color: var(--text-color);
-            height: 100vh;
-            transition: background-color 0.3s, color 0.3s;
-        }
-
-        .chat-container {
-            max-height: 100vh;
-            background: var(--chat-bg);
-            box-shadow: 0 0 15px rgba(0, 0, 0, 0.1);
-            border-radius: 15px;
-            transition: background 0.3s;
-        }
-
-        .people-list {
-            background: #fff;
-            background-image: url('https://www.transparenttextures.com/patterns/brick-wall.png');
-            border-right: 1px solid #eee;
-            height: 100vh;
-        }
-
-        .chat-list li {
-            padding: 10px;
-            border-radius: 10px;
-            margin: 5px 0;
-            cursor: pointer;
-            transition: all 0.3s ease;
-        }
-
-        .chat-list li:hover {
-            background: var(--bg-light);
-        }
-
-        .chat-list .active {
-            background: var(--primary-color);
-            color: white;
-        }
-
-        .chat-header {
-            background: var(--chat-bg);
-            background-image: url('https://www.transparenttextures.com/patterns/brick-wall.png');
-            border-bottom: 1px solid #eee;
-            padding: 15px;
-            transition: background 0.3s;
-        }
-
-        .chat-history {
-            height: calc(100vh - 180px);
-            overflow-y: auto;
-            padding: 20px;
-            background-image: url('https://www.transparenttextures.com/patterns/argyle.png');
-            background-color: #cfd4dd;
-            transition: background 0.3s;
-        }
-
-        .message {
-            padding: 12px 18px;
-            border-radius: 18px;
-            margin-bottom: 15px;
-            max-width: 50%;
-            word-wrap: break-word;
-            overflow-wrap: break-word;
-            position: relative;
-        }
-
-        .my-message {
-            background: var(--primary-color);
-            color: white;
-            margin-left: auto;
-            border-bottom-right-radius: 5px;
-            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
-        }
-
-        .other-message {
-            background: white;
-            color: #333;
-            margin-right: auto;
-            border-bottom-left-radius: 5px;
-            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
-        }
-
-        [data-theme="dark"] .other-message {
-            background: #424242;
-            color: #fff;
-        }
-
-        .message-data {
-            margin-bottom: 8px;
-        }
-
-        .user-name {
-            font-size: 0.85em;
-            margin-top: 5px;
-            opacity: 0.8;
-        }
-
-        .time {
-            font-size: 0.75em;
-            opacity: 0.7;
-        }
-
-        .time-sender {
-            font-family: monospace;
-            margin-left: 90%;
-        }
-
-        .time-left {
-            font-family: math;
-        }
-
-        /* Ensure images in chat are properly sized */
-        .message img {
-            max-width: 100%;
-            height: auto;
-            border-radius: 10px;
-            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
-        }
-
-        .chat-message {
-            padding: 15px;
-            background: var(--chat-bg);
-            background-image: url('https://www.transparenttextures.com/patterns/brick-wall.png');
-            border-top: 1px solid #eee;
-            transition: background 0.3s;
-        }
-
-        #chat-message-input {
-            border-radius: 20px;
-            padding: 10px 20px;
-        }
-
-        #chat-message-submit {
-            border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            padding: 0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: var(--primary-color);
-            color: white;
-        }
-
-        .avatar-img {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-        }
-
-        em-emoji-picker {
-            position: absolute;
-            bottom: 70px;
-            right: 20px;
-            z-index: 1000;
-        }
-
-        .dark-mode-toggle {
-            position: fixed;
-            top: 10px;
-            left: 10px;
-            z-index: 1000;
-            background: var(--primary-color);
-            color: var(--text-color);
-            border: none;
-            border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            transition: background 0.3s;
-        }
-
-        .dark-mode-toggle:hover {
-            background: var(--secondary-color);
-        }
-
-        .typing-indicator {
-            background-color: var(--bg-light);
-            padding: 8px;
-            border-radius: 15px;
-            display: none;
-            align-items: center;
-            margin-bottom: 10px;
-        }
-
-        .typing-indicator span {
-            height: 8px;
-            width: 8px;
-            margin: 0 2px;
-            background-color: #90949c;
-            display: block;
-            border-radius: 50%;
-            opacity: 0.4;
-            animation: typing 1s infinite;
-        }
-
-        .typing-indicator span:nth-child(1) {
-            animation-delay: 0s;
-        }
-
-        .typing-indicator span:nth-child(2) {
-            animation-delay: 0.2s;
-        }
-
-        .typing-indicator span:nth-child(3) {
-            animation-delay: 0.4s;
-        }
-
-        @keyframes typing {
-            0% {
-                transform: scale(1);
-            }
-
-            50% {
-                transform: scale(1.5);
-            }
-
-            100% {
-                transform: scale(1);
-            }
-        }
-
-        .file-preview {
-            position: fixed;
-            bottom: 80px;
-            right: 20px;
-            max-width: 300px;
-            background: var(--chat-bg);
-            border-radius: 10px;
-            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
-            padding: 10px;
-            display: none;
-            z-index: 1000;
-        }
-
-        .file-preview img {
-            max-width: 100%;
-            border-radius: 8px;
-        }
-
-        .file-preview .file-info {
-            display: flex;
-            align-items: center;
-            margin-top: 8px;
-        }
-
-        .file-preview .file-name {
-            flex: 1;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-
-        .file-preview .close-preview {
-            background: none;
-            border: none;
-            color: #666;
-            cursor: pointer;
-            padding: 5px;
-        }
-
-        .upload-progress {
-            height: 4px;
-            width: 100%;
-            background: #eee;
-            border-radius: 2px;
-            overflow: hidden;
-            margin-top: 8px;
-        }
-
-        .upload-progress-bar {
-            height: 100%;
-            background: var(--primary-color);
-            width: 0%;
-            transition: width 0.3s ease;
-        }
-
-        .file-preview .preview-content {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100px;
-            margin-bottom: 10px;
-        }
-
-        .file-preview .preview-content img {
-            max-height: 100px;
-            max-width: 100%;
-            border-radius: 8px;
-        }
-
-        .file-preview .preview-content video {
-            max-height: 100px;
-            max-width: 100%;
-            border-radius: 8px;
-        }
-
-        .status-dot {
-            display: inline-block;
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-            background: #ccc;
-            transition: background 0.3s;
-        }
-
-        .status-dot.online {
-            background: #4caf50;
-        }
-
-        .status-dot.offline {
-            background: #f44336;
-        }
-
-        /* the login and settings bar */
-        .listbottom {
-            position: absolute;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            background: #fff;
-            z-index: 100;
-            padding: 10px;
-            box-shadow: 0 -2px 5px rgba(0, 0, 0, 0.2);
-        }
-
-        /* smaller for sidebar if you like */
-        .sidebar-dot {
-            width: 8px;
-            height: 8px;
-            margin-left: 4px;
-        }
-
-        @media only screen and (max-width: 767px) {
-            .listbottom {
-                position: absolute;
-                bottom: 0;
-                left: 0;
-                right: 0;
-                background: #fff;
-                z-index: 100;
-                padding: 10px;
-                box-shadow: 0 -2px 5px rgba(0, 0, 0, 0.2);
-            }
-
-            .chat-app .chat-list {
-                height: 200px;
-                overflow-x: auto
-            }
-
-            .chat-app .people-list {
-                height: calc(100vh - 60px);
-                overflow-x: auto
-            }
-
-            .chat .chat-header {
-                padding: 15px 20px;
-                border-bottom: 2px solid #f4f7f6
-            }
-
-            .form-control {
-                max-width: 100%;
-            }
-
-            body {
-                background-color: #f8f9fa;
-                margin-top: 14px;
-            }
-
-            .chat-app .people-list {
-                position: fixed;
-                top: 0;
-                bottom: 0;
-                background: #fff;
-                left: 0;
-                right: 0;
-                z-index: 100;
-                width: auto;
-                transform: translateX(100%);
-                transition: transform 250ms cubic-bezier(0.19, 1, 0.22, 1);
-            }
-
-            .people-open .people-list {
-                transform: translateX(0%);
-            }
-
-            .people-open .toggle-btn {
-                position: fixed;
-                right: 10px;
-
-            }
-
-            .people-open .hamburger {
-                transform: rotate(.625turn);
-            }
-
-            .people-open .hamburger::before {
-                transform: rotate(90deg) translate(-6px);
-            }
-
-            .people-open .hamburger::after {
-                opacity: 0;
-            }
-
-            .people-open #search {
-                max-width: 70%;
-            }
-
-            .toggle-btn {
-                padding: 1em;
-                border-style: none;
-                background: border-box;
-                cursor: pointer;
-                z-index: 1000;
-                position: absolute;
-                right: 28px;
-            }
-
-            .hamburger {
-                display: block;
-                position: relative;
-
-            }
-
-            .hamburger,
-            .hamburger::before,
-            .hamburger::after {
-                background: #131212;
-                width: 1em;
-                height: 2px;
-                border-radius: 0.5em;
-                transition: transform 250ms ease-in-out;
-
-            }
-
-            .hamburger::before,
-            .hamburger::after {
-                content: '';
-                right: 0;
-                left: 0;
-                position: absolute;
-            }
-
-            .hamburger::before {
-                top: 6px;
-            }
-
-            .hamburger::after {
-                bottom: 6px;
-            }
-
-            .chat-app .chat {
-                margin: 0
-            }
-
-
-            .chat-app .chat .chat-header {
-                border-radius: 0.55rem 0.55rem 0 0
-            }
-
-            .chat-app .chat-history {
-                height: 400px;
-                overflow-x: auto
-            }
-
-            .time-sender {
-                font-size: small;
-                margin-right: 60px;
-                font-family: math;
-                margin-bottom: -3px
-            }
-
-            .time-left {
-                font-size: small;
-                margin-left: 50px;
-                font-family: math;
-                margin-bottom: -3px
-            }
-        }
-
-        @media only screen and (min-width: 768px) and (max-width: 992px) {
-            .chat-app .chat-list {
-                height: 650px;
-                overflow-x: auto
-            }
-
-            .chat-app .chat-history {
-                height: 600px;
-                overflow-x: auto
-            }
-        }
-
-        @media only screen and (min-device-width: 768px) and (max-device-width: 1024px) and (orientation: landscape) and (-webkit-min-device-pixel-ratio: 1) {
-            .chat-app .chat-list {
-                height: 480px;
-                overflow-x: auto
-            }
-
-            .chat-app .chat-history {
-                height: calc(100vh - 350px);
-                overflow-x: auto
-            }
-        }
-    </style>
-
+    <link href="{% static 'css/chatbase.css' %}" rel="stylesheet">
 </head>
 
 <body>
@@ -546,7 +19,7 @@
     <div class="container-fluid p-0">
         <div class="row g-0">
             <div class="col-md-4 col-lg-3 people-list">
-                <div class="p-3">
+                <div class="p-3 people-list-content">
                     <div class="input-group mb-3">
                         <span class="input-group-text bg-light border-0">
                             <i class="fas fa-search text-muted"></i>
@@ -575,14 +48,15 @@
                         </li>
                         {% endfor %}
                     </ul>
-                        <div class="listbottom d-flex justify-content-between align-items-center mt-3">
-                            <a href="{% url 'users:logout' %}" class="btn btn-outline-danger">
-                                <i class="fas fa-sign-out-alt me-2"></i>Logout
-                            </a>
-                            <button class="btn btn-link text-muted">
-                                <i class="fas fa-cog fa-spin"></i>
-                            </button>
-                        </div>
+                </div>
+
+                <div class="listbottom d-flex justify-content-between align-items-center">
+                    <a href="{% url 'users:logout' %}" class="btn btn-outline-danger btn-sm">
+                        <i class="fas fa-sign-out-alt me-2"></i>Logout
+                    </a>
+                    <button class="btn btn-link text-muted">
+                        <i class="fas fa-cog fa-spin"></i>
+                    </button>
                 </div>
             </div>
 
@@ -591,6 +65,9 @@
                     <div class="row align-items-center">
                         <div class="col-8">
                             <div class="d-flex align-items-center">
+                                <button class="toggle-btn d-md-none me-2" id="menuToggle">
+                                    <span class="hamburger"></span>
+                                </button>
                                 <img src="https://bootdey.com/img/Content/avatar/avatar2.png" class="avatar-img me-3"
                                     alt="avatar">
                                 <div>
@@ -656,12 +133,65 @@
     <script src="https://cdn.jsdelivr.net/npm/emoji-mart@latest/dist/browser.js"></script>
 
     <script>
-        var roomName = {{ room_name }}; // Ensure room_name is properly formatted
-        var username = {{ username }}; // Ensure username is properly formatted
-        var otherUser = '{{ room_member }}'; // room_member is the other user's name
+        var roomName = {{ room_name }};
+        var username = {{ username }};
+        var otherUser = '{{ room_member }}';
         var chatSocket = new ReconnectingWebSocket(
             'ws://' + window.location.host + '/ws/chat/' + roomName + '/'
         );
+
+        // Hamburger menu toggle - Wait for DOM to load
+        (function () {
+            let menuOpen = false;
+
+            window.addEventListener('load', function () {
+                const menuToggle = document.getElementById('menuToggle');
+                console.log('Menu toggle button found:', menuToggle);
+                console.log('Initial menuOpen state:', menuOpen);
+
+                if (menuToggle) {
+                    menuToggle.onclick = function (e) {
+                        e.preventDefault();
+                        e.stopPropagation();
+
+                        menuOpen = !menuOpen;
+                        console.log('Menu state changed to:', menuOpen);
+
+                        if (menuOpen) {
+                            document.body.classList.add('people-open');
+                            console.log('Added people-open class');
+                        } else {
+                            document.body.classList.remove('people-open');
+                            console.log('Removed people-open class');
+                        }
+
+                        console.log('Body classes now:', document.body.className);
+                        return false;
+                    };
+                } else {
+                    console.error('Menu toggle button NOT found!');
+                }
+
+                // Close menu when clicking outside
+                document.body.onclick = function (e) {
+                    if (menuOpen) {
+                        const peopleList = document.querySelector('.people-list');
+                        const menuToggle = document.getElementById('menuToggle');
+
+                        if (peopleList && menuToggle) {
+                            const clickedInsideMenu = peopleList.contains(e.target);
+                            const clickedToggle = menuToggle.contains(e.target);
+
+                            if (!clickedInsideMenu && !clickedToggle) {
+                                menuOpen = false;
+                                document.body.classList.remove('people-open');
+                                console.log('Menu closed by clicking outside');
+                            }
+                        }
+                    }
+                };
+            });
+        })();
 
         // Initialize chat connection
         chatSocket.onopen = function (e) {
@@ -681,12 +211,10 @@
             const chatHistory = document.querySelector('.chat-history');
             var message = data;
             var author = data['member'];
-            var time = (message.timestamp).slice(10, -16);
-            var formattedTime = new Date(message.timestamp).toLocaleTimeString(); // New line added for formatted time
-            time = `<span class="time-sender">${formattedTime}</span>`;
+            var formattedTime = new Date(message.timestamp).toLocaleTimeString();
+            var time = `<span class="time-label">${formattedTime}</span>`;
             var msgListTag = document.createElement('li');
             msgListTag.classList.add(message.member === username ? 'my' : 'other');
-
 
             var msgDivTag = document.createElement('div');
             var msgdivtag = document.createElement('p');
@@ -702,13 +230,13 @@
             msgListTag.id = 'tracker';
 
             if (message.member === username) {
-                msgDivTag.className = 'message-data text-right';
-                msgTextTag.className = 'message my-message float-right';
-                msgpTag.className = 'time-sender';
+                msgDivTag.className = 'message-data text-end';
+                msgTextTag.className = 'message my-message';
+                msgpTag.className = 'time-label';
             } else {
                 msgDivTag.className = 'message-data';
                 msgTextTag.className = 'message other-message';
-                msgpTag.className = 'time-left';
+                msgpTag.className = 'time-label';
             }
 
             msgdivtag.className = 'user-name';
@@ -769,7 +297,6 @@
                 "chatid": roomName
             }));
         });
-
 
         document.querySelector('#chat-message-input').addEventListener('keyup', function (e) {
             if (e.keyCode === 13) {
@@ -869,11 +396,10 @@
 
             if (data.command === 'typing' && data.from !== username) {
                 document.getElementById('typing-user').textContent = data.from;
-                showTypingIndicator();            // simply shows the full line
+                showTypingIndicator();
                 clearTimeout(typingTimer);
                 typingTimer = setTimeout(hideTypingIndicator, 3000);
             }
-
             else if (data['command'] == 'messages') {
                 for (let i = (data['messages'].length) - 1; i >= 0; i--) {
                     createMessage(data['messages'][i]);
@@ -886,16 +412,14 @@
             }
             else if (data.command === 'presence') {
                 const who = data.user;
-                const state = data.status; // "online" or "offline"
+                const state = data.status;
 
-                // 1) Header: only if this is the current partner
                 if (who === otherUser) {
                     const dot = document.getElementById('header-presence');
                     dot.classList.toggle('online', state === 'online');
                     dot.classList.toggle('offline', state === 'offline');
                 }
 
-                // 2) Sidebar: update any .sidebar-dot[data-user="…"]
                 document.querySelectorAll(`.sidebar-dot[data-user="${who}"]`)
                     .forEach(el => {
                         el.classList.toggle('online', state === 'online');
@@ -905,7 +429,6 @@
             else if (data.command === 'presence_snapshot') {
                 const online = new Set(data.online || []);
 
-                // header dot
                 const headerDot = document.getElementById('header-presence');
                 if (headerDot && otherUser) {
                     const on = online.has(otherUser);
@@ -913,7 +436,6 @@
                     headerDot.classList.toggle('offline', !on);
                 }
 
-                // sidebar dots
                 document.querySelectorAll('.sidebar-dot[data-user]').forEach(el => {
                     const who = el.dataset.user;
                     const on = online.has(who);
@@ -921,7 +443,6 @@
                     el.classList.toggle('offline', !on);
                 });
             }
-
             else if (data.command === 'error') {
                 console.error('Error from server:', data.message);
             }

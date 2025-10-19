@@ -1,150 +1,137 @@
-html {
-    scroll-behavior: smooth;
+/* CSS Variables for Theme Support */
+:root {
+    --primary-color: #4f8cff;
+    --secondary-color: #6c757d;
+    --bg-light: #f8f9fa;
+    --chat-bg: #ffffff;
+    --text-color: #000;
+}
+
+[data-theme="dark"] {
+    --primary-color: #3a6ea5;
+    --secondary-color: #3c4043;
+    --bg-light: #202124;
+    --chat-bg: #303134;
+    --text-color: #e8eaed;
 }
 
 body {
-    background-color: #4bcca1;
-    margin-top: 20px;
+    background-color: var(--bg-light);
+    color: var(--text-color);
+    height: 100vh;
+    transition: background-color 0.3s, color 0.3s;
 }
 
-.card {
-    background: #fff;
-    transition: .5s;
-    border: 0;
-    margin-bottom: 30px;
-    border-radius: .55rem;
-    position: relative;
-    width: 100%;
-    min-height: 450px;
-    box-shadow: 0 1px 2px 0 rgb(0 0 0 / 10%);
-}
-
-.icon-container {
-    display: flex;
-    padding: 5px;
-    justify-content: space-between;
-    align-items: center;
-}
-
-.left-icon,
-.right-icon {
-    width: 15%;
-    color: #131212;
-    font-size: larger;
-}
-
-.chat-app .people-list {
-    width: 280px;
-    position: absolute;
-    left: 0;
-    top: 0;
-    padding: 20px;
-    z-index: 7
-}
-
-
-.chat-app .chat {
-    margin-left: 280px;
-    border-left: 1px solid #eaeaea
-}
-
-.chat-app .chat-history {
-    height: 400px;
-    overflow-x: auto;
+.chat-container {
+    max-height: 100vh;
+    background: var(--chat-bg);
+    box-shadow: 0 0 15px rgba(0, 0, 0, 0.1);
+    border-radius: 15px;
+    transition: background 0.3s;
 }
 
 .people-list {
-    -moz-transition: .5s;
-    -o-transition: .5s;
-    -webkit-transition: .5s;
-    transition: .5s
+    background: #fff;
+    background-image: url('https://www.transparenttextures.com/patterns/brick-wall.png');
+    border-right: 1px solid #eee;
+    height: 100vh;
+    position: relative;
+    display: flex;
+    flex-direction: column;
 }
 
-.people-list .chat-list li {
-    padding: 10px 15px;
-    list-style: none;
-    border-radius: 3px
+[data-theme="dark"] .people-list {
+    background: var(--bg-light);
+    border-right-color: var(--secondary-color);
 }
 
-.people-list .chat-list li:hover {
-    background: #efefef;
-    cursor: pointer
+.people-list-content {
+    flex: 1;
+    overflow-y: auto;
+    padding-bottom: 80px !important;
 }
 
-.people-list .chat-list li.active {
-    background: #efefef
+.chat-list li {
+    padding: 10px;
+    border-radius: 10px;
+    margin: 5px 0;
+    cursor: pointer;
+    transition: all 0.3s ease;
 }
 
-.people-list .chat-list li .name {
-    font-size: 15px
+.chat-list li:hover {
+    background: var(--bg-light);
 }
 
-.people-list .chat-list img {
-    width: 45px;
-    border-radius: 50%
+.chat-list .active {
+    background: var(--primary-color);
+    color: white;
 }
 
-.people-list img {
-    float: left;
-    border-radius: 50%
+.chat-header {
+    background: var(--chat-bg);
+    background-image: url('https://www.transparenttextures.com/patterns/brick-wall.png');
+    border-bottom: 1px solid #eee;
+    padding: 15px;
+    transition: background 0.3s;
 }
 
-.people-list .about {
-    float: left;
-    padding-left: 8px
+[data-theme="dark"] .chat-header {
+    border-bottom-color: var(--secondary-color);
 }
 
-.people-list .status {
-    color: #999;
-    font-size: 13px
-}
-
-.chat .chat-header {
-    padding: 38px 20px;
-    border-bottom: 2px solid #f4f7f6
-}
-
-.chat .chat-header img {
-    float: left;
-    border-radius: 40px;
-    width: 40px
-}
-
-.chat .chat-header .chat-about {
-    float: left;
-    padding-left: 10px
-}
-
-.chat .chat-history {
+.chat-history {
+    height: calc(100vh - 180px);
+    overflow-y: auto;
     padding: 20px;
-    border-bottom: 2px solid #fff
+    background-image: url('https://www.transparenttextures.com/patterns/argyle.png');
+    background-color: #cfd4dd;
+    transition: background 0.3s;
 }
 
-.chat .chat-history ul {
-    padding: 0
+[data-theme="dark"] .chat-history {
+    background-color: var(--bg-light);
 }
 
-.chat .chat-history ul li {
-    list-style: none;
-    margin-bottom: 30px
+.message {
+    padding: 12px 18px;
+    border-radius: 18px;
+    margin-bottom: 15px;
+    max-width: 50%;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    position: relative;
 }
 
-.chat .chat-history ul li:last-child {
-    margin-bottom: 0px
+.my-message {
+    background: var(--primary-color);
+    color: white;
+    margin-left: auto;
+    border-bottom-right-radius: 5px;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
 }
 
-.chat .chat-history .message-data {
-    margin-bottom: 15px
+.other-message {
+    background: white;
+    color: #333;
+    margin-right: auto;
+    border-bottom-left-radius: 5px;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
 }
 
-.chat .chat-history .message-data img {
-    border-radius: 40px;
-    width: 40px
+[data-theme="dark"] .other-message {
+    background: #424242;
+    color: #fff;
 }
 
-.chat .chat-history .message-data-time {
-    color: #434651;
-    padding-left: 6px
+.message-data {
+    margin-bottom: 8px;
+}
+
+.user-name {
+    font-size: 0.85em;
+    margin-top: 5px;
+    opacity: 0.8;
 }
 
 .time {
@@ -154,91 +141,225 @@ body {
 
 .time-sender {
     font-family: monospace;
-    margin-left: 100%;
+    margin-left: 90%;
 }
 
 .time-left {
     font-family: math;
 }
 
-.user-name {
-    margin-bottom: -8px;
-    font-size: small;
-    font-family: ui-sans-serif;
-    font-style: italic;
-    color: rgb(132, 41, 216);
-    padding: 0.1em;
+.time-label {
+    font-size: 0.75em;
+    opacity: 0.7;
 }
 
-.chat .chat-history .message {
-    color: #1b1e21;
-    padding: 5px 29px;
-    line-height: 17px;
-    font-size: 16px;
-    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
-    border-radius: 20px;
-    display: inline-block;
-    position: relative;
-    min-width: 25%;
-    max-width: 70%;
-    border-color: #3a1e11;
-
-}
-
-.chat .chat-history .message:after {
-    bottom: 100%;
-    left: 7%;
-    border: solid transparent;
-    content: " ";
-    height: 0;
-    width: 0;
-    position: absolute;
-    pointer-events: none;
-    border-bottom-color: #fff;
-    border-width: 10px;
-    margin-left: -10px
-}
-
-.chat .chat-history .my-message {
-    background: #ECECEC;
-    border: inset;
-    border-color: maroon;
-
-}
-
-.chat .chat-history .my-message:after {
-    bottom: 100%;
-    left: 30px;
-    border: solid transparent;
-    content: " ";
-    height: 0;
-    width: 0;
-    position: absolute;
-    pointer-events: none;
-    border-bottom-color: #4f4086;
-    border-width: 10px;
-    margin-left: -10px
-}
-
-.chat .chat-history .other-message {
-    background: #25D366;
-    text-align: right;
-    font-family: 'Trebuchet MS', 'Lucida Sans Unicode', 'Lucida Grande', 'Lucida Sans', Arial, sans-serif;
-}
-
-.chat .chat-history .other-message:after {
-    border-bottom-color: #b04bbc;
-    left: 76%;
-}
-
-.chat .chat-message {
-    padding: 20px;
-
-}
-
-.chat .chat-history .message-data img {
+/* Ensure images in chat are properly sized */
+.message img {
+    max-width: 100%;
+    height: auto;
     border-radius: 10px;
-    min-width: 100%;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+}
+
+.chat-message {
+    padding: 15px;
+    background: var(--chat-bg);
+    background-image: url('https://www.transparenttextures.com/patterns/brick-wall.png');
+    border-top: 1px solid #eee;
+    transition: background 0.3s;
+}
+
+[data-theme="dark"] .chat-message {
+    border-top-color: var(--secondary-color);
+}
+
+#chat-message-input {
+    border-radius: 20px;
+    padding: 10px 20px;
+    background: var(--chat-bg);
+    color: var(--text-color);
+    border: 1px solid #ced4da;
+}
+
+[data-theme="dark"] #chat-message-input {
+    border-color: var(--secondary-color);
+}
+
+#chat-message-submit {
+    border-radius: 50%;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--primary-color);
+    color: white;
+}
+
+.avatar-img {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    object-fit: cover;
+}
+
+em-emoji-picker {
+    position: absolute;
+    bottom: 70px;
+    right: 20px;
+    z-index: 1000;
+}
+
+.dark-mode-toggle {
+    position: fixed;
+    top: 10px;
+    left: 10px;
+    z-index: 1000;
+    background: var(--primary-color);
+    color: var(--text-color);
+    border: none;
+    border-radius: 50%;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background 0.3s;
+}
+
+.dark-mode-toggle:hover {
+    background: var(--secondary-color);
+}
+
+.typing-indicator {
+    background-color: var(--bg-light);
+    padding: 8px;
+    border-radius: 15px;
+    display: none;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.typing-indicator span {
+    height: 8px;
+    width: 8px;
+    margin: 0 2px;
+    background-color: #90949c;
+    display: block;
+    border-radius: 50%;
+    opacity: 0.4;
+    animation: typing 1s infinite;
+}
+
+.typing-indicator span:nth-child(1) {
+    animation-delay: 0s;
+}
+
+.typing-indicator span:nth-child(2) {
+    animation-delay: 0.2s;
+}
+
+.typing-indicator span:nth-child(3) {
+    animation-delay: 0.4s;
+}
+
+@keyframes typing {
+    0% {
+        transform: scale(1);
+    }
+
+    50% {
+        transform: scale(1.5);
+    }
+
+    100% {
+        transform: scale(1);
+    }
+}
+
+.file-preview {
+    position: fixed;
+    bottom: 80px;
+    right: 20px;
+    max-width: 300px;
+    background: var(--chat-bg);
+    border-radius: 10px;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+    padding: 10px;
+    display: none;
+    z-index: 1000;
+}
+
+.file-preview img {
+    max-width: 100%;
+    border-radius: 8px;
+}
+
+.file-preview .file-info {
+    display: flex;
+    align-items: center;
+    margin-top: 8px;
+}
+
+.file-preview .file-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.file-preview .close-preview {
+    background: none;
+    border: none;
+    color: #666;
+    cursor: pointer;
+    padding: 5px;
+}
+
+[data-theme="dark"] .file-preview .close-preview {
+    color: var(--text-color);
+}
+
+.upload-progress {
+    height: 4px;
+    width: 100%;
+    background: #eee;
+    border-radius: 2px;
+    overflow: hidden;
+    margin-top: 8px;
+}
+
+[data-theme="dark"] .upload-progress {
+    background: var(--secondary-color);
+}
+
+.upload-progress-bar {
+    height: 100%;
+    background: var(--primary-color);
+    width: 0%;
+    transition: width 0.3s ease;
+}
+
+.file-preview .preview-content {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100px;
+    margin-bottom: 10px;
+}
+
+.file-preview .preview-content img {
+    max-height: 100px;
+    max-width: 100%;
+    border-radius: 8px;
+}
+
+.file-preview .preview-content video {
+    max-height: 100px;
+    max-width: 100%;
+    border-radius: 8px;
 }
 
 .status-dot {
@@ -258,6 +379,22 @@ body {
     background: #f44336;
 }
 
+/* the login and settings bar */
+.listbottom {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: #fff;
+    z-index: 100;
+    padding: 10px;
+    box-shadow: 0 -2px 5px rgba(0, 0, 0, 0.2);
+}
+
+[data-theme="dark"] .listbottom {
+    background: var(--bg-light);
+}
+
 /* smaller for sidebar if you like */
 .sidebar-dot {
     width: 8px;
@@ -265,52 +402,81 @@ body {
     margin-left: 4px;
 }
 
-.online,
-.offline,
-.me {
-    margin-right: 2px;
-    font-size: 8px;
-    vertical-align: middle
+.toggle-btn {
+    padding: 0;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    display: none;
 }
 
-.online {
-    color: #86c541
-}
-
-.offline {
-    color: #e47297
-}
-
-.me {
-    color: #1d8ecd
-}
-
-.float-right {
-    float: right
-}
-
-.clearfix:after {
-    visibility: hidden;
+.hamburger {
     display: block;
-    font-size: 0;
-    content: " ";
-    clear: both;
-    height: 0
+    position: relative;
+    width: 1em;
+    height: 2px;
+    background: #131212;
+    border-radius: 0.5em;
+    transition: transform 250ms ease-in-out;
+}
+
+[data-theme="dark"] .hamburger,
+[data-theme="dark"] .hamburger::before,
+[data-theme="dark"] .hamburger::after {
+    background: var(--text-color);
+}
+
+.hamburger::before,
+.hamburger::after {
+    content: '';
+    position: absolute;
+    right: 0;
+    left: 0;
+    width: 1em;
+    height: 2px;
+    background: #131212;
+    border-radius: 0.5em;
+    transition: transform 250ms ease-in-out;
+}
+
+.hamburger::before {
+    top: 6px;
+}
+
+.hamburger::after {
+    bottom: 6px;
 }
 
 @media only screen and (max-width: 767px) {
+    .toggle-btn {
+        display: block !important;
+        padding: 0.5em;
+        border-style: none;
+        background: transparent;
+        cursor: pointer;
+        z-index: 2000;
+        position: relative;
+    }
 
-    /*.row {
-        display: -ms-flexbox;
-        display: flex;
-        -ms-flex-wrap: wrap;
-        flex-wrap: wrap;
-        margin-right: -15px;
-        margin-left: -15px;
-    } */
-    .chat .chat-header {
-        padding: 15px 20px;
-        border-bottom: 2px solid #f4f7f6
+    .listbottom {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: #fff;
+        z-index: 100;
+        padding: 10px;
+        box-shadow: 0 -2px 5px rgba(0, 0, 0, 0.2);
+    }
+
+    [data-theme="dark"] .listbottom {
+        background: var(--bg-light);
+    }
+
+    .chat-list {
+        height: auto;
+        max-height: calc(100vh - 200px);
+        overflow-y: auto;
     }
 
     .form-control {
@@ -322,137 +488,129 @@ body {
         margin-top: 14px;
     }
 
-    .chat-app .people-list {
-        position: fixed;
+    /* Hide people list by default on mobile */
+    .people-list {
+        position: fixed !important;
         top: 0;
         bottom: 0;
         background: #fff;
+        background-image: url('https://www.transparenttextures.com/patterns/brick-wall.png');
         left: 0;
         right: 0;
-        z-index: 100;
-        width: auto;
-        transform: translateX(100%);
+        z-index: 1500;
+        width: 100%;
+        transform: translateX(-100%);
         transition: transform 250ms cubic-bezier(0.19, 1, 0.22, 1);
+        box-shadow: 2px 0 10px rgba(0, 0, 0, 0.1);
     }
 
-    .people-open .people-list {
-        transform: translateX(0%);
+    [data-theme="dark"] .people-list {
+        background: var(--bg-light);
+        background-image: url('https://www.transparenttextures.com/patterns/brick-wall.png');
     }
 
-    .people-open .toggle-btn {
-        position: fixed;
-        right: 10px;
-
+    /* Show people list when menu is open */
+    body.people-open .people-list {
+        transform: translateX(0%) !important;
     }
 
-    .people-open .hamburger {
+    /* Move toggle button when menu is open */
+    body.people-open .toggle-btn {
+        position: fixed !important;
+        right: 20px;
+        top: 15px;
+        z-index: 2000;
+    }
+
+    /* Animate hamburger to X */
+    body.people-open .hamburger {
         transform: rotate(.625turn);
+        background: var(--text-color);
     }
 
-    .people-open .hamburger::before {
+    body.people-open .hamburger::before {
         transform: rotate(90deg) translate(-6px);
+        background: var(--text-color);
     }
 
-    .people-open .hamburger::after {
+    body.people-open .hamburger::after {
         opacity: 0;
     }
 
-    .people-open #search {
+    body.people-open #search {
         max-width: 70%;
     }
 
-    .toggle-btn {
-        padding: 1em;
-        border-style: none;
-        background: border-box;
-        cursor: pointer;
-        z-index: 1000;
-        position: absolute;
-        right: 28px;
-    }
-
-    .hamburger {
-        display: block;
-        position: relative;
-
-    }
-
-    .hamburger,
-    .hamburger::before,
-    .hamburger::after {
-        background: #131212;
-        width: 1em;
-        height: 2px;
-        border-radius: 0.5em;
-        transition: transform 250ms ease-in-out;
-
-    }
-
-    .hamburger::before,
-    .hamburger::after {
+    /* Add overlay when menu is open */
+    body.people-open::after {
         content: '';
-        right: 0;
+        position: fixed;
+        top: 0;
         left: 0;
-        position: absolute;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: 1400;
+        animation: fadeIn 0.25s ease;
     }
 
-    .hamburger::before {
-        top: 6px;
+    @keyframes fadeIn {
+        from {
+            opacity: 0;
+        }
+
+        to {
+            opacity: 1;
+        }
     }
 
-    .hamburger::after {
-        bottom: 6px;
+    .chat-container {
+        border-radius: 0;
     }
 
-    .chat-app .chat {
-        margin: 0
+    .chat-header {
+        border-radius: 0;
     }
 
-
-    .chat-app .chat .chat-header {
-        border-radius: 0.55rem 0.55rem 0 0
-    }
-
-    .chat-app .chat-history {
-        height: 400px;
-        overflow-x: auto
+    .chat-history {
+        height: calc(100vh - 200px);
     }
 
     .time-sender {
         font-size: small;
         margin-right: 60px;
         font-family: math;
-        margin-bottom: -3px
+        margin-bottom: -3px;
     }
 
     .time-left {
         font-size: small;
         margin-left: 50px;
         font-family: math;
-        margin-bottom: -3px
+        margin-bottom: -3px;
     }
 }
 
 @media only screen and (min-width: 768px) and (max-width: 992px) {
     .chat-app .chat-list {
         height: 650px;
-        overflow-x: auto
+        overflow-x: auto;
     }
 
     .chat-app .chat-history {
         height: 600px;
-        overflow-x: auto
+        overflow-x: auto;
     }
 }
 
 @media only screen and (min-device-width: 768px) and (max-device-width: 1024px) and (orientation: landscape) and (-webkit-min-device-pixel-ratio: 1) {
     .chat-app .chat-list {
         height: 480px;
-        overflow-x: auto
+        overflow-x: auto;
     }
 
     .chat-app .chat-history {
         height: calc(100vh - 350px);
-        overflow-x: auto
+        overflow-x: auto;
     }
 }

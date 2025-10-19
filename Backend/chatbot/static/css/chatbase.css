@@ -147,15 +147,18 @@ body {
     padding-left: 6px
 }
 
+.time {
+    font-size: 0.75em;
+    opacity: 0.7;
+}
+
 .time-sender {
-    font-size: small;
-    font-family: math;
+    font-family: monospace;
+    margin-left: 100%;
 }
 
 .time-left {
-    font-size: small;
     font-family: math;
-    margin-left: -10px;
 }
 
 .user-name {

@@ -45,6 +45,7 @@
 
         .people-list {
             background: #fff;
+            background-image: url('https://www.transparenttextures.com/patterns/brick-wall.png');
             border-right: 1px solid #eee;
             height: 100vh;
         }
@@ -68,6 +69,7 @@
 
         .chat-header {
             background: var(--chat-bg);
+            background-image: url('https://www.transparenttextures.com/patterns/brick-wall.png');
             border-bottom: 1px solid #eee;
             padding: 15px;
             transition: background 0.3s;
@@ -77,7 +79,8 @@
             height: calc(100vh - 180px);
             overflow-y: auto;
             padding: 20px;
-            background: var(--bg-light);
+            background-image: url('https://www.transparenttextures.com/patterns/argyle.png');
+            background-color: #cfd4dd;
             transition: background 0.3s;
         }
 
@@ -85,7 +88,7 @@
             padding: 12px 18px;
             border-radius: 18px;
             margin-bottom: 15px;
-            max-width: 70%;
+            max-width: 50%;
             word-wrap: break-word;
             overflow-wrap: break-word;
             position: relative;
@@ -122,10 +125,18 @@
             opacity: 0.8;
         }
 
-        .time-sender,
-        .time-left {
+        .time {
             font-size: 0.75em;
             opacity: 0.7;
+        }
+
+        .time-sender {
+            font-family: monospace;
+            margin-left: 90%;
+        }
+
+        .time-left {
+            font-family: math;
         }
 
         /* Ensure images in chat are properly sized */
@@ -139,6 +150,7 @@
         .chat-message {
             padding: 15px;
             background: var(--chat-bg);
+            background-image: url('https://www.transparenttextures.com/patterns/brick-wall.png');
             border-top: 1px solid #eee;
             transition: background 0.3s;
         }
@@ -334,11 +346,194 @@
             background: #f44336;
         }
 
+        /* the login and settings bar */
+        .listbottom {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: #fff;
+            z-index: 100;
+            padding: 10px;
+            box-shadow: 0 -2px 5px rgba(0, 0, 0, 0.2);
+        }
+
         /* smaller for sidebar if you like */
         .sidebar-dot {
             width: 8px;
             height: 8px;
             margin-left: 4px;
+        }
+
+        @media only screen and (max-width: 767px) {
+            .listbottom {
+                position: absolute;
+                bottom: 0;
+                left: 0;
+                right: 0;
+                background: #fff;
+                z-index: 100;
+                padding: 10px;
+                box-shadow: 0 -2px 5px rgba(0, 0, 0, 0.2);
+            }
+
+            .chat-app .chat-list {
+                height: 200px;
+                overflow-x: auto
+            }
+
+            .chat-app .people-list {
+                height: calc(100vh - 60px);
+                overflow-x: auto
+            }
+
+            .chat .chat-header {
+                padding: 15px 20px;
+                border-bottom: 2px solid #f4f7f6
+            }
+
+            .form-control {
+                max-width: 100%;
+            }
+
+            body {
+                background-color: #f8f9fa;
+                margin-top: 14px;
+            }
+
+            .chat-app .people-list {
+                position: fixed;
+                top: 0;
+                bottom: 0;
+                background: #fff;
+                left: 0;
+                right: 0;
+                z-index: 100;
+                width: auto;
+                transform: translateX(100%);
+                transition: transform 250ms cubic-bezier(0.19, 1, 0.22, 1);
+            }
+
+            .people-open .people-list {
+                transform: translateX(0%);
+            }
+
+            .people-open .toggle-btn {
+                position: fixed;
+                right: 10px;
+
+            }
+
+            .people-open .hamburger {
+                transform: rotate(.625turn);
+            }
+
+            .people-open .hamburger::before {
+                transform: rotate(90deg) translate(-6px);
+            }
+
+            .people-open .hamburger::after {
+                opacity: 0;
+            }
+
+            .people-open #search {
+                max-width: 70%;
+            }
+
+            .toggle-btn {
+                padding: 1em;
+                border-style: none;
+                background: border-box;
+                cursor: pointer;
+                z-index: 1000;
+                position: absolute;
+                right: 28px;
+            }
+
+            .hamburger {
+                display: block;
+                position: relative;
+
+            }
+
+            .hamburger,
+            .hamburger::before,
+            .hamburger::after {
+                background: #131212;
+                width: 1em;
+                height: 2px;
+                border-radius: 0.5em;
+                transition: transform 250ms ease-in-out;
+
+            }
+
+            .hamburger::before,
+            .hamburger::after {
+                content: '';
+                right: 0;
+                left: 0;
+                position: absolute;
+            }
+
+            .hamburger::before {
+                top: 6px;
+            }
+
+            .hamburger::after {
+                bottom: 6px;
+            }
+
+            .chat-app .chat {
+                margin: 0
+            }
+
+
+            .chat-app .chat .chat-header {
+                border-radius: 0.55rem 0.55rem 0 0
+            }
+
+            .chat-app .chat-history {
+                height: 400px;
+                overflow-x: auto
+            }
+
+            .time-sender {
+                font-size: small;
+                margin-right: 60px;
+                font-family: math;
+                margin-bottom: -3px
+            }
+
+            .time-left {
+                font-size: small;
+                margin-left: 50px;
+                font-family: math;
+                margin-bottom: -3px
+            }
+        }
+
+        @media only screen and (min-width: 768px) and (max-width: 992px) {
+            .chat-app .chat-list {
+                height: 650px;
+                overflow-x: auto
+            }
+
+            .chat-app .chat-history {
+                height: 600px;
+                overflow-x: auto
+            }
+        }
+
+        @media only screen and (min-device-width: 768px) and (max-device-width: 1024px) and (orientation: landscape) and (-webkit-min-device-pixel-ratio: 1) {
+            .chat-app .chat-list {
+                height: 480px;
+                overflow-x: auto
+            }
+
+            .chat-app .chat-history {
+                height: calc(100vh - 350px);
+                overflow-x: auto
+            }
         }
     </style>
 
@@ -362,7 +557,6 @@
 
                     <ul class="list-unstyled chat-list">
                         {% for chatroom in chatrooms %}
-                        {% if chatroom.id != 2 %}
                         <li class="clearfix {% if chatroom.id == room_name %}active{% endif %}">
                             <a href="{% url 'chatbot:bot-home' chatroom.id %}"
                                 class="text-decoration-none {% if chatroom.id == room_name %}text-white{% else %}text-dark{% endif %}">
@@ -379,35 +573,16 @@
                                 </div>
                             </a>
                         </li>
-                        {% else %}
-                        <li class="clearfix {% if chatroom.id == room_name %}active{% endif %}">
-                            <a href="{% url 'chatbot:bot-home' chatroom.id %}"
-                                class="text-decoration-none {% if chatroom.id == room_name %}text-white{% else %}text-dark{% endif %}">
-                                <div class="d-flex align-items-center">
-                                    <img src="https://bootdey.com/img/Content/avatar/avatar1.png"
-                                        class="avatar-img me-2" alt="avatar">
-                                    <div>
-                                        <div class="fw-bold">MATHIA ROOM{{chatroom.id}} (LIVE CHAT ROOM)</div>
-                                        <div class="small">
-                                            <i class="fas fa-circle text-success me-1"></i>
-                                            online
-                                        </div>
-                                    </div>
-                                </div>
-                            </a>
-                        </li>
-                        {% endif %}
                         {% endfor %}
                     </ul>
-
-                    <div class="d-flex justify-content-between align-items-center mt-3">
-                        <a href="{% url 'users:logout' %}" class="btn btn-outline-danger">
-                            <i class="fas fa-sign-out-alt me-2"></i>Logout
-                        </a>
-                        <button class="btn btn-link text-muted">
-                            <i class="fas fa-cog fa-spin"></i>
-                        </button>
-                    </div>
+                        <div class="listbottom d-flex justify-content-between align-items-center mt-3">
+                            <a href="{% url 'users:logout' %}" class="btn btn-outline-danger">
+                                <i class="fas fa-sign-out-alt me-2"></i>Logout
+                            </a>
+                            <button class="btn btn-link text-muted">
+                                <i class="fas fa-cog fa-spin"></i>
+                            </button>
+                        </div>
                 </div>
             </div>
 

@@ -20,19 +20,21 @@
         <div class="row g-0">
             <div class="col-md-4 col-lg-3 people-list">
                 <div class="p-3 people-list-content">
-                    <div class="input-group mb-3">
-                        <span class="input-group-text bg-light border-0">
-                            <i class="fas fa-search text-muted"></i>
+                    <div class="search-bar input-group mb-3">
+                        <span class="input-group-text p-3 bg-light border-0">
+                            <i class=""></i>
                         </span>
                         <input type="text" class="form-control border-0 bg-light" id="search"
                             placeholder="Search messages...">
+                        <span class="input-group-text bg-light border-0">
+                            <i class="fas fa-search text-muted"></i>
+                        </span>
                     </div>
 
                     <ul class="list-unstyled chat-list">
                         {% for chatroom in chatrooms %}
                         <li class="clearfix {% if chatroom.id == room_name %}active{% endif %}">
-                            <a href="{% url 'chatbot:bot-home' chatroom.id %}"
-                                class="text-decoration-none {% if chatroom.id == room_name %}text-white{% else %}text-dark{% endif %}">
+                            <a href="{% url 'chatbot:bot-home' chatroom.id %}" class="text-decoration-none">
                                 <div class="d-flex align-items-center">
                                     <img src="https://bootdey.com/img/Content/avatar/avatar1.png"
                                         class="avatar-img me-2" alt="avatar">
@@ -54,7 +56,7 @@
                     <a href="{% url 'users:logout' %}" class="btn btn-outline-danger btn-sm">
                         <i class="fas fa-sign-out-alt me-2"></i>Logout
                     </a>
-                    <button class="btn btn-link text-muted">
+                    <button class="btn btn-link">
                         <i class="fas fa-cog fa-spin"></i>
                     </button>
                 </div>
@@ -112,8 +114,8 @@
 
                 <div class="chat-message">
                     <div class="input-group">
-                        <button id="emoji" class="btn btn-light">
-                            <i class="far fa-smile"></i>
+                        <button id="emoji" class="btn">
+                            <i class="far fa-smile fa-2x"></i>
                         </button>
                         <input type="text" class="form-control" id="chat-message-input"
                             placeholder="Type your message...">
@@ -238,7 +240,10 @@
                 msgTextTag.className = 'message other-message';
                 msgpTag.className = 'time-label';
             }
-
+            // Add sentimage class if message contains an image
+            if (message.content.includes('<img')) {
+                msgTextTag.classList.add('sentimage');
+            }
             msgdivtag.className = 'user-name';
             msgSpanTag.className = 'message-data-time';
 
@@ -453,35 +458,51 @@
 
         // Emoji picker initialization
         document.addEventListener('DOMContentLoaded', function () {
+            // Load saved theme or fallback to light
+            const savedTheme = localStorage.getItem('theme') || 'light';
+            document.body.setAttribute('data-theme', savedTheme);
+
+            // Create picker with correct theme
             const pickerOptions = {
                 onEmojiSelect: function (emoji) {
-                    var input = document.getElementById('chat-message-input');
+                    const input = document.getElementById('chat-message-input');
                     input.value += emoji.native;
                     toggleEmojiPicker();
-                }
-            }
-            const picker = new EmojiMart.Picker(pickerOptions)
+                },
+                theme: savedTheme   // set emoji picker theme
+            };
+
+            // Initialize emoji picker
+            const picker = new EmojiMart.Picker(pickerOptions);
             picker.style.display = 'none';
-            document.body.appendChild(picker)
+            document.body.appendChild(picker);
+
+            // Toggle button for showing/hiding the picker
             document.getElementById('emoji').addEventListener('click', toggleEmojiPicker);
+
+            // Handle dark mode toggle and sync emoji picker theme
+            const toggleButton = document.getElementById('darkModeToggle');
+            toggleButton.addEventListener('click', () => {
+                const currentTheme = document.body.getAttribute('data-theme');
+                const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+
+                document.body.setAttribute('data-theme', newTheme);
+                localStorage.setItem('theme', newTheme);
+
+                // Update emoji picker theme as well
+                const pickerElement = document.querySelector('em-emoji-picker');
+                if (pickerElement) {
+                    pickerElement.setAttribute('theme', newTheme);
+                }
+            });
         });
 
+        // Toggle emoji picker visibility
         function toggleEmojiPicker() {
             const element = document.querySelector('em-emoji-picker');
+            if (!element) return;
             element.style.display = element.style.display === 'none' ? '' : 'none';
         }
-
-        // Dark mode
-        const toggleButton = document.getElementById('darkModeToggle');
-        toggleButton.addEventListener('click', () => {
-            const currentTheme = document.body.getAttribute('data-theme');
-            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
-            document.body.setAttribute('data-theme', newTheme);
-            localStorage.setItem('theme', newTheme);
-        });
-
-        const savedTheme = localStorage.getItem('theme') || 'light';
-        document.body.setAttribute('data-theme', savedTheme);
     </script>
 
 </html>

@@ -552,8 +552,198 @@ em-emoji-picker {
     bottom: 6px;
 }
 
+/* Search Panel */
+.search-panel {
+    position: absolute;
+    top: 70px;
+    left: 0;
+    right: 0;
+    background: var(--chat-bg);
+    border-bottom: 2px solid var(--border-color);
+    padding: 20px;
+    z-index: 100;
+    transform: translateY(-100%);
+    opacity: 0;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    pointer-events: none;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.search-panel.active {
+    transform: translateY(0);
+    opacity: 1;
+    pointer-events: all;
+}
+
+[data-theme="dark"] .search-panel {
+    background: var(--chat-bg);
+    border-bottom-color: var(--secondary-color);
+}
+
+.search-panel-content {
+    max-width: 600px;
+    margin: 0 auto;
+}
+
+.search-input {
+    border: 2px solid var(--border-color);
+    border-radius: 12px;
+    padding: 10px 16px;
+    font-size: 0.95rem;
+    transition: all 0.3s ease;
+}
+
+.search-input:focus {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(79, 140, 255, 0.1);
+}
+
+[data-theme="dark"] .search-input {
+    background: var(--input-bg);
+    color: var(--text-color);
+    border-color: var(--secondary-color);
+}
+
+.search-filters {
+    background: var(--bg-light);
+    border-radius: 12px;
+    padding: 15px;
+    margin-top: 15px;
+}
+
+[data-theme="dark"] .search-filters {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.search-filters .form-control-sm {
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    padding: 6px 12px;
+}
+
+[data-theme="dark"] .search-filters .form-control-sm {
+    background: var(--input-bg);
+    color: var(--text-color);
+    border-color: var(--secondary-color);
+}
+
+.search-results-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 15px;
+    background: var(--bg-light);
+    border-radius: 10px;
+}
+
+[data-theme="dark"] .search-results-header {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.search-count {
+    font-size: 0.9rem;
+    color: var(--text-color);
+    font-weight: 500;
+}
+
+.search-navigation {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.search-navigation .btn {
+    padding: 4px 8px;
+    color: var(--text-color);
+}
+
+.search-navigation .btn:hover {
+    color: var(--primary-color);
+}
+
+.search-position {
+    font-size: 0.85rem;
+    color: var(--text-color);
+    font-weight: 600;
+    min-width: 40px;
+    text-align: center;
+}
+
+/* Highlighted search matches */
+.search-highlight {
+    background: linear-gradient(120deg, #ffd93d 0%, #ffb700 100%);
+    color: #000;
+    padding: 2px 4px;
+    border-radius: 3px;
+    font-weight: 600;
+    animation: highlightPulse 0.6s ease;
+}
+
+[data-theme="dark"] .search-highlight {
+    background: linear-gradient(120deg, #d4a017 0%, #b8860b 100%);
+    color: #fff;
+}
+
+.search-highlight.active-match {
+    background: linear-gradient(120deg, #ff6b6b 0%, #ee5a24 100%);
+    color: #fff;
+    box-shadow: 0 0 0 3px rgba(255, 107, 107, 0.3);
+}
+
+@keyframes highlightPulse {
+
+    0%,
+    100% {
+        transform: scale(1);
+    }
+
+    50% {
+        transform: scale(1.05);
+    }
+}
+
+/* Hidden messages during search */
+.message-hidden {
+    display: none !important;
+}
+
+/* Search button active state */
+#searchToggle.active {
+    background: var(--primary-color) !important;
+    color: white !important;
+}
+
+/* Adjust chat history when search is active */
+.chat-container.search-active .chat-history {
+    height: calc(100vh - 340px);
+}
+
+
 /* small screens like mobile */
 @media only screen and (max-width: 767px) {
+    .search-panel {
+        top: 60px;
+        padding: 15px;
+    }
+
+    .search-panel-content {
+        max-width: 100%;
+    }
+
+    .search-filters .row {
+        flex-direction: column;
+    }
+
+    .search-results-header {
+        flex-direction: column;
+        gap: 10px;
+        text-align: center;
+    }
+
+    .chat-container.search-active .chat-history {
+        height: calc(100vh - 380px);
+    }
+
     .dark-mode-toggle {
         top: 70px;
         left: 10px;

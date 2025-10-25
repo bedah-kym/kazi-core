@@ -77,6 +77,50 @@ body {
     background: var(--bg-light);
 }
 
+/* People list show/hide animation helpers */
+.people-anim {
+    transition: opacity 220ms ease, transform 220ms ease, max-height 260ms ease;
+    will-change: opacity, transform;
+    opacity: 1;
+}
+
+.people-anim.fade-hidden {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.995);
+    max-height: 0.001px;
+    /* collapse smoothly */
+}
+
+.fw-bold .search-highlight {
+    background: linear-gradient(90deg, rgba(255, 255, 0, 0.12), rgba(255, 183, 0, 0.14));
+    color: inherit;
+    padding: 2px 6px;
+    border-radius: 6px;
+    font-weight: 700;
+}
+
+/* subtle pulse for fuzzy matches */
+.fuzzy-match {
+    animation: fuzzyPulse 0.9s ease;
+}
+
+@keyframes fuzzyPulse {
+    0% {
+        transform: scale(1);
+        opacity: 1;
+    }
+
+    50% {
+        transform: scale(1.02);
+        opacity: 0.95;
+    }
+
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
 .chat-list .active {
     background: var(--primary-color);
     color: white;

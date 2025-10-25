@@ -353,7 +353,226 @@ document.addEventListener('DOMContentLoaded', function () {
             pickerElement.setAttribute('theme', newTheme);
         }
     });
+
+    // Initialize people search in the sidebar (search who you've been talking to)
+    (function initPeopleSearch() {
+        const input = document.getElementById('search');
+        if (!input) return;
+
+        let timeout;
+        input.addEventListener('input', function (e) {
+            clearTimeout(timeout);
+            const q = e.target.value.trim();
+            timeout = setTimeout(() => performPeopleSearch(q), 180);
+        });
+
+        // Clear highlights and show all when input cleared
+        input.addEventListener('search', function (e) {
+            if (!e.target.value) performPeopleSearch('');
+        });
+
+        // Focus with Ctrl/Cmd+K
+        document.addEventListener('keydown', function (e) {
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+                e.preventDefault();
+                input.focus();
+            }
+        });
+    })();
 });
+
+// People search helpers
+function performPeopleSearch(query) {
+    const raw = (query || '').trim();
+    const q = raw.toLowerCase();
+    // token search: u:username, e:email - allow quick targeting
+    let token = null;
+    let tokenQuery = '';
+    const tokenMatch = raw.match(/^(u:|e:)(.*)$/i);
+    if (tokenMatch) {
+        token = tokenMatch[1].toLowerCase().replace(':', '');
+        tokenQuery = tokenMatch[2].trim().toLowerCase();
+    }
+    const listItems = document.querySelectorAll('.chat-list li');
+
+    if (!listItems) return;
+
+    listItems.forEach(li => {
+        const nameEl = li.querySelector('.fw-bold');
+        if (!nameEl) return;
+
+        // Extract and cache original name (text nodes only)
+        if (!nameEl.dataset.originalName) {
+            const orig = Array.from(nameEl.childNodes)
+                .filter(n => n.nodeType === Node.TEXT_NODE)
+                .map(n => n.textContent)
+                .join('')
+                .trim();
+            nameEl.dataset.originalName = orig;
+        }
+
+        const original = nameEl.dataset.originalName || '';
+
+        if (!q) {
+            // show all and restore original text
+            restoreNameText(nameEl);
+            animateItemVisibility(li, true);
+            return;
+        }
+
+        // collect searchable fields
+        const searchable = [original.toLowerCase()];
+        // data attributes if present - e.g., data-username, data-email on the li or anchor
+        const anchor = li.querySelector('a');
+        const datasetSource = (li.dataset && Object.keys(li.dataset).length) ? li.dataset : (anchor && anchor.dataset ? anchor.dataset : {});
+        if (datasetSource.username) searchable.push(String(datasetSource.username).toLowerCase());
+        if (datasetSource.email) searchable.push(String(datasetSource.email).toLowerCase());
+        if (datasetSource.user) searchable.push(String(datasetSource.user).toLowerCase());
+
+        let matches = false;
+
+        // If token search in use, prioritize that field
+        if (token) {
+            const field = token === 'u' ? (datasetSource.username || datasetSource.user || '') : (datasetSource.email || '');
+            if (field) {
+                matches = field.toLowerCase().includes(tokenQuery);
+            } else {
+                // fallback to original
+                matches = original.toLowerCase().includes(tokenQuery);
+            }
+        } else {
+            // substring fast-pass
+            if (searchable.some(s => s.includes(q))) {
+                matches = true;
+            } else {
+                // fuzzy check for longer queries
+                if (q.length >= 3) {
+                    // compute best normalized similarity across fields
+                    let best = 0;
+                    searchable.forEach(s => {
+                        const dist = levenshtein(q, s);
+                        const norm = 1 - (dist / Math.max(q.length, s.length, 1));
+                        if (norm > best) best = norm;
+                    });
+                    // threshold for fuzzy match
+                    matches = best >= 0.45; // permissive
+                }
+            }
+        }
+
+        if (matches) {
+            highlightNameText(nameEl, q);
+            animateItemVisibility(li, true);
+        } else {
+            restoreNameText(nameEl);
+            animateItemVisibility(li, false);
+        }
+    });
+}
+
+function restoreNameText(nameEl) {
+    const original = nameEl.dataset.originalName || '';
+    // remove all text nodes and re-insert original text as a single text node at start
+    // but leave other child elements (like status-dot) intact
+    // remove existing text nodes
+    Array.from(nameEl.childNodes).forEach(n => {
+        if (n.nodeType === Node.TEXT_NODE) n.remove();
+    });
+    // insert original text node at beginning
+    if (original) nameEl.insertBefore(document.createTextNode(original + ' '), nameEl.firstChild || null);
+}
+
+function highlightNameText(nameEl, query) {
+    const original = nameEl.dataset.originalName || '';
+    const regex = new RegExp(escapeRegex(query), 'ig');
+
+    // remove existing text nodes
+    const textNodes = Array.from(nameEl.childNodes).filter(n => n.nodeType === Node.TEXT_NODE);
+    const text = textNodes.map(n => n.textContent).join('');
+
+    // If query not present as substring, try to highlight best fuzzy chunk (approximate)
+    if (!regex.test(text)) {
+        // for fuzzy matches we won't try to pick exact chars — just show a subtle pulse on the name
+        restoreNameText(nameEl);
+        nameEl.classList.add('fuzzy-match');
+        setTimeout(() => nameEl.classList.remove('fuzzy-match'), 900);
+        return;
+    }
+
+    // Build new HTML for the text portion only
+    const parts = text.split(regex);
+    const matches = text.match(regex) || [];
+    const frag = document.createDocumentFragment();
+
+    for (let i = 0; i < parts.length; i++) {
+        frag.appendChild(document.createTextNode(parts[i]));
+        if (i < matches.length) {
+            const span = document.createElement('span');
+            span.className = 'search-highlight';
+            span.textContent = matches[i];
+            frag.appendChild(span);
+        }
+    }
+
+    // remove existing text nodes
+    textNodes.forEach(n => n.remove());
+    // insert the highlighted fragment at the start
+    nameEl.insertBefore(frag, nameEl.firstChild || null);
+    // ensure spacing
+    if (nameEl.firstChild && nameEl.firstChild.nodeType === Node.TEXT_NODE && !/\s$/.test(nameEl.firstChild.textContent)) {
+        nameEl.firstChild.textContent = nameEl.firstChild.textContent + ' ';
+    }
+}
+
+function escapeRegex(string) {
+    return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Simple Levenshtein distance (iterative, optimized for short strings)
+function levenshtein(a, b) {
+    a = String(a || '');
+    b = String(b || '');
+    if (a === b) return 0;
+    const al = a.length, bl = b.length;
+    if (al === 0) return bl;
+    if (bl === 0) return al;
+
+    let v0 = new Array(bl + 1), v1 = new Array(bl + 1);
+    for (let j = 0; j <= bl; j++) v0[j] = j;
+
+    for (let i = 0; i < al; i++) {
+        v1[0] = i + 1;
+        const ai = a.charAt(i);
+        for (let j = 0; j < bl; j++) {
+            const cost = ai === b.charAt(j) ? 0 : 1;
+            v1[j + 1] = Math.min(v1[j] + 1, v0[j + 1] + 1, v0[j] + cost);
+        }
+        const tmp = v0; v0 = v1; v1 = tmp;
+    }
+    return v0[bl];
+}
+
+// Animate show/hide with a CSS class; keeps layout stable
+function animateItemVisibility(li, show) {
+    // ensure animatable class
+    li.classList.add('people-anim');
+    if (show) {
+        li.style.display = '';
+        // trigger reflow then remove hidden class
+        requestAnimationFrame(() => {
+            li.classList.remove('fade-hidden');
+        });
+    } else {
+        // add hidden class to animate out then hide
+        li.classList.add('fade-hidden');
+        li.addEventListener('transitionend', function onEnd(e) {
+            if (e.propertyName === 'opacity') {
+                li.style.display = 'none';
+                li.removeEventListener('transitionend', onEnd);
+            }
+        });
+    }
+}
 
 // Toggle emoji picker visibility
 function toggleEmojiPicker() {

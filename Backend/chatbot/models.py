@@ -7,6 +7,8 @@ user=get_user_model()
 
 class Member(models.Model):
     User = models.ForeignKey(user,on_delete=models.CASCADE)
+    # persisted last seen timestamp (updated on disconnect)
+    last_seen = models.DateTimeField(null=True, blank=True)
     def __str__(self):
         return self.User.username
 

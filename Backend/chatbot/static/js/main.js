@@ -274,36 +274,59 @@ chatSocket.onmessage = function (e) {
         scrollToLastMessage();
     }
     else if (data.command === 'presence') {
+        console.debug('presence event received:', data);
         const who = data.user;
         const state = data.status;
+        const lastSeen = data.last_seen || null;
+
+        function setDot(el, st, ls) {
+            el.classList.toggle('online', st === 'online');
+            el.classList.toggle('offline', st === 'offline');
+            if (ls) el.setAttribute('title', `Last seen: ${new Date(ls).toLocaleString()}`);
+            else if (st === 'online') el.setAttribute('title', 'Online now');
+            else el.removeAttribute('title');
+        }
 
         if (who === otherUser) {
             const dot = document.getElementById('header-presence');
-            dot.classList.toggle('online', state === 'online');
-            dot.classList.toggle('offline', state === 'offline');
+            if (dot) setDot(dot, state, lastSeen);
+            // update header lastseen text - show 'Online now' only when status is online
+            const headerLast = document.getElementById('header-lastseen');
+            if (headerLast) headerLast.textContent = state === 'online' ? 'Online now' : (lastSeen ? humanizeLastSeen(new Date(lastSeen)) : '');
         }
 
         document.querySelectorAll(`.sidebar-dot[data-user="${who}"]`)
-            .forEach(el => {
-                el.classList.toggle('online', state === 'online');
-                el.classList.toggle('offline', state === 'offline');
-            });
+            .forEach(el => setDot(el, state, lastSeen));
     }
     else if (data.command === 'presence_snapshot') {
-        const online = new Set(data.online || []);
+        console.debug('presence_snapshot received:', data);
+        // presence payload is an array of {user, status, last_seen}
+        const presenceList = data.presence || [];
+        const online = new Set(presenceList.filter(p => p.status === 'online').map(p => p.user));
 
         const headerDot = document.getElementById('header-presence');
         if (headerDot && otherUser) {
-            const on = online.has(otherUser);
-            headerDot.classList.toggle('online', on);
-            headerDot.classList.toggle('offline', !on);
+            const entry = presenceList.find(p => p.user === otherUser);
+            if (entry) {
+                headerDot.classList.toggle('online', entry.status === 'online');
+                headerDot.classList.toggle('offline', entry.status !== 'online');
+                if (entry.last_seen) headerDot.setAttribute('title', `Last seen: ${new Date(entry.last_seen).toLocaleString()}`);
+                const headerLast = document.getElementById('header-lastseen');
+                if (headerLast) headerLast.textContent = entry.status === 'online' ? 'Online now' : (entry.last_seen ? humanizeLastSeen(new Date(entry.last_seen)) : '');
+            }
         }
 
         document.querySelectorAll('.sidebar-dot[data-user]').forEach(el => {
             const who = el.dataset.user;
-            const on = online.has(who);
-            el.classList.toggle('online', on);
-            el.classList.toggle('offline', !on);
+            const entry = presenceList.find(p => p.user === who);
+            if (entry) {
+                el.classList.toggle('online', entry.status === 'online');
+                el.classList.toggle('offline', entry.status !== 'online');
+                if (entry.last_seen) el.setAttribute('title', `Last seen: ${new Date(entry.last_seen).toLocaleString()}`);
+            } else {
+                el.classList.remove('online');
+                el.classList.add('offline');
+            }
         });
     }
     else if (data.command === 'error') {
@@ -572,6 +595,23 @@ function animateItemVisibility(li, show) {
             }
         });
     }
+}
+
+// Humanize last seen timestamps (simple client-side implementation)
+function humanizeLastSeen(date) {
+    if (!date) return '';
+    const now = new Date();
+    const diff = Math.floor((now - date) / 1000); // seconds
+
+    if (diff < 10) return 'just now';
+    if (diff < 60) return `${diff}s ago`;
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+
+    // older than a day -> show date
+    const days = Math.floor(diff / 86400);
+    if (days === 1) return `Yesterday ${date.toLocaleTimeString()}`;
+    return `${days}d ago`;
 }
 
 // Toggle emoji picker visibility

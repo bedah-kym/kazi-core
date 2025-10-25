@@ -35,9 +35,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
         if not self.scope["user"].is_authenticated:
             await self.close(code=4001)
             return
-
         # 2. Room setup
-        self.room_name       = self.scope["url_route"]["kwargs"]["room_name"]
+        self.room_name = self.scope["url_route"]["kwargs"]["room_name"]
         self.room_group_name = f"chat_{self.room_name}"
 
         # 3. Secure session init
@@ -45,12 +44,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
         if not initialized:
             await self.close(code=4002)
             return
+
         # 4. Check if the room exists
         current_chat = await self.get_current_chatroom(self.room_name)
         if not current_chat:
             await self.close(code=4003)
             return
-        # 4. Join group
+
+        # 5. Join group
         await self.channel_layer.group_add(self.room_group_name, self.channel_name)
 
         # presence via Redis SET
@@ -58,7 +59,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
         key = f"online:{self.room_group_name}"
         user = self.scope["user"].username
         await sync_to_async(redis.sadd)(key, user)
-        
+
+        # set a last_seen placeholder in redis (now) while online
+        last_seen_key = f"lastseen:{user}"
+        await sync_to_async(redis.set)(last_seen_key, timezone.now().isoformat())
+
         # Broadcast to others that you’re online
         await self.channel_layer.group_send(
             self.room_group_name,
@@ -68,26 +73,38 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 "status": "online",
             }
         )
-        
+
         await self.accept()
-        
-        redis = get_redis_connection("default")
-        key = f"online:{self.room_group_name}"
+
+        # build presence snapshot to return to the connecting client
         raw = await sync_to_async(redis.smembers)(key)
         online_users = [u.decode() if isinstance(u, bytes) else u for u in raw]
 
+        presence = []
+        for u in online_users:
+            ls = await sync_to_async(redis.get)(f"lastseen:{u}")
+            if isinstance(ls, bytes):
+                try:
+                    ls = ls.decode()
+                except Exception:
+                    ls = None
+            presence.append({"user": u, "status": "online", "last_seen": ls})
+
         await self.send(text_data=json.dumps({
             "command": "presence_snapshot",
-            "online": online_users,
+            "presence": presence,
         }))
 
         
     async def presence_update(self, event):
-        await self.send_message({
+        payload = {
             "command": "presence",
-            "user":    event["user"],
-            "status":  event["status"],
-        })
+            "user": event.get("user"),
+            "status": event.get("status"),
+        }
+        if 'last_seen' in event:
+            payload['last_seen'] = event.get('last_seen')
+        await self.send_message(payload)
 
     @sync_to_async
     def get_chatroom_key(self, room_id):
@@ -196,16 +213,46 @@ class ChatConsumer(AsyncWebsocketConsumer):
         cache_key = f"online:{self.room_group_name}"
         redis = get_redis_connection("default")
         await sync_to_async(redis.srem)(cache_key, self.scope["user"].username)
+        # 3. Set last_seen in redis and persist to DB, then broadcast offline status including last_seen
+        try:
+            redis = get_redis_connection("default")
+            last_seen_key = f"lastseen:{self.scope['user'].username}"
+            now_iso = timezone.now().isoformat()
+            await sync_to_async(redis.set)(last_seen_key, now_iso)
 
-        # 3. Broadcast offline status
-        await self.channel_layer.group_send(
-            self.room_group_name,
-            {
-                "type": "presence_update",
-                "user":   self.scope["user"].username,
-                "status": "offline",
-            }
-        )
+            # persist to Member.last_seen if Member exists
+            def persist_last_seen(username, iso_ts):
+                try:
+                    u = User.objects.filter(username=username).first()
+                    if not u:
+                        return
+                    m = Member.objects.filter(User=u).first()
+                    if not m:
+                        return
+                    from django.utils.dateparse import parse_datetime
+                    dt = parse_datetime(iso_ts)
+                    if dt is None:
+                        return
+                    m.last_seen = dt
+                    m.save()
+                except Exception as e:
+                    logger.error(f"Error persisting last_seen: {e}")
+
+            await sync_to_async(persist_last_seen)(self.scope['user'].username, now_iso)
+
+            # Broadcast offline status with last_seen to the group
+            logger.debug(f"Broadcasting offline for {self.scope['user'].username} with last_seen={now_iso} to {self.room_group_name}")
+            await self.channel_layer.group_send(
+                self.room_group_name,
+                {
+                    "type": "presence_update",
+                    "user":   self.scope["user"].username,
+                    "status": "offline",
+                    "last_seen": now_iso,
+                }
+            )
+        except Exception as e:
+            logger.error(f"Error updating last_seen on disconnect: {e}")
 
     async def receive(self, text_data):
         try:

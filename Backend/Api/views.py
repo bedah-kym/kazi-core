@@ -4,6 +4,166 @@ from chatbot.serializers import ChatroomSerializer
 from rest_framework import generics
 from .permissions import IsStaffEditorPermissions
 from .models import MathiaReply
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from django.conf import settings
+from django.shortcuts import get_object_or_404
+from users.models import CalendlyProfile
+from django.contrib.auth import get_user_model
+import requests
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def calendly_connect(request):
+    """Return an authorization URL to start OAuth with Calendly."""
+    client_id = getattr(settings, 'CALENDLY_CLIENT_ID', None)
+    redirect_uri = request.build_absolute_uri('/api/calendly/callback')
+    if not client_id:
+        return Response({'error': 'Calendly client id not configured'}, status=500)
+    state = str(request.user.id)
+    auth_url = f"https://auth.calendly.com/oauth/authorize?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope=event_types:read%20scheduled_events:read%20scheduled_events:write&state={state}"
+    return Response({'authorization_url': auth_url})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def calendly_callback(request):
+    """Handle OAuth callback from Calendly and store tokens."""
+    code = request.GET.get('code')
+    state = request.GET.get('state')
+    if not code:
+        return Response({'error': 'code missing'}, status=400)
+    token_url = 'https://auth.calendly.com/oauth/token'
+    client_id = getattr(settings, 'CALENDLY_CLIENT_ID', None)
+    client_secret = getattr(settings, 'CALENDLY_CLIENT_SECRET', None)
+    redirect_uri = request.build_absolute_uri('/api/calendly/callback')
+    payload = {
+        'grant_type': 'authorization_code',
+        'client_id': client_id,
+        'client_secret': client_secret,
+        'code': code,
+        'redirect_uri': redirect_uri
+    }
+    r = requests.post(token_url, data=payload)
+    if r.status_code != 200:
+        logger.error('Calendly token exchange failed: %s', r.text)
+        return Response({'error': 'token exchange failed'}, status=500)
+    data = r.json()
+    access_token = data.get('access_token')
+    refresh_token = data.get('refresh_token')
+
+    # fetch user info
+    headers = {'Authorization': f'Bearer {access_token}'}
+    userinfo = requests.get('https://api.calendly.com/users/me', headers=headers).json()
+    calendly_user_uri = userinfo.get('resource', {}).get('uri') or userinfo.get('uri') or userinfo.get('data', {}).get('uri')
+
+    profile, _ = CalendlyProfile.objects.get_or_create(user=request.user)
+    # For free tier assume single event type - try to fetch event_types
+    et_resp = requests.get('https://api.calendly.com/event_types', headers=headers, params={'user': calendly_user_uri})
+    event_type_uri = None
+    event_type_name = None
+    booking_link = None
+    if et_resp.status_code == 200:
+        et_json = et_resp.json()
+        items = et_json.get('collection') or et_json.get('data')
+        if items:
+            first = items[0]
+            event_type_uri = first.get('uri') or first.get('resource', {}).get('uri') or first.get('data', {}).get('uri')
+            event_type_name = first.get('name') or first.get('resource', {}).get('name')
+            booking_link = first.get('scheduling_url') or first.get('resource', {}).get('scheduling_url')
+
+    profile.connect(access_token, refresh_token, calendly_user_uri, event_type_uri, event_type_name, booking_link)
+    # In a real app register webhook here
+    return Response({'status': 'connected', 'booking_link': booking_link})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def calendly_status(request):
+    profile = getattr(request.user, 'calendly', None)
+    if not profile or not profile.is_connected:
+        return Response({'isConnected': False})
+    return Response({'isConnected': True, 'eventTypeName': profile.event_type_name, 'bookingLink': profile.booking_link, 'calendlyUserUri': profile.calendly_user_uri})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def calendly_events(request):
+    profile = getattr(request.user, 'calendly', None)
+    if not profile or not profile.is_connected:
+        return Response({'events': []})
+    access_token = profile.get_access_token()
+    headers = {'Authorization': f'Bearer {access_token}'}
+    r = requests.get('https://api.calendly.com/scheduled_events', headers=headers, params={'user': profile.calendly_user_uri})
+    if r.status_code != 200:
+        return Response({'events': []})
+    data = r.json()
+    items = data.get('collection') or data.get('data') or []
+    events = []
+    for item in items:
+        start = item.get('start_time') or item.get('resource', {}).get('start_time')
+        end = item.get('end_time') or item.get('resource', {}).get('end_time')
+        duration = item.get('duration') or item.get('resource', {}).get('duration')
+        name = item.get('name') or item.get('event_type') or 'Meeting'
+        invitee = None
+        invitee_obj = item.get('invitees', [])
+        if invitee_obj:
+            inv = invitee_obj[0]
+            invitee = inv.get('name') or inv.get('email')
+        events.append({'title': name, 'start': start, 'end': end, 'duration': duration, 'invitee': invitee, 'raw': item})
+    return Response({'events': events})
+
+
+@api_view(['POST'])
+def calendly_webhook(request):
+    # Handle invitee.created and invitee.canceled
+    payload = request.data
+    event = payload.get('event')
+    if not event:
+        return Response({'ok': True})
+    event_type = event.get('type')
+    # Minimal handling - in prod validate signature
+    if event_type == 'invitee.created':
+        # find which user this belongs to by payload['config']['webhook_subscription']['owner'] or by resource['uri'] owner
+        logger.info('Calendly invitee.created received')
+    return Response({'ok': True})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def calendly_user_booking_link(request, user_id):
+    User = get_user_model()
+    user = get_object_or_404(User, pk=user_id)
+    profile = getattr(user, 'calendly', None)
+    if not profile or not profile.is_connected:
+        return Response({'bookingLink': None})
+    return Response({'bookingLink': profile.booking_link})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def calendly_user_booking_link_by_username(request, username):
+    User = get_user_model()
+    user = get_object_or_404(User, username=username)
+    profile = getattr(user, 'calendly', None)
+    if not profile or not profile.is_connected:
+        return Response({'bookingLink': None, 'isConnected': False})
+    return Response({'bookingLink': profile.booking_link, 'isConnected': True, 'eventTypeName': profile.event_type_name})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def calendly_disconnect(request):
+    profile = getattr(request.user, 'calendly', None)
+    if not profile:
+        return Response({'ok': True})
+    profile.disconnect()
+    return Response({'ok': True})
 
 
 class CreateReply(generics.ListCreateAPIView):

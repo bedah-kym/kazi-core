@@ -482,6 +482,7 @@
         if (!gear) return;
         gear.addEventListener('click', (e) => {
             e.preventDefault();
+            e.stopPropagation();
             const panel = overlay.querySelector('.mini-settings');
             if (overlay.classList.contains('open')) {
                 closeMini(overlay, panel);

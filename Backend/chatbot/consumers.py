@@ -261,51 +261,86 @@ class ChatConsumer(AsyncWebsocketConsumer):
             return None
 
     async def disconnect(self, close_code):
-        # 1. Leave the chat group
-        await self.channel_layer.group_discard(self.room_group_name, self.channel_name)
+        if not hasattr(self, 'room_group_name'):
+            # Connection was never fully established
+            return
 
-        # 2. Remove from Redis set of online users
-        cache_key = f"online:{self.room_group_name}"
-        redis = get_redis_connection("default")
-        await sync_to_async(redis.srem)(cache_key, self.scope["user"].username)
-        # 3. Set last_seen in redis and persist to DB, then broadcast offline status including last_seen
         try:
+            # 1. Leave the chat group with timeout
+            try:
+                await asyncio.wait_for(
+                    self.channel_layer.group_discard(self.room_group_name, self.channel_name),
+                    timeout=2.0
+                )
+            except asyncio.TimeoutError:
+                logger.warning(f"Group discard timed out for {self.channel_name}")
+
+            # 2. Remove from Redis set of online users
+            cache_key = f"online:{self.room_group_name}"
             redis = get_redis_connection("default")
-            last_seen_key = f"lastseen:{self.scope['user'].username}"
-            now_iso = timezone.now().isoformat()
-            await sync_to_async(redis.set)(last_seen_key, now_iso)
+            try:
+                await sync_to_async(redis.srem)(cache_key, self.scope["user"].username)
+            except Exception as e:
+                logger.error(f"Redis srem error: {e}")
 
-            # persist to Member.last_seen if Member exists
-            def persist_last_seen(username, iso_ts):
+            # 3. Update last seen
+            try:
+                last_seen_key = f"lastseen:{self.scope['user'].username}"
+                now_iso = timezone.now().isoformat()
+                await sync_to_async(redis.set)(last_seen_key, now_iso)
+
+                # persist to Member.last_seen if Member exists
+                def persist_last_seen(username, iso_ts):
+                    try:
+                        u = User.objects.filter(username=username).first()
+                        if not u:
+                            return
+                        m = Member.objects.filter(User=u).first()
+                        if not m:
+                            return
+                        from django.utils.dateparse import parse_datetime
+                        dt = parse_datetime(iso_ts)
+                        if dt is None:
+                            return
+                        m.last_seen = dt
+                        m.save()
+                    except Exception as e:
+                        logger.error(f"Error persisting last_seen: {e}")
+
+                await sync_to_async(persist_last_seen)(self.scope['user'].username, now_iso)
+
+                # Broadcast offline status with last_seen to the group with timeout
+                logger.debug(f"Broadcasting offline for {self.scope['user'].username}")
                 try:
-                    u = User.objects.filter(username=username).first()
-                    if not u:
-                        return
-                    m = Member.objects.filter(User=u).first()
-                    if not m:
-                        return
-                    from django.utils.dateparse import parse_datetime
-                    dt = parse_datetime(iso_ts)
-                    if dt is None:
-                        return
-                    m.last_seen = dt
-                    m.save()
+                    await asyncio.wait_for(
+                        self.channel_layer.group_send(
+                            self.room_group_name,
+                            {
+                                "type": "presence_update",
+                                "user": self.scope["user"].username,
+                                "status": "offline",
+                                "last_seen": now_iso
+                            }
+                        ),
+                        timeout=2.0
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(f"Presence broadcast timed out for {self.scope['user'].username}")
                 except Exception as e:
-                    logger.error(f"Error persisting last_seen: {e}")
-
-            await sync_to_async(persist_last_seen)(self.scope['user'].username, now_iso)
-
-            # Broadcast offline status with last_seen to the group
-            logger.debug(f"Broadcasting offline for {self.scope['user'].username} with last_seen={now_iso} to {self.room_group_name}")
-            await self.channel_layer.group_send(
-                self.room_group_name,
-                {
-                    "type": "presence_update",
-                    "user":   self.scope["user"].username,
-                    "status": "offline",
-                    "last_seen": now_iso,
-                }
-            )
+                    logger.error(f"Presence broadcast error: {e}")
+                    
+            except Exception as e:
+                logger.error(f"Last seen update error: {e}")
+                
+        except Exception as e:
+            logger.error(f"Disconnect error for {self.channel_name}: {e}")
+            self.room_group_name, {
+                "type": "presence_update",
+                "user": self.scope["user"].username,
+                "status": "offline",
+                "last_seen": now_iso,
+            }
+            
         except Exception as e:
             logger.error(f"Error updating last_seen on disconnect: {e}")
 

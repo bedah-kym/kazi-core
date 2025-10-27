@@ -11,23 +11,41 @@ https://docs.djangoproject.com/en/4.1/ref/settings/
 """
 import os    
 from pathlib import Path
+# load environment variables from project .env
+try:
+    from dotenv import load_dotenv
+    # .env is located one level above the Backend folder (project root)
+    # BASE_DIR is defined below so load using file path after BASE_DIR or use parent placeholder
+except Exception:
+    load_dotenv = lambda *a, **k: None
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# attempt to load .env from project root (one level above BASE_DIR)
+try:
+    load_dotenv(str(BASE_DIR.parent / '.env'))
+except Exception:
+    pass
 
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'set-DJANGO_SECRET_KEY-env-var'
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'set-DJANGO_SECRET_KEY-env-var')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.environ.get('DJANGO_DEBUG', 'True').lower() in ('1', 'true', 'yes')
 
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', '.ngrok-free.app']
+ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
 
-CSRF_TRUSTED_ORIGINS = ['https://8a74-197-232-61-221.ngrok-free.app']
+# you can set a comma-separated list in .env, e.g. DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1
+CSRF_TRUSTED_ORIGINS = os.environ.get('DJANGO_CSRF_TRUSTED_ORIGINS', '').split(',') if os.environ.get('DJANGO_CSRF_TRUSTED_ORIGINS') else []
+
+# Calendly app credentials (set in .env)
+CALENDLY_CLIENT_ID = os.environ.get('CALENDLY_CLIENT_ID')
+CALENDLY_CLIENT_SECRET = os.environ.get('CALENDLY_CLIENT_SECRET')
 
 # Application definition
 

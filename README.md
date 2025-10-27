@@ -68,7 +68,8 @@ graph TD;
     B -->|Communicates via| D[WebSocket];
     B -->|Stores Data in| E[Database];
     A -->|Interacts with| F[Frontend HTML/CSS/JS];
-   ## MATHIA — System Architecture & Developer Guide
+```
+### MATHIA — System Architecture & Developer Guide
 
    This README replaces the old, high-level doc and maps the current codebase to clear system diagrams and a short systems-design for adding an AI moderation/assistant feature.
 

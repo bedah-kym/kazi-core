@@ -14,6 +14,7 @@ from base64 import b64encode, b64decode
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.exceptions import InvalidKey
 import logging
+import asyncio
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -35,6 +36,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         if not self.scope["user"].is_authenticated:
             await self.close(code=4001)
             return
+        
         # 2. Room setup
         self.room_name = self.scope["url_route"]["kwargs"]["room_name"]
         self.room_group_name = f"chat_{self.room_name}"
@@ -51,61 +53,114 @@ class ChatConsumer(AsyncWebsocketConsumer):
             await self.close(code=4003)
             return
 
-        # 5. Join group
+        # 5. Join group FIRST
         await self.channel_layer.group_add(self.room_group_name, self.channel_name)
-
-        # presence via Redis SET
-        redis = get_redis_connection("default")  # low-level redis-py client
+        
+        # 6. Update presence in Redis ATOMICALLY
+        redis = get_redis_connection("default")
         key = f"online:{self.room_group_name}"
         user = self.scope["user"].username
+
+        # Atomic presence update
+        await sync_to_async(redis.srem)(key, user)
         await sync_to_async(redis.sadd)(key, user)
-
-        # set a last_seen placeholder in redis (now) while online
+        
+        # Set last_seen timestamp
         last_seen_key = f"lastseen:{user}"
-        await sync_to_async(redis.set)(last_seen_key, timezone.now().isoformat())
+        current_time = timezone.now().isoformat()
+        await sync_to_async(redis.set)(last_seen_key, current_time)
 
-        # Broadcast to others that you’re online
+        # 7. Accept connection
+        await self.accept()
+
+        # 8. Broadcast online status to ALL other users
         await self.channel_layer.group_send(
             self.room_group_name,
             {
                 "type": "presence_update",
-                "user": self.scope["user"].username,
+                "user": user,
                 "status": "online",
+                "last_seen": current_time,
             }
         )
 
-        await self.accept()
+        # 9. Small delay to ensure broadcast propagates
+        try:
+            await asyncio.sleep(0.2)
+        except Exception:
+            pass
 
-        # build presence snapshot to return to the connecting client
-        raw = await sync_to_async(redis.smembers)(key)
-        online_users = [u.decode() if isinstance(u, bytes) else u for u in raw]
-
+        # 10. Build FRESH presence snapshot
         presence = []
-        for u in online_users:
-            ls = await sync_to_async(redis.get)(f"lastseen:{u}")
-            if isinstance(ls, bytes):
+        try:
+            participants = await self.get_chatroom_participants(current_chat)
+            
+            # Re-read Redis to get absolute latest state
+            raw_online = await sync_to_async(redis.smembers)(key)
+            online_set = set(u.decode() if isinstance(u, bytes) else u for u in raw_online)
+            
+            logger.debug(f"Building presence for {user}: {len(participants)} participants, {len(online_set)} online")
+            
+            for member in participants:
                 try:
-                    ls = ls.decode()
-                except Exception:
-                    ls = None
-            presence.append({"user": u, "status": "online", "last_seen": ls})
+                    # CRITICAL: Must wrap DB access in sync_to_async
+                    uname = await sync_to_async(lambda m: m.User.username)(member)
+                except Exception as e:
+                    logger.error(f"Could not get username from member: {e}")
+                    continue
+                
+                # Check if user is in the online set
+                is_online = uname in online_set
+                
+                # Fetch last_seen from Redis
+                ls = await sync_to_async(redis.get)(f"lastseen:{uname}")
+                if isinstance(ls, bytes):
+                    try:
+                        ls = ls.decode()
+                    except Exception:
+                        ls = None
+                
+                # Force current connecting user to online status
+                if uname == user:
+                    is_online = True
+                    ls = current_time
+                
+                status = 'online' if is_online else 'offline'
+                presence.append({
+                    "user": uname, 
+                    "status": status, 
+                    "last_seen": ls
+                })
+                
+                logger.debug(f"Presence: {uname} -> {status}")
+            
+        except Exception as e:
+            logger.error(f"Error building presence snapshot: {e}")
+            logger.error(traceback.format_exc())
 
+        logger.info(f"Sending presence snapshot to {user}: {len(presence)} users")
+
+        # 11. Send snapshot to the newly connected user
         await self.send(text_data=json.dumps({
             "command": "presence_snapshot",
             "presence": presence,
         }))
-
         
+    # Enhanced presence_update handler with better logging
     async def presence_update(self, event):
+        logger.debug(f"presence_update received by {self.scope['user'].username}: {event}")
+        
         payload = {
             "command": "presence",
             "user": event.get("user"),
             "status": event.get("status"),
         }
+        
         if 'last_seen' in event:
             payload['last_seen'] = event.get('last_seen')
+        
+        logger.debug(f"Sending presence update to client: {payload}")
         await self.send_message(payload)
-
     @sync_to_async
     def get_chatroom_key(self, room_id):
         """Fetches the Chatroom and its encryption key from the database."""
@@ -573,8 +628,16 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     @classmethod
     async def get_chatroom_participants(cls, chat):
-        participants = chat.participants.all()
-        return await sync_to_async(list)(participants)
+        """Get all participants in a chatroom"""
+        try:
+            participants = chat.participants.all()
+            participants_list = await sync_to_async(list)(participants)
+            logger.info(f"get_chatroom_participants returned {len(participants_list)} participants")
+            return participants_list
+        except Exception as e:
+            logger.error(f"Error in get_chatroom_participants: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return []
 
     async def check_key_rotation(self):
         """Check if key rotation is needed"""

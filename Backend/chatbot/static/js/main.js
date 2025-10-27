@@ -1,35 +1,21 @@
 var chatSocket = new ReconnectingWebSocket(
     'ws://' + window.location.host + '/ws/chat/' + roomName + '/');
-// Hamburger menu toggle - Wait for DOM to load
+
+// Hamburger menu toggle
 (function () {
     let menuOpen = false;
 
     window.addEventListener('load', function () {
         const menuToggle = document.getElementById('menuToggle');
         console.log('Menu toggle button found:', menuToggle);
-        console.log('Initial menuOpen state:', menuOpen);
-
         if (menuToggle) {
             menuToggle.onclick = function (e) {
                 e.preventDefault();
                 e.stopPropagation();
-
                 menuOpen = !menuOpen;
-                console.log('Menu state changed to:', menuOpen);
-
-                if (menuOpen) {
-                    document.body.classList.add('people-open');
-                    console.log('Added people-open class');
-                } else {
-                    document.body.classList.remove('people-open');
-                    console.log('Removed people-open class');
-                }
-
-                console.log('Body classes now:', document.body.className);
+                document.body.classList.toggle('people-open', menuOpen);
                 return false;
             };
-        } else {
-            console.error('Menu toggle button NOT found!');
         }
 
         // Close menu when clicking outside
@@ -37,15 +23,12 @@ var chatSocket = new ReconnectingWebSocket(
             if (menuOpen) {
                 const peopleList = document.querySelector('.people-list');
                 const menuToggle = document.getElementById('menuToggle');
-
                 if (peopleList && menuToggle) {
                     const clickedInsideMenu = peopleList.contains(e.target);
                     const clickedToggle = menuToggle.contains(e.target);
-
                     if (!clickedInsideMenu && !clickedToggle) {
                         menuOpen = false;
                         document.body.classList.remove('people-open');
-                        console.log('Menu closed by clicking outside');
                     }
                 }
             }
@@ -55,55 +38,61 @@ var chatSocket = new ReconnectingWebSocket(
 
 // Initialize chat connection
 chatSocket.onopen = function (e) {
+    console.log('WebSocket connection established');
+    document.querySelectorAll('.status-dot').forEach(dot => {
+        dot.classList.remove('online', 'offline');
+    });
     FetchMessages();
 };
 
 chatSocket.onclose = function (e) {
     console.error('Chat socket closed unexpectedly');
+    document.querySelectorAll('.status-dot').forEach(dot => {
+        dot.classList.remove('online');
+        dot.classList.add('offline');
+    });
 };
 
-// Message handling functions
+// Message handling
 function createMessage(data) {
     if (!data || !data.member || !data.content || !data.timestamp) {
         console.error('Invalid message data:', data);
         return;
     }
     const chatHistory = document.querySelector('.chat-history');
-    var message = data;
-    var author = data['member'];
-    var formattedTime = new Date(message.timestamp).toLocaleTimeString();
-    var time = `<span class="time-label">${formattedTime}</span>`;
-    var msgListTag = document.createElement('li');
-    msgListTag.classList.add(message.member === username ? 'my' : 'other');
+    const formattedTime = new Date(data.timestamp).toLocaleTimeString();
+    const time = `<span class="time-label">${formattedTime}</span>`;
 
-    var msgDivTag = document.createElement('div');
-    var msgdivtag = document.createElement('p');
-    var msgSpanTag = document.createElement('span');
-    var msgpTag = document.createElement('div');
-    var msgTextTag = document.createElement('div');
-
-    msgTextTag.innerHTML = message.content;
-    msgdivtag.innerHTML = author;
-    msgpTag.innerHTML += time;
-
+    const msgListTag = document.createElement('li');
+    msgListTag.classList.add(data.member === username ? 'my' : 'other');
     msgListTag.className = 'clearfix';
     msgListTag.id = 'tracker';
 
-    if (message.member === username) {
+    const msgDivTag = document.createElement('div');
+    const msgdivtag = document.createElement('p');
+    const msgSpanTag = document.createElement('span');
+    const msgpTag = document.createElement('div');
+    const msgTextTag = document.createElement('div');
+
+    msgTextTag.innerHTML = data.content;
+    msgdivtag.innerHTML = data.member;
+    msgpTag.innerHTML = time;
+
+    if (data.member === username) {
         msgDivTag.className = 'message-data text-end';
         msgTextTag.className = 'message my-message';
-        msgpTag.className = 'time-label';
     } else {
         msgDivTag.className = 'message-data';
         msgTextTag.className = 'message other-message';
-        msgpTag.className = 'time-label';
     }
-    // Add sentimage class if message contains an image
-    if (message.content.includes('<img')) {
+
+    if (data.content.includes('<img')) {
         msgTextTag.classList.add('sentimage');
     }
+
     msgdivtag.className = 'user-name';
     msgSpanTag.className = 'message-data-time';
+    msgpTag.className = 'time-label';
 
     msgListTag.appendChild(msgDivTag);
     msgDivTag.appendChild(msgpTag);
@@ -124,499 +113,359 @@ function FetchMessages() {
 
 function scrollToLastMessage() {
     const elements = document.querySelectorAll('#tracker');
-    if (elements.length > 0) {
-        const lastElement = elements[elements.length - 1];
-        lastElement.scrollIntoView();
-    }
+    if (elements.length > 0) elements[elements.length - 1].scrollIntoView();
 }
 
-// Typing indicator functions
-function showTypingIndicator() {
-    document.querySelector('.typing-indicator').style.display = 'flex';
-}
+// Typing indicator
+function showTypingIndicator() { document.querySelector('.typing-indicator')?.style.setProperty('display', 'flex'); }
+function hideTypingIndicator() { document.querySelector('.typing-indicator')?.style.setProperty('display', 'none'); }
 
-function hideTypingIndicator() {
-    document.querySelector('.typing-indicator').style.display = 'none';
-}
-
-// Utility functions
 function getCookie(name) {
     const cookies = document.cookie.split(';');
     for (let cookie of cookies) {
         cookie = cookie.trim();
-        if (cookie.startsWith(name + '=')) {
-            return cookie.substring(name.length + 1);
-        }
+        if (cookie.startsWith(name + '=')) return cookie.substring(name.length + 1);
     }
     return null;
 }
 
-// Event listeners
 let typingTimer;
-document.querySelector('#chat-message-input').addEventListener('input', function () {
-    chatSocket.send(JSON.stringify({
-        'command': 'typing',
-        'from': username,
-        "chatid": roomName
-    }));
-});
+const chatInput = document.querySelector('#chat-message-input');
+if (chatInput) {
+    chatInput.addEventListener('input', function () {
+        chatSocket.send(JSON.stringify({ 'command': 'typing', 'from': username, "chatid": roomName }));
+    });
+    chatInput.addEventListener('keyup', function (e) { if (e.keyCode === 13) document.querySelector('#chat-message-submit')?.click(); });
+}
 
-document.querySelector('#chat-message-input').addEventListener('keyup', function (e) {
-    if (e.keyCode === 13) {
-        document.querySelector('#chat-message-submit').click();
-    }
-});
-
-document.querySelector('#chat-message-submit').addEventListener('click', function (e) {
-    var messageInputDom = document.querySelector('#chat-message-input');
-    var message = messageInputDom.value;
-    if (message.trim()) {
-        chatSocket.send(JSON.stringify({
-            'message': message,
-            'from': username,
-            'command': 'new_message',
-            "chatid": roomName
-        }));
-        messageInputDom.value = '';
+const chatSubmit = document.querySelector('#chat-message-submit');
+if (chatSubmit) chatSubmit.addEventListener('click', function () {
+    const messageInputDom = document.querySelector('#chat-message-input');
+    const message = messageInputDom?.value?.trim();
+    if (message) {
+        chatSocket.send(JSON.stringify({ 'message': message, 'from': username, 'command': 'new_message', "chatid": roomName }));
+        if (messageInputDom) messageInputDom.value = '';
     }
 });
 
 // File handling
-document.querySelector('#upload').addEventListener('click', function () {
-    document.querySelector('#fileInput').click();
-});
+function initFileHandlers() {
+    const uploadBtn = document.querySelector('#upload');
+    const fileInputEl = document.querySelector('#fileInput');
+    if (uploadBtn) uploadBtn.addEventListener('click', () => fileInputEl?.click());
+    if (!fileInputEl) return;
 
-document.querySelector('#fileInput').addEventListener('change', function (event) {
-    const file = event.target.files[0];
-    if (!file) return;
+    fileInputEl.addEventListener('change', function (event) {
+        const file = event.target.files[0];
+        if (!file) return;
+        const filePreview = document.querySelector('.file-preview');
+        const previewContent = filePreview?.querySelector('.preview-content');
+        const fileName = filePreview?.querySelector('.file-name');
+        const progressBar = filePreview?.querySelector('.upload-progress-bar');
+        if (fileName) fileName.textContent = file.name;
+        if (previewContent) previewContent.innerHTML = '';
+        if (progressBar) progressBar.style.width = '0%';
+        if (filePreview) filePreview.style.display = 'block';
 
-    const filePreview = document.querySelector('.file-preview');
-    const previewContent = filePreview.querySelector('.preview-content');
-    const fileName = filePreview.querySelector('.file-name');
-    const progressBar = filePreview.querySelector('.upload-progress-bar');
-
-    fileName.textContent = file.name;
-    previewContent.innerHTML = '';
-    progressBar.style.width = '0%';
-    filePreview.style.display = 'block';
-
-    if (file.type.startsWith('image/')) {
-        const reader = new FileReader();
-        reader.onload = function (e) {
-            previewContent.innerHTML = `<img src="${e.target.result}" alt="preview">`;
-        };
-        reader.readAsDataURL(file);
-    } else {
-        previewContent.innerHTML = `<i class="fas fa-file fa-3x"></i>`;
-    }
-
-    const formData = new FormData();
-    formData.append('file', file);
-    const csrfToken = getCookie('csrftoken');
-
-    let progress = 0;
-    const progressInterval = setInterval(() => {
-        progress += 10;
-        progressBar.style.width = `${progress}%`;
-
-        if (progress >= 100) {
-            clearInterval(progressInterval);
-            setTimeout(() => {
-                filePreview.style.display = 'none';
-            }, 500);
+        if (file.type.startsWith('image/') && previewContent) {
+            const reader = new FileReader();
+            reader.onload = function (e) { previewContent.innerHTML = `<img src="${e.target.result}" alt="preview">`; };
+            reader.readAsDataURL(file);
+        } else if (previewContent) {
+            previewContent.innerHTML = `<i class="fas fa-file fa-3x"></i>`;
         }
-    }, 200);
 
-    fetch('/uploads/', {
-        method: 'POST',
-        body: formData,
-        headers: {
-            'X-CSRFToken': csrfToken
-        }
-    })
-        .then(response => response.json())
-        .then(data => {
-            chatSocket.send(JSON.stringify({
-                'message': file.type.startsWith('image/')
+        const formData = new FormData(); formData.append('file', file);
+        const csrfToken = getCookie('csrftoken');
+
+        let progress = 0;
+        const progressInterval = setInterval(() => {
+            progress += 10; if (progressBar) progressBar.style.width = `${progress}%`;
+            if (progress >= 100) { clearInterval(progressInterval); setTimeout(() => { if (filePreview) filePreview.style.display = 'none'; }, 500); }
+        }, 200);
+
+        fetch('/uploads/', { method: 'POST', body: formData, headers: { 'X-CSRFToken': csrfToken } })
+            .then(response => response.json())
+            .then(data => {
+                const messageHtml = file.type.startsWith('image/')
                     ? `<img src="${data.fileUrl}" alt="uploaded image" />`
-                    : `<a href="${data.fileUrl}" target="_blank">${file.name}</a>`,
-                'from': username,
-                'command': 'new_message',
-                "chatid": roomName
-            }));
-        })
-        .catch(error => console.error('Error uploading file:', error));
-});
+                    : `<a href="${data.fileUrl}" target="_blank">${file.name}</a>`;
 
-document.querySelector('.close-preview').addEventListener('click', function () {
-    document.querySelector('.file-preview').style.display = 'none';
-    document.querySelector('#fileInput').value = '';
-});
+                chatSocket.send(JSON.stringify({
+                    message: messageHtml,
+                    from: username,
+                    command: 'new_message',
+                    chatid: roomName
+                }));
+            })
+            .catch(error => console.error('Error uploading file:', error));
+    });
+
+    const closePreview = document.querySelector('.close-preview');
+    if (closePreview) closePreview.addEventListener('click', function () {
+        const fp = document.querySelector('.file-preview');
+        if (fp) fp.style.display = 'none';
+        const fi = document.querySelector('#fileInput');
+        if (fi) fi.value = '';
+    });
+}
 
 // WebSocket message handling
 chatSocket.onmessage = function (e) {
-    var data = JSON.parse(e.data);
-
-    if (data.command === 'typing' && data.from !== username) {
-        document.getElementById('typing-user').textContent = data.from;
-        showTypingIndicator();
-        clearTimeout(typingTimer);
-        typingTimer = setTimeout(hideTypingIndicator, 3000);
-    }
-    else if (data['command'] == 'messages') {
-        for (let i = (data['messages'].length) - 1; i >= 0; i--) {
-            createMessage(data['messages'][i]);
-        }
-        scrollToLastMessage();
-    }
-    else if (data['command'] == 'new_message') {
-        createMessage(data['message']);
-        scrollToLastMessage();
-    }
-    else if (data.command === 'presence') {
-        console.debug('presence event received:', data);
-        const who = data.user;
-        const state = data.status;
-        const lastSeen = data.last_seen || null;
-
-        function setDot(el, st, ls) {
-            el.classList.toggle('online', st === 'online');
-            el.classList.toggle('offline', st === 'offline');
-            if (ls) el.setAttribute('title', `Last seen: ${new Date(ls).toLocaleString()}`);
-            else if (st === 'online') el.setAttribute('title', 'Online now');
-            else el.removeAttribute('title');
-        }
-
-        if (who === otherUser) {
-            const dot = document.getElementById('header-presence');
-            if (dot) setDot(dot, state, lastSeen);
-            // update header lastseen text - show 'Online now' only when status is online
-            const headerLast = document.getElementById('header-lastseen');
-            if (headerLast) headerLast.textContent = state === 'online' ? 'Online now' : (lastSeen ? humanizeLastSeen(new Date(lastSeen)) : '');
-        }
-
-        document.querySelectorAll(`.sidebar-dot[data-user="${who}"]`)
-            .forEach(el => setDot(el, state, lastSeen));
-    }
-    else if (data.command === 'presence_snapshot') {
-        console.debug('presence_snapshot received:', data);
-        // presence payload is an array of {user, status, last_seen}
-        const presenceList = data.presence || [];
-        const online = new Set(presenceList.filter(p => p.status === 'online').map(p => p.user));
-
-        const headerDot = document.getElementById('header-presence');
-        if (headerDot && otherUser) {
-            const entry = presenceList.find(p => p.user === otherUser);
-            if (entry) {
-                headerDot.classList.toggle('online', entry.status === 'online');
-                headerDot.classList.toggle('offline', entry.status !== 'online');
-                if (entry.last_seen) headerDot.setAttribute('title', `Last seen: ${new Date(entry.last_seen).toLocaleString()}`);
-                const headerLast = document.getElementById('header-lastseen');
-                if (headerLast) headerLast.textContent = entry.status === 'online' ? 'Online now' : (entry.last_seen ? humanizeLastSeen(new Date(entry.last_seen)) : '');
-            }
-        }
-
-        document.querySelectorAll('.sidebar-dot[data-user]').forEach(el => {
-            const who = el.dataset.user;
-            const entry = presenceList.find(p => p.user === who);
-            if (entry) {
-                el.classList.toggle('online', entry.status === 'online');
-                el.classList.toggle('offline', entry.status !== 'online');
-                if (entry.last_seen) el.setAttribute('title', `Last seen: ${new Date(entry.last_seen).toLocaleString()}`);
-            } else {
-                el.classList.remove('online');
-                el.classList.add('offline');
-            }
-        });
-    }
-    else if (data.command === 'error') {
-        console.error('Error from server:', data.message);
-    }
-    else {
-        console.warn('Unknown command:', data);
-    }
+    const data = JSON.parse(e.data);
+    if (data.command === 'typing' && data.from !== username) { document.getElementById('typing-user').textContent = data.from; showTypingIndicator(); clearTimeout(typingTimer); typingTimer = setTimeout(hideTypingIndicator, 3000); return; }
+    if (data.command === 'presence_snapshot' || data.command === 'presence') { handlePresenceUpdate(data); return; }
+    if (data.command === 'messages') { for (let i = data.messages.length - 1; i >= 0; i--) createMessage(data.messages[i]); scrollToLastMessage(); return; }
+    if (data.command === 'new_message') { createMessage(data.message); scrollToLastMessage(); return; }
+    if (data.command === 'error') { console.error('Error from server:', data.message); return; }
+    console.warn('Unknown command:', data);
 };
+// ============================================
+// PRESENCE MANAGEMENT SYSTEM
+// ============================================
 
-// Emoji picker initialization
-document.addEventListener('DOMContentLoaded', function () {
-    // Load saved theme or fallback to light
-    const savedTheme = localStorage.getItem('theme') || 'light';
-    document.body.setAttribute('data-theme', savedTheme);
+// Track all user statuses globally
+const userPresenceMap = new Map();
 
-    // Create picker with correct theme
-    const pickerOptions = {
-        onEmojiSelect: function (emoji) {
-            const input = document.getElementById('chat-message-input');
-            input.value += emoji.native;
-            toggleEmojiPicker();
-        },
-        theme: savedTheme   // set emoji picker theme
-    };
-
-    // Initialize emoji picker
-    const picker = new EmojiMart.Picker(pickerOptions);
-    picker.style.display = 'none';
-    document.body.appendChild(picker);
-
-    // Toggle button for showing/hiding the picker
-    document.getElementById('emoji').addEventListener('click', toggleEmojiPicker);
-
-    // Handle dark mode toggle and sync emoji picker theme
-    const toggleButton = document.getElementById('darkModeToggle');
-    toggleButton.addEventListener('click', () => {
-        const currentTheme = document.body.getAttribute('data-theme');
-        const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
-
-        document.body.setAttribute('data-theme', newTheme);
-        localStorage.setItem('theme', newTheme);
-
-        // Update emoji picker theme as well
-        const pickerElement = document.querySelector('em-emoji-picker');
-        if (pickerElement) {
-            pickerElement.setAttribute('theme', newTheme);
-        }
-    });
-
-    // Initialize people search in the sidebar (search who you've been talking to)
-    (function initPeopleSearch() {
-        const input = document.getElementById('search');
-        if (!input) return;
-
-        let timeout;
-        input.addEventListener('input', function (e) {
-            clearTimeout(timeout);
-            const q = e.target.value.trim();
-            timeout = setTimeout(() => performPeopleSearch(q), 180);
-        });
-
-        // Clear highlights and show all when input cleared
-        input.addEventListener('search', function (e) {
-            if (!e.target.value) performPeopleSearch('');
-        });
-
-        // Focus with Ctrl/Cmd+K
-        document.addEventListener('keydown', function (e) {
-            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
-                e.preventDefault();
-                input.focus();
-            }
-        });
-    })();
-});
-
-// People search helpers
-function performPeopleSearch(query) {
-    const raw = (query || '').trim();
-    const q = raw.toLowerCase();
-    // token search: u:username, e:email - allow quick targeting
-    let token = null;
-    let tokenQuery = '';
-    const tokenMatch = raw.match(/^(u:|e:)(.*)$/i);
-    if (tokenMatch) {
-        token = tokenMatch[1].toLowerCase().replace(':', '');
-        tokenQuery = tokenMatch[2].trim().toLowerCase();
-    }
-    const listItems = document.querySelectorAll('.chat-list li');
-
-    if (!listItems) return;
-
-    listItems.forEach(li => {
-        const nameEl = li.querySelector('.fw-bold');
-        if (!nameEl) return;
-
-        // Extract and cache original name (text nodes only)
-        if (!nameEl.dataset.originalName) {
-            const orig = Array.from(nameEl.childNodes)
-                .filter(n => n.nodeType === Node.TEXT_NODE)
-                .map(n => n.textContent)
-                .join('')
-                .trim();
-            nameEl.dataset.originalName = orig;
-        }
-
-        const original = nameEl.dataset.originalName || '';
-
-        if (!q) {
-            // show all and restore original text
-            restoreNameText(nameEl);
-            animateItemVisibility(li, true);
-            return;
-        }
-
-        // collect searchable fields
-        const searchable = [original.toLowerCase()];
-        // data attributes if present - e.g., data-username, data-email on the li or anchor
-        const anchor = li.querySelector('a');
-        const datasetSource = (li.dataset && Object.keys(li.dataset).length) ? li.dataset : (anchor && anchor.dataset ? anchor.dataset : {});
-        if (datasetSource.username) searchable.push(String(datasetSource.username).toLowerCase());
-        if (datasetSource.email) searchable.push(String(datasetSource.email).toLowerCase());
-        if (datasetSource.user) searchable.push(String(datasetSource.user).toLowerCase());
-
-        let matches = false;
-
-        // If token search in use, prioritize that field
-        if (token) {
-            const field = token === 'u' ? (datasetSource.username || datasetSource.user || '') : (datasetSource.email || '');
-            if (field) {
-                matches = field.toLowerCase().includes(tokenQuery);
-            } else {
-                // fallback to original
-                matches = original.toLowerCase().includes(tokenQuery);
-            }
-        } else {
-            // substring fast-pass
-            if (searchable.some(s => s.includes(q))) {
-                matches = true;
-            } else {
-                // fuzzy check for longer queries
-                if (q.length >= 3) {
-                    // compute best normalized similarity across fields
-                    let best = 0;
-                    searchable.forEach(s => {
-                        const dist = levenshtein(q, s);
-                        const norm = 1 - (dist / Math.max(q.length, s.length, 1));
-                        if (norm > best) best = norm;
-                    });
-                    // threshold for fuzzy match
-                    matches = best >= 0.45; // permissive
-                }
-            }
-        }
-
-        if (matches) {
-            highlightNameText(nameEl, q);
-            animateItemVisibility(li, true);
-        } else {
-            restoreNameText(nameEl);
-            animateItemVisibility(li, false);
-        }
-    });
-}
-
-function restoreNameText(nameEl) {
-    const original = nameEl.dataset.originalName || '';
-    // remove all text nodes and re-insert original text as a single text node at start
-    // but leave other child elements (like status-dot) intact
-    // remove existing text nodes
-    Array.from(nameEl.childNodes).forEach(n => {
-        if (n.nodeType === Node.TEXT_NODE) n.remove();
-    });
-    // insert original text node at beginning
-    if (original) nameEl.insertBefore(document.createTextNode(original + ' '), nameEl.firstChild || null);
-}
-
-function highlightNameText(nameEl, query) {
-    const original = nameEl.dataset.originalName || '';
-    const regex = new RegExp(escapeRegex(query), 'ig');
-
-    // remove existing text nodes
-    const textNodes = Array.from(nameEl.childNodes).filter(n => n.nodeType === Node.TEXT_NODE);
-    const text = textNodes.map(n => n.textContent).join('');
-
-    // If query not present as substring, try to highlight best fuzzy chunk (approximate)
-    if (!regex.test(text)) {
-        // for fuzzy matches we won't try to pick exact chars — just show a subtle pulse on the name
-        restoreNameText(nameEl);
-        nameEl.classList.add('fuzzy-match');
-        setTimeout(() => nameEl.classList.remove('fuzzy-match'), 900);
+/**
+ * Log all current user states - useful for debugging
+ */
+function logAllUserStates() {
+    console.log('=== ALL USER PRESENCE STATES ===');
+    if (userPresenceMap.size === 0) {
+        console.log('No users tracked yet');
         return;
     }
 
-    // Build new HTML for the text portion only
-    const parts = text.split(regex);
-    const matches = text.match(regex) || [];
-    const frag = document.createDocumentFragment();
+    userPresenceMap.forEach((presence, username) => {
+        const statusIcon = presence.status === 'online' ? '🟢' : '🔴';
+        const lastSeenText = presence.lastSeen
+            ? humanizeLastSeen(new Date(presence.lastSeen))
+            : 'never';
+        console.log(`${statusIcon} ${username}: ${presence.status} (last seen: ${lastSeenText})`);
+    });
 
-    for (let i = 0; i < parts.length; i++) {
-        frag.appendChild(document.createTextNode(parts[i]));
-        if (i < matches.length) {
-            const span = document.createElement('span');
-            span.className = 'search-highlight';
-            span.textContent = matches[i];
-            frag.appendChild(span);
+    const onlineCount = Array.from(userPresenceMap.values())
+        .filter(p => p.status === 'online').length;
+    console.log(`Total: ${userPresenceMap.size} users, ${onlineCount} online`);
+    console.log('================================');
+}
+
+/**
+ * Update presence for a specific user
+ */
+function updateUserPresence(user, status, lastSeen) {
+    console.log(`📍 Updating presence for ${user}: ${status}`);
+
+    // Update the global presence map
+    userPresenceMap.set(user, { status, lastSeen });
+
+    // Update sidebar dots for this specific user
+    const dots = document.querySelectorAll(`[data-user="${user}"], .sidebar-dot[data-user="${user}"]`);
+    console.log(`Found ${dots.length} sidebar dots for ${user}`);
+
+    dots.forEach(dot => {
+        dot.classList.toggle('online', status === 'online');
+        dot.classList.toggle('offline', status !== 'online');
+        if (lastSeen) {
+            dot.setAttribute('title', `Last seen: ${new Date(lastSeen).toLocaleString()}`);
         }
-    }
+    });
 
-    // remove existing text nodes
-    textNodes.forEach(n => n.remove());
-    // insert the highlighted fragment at the start
-    nameEl.insertBefore(frag, nameEl.firstChild || null);
-    // ensure spacing
-    if (nameEl.firstChild && nameEl.firstChild.nodeType === Node.TEXT_NODE && !/\s$/.test(nameEl.firstChild.textContent)) {
-        nameEl.firstChild.textContent = nameEl.firstChild.textContent + ' ';
-    }
-}
-
-function escapeRegex(string) {
-    return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-// Simple Levenshtein distance (iterative, optimized for short strings)
-function levenshtein(a, b) {
-    a = String(a || '');
-    b = String(b || '');
-    if (a === b) return 0;
-    const al = a.length, bl = b.length;
-    if (al === 0) return bl;
-    if (bl === 0) return al;
-
-    let v0 = new Array(bl + 1), v1 = new Array(bl + 1);
-    for (let j = 0; j <= bl; j++) v0[j] = j;
-
-    for (let i = 0; i < al; i++) {
-        v1[0] = i + 1;
-        const ai = a.charAt(i);
-        for (let j = 0; j < bl; j++) {
-            const cost = ai === b.charAt(j) ? 0 : 1;
-            v1[j + 1] = Math.min(v1[j] + 1, v0[j + 1] + 1, v0[j] + cost);
-        }
-        const tmp = v0; v0 = v1; v1 = tmp;
-    }
-    return v0[bl];
-}
-
-// Animate show/hide with a CSS class; keeps layout stable
-function animateItemVisibility(li, show) {
-    // ensure animatable class
-    li.classList.add('people-anim');
-    if (show) {
-        li.style.display = '';
-        // trigger reflow then remove hidden class
-        requestAnimationFrame(() => {
-            li.classList.remove('fade-hidden');
-        });
+    // Update header ONLY if this is the specific user for this chat
+    // For 1-on-1 chats, otherUser is defined
+    // For group chats, you might want different logic
+    if (typeof otherUser !== 'undefined' && user === otherUser) {
+        console.log(`📌 Updating header for ${user} (this is otherUser)`);
+        updateHeaderPresence(user, status, lastSeen);
     } else {
-        // add hidden class to animate out then hide
-        li.classList.add('fade-hidden');
-        li.addEventListener('transitionend', function onEnd(e) {
-            if (e.propertyName === 'opacity') {
-                li.style.display = 'none';
-                li.removeEventListener('transitionend', onEnd);
-            }
+        console.log(`⏭️  Skipping header update for ${user} (otherUser is: ${typeof otherUser !== 'undefined' ? otherUser : 'undefined'})`);
+    }
+
+    // Log all states after each update
+    logAllUserStates();
+}
+
+/**
+ * Update the header presence indicator
+ */
+function updateHeaderPresence(user, status, lastSeen) {
+    const headerDot = document.getElementById('header-presence');
+    const headerLast = document.getElementById('header-lastseen');
+
+    if (headerDot) {
+        headerDot.classList.toggle('online', status === 'online');
+        headerDot.classList.toggle('offline', status !== 'online');
+    }
+
+    if (headerLast) {
+        if (status === 'online') {
+            headerLast.textContent = 'Online now';
+            headerLast.style.color = '#4caf50';
+        } else if (lastSeen) {
+            headerLast.textContent = humanizeLastSeen(new Date(lastSeen));
+            headerLast.style.color = '#999';
+        } else {
+            headerLast.textContent = 'Offline';
+            headerLast.style.color = '#999';
+        }
+    }
+
+    console.log(`✅ Header updated for ${user}: ${status}`);
+}
+
+/**
+ * Handle incoming presence updates from WebSocket
+ */
+function handlePresenceUpdate(data) {
+    console.log('🔔 handlePresenceUpdate called with:', data);
+
+    if (data.command === 'presence_snapshot') {
+        const presenceList = data.presence || [];
+        console.log(`📸 Processing presence snapshot (${presenceList.length} users)`);
+
+        // Clear existing presence data
+        userPresenceMap.clear();
+
+        // Process all users in the snapshot
+        presenceList.forEach(entry => {
+            console.log(`  📦 Snapshot: ${entry.user} -> ${entry.status}`);
+            updateUserPresence(entry.user, entry.status, entry.last_seen);
         });
+
+        // After processing snapshot, update group chat header if needed
+        updateGroupChatHeader();
+
+    } else if (data.command === 'presence') {
+        console.log(`🔄 Processing individual presence update: ${data.user} -> ${data.status}`);
+        updateUserPresence(data.user, data.status, data.last_seen);
+
+        // Update group header after individual update
+        updateGroupChatHeader();
     }
 }
 
-// Humanize last seen timestamps (simple client-side implementation)
+/**
+ * For GROUP CHATS: Show count of online users
+ */
+function updateGroupChatHeader() {
+    // Skip if this is a 1-on-1 chat
+    if (typeof otherUser !== 'undefined') {
+        console.log('⏭️  Skipping group header update (this is 1-on-1 chat)');
+        return;
+    }
+
+    const headerLast = document.getElementById('header-lastseen');
+    if (!headerLast) return;
+
+    const onlineCount = Array.from(userPresenceMap.values())
+        .filter(p => p.status === 'online').length;
+
+    const totalCount = userPresenceMap.size;
+
+    if (onlineCount > 0) {
+        headerLast.textContent = `${onlineCount} of ${totalCount} members online`;
+        headerLast.style.color = '#4caf50';
+    } else {
+        headerLast.textContent = `${totalCount} members`;
+        headerLast.style.color = '#999';
+    }
+
+    console.log(`👥 Group header updated: ${onlineCount}/${totalCount} online`);
+}
+
+/**
+ * Get current presence status for a user
+ */
+function getUserPresence(username) {
+    return userPresenceMap.get(username) || { status: 'offline', lastSeen: null };
+}
+
+/**
+ * Check if a specific user is online
+ */
+function isUserOnline(username) {
+    const presence = userPresenceMap.get(username);
+    return presence ? presence.status === 'online' : false;
+}
+
+/**
+ * Convert a date to human-readable "last seen" format
+ */
 function humanizeLastSeen(date) {
     if (!date) return '';
     const now = new Date();
-    const diff = Math.floor((now - date) / 1000); // seconds
+    const diff = Math.floor((now - date) / 1000);
 
     if (diff < 10) return 'just now';
     if (diff < 60) return `${diff}s ago`;
     if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
     if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
 
-    // older than a day -> show date
     const days = Math.floor(diff / 86400);
-    if (days === 1) return `Yesterday ${date.toLocaleTimeString()}`;
-    return `${days}d ago`;
+    if (days === 1) return `Yesterday at ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    if (days < 7) return `${days}d ago`;
+
+    return date.toLocaleDateString();
 }
 
-// Toggle emoji picker visibility
-function toggleEmojiPicker() {
-    const element = document.querySelector('em-emoji-picker');
-    if (!element) return;
-    element.style.display = element.style.display === 'none' ? '' : 'none';
+// ============================================
+// EXPOSE TO WINDOW FOR DEBUGGING
+// ============================================
+window.presenceDebug = {
+    logAllStates: logAllUserStates,
+    getPresence: getUserPresence,
+    isOnline: isUserOnline,
+    getUserMap: () => userPresenceMap,
+    forceUpdate: (user, status, lastSeen) => {
+        console.log(`🔧 Manual presence update triggered`);
+        updateUserPresence(user, status, lastSeen);
+    }
+};
+
+console.log('💡 Presence system loaded. Debug commands available via window.presenceDebug');
+console.log('   - window.presenceDebug.logAllStates()');
+console.log('   - window.presenceDebug.getPresence(username)');
+console.log('   - window.presenceDebug.isOnline(username)');
+console.log('   - window.presenceDebug.getUserMap()');
+// ============================================
+// PEOPLE SEARCH FUNCTIONALITY
+// ============================================
+function levenshtein(a, b) { a = String(a || ''); b = String(b || ''); if (a === b) return 0; if (!a.length) return b.length; if (!b.length) return a.length; let prev = new Array(b.length + 1).fill(0).map((_, i) => i); for (let i = 0; i < a.length; i++) { let curr = [i + 1]; for (let j = 0; j < b.length; j++) { curr[j + 1] = Math.min(curr[j] + 1, prev[j + 1] + 1, prev[j] + (a[i] === b[j] ? 0 : 1)); } prev = curr; } return prev[b.length]; }
+
+function animateItemVisibility(li, show) { li.classList.add('people-anim'); if (show) { li.style.display = ''; requestAnimationFrame(() => li.classList.remove('fade-hidden')); } else { li.classList.add('fade-hidden'); li.addEventListener('transitionend', function onEnd(e) { if (e.propertyName === 'opacity') { li.style.display = 'none'; li.removeEventListener('transitionend', onEnd); } }); } }
+
+function humanizeLastSeen(date) { if (!date) return ''; const now = new Date(); const diff = Math.floor((now - date) / 1000); if (diff < 10) return 'just now'; if (diff < 60) return `${diff}s ago`; if (diff < 3600) return `${Math.floor(diff / 60)}m ago`; if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`; const days = Math.floor(diff / 86400); if (days === 1) return `Yesterday ${date.toLocaleTimeString()}`; return `${days}d ago`; }
+
+function toggleEmojiPicker() { const element = document.querySelector('em-emoji-picker'); if (!element) return; element.style.display = element.style.display === 'none' ? '' : 'none'; }
+
+function initPeopleSearch() {
+    const input = document.getElementById('search'); if (!input) return; let timeout; input.addEventListener('input', (e) => { clearTimeout(timeout); timeout = setTimeout(() => performPeopleSearch(e.target.value.trim()), 180); }); input.addEventListener('search', (e) => { if (!e.target.value) performPeopleSearch(''); }); document.addEventListener('keydown', (e) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); input.focus(); } });
 }
+
+function performPeopleSearch(query) { const raw = (query || '').trim(); const q = raw.toLowerCase(); const tokenMatch = raw.match(/^(u:|e:)(.*)$/i); let token = null; let tokenQuery = ''; if (tokenMatch) { token = tokenMatch[1].toLowerCase().replace(':', ''); tokenQuery = tokenMatch[2].trim().toLowerCase(); } document.querySelectorAll('.chat-list li').forEach(li => { const nameEl = li.querySelector('.fw-bold'); if (!nameEl) return; if (!nameEl.dataset.originalName) { const orig = Array.from(nameEl.childNodes).filter(n => n.nodeType === Node.TEXT_NODE).map(n => n.textContent).join('').trim(); nameEl.dataset.originalName = orig; } const original = nameEl.dataset.originalName || ''; if (!q) { restoreNameText(nameEl); animateItemVisibility(li, true); return; } const searchable = [original.toLowerCase()]; const anchor = li.querySelector('a'); const datasetSource = (li.dataset && Object.keys(li.dataset).length) ? li.dataset : (anchor?.dataset || {}); if (datasetSource.username) searchable.push(String(datasetSource.username).toLowerCase()); if (datasetSource.email) searchable.push(String(datasetSource.email).toLowerCase()); if (datasetSource.user) searchable.push(String(datasetSource.user).toLowerCase()); let matches = false; if (token) { const field = token === 'u' ? (datasetSource.username || datasetSource.user || '') : (datasetSource.email || ''); matches = field ? field.toLowerCase().includes(tokenQuery) : original.toLowerCase().includes(tokenQuery); } else { if (searchable.some(s => s.includes(q))) matches = true; else if (q.length >= 3) { const best = Math.max(...searchable.map(s => { const dist = levenshtein(q, s); return 1 - (dist / Math.max(q.length, s.length, 1)); })); matches = best >= 0.45; } } if (matches) { highlightNameText(nameEl, q); animateItemVisibility(li, true); } else { restoreNameText(nameEl); animateItemVisibility(li, false); } }); }
+
+function restoreNameText(nameEl) { const original = nameEl.dataset.originalName || ''; Array.from(nameEl.childNodes).filter(n => n.nodeType === Node.TEXT_NODE).forEach(n => n.remove()); if (original) nameEl.insertBefore(document.createTextNode(original + ' '), nameEl.firstChild || null); }
+
+function highlightNameText(nameEl, query) { const original = nameEl.dataset.originalName || ''; const regex = new RegExp(escapeRegex(query), 'ig'); const textNodes = Array.from(nameEl.childNodes).filter(n => n.nodeType === Node.TEXT_NODE); const text = textNodes.map(n => n.textContent).join(''); if (!regex.test(text)) { restoreNameText(nameEl); nameEl.classList.add('fuzzy-match'); setTimeout(() => nameEl.classList.remove('fuzzy-match'), 900); return; } const parts = text.split(regex); const matches = text.match(regex) || []; const frag = document.createDocumentFragment(); for (let i = 0; i < parts.length; i++) { frag.appendChild(document.createTextNode(parts[i])); if (i < matches.length) { const span = document.createElement('span'); span.className = 'search-highlight'; span.textContent = matches[i]; frag.appendChild(span); } } textNodes.forEach(n => n.remove()); nameEl.insertBefore(frag, nameEl.firstChild || null); if (nameEl.firstChild?.nodeType === Node.TEXT_NODE && !/\s$/.test(nameEl.firstChild.textContent)) nameEl.firstChild.textContent += ' '; }
+
+function escapeRegex(string) { return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+// Emoji & init
+function initEmojiPicker() {
+    const savedTheme = localStorage.getItem('theme') || 'light';
+    document.body.setAttribute('data-theme', savedTheme);
+    const pickerOptions = { onEmojiSelect: function (emoji) { const input = document.getElementById('chat-message-input'); if (input) input.value += emoji.native; toggleEmojiPicker(); }, theme: savedTheme };
+    try { const picker = new EmojiMart.Picker(pickerOptions); picker.style.display = 'none'; document.body.appendChild(picker); } catch (e) { /* emoji lib may not be present */ }
+    document.getElementById('emoji')?.addEventListener('click', toggleEmojiPicker);
+    document.getElementById('darkModeToggle')?.addEventListener('click', () => {
+        const currentTheme = document.body.getAttribute('data-theme');
+        const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+        document.body.setAttribute('data-theme', newTheme); localStorage.setItem('theme', newTheme); document.querySelector('em-emoji-picker')?.setAttribute('theme', newTheme);
+    });
+}
+
+document.addEventListener('DOMContentLoaded', function () { initEmojiPicker(); initFileHandlers(); initPeopleSearch(); });
+
+// placeholder
+function placeholder() { return null; }

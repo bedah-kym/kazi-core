@@ -1,10 +1,7 @@
-from django.shortcuts import render, redirect
 from django.contrib.auth.views import LoginView
 from django.contrib import messages
 from django.core.cache import cache
 from .forms import CustomAuthenticationForm
-from django.http import HttpResponseRedirect
-from django.urls import reverse
 
 class CustomLoginView(LoginView):
     form_class = CustomAuthenticationForm

@@ -1,5 +1,5 @@
 // Search functionality for MATHIA chat
-(function() {
+(function () {
     'use strict';
 
     // Search state
@@ -12,9 +12,10 @@
         dateTo: null
     };
 
-    // Initialize search on page load
-    document.addEventListener('DOMContentLoaded', function() {
+    // Initialize search and mini-settings on page load
+    document.addEventListener('DOMContentLoaded', function () {
         initializeSearch();
+        initializeMiniSettings();
     });
 
     function initializeSearch() {
@@ -29,17 +30,17 @@
         const nextMatch = document.getElementById('nextMatch');
 
         // Toggle search panel
-        searchToggle.addEventListener('click', function() {
+        searchToggle.addEventListener('click', function () {
             toggleSearchPanel();
         });
 
-        closeSearch.addEventListener('click', function() {
+        closeSearch.addEventListener('click', function () {
             closeSearchPanel();
         });
 
         // Search input with debounce
         let searchTimeout;
-        searchInput.addEventListener('input', function() {
+        searchInput.addEventListener('input', function () {
             clearTimeout(searchTimeout);
             searchTimeout = setTimeout(() => {
                 performSearch();
@@ -51,7 +52,7 @@
         dateTo.addEventListener('change', performSearch);
 
         // Clear filters
-        clearFilters.addEventListener('click', function() {
+        clearFilters.addEventListener('click', function () {
             searchInput.value = '';
             dateFrom.value = '';
             dateTo.value = '';
@@ -63,13 +64,13 @@
         nextMatch.addEventListener('click', () => navigateMatches('next'));
 
         // Keyboard shortcuts
-        document.addEventListener('keydown', function(e) {
+        document.addEventListener('keydown', function (e) {
             // Ctrl/Cmd + F to open search
             if ((e.ctrlKey || e.metaKey) && e.key === 'f' && searchState.isActive) {
                 e.preventDefault();
                 searchInput.focus();
             }
-            
+
             // Escape to close search
             if (e.key === 'Escape' && searchState.isActive) {
                 closeSearchPanel();
@@ -99,7 +100,7 @@
             panel.classList.add('active');
             searchToggle.classList.add('active');
             chatContainer.classList.add('search-active');
-            
+
             // Focus search input
             setTimeout(() => {
                 document.getElementById('messageSearchInput').focus();
@@ -260,8 +261,8 @@
         if (direction === 'next') {
             searchState.currentMatchIndex = (searchState.currentMatchIndex + 1) % searchState.matches.length;
         } else {
-            searchState.currentMatchIndex = searchState.currentMatchIndex <= 0 
-                ? searchState.matches.length - 1 
+            searchState.currentMatchIndex = searchState.currentMatchIndex <= 0
+                ? searchState.matches.length - 1
                 : searchState.currentMatchIndex - 1;
         }
 
@@ -272,7 +273,7 @@
         if (index < 0 || index >= searchState.matches.length) return;
 
         const matchElement = searchState.matches[index];
-        
+
         // Add active class to current match
         matchElement.querySelectorAll('.search-highlight').forEach(h => {
             h.classList.add('active-match');
@@ -313,7 +314,7 @@
             // This is a simple parser - adjust based on your actual time format
             const today = new Date();
             const timeParts = timeString.match(/(\d+):(\d+)(?::(\d+))?\s*(AM|PM)?/i);
-            
+
             if (!timeParts) return today;
 
             let hours = parseInt(timeParts[1]);
@@ -332,6 +333,176 @@
             console.error('Error parsing date:', e);
             return new Date();
         }
+    }
+
+    /* ------------------ Mini quick settings panel ------------------ */
+    function initializeMiniSettings() {
+        try {
+            const settings = loadMiniSettings();
+            applyMiniSettings(settings);
+            const overlay = createMiniPanel();
+            wireMiniPanel(overlay, settings);
+            hookGearButton(overlay);
+        } catch (e) {
+            console.warn('Mini settings failed to initialize', e);
+        }
+    }
+
+    const MINI_STORAGE_KEY = 'mini_chat_settings_v1';
+
+    function loadMiniSettings() {
+        const defaults = {
+            theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light',
+            fontSize: parseInt(getComputedStyle(document.documentElement).getPropertyValue('--chat-font-size')) || 14,
+            density: document.body.getAttribute('data-message-density') || 'comfortable'
+        };
+        try {
+            const raw = localStorage.getItem(MINI_STORAGE_KEY);
+            if (!raw) return defaults;
+            const parsed = JSON.parse(raw);
+            return Object.assign({}, defaults, parsed);
+        } catch (e) {
+            console.warn('Failed to load mini settings', e);
+            return defaults;
+        }
+    }
+
+    function saveMiniSettings(s) {
+        try {
+            localStorage.setItem(MINI_STORAGE_KEY, JSON.stringify(s));
+        } catch (e) {
+            console.warn('Failed to save mini settings', e);
+        }
+    }
+
+    function applyMiniSettings(s) {
+        if (s.theme === 'dark') {
+            document.documentElement.setAttribute('data-theme', 'dark');
+        } else {
+            document.documentElement.removeAttribute('data-theme');
+        }
+        document.documentElement.style.setProperty('--chat-font-size', (s.fontSize || 14) + 'px');
+        document.body.setAttribute('data-message-density', s.density || 'comfortable');
+    }
+
+    function createMiniPanel() {
+        const overlay = document.createElement('div');
+        overlay.className = 'mini-settings-overlay';
+        overlay.innerHTML = `
+            <div class="mini-settings" role="dialog" aria-label="Quick settings">
+                <div class="mini-settings-header">
+                    <strong>Quick settings</strong>
+                    <button class="mini-settings-close" aria-label="Close">&times;</button>
+                </div>
+                <div class="mini-settings-body">
+                    <div class="form-group">
+                        <label>Theme</label>
+                        <div>
+                            <button type="button" class="btn btn-sm btn-outline-secondary theme-btn" data-theme="light">Light</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary theme-btn" data-theme="dark">Dark</button>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Font size</label>
+                        <input type="range" min="12" max="20" value="14" class="form-range mini-font" />
+                        <div class="mini-font-value">14px</div>
+                    </div>
+                    <div class="form-group">
+                        <label>Density</label>
+                        <div>
+                            <select class="form-select form-select-sm mini-density">
+                                <option value="comfortable">Comfortable</option>
+                                <option value="compact">Compact</option>
+                                <option value="spacious">Spacious</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <a href="#" class="btn btn-link" id="open-main-settings">Open full settings</a>
+                    </div>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+        return overlay;
+    }
+
+    function wireMiniPanel(overlay, initial) {
+        const panel = overlay.querySelector('.mini-settings');
+        const closeBtn = overlay.querySelector('.mini-settings-close');
+        const themeBtns = overlay.querySelectorAll('.theme-btn');
+        const fontRange = overlay.querySelector('.mini-font');
+        const fontValue = overlay.querySelector('.mini-font-value');
+        const densitySelect = overlay.querySelector('.mini-density');
+        const openMain = overlay.querySelector('#open-main-settings');
+
+        // apply initial
+        fontRange.value = initial.fontSize || 14;
+        fontValue.textContent = (initial.fontSize || 14) + 'px';
+        densitySelect.value = initial.density || 'comfortable';
+        themeBtns.forEach(b => b.classList.toggle('active', b.getAttribute('data-theme') === initial.theme));
+
+        closeBtn.addEventListener('click', () => closeMini(overlay, panel));
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) closeMini(overlay, panel); });
+        document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && overlay.classList.contains('open')) closeMini(overlay, panel); });
+
+        themeBtns.forEach(b => b.addEventListener('click', () => {
+            const theme = b.getAttribute('data-theme');
+            initial.theme = theme;
+            applyMiniSettings(initial);
+            saveMiniSettings(initial);
+            themeBtns.forEach(btn => btn.classList.toggle('active', btn === b));
+        }));
+
+        fontRange.addEventListener('input', (e) => {
+            const val = parseInt(e.target.value, 10);
+            fontValue.textContent = val + 'px';
+            initial.fontSize = val;
+            applyMiniSettings(initial);
+        });
+        fontRange.addEventListener('change', () => saveMiniSettings(initial));
+
+        densitySelect.addEventListener('change', (e) => {
+            initial.density = e.target.value;
+            applyMiniSettings(initial);
+            saveMiniSettings(initial);
+        });
+
+        openMain.addEventListener('click', (e) => { e.preventDefault(); window.location.href = '/settings/'; });
+    }
+
+    function hookGearButton(overlay) {
+        const listbottom = document.querySelector('.listbottom');
+        if (!listbottom) return;
+        const btns = listbottom.querySelectorAll('button, a');
+        let gear = null;
+        for (const b of btns) {
+            if (b.querySelector && b.querySelector('.fa-cog')) { gear = b; break; }
+        }
+        if (!gear) return;
+        gear.addEventListener('click', (e) => {
+            e.preventDefault();
+            const panel = overlay.querySelector('.mini-settings');
+            if (overlay.classList.contains('open')) {
+                closeMini(overlay, panel);
+            } else {
+                openMini(overlay, panel);
+            }
+        });
+    }
+
+    function openMini(overlay, panel) {
+        overlay.classList.add('open');
+        panel.classList.add('open');
+        setTimeout(() => {
+            const first = panel.querySelector('button, [href], input, select');
+            if (first) first.focus();
+        }, 120);
+    }
+
+    function closeMini(overlay, panel) {
+        overlay.classList.remove('open');
+        panel.classList.remove('open');
     }
 
     // Export for use in other scripts if needed

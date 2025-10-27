@@ -5,6 +5,7 @@
     --bg-light: #f8f9fa;
     --chat-bg: #ffffff;
     --text-color: #000;
+    --chat-font-size: 14px;
 }
 
 [data-theme="dark"] {
@@ -19,6 +20,7 @@ body {
     background-color: var(--bg-light);
     color: var(--text-color);
     height: 100vh;
+    font-size: var(--chat-font-size);
     transition: background-color 0.3s, color 0.3s;
 }
 
@@ -1017,4 +1019,98 @@ em-emoji-picker {
         height: calc(100vh - 350px);
         overflow-x: auto;
     }
+}
+
+/* Mini quick settings panel (glass) */
+.mini-settings-overlay {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: flex-end;
+    justify-content: flex-end;
+    padding: 20px;
+    z-index: 2200;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.18s ease;
+}
+
+.mini-settings-overlay.open {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.mini-settings {
+    width: 320px;
+    max-width: calc(100% - 40px);
+    background: rgba(255, 255, 255, 0.06);
+    backdrop-filter: blur(8px) saturate(120%);
+    -webkit-backdrop-filter: blur(8px) saturate(120%);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    box-shadow: 0 10px 30px rgba(10, 15, 30, 0.35);
+    transform: translateY(10px) scale(0.98);
+    transition: transform 0.18s ease, opacity 0.18s ease;
+    opacity: 0;
+    padding: 12px;
+    color: var(--text-color);
+    pointer-events: auto;
+}
+
+.mini-settings.open {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+}
+
+.mini-settings-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 6px;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+    margin-bottom: 8px;
+}
+
+.mini-settings-close {
+    background: transparent;
+    border: none;
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+    color: var(--text-color);
+}
+
+.mini-settings-body {
+    padding: 6px 2px;
+}
+
+.mini-settings .form-group {
+    margin-bottom: 10px;
+}
+
+.mini-settings label {
+    font-size: 0.85rem;
+    display: block;
+    margin-bottom: 6px;
+}
+
+.mini-font-value {
+    font-size: 0.85rem;
+    color: var(--secondary-color);
+    margin-top: 6px;
+}
+
+[data-theme="dark"] .mini-settings {
+    background: rgba(32, 33, 36, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.mini-settings a.btn-link {
+    padding: 0;
+}
+
+/* small adjustment when compact density selected */
+body[data-message-density="compact"] .message {
+    padding: 8px 12px;
+    border-radius: 12px;
 }

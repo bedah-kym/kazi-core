@@ -491,6 +491,7 @@
             }
         });
     }
+    
 
     function openMini(overlay, panel) {
         overlay.classList.add('open');

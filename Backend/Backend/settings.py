@@ -22,6 +22,13 @@ except Exception:
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+env_path = BASE_DIR.parent / '.env'
+load_dotenv(dotenv_path=env_path, override=True)
+
+# Debug: Print to verify it loaded
+print(f"DEBUG: REDIS_URL from env = {os.environ.get('REDIS_URL', 'NOT FOUND')}")
+
+
 # attempt to load .env from project root (one level above BASE_DIR)
 try:
     load_dotenv(str(BASE_DIR.parent / '.env'))
@@ -63,7 +70,9 @@ INSTALLED_APPS = [
     'Api',
     'rest_framework',
     'rest_framework.authtoken',
-]
+    'django_celery_beat',
+    'django_celery_results' ]
+
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
@@ -96,6 +105,7 @@ TEMPLATES = [
 WSGI_APPLICATION = 'Backend.wsgi.application'
 
 ASGI_APPLICATION = "Backend.asgi.application"
+
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
@@ -115,14 +125,115 @@ DATABASES = {
         'NAME': BASE_DIR / 'db.sqlite3',
     }
 }
+# Redis configuration for Celery, Caching, and Channels
+# Replace your Redis configuration section with this:
 
+import ssl
+LANGUAGE_CODE = 'en-us'
+
+TIME_ZONE = 'Africa/Nairobi'
+
+USE_I18N = True
+
+USE_TZ = True
+
+
+# Redis configuration for Celery, Caching, and Channels
+REDIS_URL = os.environ.get('REDIS_URL', 'rediss://default:ASlnAAIncDI4ODQ3N2EyNDY1ZjE0OWRkOTM1MDZjMjQ1ZjQ5Yjk2MHAyMTA1OTk@exact-eft-10599.upstash.io:6379')
+
+# Parse Upstash URL to check if it's secure
+IS_UPSTASH = REDIS_URL.startswith('rediss://')
+
+# SSL context for Upstash (secure Redis)
+if IS_UPSTASH:
+    redis_ssl_context = ssl.create_default_context()
+    redis_ssl_context.check_hostname = False
+    redis_ssl_context.verify_mode = ssl.CERT_NONE
+else:
+    redis_ssl_context = None
+
+# Celery Broker with SSL support
+CELERY_BROKER_URL = REDIS_URL
+if IS_UPSTASH:
+    CELERY_BROKER_USE_SSL = {
+        'ssl_cert_reqs': ssl.CERT_NONE,
+        'ssl_ca_certs': None,
+        'ssl_certfile': None,
+        'ssl_keyfile': None,
+    }
+
+# Celery Results
+CELERY_RESULT_BACKEND = 'django-db'  # Using Django DB for results
+CELERY_CACHE_BACKEND = 'django-cache'
+
+# Celery serialization
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = TIME_ZONE
+
+# Celery execution
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = 30 * 60
+CELERY_TASK_SOFT_TIME_LIMIT = 25 * 60
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+CELERY_WORKER_MAX_TASKS_PER_CHILD = 1000
+
+# Django Cache with SSL
 CACHES = {
-  "default": {
-    "BACKEND": "django_redis.cache.RedisCache",
-    "LOCATION": "redis://127.0.0.1:6379/1",
-    "OPTIONS": {"CLIENT_CLASS": "django_redis.client.DefaultClient"},
-  }
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": REDIS_URL,
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            "CONNECTION_POOL_KWARGS": {
+                "ssl_cert_reqs": None if IS_UPSTASH else None,
+            } if IS_UPSTASH else {},
+        }
+    }
 }
+
+# Channels Layer with SSL
+if IS_UPSTASH:
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels_redis.core.RedisChannelLayer",
+            "CONFIG": {
+                "hosts": [{
+                    "address": REDIS_URL,
+                    "ssl_cert_reqs": None,
+                }],
+            },
+        },
+    }
+else:
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels_redis.core.RedisChannelLayer",
+            "CONFIG": {
+                "hosts": [("127.0.0.1", 6379)],
+            },
+        },
+    }
+
+# Celery Beat Schedule
+CELERY_BEAT_SCHEDULE = {
+    'flush-moderation-batches': {
+        'task': 'chatbot.tasks.process_pending_batches',
+        'schedule': 300.0,  # 5 min
+    },
+    'cleanup-old-batches': {
+        'task': 'chatbot.tasks.cleanup_old_moderation_batches',
+        'schedule': 86400.0,  # Daily
+    },
+}
+
+# AI Moderation Settings
+MODERATION_BATCH_SIZE = 10
+MODERATION_BATCH_TIMEOUT = 5
+MODERATION_FLAG_THRESHOLD = 3
+HF_API_TOKEN = os.environ.get('HF_API_TOKEN', '')
+HF_MONTHLY_LIMIT = 10000  # e.g., 10,000 tokens per month
 
 # Password validation
 # https://docs.djangoproject.com/en/4.1/ref/settings/#auth-password-validators
@@ -153,13 +264,6 @@ LOGOUT_REDIRECT_URL = 'users:login'
 # Internationalization
 # https://docs.djangoproject.com/en/4.1/topics/i18n/
 
-LANGUAGE_CODE = 'en-us'
-
-TIME_ZONE = 'Africa/Nairobi'
-
-USE_I18N = True
-
-USE_TZ = True
 
 
 # Static files (CSS, JavaScript, Images)
@@ -186,7 +290,6 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.LimitOffsetPagination",
     "PAGE_SIZE": 5
 }
-
 
 
 # Chat rate limit (messages per minute)

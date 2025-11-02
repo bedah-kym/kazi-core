@@ -11,6 +11,7 @@ from django.conf import settings
 from django.shortcuts import get_object_or_404
 from users.models import CalendlyProfile
 from django.contrib.auth import get_user_model
+from urllib.parse import quote
 import requests
 import logging
 
@@ -22,13 +23,35 @@ logger = logging.getLogger(__name__)
 def calendly_connect(request):
     """Return an authorization URL to start OAuth with Calendly."""
     client_id = getattr(settings, 'CALENDLY_CLIENT_ID', None)
-    redirect_uri = request.build_absolute_uri('/api/calendly/callback')
+    
     if not client_id:
         return Response({'error': 'Calendly client id not configured'}, status=500)
+    
+    # Build the EXACT redirect URI - ensure it matches what's in Calendly settings
+    # Use build_absolute_uri to get the full URL
+    redirect_uri = request.build_absolute_uri('/api/calendly/callback/')
+    
+    # Debug: Print the redirect URI to console
+    print(f"[calendly] Redirect URI being used: {redirect_uri}")
+    
+    # Use user ID as state for security
     state = str(request.user.id)
-    auth_url = f"https://auth.calendly.com/oauth/authorize?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope=event_types:read%20scheduled_events:read%20scheduled_events:write&state={state}"
+    
+    # URL encode the redirect_uri properly
+    encoded_redirect_uri = quote(redirect_uri, safe='')
+    
+    # Build authorization URL
+    auth_url = (
+        f"https://auth.calendly.com/oauth/authorize"
+        f"?response_type=code"
+        f"&client_id={client_id}"
+        f"&redirect_uri={encoded_redirect_uri}"
+        f"&state={state}"
+    )
+    
+    print(f"[calendly] Full auth URL: {auth_url}")
+    
     return Response({'authorization_url': auth_url})
-
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -41,7 +64,7 @@ def calendly_callback(request):
     token_url = 'https://auth.calendly.com/oauth/token'
     client_id = getattr(settings, 'CALENDLY_CLIENT_ID', None)
     client_secret = getattr(settings, 'CALENDLY_CLIENT_SECRET', None)
-    redirect_uri = request.build_absolute_uri('/api/calendly/callback')
+    redirect_uri = request.build_absolute_uri('/api/calendly/callback/')
     payload = {
         'grant_type': 'authorization_code',
         'client_id': client_id,

@@ -15,7 +15,9 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.exceptions import InvalidKey
 import logging
 import asyncio
-
+from .models import Message, Member, Chatroom, UserModerationStatus, ModerationBatch
+from .tasks import moderate_message_batch, generate_ai_response
+from django.conf import settings 
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
@@ -146,7 +148,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
             "presence": presence,
         }))
         
-    # Enhanced presence_update handler with better logging
     async def presence_update(self, event):
         logger.debug(f"presence_update received by {self.scope['user'].username}: {event}")
         
@@ -161,6 +162,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         
         logger.debug(f"Sending presence update to client: {payload}")
         await self.send_message(payload)
+    
     @sync_to_async
     def get_chatroom_key(self, room_id):
         """Fetches the Chatroom and its encryption key from the database."""
@@ -408,12 +410,78 @@ class ChatConsumer(AsyncWebsocketConsumer):
             return False
         cache.set(cache_key, current + 1, 60)  # Expire after 60 seconds
         return True
+      
+    async def check_user_muted(self, user, room_id):
+            """Check if user is muted in this room"""
+            def _check():
+                try:
+                    status = UserModerationStatus.objects.get(
+                        user=user,
+                        room_id=room_id
+                    )
+                    return status.is_muted
+                except UserModerationStatus.DoesNotExist:
+                    return False
+            
+            return await sync_to_async(_check)()
 
+    async def buffer_message_for_moderation(self, room_id, message_id):
+        """
+        Buffer messages in Redis and trigger moderation when batch is ready
+        Returns True if batch was triggered
+        """
+        room = await self.get_current_chatroom(room_id)
+        
+        # Skip if moderation disabled for this room
+        if hasattr(room, 'moderation_enabled') and not room.moderation_enabled:
+            return False
+        
+        redis = get_redis_connection("default")
+        buffer_key = f"message_buffer:{room_id}"
+        
+        # Add message to buffer
+        await sync_to_async(redis.lpush)(buffer_key, message_id)
+        
+        # Get buffer size
+        buffer_size = await sync_to_async(redis.llen)(buffer_key)
+        
+        # Check if batch size reached
+        batch_size = getattr(settings, 'MODERATION_BATCH_SIZE', 10)
+        
+        if buffer_size >= batch_size:
+            # Get all messages from buffer
+            message_ids = await sync_to_async(redis.lrange)(buffer_key, 0, -1)
+            message_ids = [mid.decode() if isinstance(mid, bytes) else mid for mid in message_ids]
+            
+            # Create moderation batch
+            def _create_batch():
+                return ModerationBatch.objects.create(
+                    room=room,
+                    message_ids=json.dumps(message_ids),
+                    status='pending'
+                )
+            
+            batch = await sync_to_async(_create_batch)()
+            
+            # Clear buffer
+            await sync_to_async(redis.delete)(buffer_key)
+            
+            # Trigger async moderation task
+            moderate_message_batch.delay(batch.id)
+            
+            logger.info(f"Triggered moderation batch {batch.id} for room {room_id}")
+            return True
+        
+        return False                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
+    
     async def new_message(self, data):
         try:
+            logger.info(f"=== NEW MESSAGE START === Data: {data}")
+            
             member_username = data['from']
             get_user = sync_to_async(User.objects.filter(username=member_username).first)
             member_user = await get_user()
+            logger.info(f"Step 1: Got user: {member_user}")
 
             if not member_user:
                 await self.send_chat_message({
@@ -423,6 +491,27 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 })
                 return
 
+            # === NEW: Check if user is muted ===
+            room_id = data.get('chatid')
+            logger.info(f"Step 2: room_id={room_id}, checking mute status...")
+            
+            try:
+                is_muted = await self.check_user_muted(member_user, room_id)
+                logger.info(f"Step 3: Mute check passed. is_muted={is_muted}")
+            except Exception as e:
+                logger.error(f"ERROR in check_user_muted: {e}")
+                logger.error(traceback.format_exc())
+                raise
+            
+            if is_muted:
+                await self.send_message({
+                    'member': 'security system',
+                    'content': "You are muted in this room due to multiple flags.",
+                    'timestamp': str(timezone.now())
+                })
+                return
+
+            logger.info(f"Step 4: Rate limit check...")
             # Rate limiting check
             if not await self.check_rate_limit(member_user.id):
                 await self.send_chat_message({
@@ -432,6 +521,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 })
                 return
 
+            logger.info(f"Step 5: Get member...")
             get_member = sync_to_async(Member.objects.filter(User=member_user).first)
             member = await get_member()
 
@@ -445,7 +535,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
             # Sanitize and validate message content
             message_content = data.get('message', '').strip()
-            if not message_content or len(message_content) > 5000:  # Reasonable limit
+            logger.info(f"Step 6: Message content: {message_content[:50]}...")
+            
+            if not message_content or len(message_content) > 5000:
                 await self.send_chat_message({
                     'member': 'security system',
                     'content': "Invalid message content.",
@@ -453,9 +545,35 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 })
                 return
 
+            # === NEW: Check for @mathia mention (AI assistant trigger) ===
+            if message_content.startswith('@mathia'):
+                logger.info(f"Step 7: @mathia detected! Triggering AI...")
+                # Extract actual message (remove @mathia)
+                ai_query = message_content.replace('@mathia', '').strip()
+                if ai_query:
+                    try:
+                        # Trigger AI response async
+                        logger.info(f"Calling generate_ai_response.delay({room_id}, {member_user.id}, {ai_query})")
+                        generate_ai_response.delay(room_id, member_user.id, ai_query)
+                        logger.info("AI task queued successfully!")
+                    except Exception as e:
+                        logger.error(f"ERROR calling generate_ai_response: {e}")
+                        logger.error(traceback.format_exc())
+                        raise
+                    
+                    # Send acknowledgment
+                    await self.send_message({
+                        'member': 'mathia',
+                        'content': "Thinking... 🤔",
+                        'timestamp': str(timezone.now())
+                    })
+                return
+
+            logger.info(f"Step 8: Regular message, checking key rotation...")
             # Check for key rotation
             await self.check_key_rotation()
 
+            logger.info(f"Step 9: Encrypting message...")
             # Encrypt the message content
             encrypted_message = await self.encrypt_message({
                 'content': message_content,
@@ -470,8 +588,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 })
                 return
 
+            logger.info(f"Step 10: Creating message in DB...")
             create_message = sync_to_async(Message.objects.create)
-            # store a JSON blob containing both parts
             payload = json.dumps({
                 'data':     encrypted_message['data'],
                 'nonce':    encrypted_message['nonce'],
@@ -482,7 +600,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 timestamp=timezone.now()
             )
 
-            current_chat = await self.get_current_chatroom(data['chatid'])
+            logger.info(f"Step 11: Getting chatroom...")
+            current_chat = await self.get_current_chatroom(room_id)
             if not current_chat:
                 await self.send_chat_message({
                     'member': 'security system',
@@ -491,18 +610,32 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 })
                 return
 
+            logger.info(f"Step 12: Getting room members...")
             room_members = await self.get_chatroom_participants(current_chat)
 
             if member in room_members:
+                logger.info(f"Step 13: Adding message to chatroom...")
                 await sync_to_async(current_chat.chats.add)(message)
                 await sync_to_async(current_chat.save)()
 
+                logger.info(f"Step 14: Buffering for moderation...")
+                # === NEW: Buffer message for moderation ===
+                try:
+                    await self.buffer_message_for_moderation(room_id, message.id)
+                    logger.info("Buffering successful!")
+                except Exception as e:
+                    logger.error(f"ERROR in buffer_message_for_moderation: {e}")
+                    logger.error(traceback.format_exc())
+                    raise
+
+                logger.info(f"Step 15: Sending to clients...")
                 message_json = await self.message_to_json(message)
                 content = {
                     "command": "new_message",
                     "message": message_json
                 }
                 await self.send_chat_message(content)
+                logger.info("=== NEW MESSAGE SUCCESS ===")
             else:
                 await self.send_chat_message({
                     'member': 'security system',
@@ -511,12 +644,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 })
         except Exception as e:
             logger.error(f"Error in new_message: {str(e)}")
+            logger.error(f"Full traceback: {traceback.format_exc()}")
             await self.send_chat_message({
                 'member': 'security system',
                 'content': "Error processing message",
                 'timestamp': str(timezone.now())
             })
-
+            
     async def file_message(self, data):
         try:
             member_username = data['from']
@@ -650,7 +784,65 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     async def send_message(self, message):
         await self.send(text_data=json.dumps(message))
-
+        
+    async def ai_response_message(self, event):
+            """
+            Handler for AI bot responses sent via channel layer
+            Called by Celery task after generating AI reply
+            """
+            try:
+                ai_reply = event.get('ai_reply')
+                user_id = event.get('user_id')
+                
+                # Encrypt AI response
+                encrypted_message = await self.encrypt_message({
+                    'content': ai_reply,
+                    'timestamp': str(timezone.now())
+                })
+                
+                if not encrypted_message:
+                    logger.error("Failed to encrypt AI response")
+                    return
+                
+                # Create message from AI bot
+                def _create_ai_message():
+                    # Get or create mathia bot user
+                    ai_user, _ = User.objects.get_or_create(
+                        username='mathia',
+                        defaults={'is_active': False}  # Bot account
+                    )
+                    ai_member, _ = Member.objects.get_or_create(User=ai_user)
+                    
+                    payload = json.dumps({
+                        'data': encrypted_message['data'],
+                        'nonce': encrypted_message['nonce'],
+                    })
+                    
+                    return Message.objects.create(
+                        member=ai_member,
+                        content=payload,
+                        timestamp=timezone.now()
+                    )
+                
+                message = await sync_to_async(_create_ai_message)()
+                
+                # Add to room
+                room_id = event.get('room_id')
+                current_chat = await self.get_current_chatroom(room_id)
+                if current_chat:
+                    await sync_to_async(current_chat.chats.add)(message)
+                    await sync_to_async(current_chat.save)()
+                
+                # Send to clients
+                message_json = await self.message_to_json(message)
+                await self.send(text_data=json.dumps({
+                    "command": "new_message",
+                    "message": message_json
+                }))
+                
+            except Exception as e:
+                logger.error(f"Error in ai_response_message: {e}")
+    
     @classmethod
     async def get_last_10_messages(cls, chatid):
         messages = Message.objects.filter(chatroom__id=chatid).order_by('-timestamp')[:10]

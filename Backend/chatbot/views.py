@@ -57,7 +57,7 @@ def upload_file(request):
 
 def welcomepage(request):
     if request.user.is_authenticated:
-        return redirect(reverse("chatbot:bot-home",kwargs={"room_name":2}))
+        return redirect(reverse("chatbot:bot-home",kwargs={"room_name":4}))
     return redirect("users:login")
 
 

@@ -786,63 +786,71 @@ class ChatConsumer(AsyncWebsocketConsumer):
         await self.send(text_data=json.dumps(message))
         
     async def ai_response_message(self, event):
-            """
-            Handler for AI bot responses sent via channel layer
-            Called by Celery task after generating AI reply
-            """
-            try:
-                ai_reply = event.get('ai_reply')
-                user_id = event.get('user_id')
+        """
+        Handler for AI bot responses sent via channel layer
+        Called by Celery task after generating AI reply
+        """
+        try:
+            ai_reply = event.get('ai_reply')
+            user_id = event.get('user_id')
+            
+            # Encrypt AI response
+            encrypted_message = await self.encrypt_message({
+                'content': ai_reply,
+                'timestamp': str(timezone.now())
+            })
+            
+            if not encrypted_message:
+                logger.error("Failed to encrypt AI response")
+                return
+            
+            # Create message from AI bot
+            def _create_ai_message():
+                ai_user, _ = User.objects.get_or_create(
+                    username='mathia',
+                    defaults={'is_active': False}
+                )
+                ai_member, _ = Member.objects.get_or_create(User=ai_user)
                 
-                # Encrypt AI response
-                encrypted_message = await self.encrypt_message({
-                    'content': ai_reply,
-                    'timestamp': str(timezone.now())
+                payload = json.dumps({
+                    'data': encrypted_message['data'],
+                    'nonce': encrypted_message['nonce'],
                 })
                 
-                if not encrypted_message:
-                    logger.error("Failed to encrypt AI response")
-                    return
-                
-                # Create message from AI bot
-                def _create_ai_message():
-                    # Get or create mathia bot user
-                    ai_user, _ = User.objects.get_or_create(
-                        username='mathia',
-                        defaults={'is_active': False}  # Bot account
-                    )
-                    ai_member, _ = Member.objects.get_or_create(User=ai_user)
-                    
-                    payload = json.dumps({
-                        'data': encrypted_message['data'],
-                        'nonce': encrypted_message['nonce'],
-                    })
-                    
-                    return Message.objects.create(
-                        member=ai_member,
-                        content=payload,
-                        timestamp=timezone.now()
-                    )
-                
-                message = await sync_to_async(_create_ai_message)()
-                
-                # Add to room
-                room_id = event.get('room_id')
-                current_chat = await self.get_current_chatroom(room_id)
-                if current_chat:
-                    await sync_to_async(current_chat.chats.add)(message)
-                    await sync_to_async(current_chat.save)()
-                
-                # Send to clients
-                message_json = await self.message_to_json(message)
-                await self.send(text_data=json.dumps({
-                    "command": "new_message",
-                    "message": message_json
-                }))
-                
-            except Exception as e:
-                logger.error(f"Error in ai_response_message: {e}")
-    
+                return Message.objects.create(
+                    member=ai_member,
+                    content=payload,
+                    timestamp=timezone.now()
+                )
+            
+            message = await sync_to_async(_create_ai_message)()
+            
+            # Add to room
+            room_id = event.get('room_id')
+            current_chat = await self.get_current_chatroom(room_id)
+            if current_chat:
+                await sync_to_async(current_chat.chats.add)(message)
+                await sync_to_async(current_chat.save)()
+            
+            # Send to clients with correct command
+            message_json = await self.message_to_json(message)
+            
+            await self.send(text_data=json.dumps({
+                "command": "ai_message",  # Changed from "new_message"
+                "message": message_json
+            }))
+            
+        except Exception as e:
+            logger.error(f"Error in ai_response_message: {e}")
+            
+    async def ai_stream_chunk(self, event):
+        """Handle streaming AI response chunks"""
+        await self.send(text_data=json.dumps({
+            "command": "ai_stream",
+            "chunk": event.get('chunk'),
+            "is_final": event.get('is_final', False)
+        }))
+        
     @classmethod
     async def get_last_10_messages(cls, chatid):
         messages = Message.objects.filter(chatroom__id=chatid).order_by('-timestamp')[:10]

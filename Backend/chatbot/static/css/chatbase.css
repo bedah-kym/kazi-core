@@ -149,8 +149,12 @@ body {
     background-image: url('https://www.transparenttextures.com/patterns/brick-wall.png');
     position: relative;
     transition: background 0.3s;
-    position: relative;
     z-index: 1;
+}
+
+/* When quick prompts are visible, adjust slightly */
+.chat-container.prompts-visible .chat-history {
+    height: calc(100vh - 240px);
 }
 
 [data-theme="dark"] .chat-history {
@@ -227,6 +231,39 @@ body {
         radial-gradient(circle at 80% 80%, rgba(58, 110, 165, 0.05) 0%, transparent 50%),
         radial-gradient(circle at 40% 20%, rgba(67, 97, 238, 0.05) 0%, transparent 50%);
 }
+
+/* Webkit scrollbar styling for chat history */
+.chat-history::-webkit-scrollbar {
+    width: 8px;
+}
+
+.chat-history::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.05);
+    border-radius: 10px;
+}
+
+.chat-history::-webkit-scrollbar-thumb {
+    background: rgba(102, 126, 234, 0.3);
+    border-radius: 10px;
+    transition: background 0.3s;
+}
+
+.chat-history::-webkit-scrollbar-thumb:hover {
+    background: rgba(102, 126, 234, 0.5);
+}
+
+[data-theme="dark"] .chat-history::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+[data-theme="dark"] .chat-history::-webkit-scrollbar-thumb {
+    background: rgba(138, 159, 245, 0.3);
+}
+
+[data-theme="dark"] .chat-history::-webkit-scrollbar-thumb:hover {
+    background: rgba(138, 159, 245, 0.5);
+}
+
 
 .message {
     padding: 12px 18px;
@@ -954,16 +991,17 @@ em-emoji-picker {
         }
     }
 
+    /* When quick prompts are visible, adjust slightly */
+    .chat-container.prompts-visible .chat-history {
+        height: calc(100vh - 240px);
+    }
+
     .chat-container {
         border-radius: 0;
     }
 
     .chat-header {
         border-radius: 0;
-    }
-
-    .chat-history {
-        height: calc(100vh - 140px);
     }
 
     .time-sender {
@@ -984,6 +1022,16 @@ em-emoji-picker {
         position: absolute;
         bottom: 0;
         width: 100%;
+    }
+}
+
+@media only screen and (min-width: 768px) and (max-width: 991px) {
+    .chat-history {
+        height: calc(100vh - 200px);
+    }
+
+    .chat-container.prompts-visible .chat-history {
+        height: calc(100vh - 260px);
     }
 }
 
@@ -1016,10 +1064,28 @@ em-emoji-picker {
     }
 
     .chat-app .chat-history {
-        height: calc(100vh - 350px);
+        height: calc(100vh - 180px);
         overflow-x: auto;
     }
 }
+
+/* Extra small devices */
+@media only screen and (max-width: 375px) {
+    .chat-history {
+        height: calc(100vh - 130px);
+        padding: 12px;
+    }
+}
+
+/* Safe area insets for notched devices */
+@supports (padding: max(0px)) {
+    .chat-history {
+        height: calc(100vh - 180px - env(safe-area-inset-bottom));
+        padding-bottom: calc(24px + env(safe-area-inset-bottom));
+    }
+}
+
+
 
 /* Mini quick settings panel (glass) */
 .mini-settings-overlay {

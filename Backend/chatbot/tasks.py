@@ -166,8 +166,7 @@ def process_pending_batches():
 @shared_task(bind=True, max_retries=3, default_retry_delay=30)
 def generate_ai_response(self, room_id, user_id, user_message):
     """
-    Generate AI assistant response using HF chat model
-    For dedicated @mathia bot room
+    Generate AI assistant response with streaming support
     """
     if not HF_AVAILABLE:
         logger.error("HuggingFace not available")
@@ -177,19 +176,15 @@ def generate_ai_response(self, room_id, user_id, user_message):
         user = User.objects.get(id=user_id)
         room = Chatroom.objects.get(id=room_id)
         
-        logger.info(f"Generating AI response for user {user.username} in room {room_id}")
-        
-        # Get or create conversation context
+        # Get conversation context
         conversation, created = AIConversation.objects.get_or_create(
             user=user,
             room=room,
             defaults={'context': '[]', 'last_interaction': timezone.now()}
         )
         
-        # Load conversation history (last 3 exchanges)
         context = json.loads(conversation.context)[-3:]
         
-        # Initialize HF client
         hf_token = os.environ.get('HF_API_TOKEN', '')
         client = InferenceClient(token=hf_token if hf_token else None)
         
@@ -223,39 +218,74 @@ def generate_ai_response(self, room_id, user_id, user_message):
             messages.append({"role": "user", "content": exchange['user']})
             messages.append({"role": "assistant", "content": exchange['assistant']})
         
-        # Add current message
         messages.append({"role": "user", "content": user_message})
         
-        logger.info(f"Calling HF API with {len(messages)} messages")
-        
-        # Try different models
         models_to_try = [
             "meta-llama/Llama-3.2-3B-Instruct",
             "mistralai/Mistral-7B-Instruct-v0.2",
-            "microsoft/DialoGPT-medium"
         ]
         
         ai_reply = None
         for model in models_to_try:
             try:
-                logger.info(f"Trying model: {model}")
                 response = client.chat_completion(
                     messages=messages,
                     model=model,
                     max_tokens=150,
-                    temperature=0.7
+                    temperature=0.7,
+                    stream=True  # ✅ Enable streaming
                 )
-                ai_reply = response.choices[0].message.content.strip()
-                logger.info(f"Success with model: {model}")
+                
+                # Collect full response and send chunks
+                full_response = ""
+                chunk_buffer = ""
+                
+                from channels.layers import get_channel_layer
+                from asgiref.sync import async_to_sync
+                channel_layer = get_channel_layer()
+                room_group_name = f"chat_{room_id}"
+                
+                for chunk in response:
+                    if hasattr(chunk.choices[0].delta, 'content'):
+                        token = chunk.choices[0].delta.content
+                        if token:
+                            full_response += token
+                            chunk_buffer += token
+                            
+                            # Send chunks every ~5 characters for smooth typing
+                            if len(chunk_buffer) >= 5:
+                                async_to_sync(channel_layer.group_send)(
+                                    room_group_name,
+                                    {
+                                        "type": "ai_stream_chunk",
+                                        "room_id": room_id,
+                                        "chunk": chunk_buffer,
+                                        "is_final": False
+                                    }
+                                )
+                                chunk_buffer = ""
+                
+                # Send remaining buffer
+                if chunk_buffer:
+                    async_to_sync(channel_layer.group_send)(
+                        room_group_name,
+                        {
+                            "type": "ai_stream_chunk",
+                            "room_id": room_id,
+                            "chunk": chunk_buffer,
+                            "is_final": False
+                        }
+                    )
+                
+                ai_reply = full_response.strip()
                 break
+                
             except Exception as model_error:
                 logger.warning(f"Model {model} failed: {model_error}")
                 continue
         
-        # Fallback if all models fail
         if not ai_reply or len(ai_reply) < 2:
             ai_reply = "I'm experiencing high demand. Please try again! 🤖"
-        
         
         # Update conversation context
         context.append({
@@ -268,13 +298,7 @@ def generate_ai_response(self, room_id, user_id, user_message):
         conversation.last_interaction = timezone.now()
         conversation.save()
         
-        # Send to WebSocket
-        from channels.layers import get_channel_layer
-        from asgiref.sync import async_to_sync
-        
-        channel_layer = get_channel_layer()
-        room_group_name = f"chat_{room_id}"
-        
+        # Send final complete message
         async_to_sync(channel_layer.group_send)(
             room_group_name,
             {
@@ -287,16 +311,10 @@ def generate_ai_response(self, room_id, user_id, user_message):
         
         logger.info(f"AI response sent to room {room_id}")
         
-        return {
-            'room_id': room_id,
-            'user_id': user_id,
-            'ai_reply': ai_reply,
-            'status': 'success'
-        }
+        return {'status': 'success', 'ai_reply': ai_reply}
         
     except Exception as e:
         logger.error(f"Error generating AI response: {e}")
-        logger.error(traceback.format_exc())
         raise self.retry(exc=e)
 
 @shared_task

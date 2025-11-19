@@ -17,6 +17,7 @@ import logging
 import asyncio
 from .models import Message, Member, Chatroom, UserModerationStatus, ModerationBatch
 from .tasks import moderate_message_batch, generate_ai_response
+from orchestration.intent_parser import parse_intent
 from django.conf import settings 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -545,28 +546,62 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 })
                 return
 
-            # === NEW: Check for @mathia mention (AI assistant trigger) ===
+            # === ORCHESTRATION: Parse intent for @mathia commands ===
             if message_content.startswith('@mathia'):
-                logger.info(f"Step 7: @mathia detected! Triggering AI...")
-                # Extract actual message (remove @mathia)
+                logger.info(f"Step 7: @mathia detected! Parsing intent...")
+                
+                from orchestration.mcp_router import route_intent  # ADD THIS IMPORT
+                
+                # Extract query
                 ai_query = message_content.replace('@mathia', '').strip()
+                
                 if ai_query:
-                    try:
-                        # Trigger AI response async
-                        logger.info(f"Calling generate_ai_response.delay({room_id}, {member_user.id}, {ai_query})")
-                        generate_ai_response.delay(room_id, member_user.id, ai_query)
-                        logger.info("AI task queued successfully!")
-                    except Exception as e:
-                        logger.error(f"ERROR calling generate_ai_response: {e}")
-                        logger.error(traceback.format_exc())
-                        raise
-                    
-                    # Send acknowledgment
-                    await self.send_message({
-                        'member': 'mathia',
-                        'content': "Thinking... 🤔",
-                        'timestamp': str(timezone.now())
+                    # Parse intent
+                    intent = await parse_intent(ai_query, {
+                        "user_id": member_user.id,
+                        "username": member_username,
+                        "room_id": room_id
                     })
+                    
+                    logger.info(f"Parsed intent: {intent}")
+                    
+                    # Route to MCP if confidence is high
+                    if intent["confidence"] > 0.7 and intent["action"] != "general_chat":
+                        # Route through MCP
+                        result = await route_intent(intent, {
+                            "user_id": member_user.id,
+                            "room_id": room_id,
+                            "username": member_username
+                        })
+                        
+                        if result["status"] == "success":
+                            # Format response based on action
+                            if intent["action"] == "find_jobs":
+                                jobs = result["data"]["jobs"]
+                                response = f"🎯 Found {len(jobs)} jobs:\n\n"
+                                for job in jobs[:3]:  # Show top 3
+                                    response += f"• **{job['title']}**\n"
+                                    response += f"  Budget: {job['budget']}\n"
+                                    response += f"  Posted: {job['posted']}\n\n"
+                                response += f"[See all {result['data']['total']} results]"
+                            else:
+                                response = f"✅ {intent['action']} completed!\n{json.dumps(result['data'], indent=2)}"
+                        else:
+                            response = f"❌ Error: {result['message']}"
+                        
+                        await self.send_message({
+                            'member': 'mathia',
+                            'content': response,
+                            'timestamp': str(timezone.now())
+                        })
+                    else:
+                        # Low confidence or general chat - use existing AI
+                        generate_ai_response.delay(room_id, member_user.id, ai_query)
+                        await self.send_message({
+                            'member': 'mathia',
+                            'content': "Thinking... 🤔",
+                            'timestamp': str(timezone.now())
+                        })
                 return
 
             logger.info(f"Step 8: Regular message, checking key rotation...")

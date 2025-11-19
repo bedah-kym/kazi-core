@@ -68,6 +68,7 @@ INSTALLED_APPS = [
     'chatbot',
     'users',
     'Api',
+    'orchestration',
     'rest_framework',
     'rest_framework.authtoken',
     'django_celery_beat',

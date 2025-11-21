@@ -12,202 +12,81 @@ logger = logging.getLogger(__name__)
 
 class DataSynthesizer:
     """
-    Takes raw connector results and synthesizes natural language responses
+    Synthesizes natural language responses from structured data
     """
     
     def __init__(self):
-        self.api_url = "https://api.anthropic.com/v1/messages"
-        self.formatters = {
-            "find_jobs": self._format_jobs,
-            "schedule_meeting": self._format_calendar,
-            "check_payments": self._format_payments,
-            "search_info": self._format_search,
-        }
-    
-    async def synthesize(
-        self, 
-        intent: Dict, 
-        result: Dict, 
-        use_llm: bool = False
-    ) -> str:
-        """
-        Synthesize a natural language response
+        from .llm_client import get_llm_client
+        self.llm = get_llm_client()
         
-        Args:
-            intent: Original parsed intent
-            result: Data from MCP router
-            use_llm: If True, use Claude API for natural response
-            
-        Returns:
-            Natural language string
+    async def synthesize(self, intent: Dict, result: Dict, use_llm: bool = True) -> str:
+        """
+        Convert result data into a user-friendly response
         """
         try:
-            action = intent.get("action")
+            # 1. Basic formatting (fallback)
+            basic_response = self._format_basic(intent, result)
             
-            # Use custom formatter if available
-            formatter = self.formatters.get(action)
-            if formatter:
-                formatted = formatter(result["data"], intent)
-                
-                # Optionally enhance with LLM
-                if use_llm:
-                    return await self._enhance_with_llm(
-                        intent["raw_query"],
-                        formatted,
-                        action
-                    )
-                
-                return formatted
+            # 2. LLM Enhancement (if enabled)
+            if use_llm:
+                return await self._enhance_with_llm(intent, result, basic_response)
             
-            # Fallback to JSON dump
-            return f"Results:\n```json\n{json.dumps(result['data'], indent=2)}\n```"
+            return basic_response
             
         except Exception as e:
             logger.error(f"Synthesis error: {e}")
-            return f"Got results but couldn't format them properly: {str(e)}"
-    
-    def _format_jobs(self, data: Dict, intent: Dict) -> str:
-        """Format job listings into readable text"""
-        jobs = data.get("jobs", [])
-        query = data.get("query", "")
-        total = data.get("total", 0)
+            return "I found the information but had trouble formatting it."
+
+    def _format_basic(self, intent: Dict, result: Dict) -> str:
+        """Basic template-based formatting"""
+        action = intent.get("action")
+        data = result.get("data", {})
         
-        if not jobs:
-            return f"🔍 No {query} jobs found matching your criteria."
-        
-        response = f"🎯 Found {total} {query} jobs:\n\n"
-        
-        for i, job in enumerate(jobs[:5], 1):  # Show top 5
-            response += f"**{i}. {job['title']}**\n"
-            response += f"   💰 Budget: {job['budget']}\n"
-            response += f"   📅 Posted: {job['posted']}\n"
-            response += f"   💬 {job['proposals']} proposals\n"
-            response += f"   ⭐ Client rating: {job['client_rating']}/5\n"
-            response += f"   🔗 {job['url']}\n\n"
-        
-        if total > 5:
-            response += f"_...and {total - 5} more jobs_\n\n"
-        
-        response += "💡 **Next steps:**\n"
-        response += "• Review the listings above\n"
-        response += "• Want me to draft a proposal for any of these?\n"
-        response += "• Say `@mathia tell me more about job 1`"
-        
-        return response
-    
-    def _format_calendar(self, data: Dict, intent: Dict) -> str:
-        """Format calendar availability"""
-        slots = data.get("slots", [])
-        booking_url = data.get("booking_url", "")
-        
-        if not slots:
-            return "📅 No available slots found."
-        
-        response = "📅 **Available meeting times:**\n\n"
-        
-        from datetime import datetime
-        for i, slot in enumerate(slots, 1):
-            start = datetime.fromisoformat(slot["start"])
-            end = datetime.fromisoformat(slot["end"])
+        if action == "find_jobs":
+            jobs = data.get("jobs", [])
+            count = data.get("total", 0)
+            return f"Found {count} jobs for '{data.get('query')}'. Top result: {jobs[0]['title'] if jobs else 'None'}"
             
-            response += f"**{i}.** {start.strftime('%A, %B %d')}\n"
-            response += f"   🕐 {start.strftime('%I:%M %p')} - {end.strftime('%I:%M %p')}\n\n"
-        
-        response += f"🔗 Book here: {booking_url}\n\n"
-        response += "💡 Say `@mathia book slot 1` to schedule"
-        
-        return response
-    
-    def _format_payments(self, data: Dict, intent: Dict) -> str:
-        """Format payment information"""
-        balance = data.get("balance", 0)
-        currency = data.get("currency", "USD")
-        payments = data.get("recent_payments", [])
-        
-        response = f"💰 **Account Balance:** ${balance:.2f} {currency}\n\n"
-        response += "📊 **Recent Payments:**\n\n"
-        
-        for payment in payments:
-            status_emoji = "✅" if payment["status"] == "completed" else "⏳"
-            response += f"{status_emoji} **${payment['amount']:.2f}** - {payment['description']}\n"
-            response += f"   Date: {payment['date']} | Status: {payment['status']}\n\n"
-        
-        return response
-    
-    def _format_search(self, data: Dict, intent: Dict) -> str:
-        """Format search results"""
-        results = data.get("results", [])
-        query = data.get("query", "")
-        
-        if not results:
-            return f"🔍 No results found for '{query}'"
-        
-        response = f"🔍 **Search results for '{query}':**\n\n"
-        
-        for i, result in enumerate(results, 1):
-            response += f"**{i}. {result['title']}**\n"
-            response += f"   {result['snippet']}\n"
-            response += f"   🔗 {result['url']}\n\n"
-        
-        return response
-    
-    async def _enhance_with_llm(
-        self, 
-        original_query: str, 
-        formatted_data: str,
-        action: str
-    ) -> str:
-        """Use Claude to make response more natural and conversational"""
-        
-        prompt = f"""You are Mathia, a helpful personal assistant.
+        elif action == "check_payments":
+            return f"Current balance: {data.get('currency')} {data.get('balance')}"
+            
+        elif action == "schedule_meeting":
+            slots = data.get("slots", [])
+            return f"Found {len(slots)} available slots. First available: {slots[0]['start'] if slots else 'None'}"
+            
+        elif action == "search_info":
+            return data.get("summary", "Here is what I found.")
+            
+        return str(data)
 
-User asked: "{original_query}"
-
-You performed action: {action}
-
-Here's the structured data you found:
-{formatted_data}
-
-Task: Rewrite this into a natural, conversational response. Keep it:
-- Friendly and concise
-- Action-oriented (suggest next steps)
-- Under 300 words
-
-Response:"""
-
+    async def _enhance_with_llm(self, intent: Dict, result: Dict, basic_response: str) -> str:
+        """Use LLM to make the response conversational"""
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(
-                    self.api_url,
-                    headers={"Content-Type": "application/json"},
-                    json={
-                        "model": "claude-sonnet-4-20250514",
-                        "max_tokens": 500,
-                        "messages": [
-                            {"role": "user", "content": prompt}
-                        ]
-                    }
-                )
-                
-                data = response.json()
-                
-                # Extract text
-                text = ""
-                for block in data.get("content", []):
-                    if block.get("type") == "text":
-                        text += block.get("text", "")
-                
-                return text.strip()
-                
+            system_prompt = """You are Mathia, a helpful personal assistant.
+Convert the provided structured data into a natural, friendly response.
+Keep it concise but informative.
+Do not make up facts not present in the data.
+If the data indicates an error, explain it clearly."""
+
+            user_prompt = f"""
+User Intent: {json.dumps(intent)}
+System Data: {json.dumps(result)}
+Basic Summary: {basic_response}
+
+Please generate a natural response for the user.
+"""
+            response = await self.llm.generate_text(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                temperature=0.7
+            )
+            
+            return response
+            
         except Exception as e:
             logger.error(f"LLM enhancement failed: {e}")
-            # Fallback to formatted data
-            return formatted_data
+            return basic_response
 
-
-# ============================================
-# SINGLETON AND CONVENIENCE FUNCTIONS
-# ============================================
 
 _synthesizer = None
 

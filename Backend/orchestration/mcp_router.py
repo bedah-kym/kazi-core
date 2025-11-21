@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from django.core.cache import cache
 from django_redis import get_redis_connection
 from asgiref.sync import sync_to_async
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -260,33 +261,55 @@ class StripeConnector(BaseConnector):
 
 
 class SearchConnector(BaseConnector):
-    """Mock web search connector - returns fake search results"""
+    """
+    Web search connector using LLM capabilities
+    Falls back gracefully if Claude (Anthropic) is not available
+    """
+    
+    def __init__(self):
+        from .llm_client import get_llm_client
+        self.llm = get_llm_client()
     
     async def execute(self, parameters: Dict, context: Dict) -> Dict:
-        """Search the web for information"""
-        query = parameters.get("query", "")
-        logger.info(f"SearchConnector called with query: {query}")
-        
-        return {
-            "results": [
-                {
-                    "title": f"Everything you need to know about {query}",
-                    "snippet": f"Comprehensive guide covering {query} in detail...",
-                    "url": "https://example.com/article1"
-                },
-                {
-                    "title": f"{query} - Wikipedia",
-                    "snippet": f"Wikipedia article about {query}...",
-                    "url": "https://en.wikipedia.org/wiki/mock"
-                }
-            ],
-            "query": query
-        }
+        """
+        Perform web search
+        """
+        query = parameters.get("query")
+        if not query:
+            return {"error": "No search query provided"}
+            
+        # Check if we have Claude capabilities (Anthropic key)
+        if not self.llm.anthropic_key:
+            logger.warning("Search requested but Anthropic key missing. HF fallback cannot search web.")
+            return {
+                "results": [],
+                "summary": "I apologize, but I cannot browse the live web right now because my advanced search module (Claude) is not active. I can only answer based on my internal knowledge.",
+                "source": "system_fallback"
+            }
+            
+        # If we have Claude, use it for search
+        try:
+            system_prompt = "You are a helpful research assistant. Search the web for the user's query and provide a summary."
+            response = await self.llm.generate_text(
+                system_prompt=system_prompt,
+                user_prompt=f"Search for: {query}",
+                temperature=0.7
+            )
+            
+            return {
+                "results": [{"title": "Search Result", "snippet": response[:200] + "..."}],
+                "summary": response,
+                "source": "claude_search"
+            }
+            
+        except Exception as e:
+            logger.error(f"Search failed: {e}")
+            return {
+                "results": [],
+                "summary": "Search failed due to an internal error.",
+                "error": str(e)
+            }
 
-
-# ============================================
-# SINGLETON AND CONVENIENCE FUNCTIONS
-# ============================================
 
 _router = None
 
@@ -301,19 +324,6 @@ def get_mcp_router() -> MCPRouter:
 async def route_intent(intent: Dict, user_context: Dict) -> Dict:
     """
     Convenience function to route an intent
-    
-    Usage in consumers:
-        from orchestration.mcp_router import route_intent
-        
-        result = await route_intent(intent, {
-            "user_id": user.id,
-            "room_id": room_id,
-            "username": username
-        })
-        
-        if result["status"] == "success":
-            # Process result data
-            jobs = result["data"]["jobs"]
     """
     router = get_mcp_router()
     return await router.route(intent, user_context)

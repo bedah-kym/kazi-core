@@ -196,7 +196,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
             nonce = os.urandom(12)
             message_bytes = json.dumps(message_data).encode('utf-8')
             
-            encrypted_data = self.aes_gcm.encrypt(
+            # Offload CPU-intensive encryption to thread
+            encrypted_data = await sync_to_async(self.aes_gcm.encrypt)(
                 nonce,
                 message_bytes,
                 None
@@ -246,7 +247,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     logger.error(f"Invalid nonce length: {len(nonce_bytes)}")
                     return None
 
-                decrypted_data = self.aes_gcm.decrypt(
+                # Offload CPU-intensive decryption to thread
+                decrypted_data = await sync_to_async(self.aes_gcm.decrypt)(
                     nonce_bytes,
                     encrypted_bytes,
                     None
@@ -337,15 +339,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 
         except Exception as e:
             logger.error(f"Disconnect error for {self.channel_name}: {e}")
-            self.room_group_name, {
-                "type": "presence_update",
-                "user": self.scope["user"].username,
-                "status": "offline",
-                "last_seen": now_iso,
-            }
-            
-        except Exception as e:
-            logger.error(f"Error updating last_seen on disconnect: {e}")
 
     async def receive(self, text_data):
         try:
@@ -546,64 +539,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 })
                 return
 
-            # === ORCHESTRATION: Parse intent for @mathia commands ===
-            if message_content.startswith('@mathia'):
-                logger.info(f"Step 7: @mathia detected! Parsing intent...")
-                
-                from orchestration.mcp_router import route_intent  # ADD THIS IMPORT
-                
-                # Extract query
-                ai_query = message_content.replace('@mathia', '').strip()
-                
-                if ai_query:
-                    # Parse intent
-                    intent = await parse_intent(ai_query, {
-                        "user_id": member_user.id,
-                        "username": member_username,
-                        "room_id": room_id
-                    })
-                    
-                    logger.info(f"Parsed intent: {intent}")
-                    
-                    # Route to MCP if confidence is high
-                    if intent["confidence"] > 0.7 and intent["action"] != "general_chat":
-                        # Route through MCP
-                        result = await route_intent(intent, {
-                            "user_id": member_user.id,
-                            "room_id": room_id,
-                            "username": member_username
-                        })
-                        
-                        if result["status"] == "success":
-                            # Format response based on action
-                            if intent["action"] == "find_jobs":
-                                jobs = result["data"]["jobs"]
-                                response = f"🎯 Found {len(jobs)} jobs:\n\n"
-                                for job in jobs[:3]:  # Show top 3
-                                    response += f"• **{job['title']}**\n"
-                                    response += f"  Budget: {job['budget']}\n"
-                                    response += f"  Posted: {job['posted']}\n\n"
-                                response += f"[See all {result['data']['total']} results]"
-                            else:
-                                response = f"✅ {intent['action']} completed!\n{json.dumps(result['data'], indent=2)}"
-                        else:
-                            response = f"❌ Error: {result['message']}"
-                        
-                        await self.send_message({
-                            'member': 'mathia',
-                            'content': response,
-                            'timestamp': str(timezone.now())
-                        })
-                    else:
-                        # Low confidence or general chat - use existing AI
-                        generate_ai_response.delay(room_id, member_user.id, ai_query)
-                        await self.send_message({
-                            'member': 'mathia',
-                            'content': "Thinking... 🤔",
-                            'timestamp': str(timezone.now())
-                        })
-                return
-
             logger.info(f"Step 8: Regular message, checking key rotation...")
             # Check for key rotation
             await self.check_key_rotation()
@@ -671,6 +606,61 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 }
                 await self.send_chat_message(content)
                 logger.info("=== NEW MESSAGE SUCCESS ===")
+
+                # === ORCHESTRATION: Full pipeline ===
+                if message_content.startswith('@mathia'):
+                    logger.info(f"Step 16: @mathia detected! Starting orchestration...")
+                    
+                    from orchestration.intent_parser import parse_intent
+                    from orchestration.mcp_router import route_intent
+                    from orchestration.data_synthesizer import synthesize_response
+                    
+                    ai_query = message_content.replace('@mathia', '').strip()
+                    
+                    if ai_query:
+                        # Step 1: Parse intent
+                        intent = await parse_intent(ai_query, {
+                            "user_id": member_user.id,
+                            "username": member_username,
+                            "room_id": room_id
+                        })
+                        
+                        logger.info(f"Intent: {intent}")
+                        
+                        # Step 2: Route if high confidence & not general chat
+                        if intent["confidence"] > 0.7 and intent["action"] != "general_chat":
+                            # Route through MCP
+                            result = await route_intent(intent, {
+                                "user_id": member_user.id,
+                                "room_id": room_id,
+                                "username": member_username
+                            })
+                            
+                            logger.info(f"MCP result: {result['status']}")
+                            
+                            if result["status"] == "success":
+                                # Step 3: Synthesize natural language response
+                                response = await synthesize_response(
+                                    intent, 
+                                    result, 
+                                    use_llm=False  # Set True for LLM-enhanced responses
+                                )
+                            else:
+                                response = f"❌ {result['message']}"
+                            
+                            await self.send_message({
+                                'member': 'mathia',
+                                'content': response,
+                                'timestamp': str(timezone.now())
+                            })
+                        else:
+                            # Fallback to general AI
+                            generate_ai_response.delay(room_id, member_user.id, ai_query)
+                            await self.send_message({
+                                'member': 'mathia',
+                                'content': "Thinking... 🤔",
+                                'timestamp': str(timezone.now())
+                            })
             else:
                 await self.send_chat_message({
                     'member': 'security system',
@@ -735,6 +725,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             # Check file size (limit to 5MB)
             file_size = len(file_data) * 3/4  # Approximate size for base64
             if file_size > 5 * 1024 * 1024:  # 5MB
+            
                 await self.send_chat_message({
                     'member': 'security system',
                     'content': "File too large. Maximum size is 5MB.",

@@ -5,15 +5,13 @@ Converts natural language commands into structured JSON intents
 import json
 import logging
 from typing import Dict, Optional
-import httpx
-from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
 
 class IntentParser:
     """
-    Parses user messages and extracts structured intent using Claude API
+    Parses user messages and extracts structured intent using LLMClient
     """
     
     # Define supported actions
@@ -58,29 +56,27 @@ Rules:
 """
 
     def __init__(self):
-        self.api_url = "https://api.anthropic.com/v1/messages"
-        # API key handled automatically by Claude.ai environment
+        from .llm_client import get_llm_client
+        self.llm = get_llm_client()
         
     async def parse(self, message: str, user_context: Optional[Dict] = None) -> Dict:
         """
         Parse a natural language message into structured intent
-        
-        Args:
-            message: User's natural language input
-            user_context: Optional dict with user preferences/history
-            
-        Returns:
-            Dict with action, confidence, parameters, raw_query
         """
         try:
             # Build context-aware prompt
             user_prompt = self._build_user_prompt(message, user_context)
             
-            # Call Claude API
-            response = await self._call_llm(user_prompt)
+            # Call LLM
+            response_text = await self.llm.generate_text(
+                system_prompt=self.SYSTEM_PROMPT,
+                user_prompt=user_prompt,
+                temperature=0.1, # Low temp for deterministic JSON
+                json_mode=True
+            )
             
             # Parse response
-            intent = self._extract_intent(response)
+            intent = self.llm.extract_json(response_text)
             
             # Validate and return
             return self._validate_intent(intent, message)
@@ -105,54 +101,17 @@ Rules:
             
         return prompt
     
-    async def _call_llm(self, user_prompt: str) -> str:
-        """Call Claude API to parse intent"""
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                self.api_url,
-                headers={"Content-Type": "application/json"},
-                json={
-                    "model": "claude-sonnet-4-20250514",
-                    "max_tokens": 1000,
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": f"{self.SYSTEM_PROMPT}\n\n{user_prompt}"
-                        }
-                    ]
-                }
-            )
-            
-            data = response.json()
-            
-            # Extract text from response
-            text_content = ""
-            for block in data.get("content", []):
-                if block.get("type") == "text":
-                    text_content += block.get("text", "")
-                    
-            return text_content
-    
-    def _extract_intent(self, response: str) -> Dict:
-        """Extract JSON intent from LLM response"""
-        # Clean up response (remove markdown code blocks if present)
-        clean = response.strip()
-        if clean.startswith("```json"):
-            clean = clean[7:]
-        if clean.startswith("```"):
-            clean = clean[3:]
-        if clean.endswith("```"):
-            clean = clean[:-3]
-        clean = clean.strip()
-        
-        # Parse JSON
-        return json.loads(clean)
-    
     def _validate_intent(self, intent: Dict, original_message: str) -> Dict:
         """Validate and normalize the parsed intent"""
         # Ensure required fields
-        if "action" not in intent:
-            intent["action"] = "general_chat"
+        if not intent or "action" not in intent:
+            logger.warning(f"Invalid intent structure: {intent}")
+            return {
+                "action": "general_chat",
+                "confidence": 0.0,
+                "parameters": {},
+                "raw_query": original_message
+            }
         
         if "confidence" not in intent:
             intent["confidence"] = 0.5
@@ -164,7 +123,10 @@ Rules:
             intent["raw_query"] = original_message
         
         # Clamp confidence
-        intent["confidence"] = max(0.0, min(1.0, float(intent["confidence"])))
+        try:
+            intent["confidence"] = max(0.0, min(1.0, float(intent["confidence"])))
+        except (ValueError, TypeError):
+            intent["confidence"] = 0.5
         
         # Validate action is supported
         if intent["action"] not in self.SUPPORTED_ACTIONS:
@@ -190,18 +152,6 @@ def get_intent_parser() -> IntentParser:
 async def parse_intent(message: str, user_context: Optional[Dict] = None) -> Dict:
     """
     Parse a message into structured intent
-    
-    Usage in your consumer:
-        from orchestration.intent_parser import parse_intent
-        
-        intent = await parse_intent(message_content, {
-            "user_id": user.id,
-            "recent_actions": ["find_jobs", "schedule_meeting"]
-        })
-        
-        if intent["action"] == "find_jobs":
-            # Route to job finder
-            pass
     """
     parser = get_intent_parser()
     return await parser.parse(message, user_context)

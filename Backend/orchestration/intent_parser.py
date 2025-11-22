@@ -28,20 +28,22 @@ class IntentParser:
 Your job: Parse user messages into structured JSON.
 
 Supported actions:
-- find_jobs: User wants to search for freelance work
-- schedule_meeting: User wants to book time on calendar
-- check_payments: User asks about payments/invoices
-- search_info: User wants to look up information
-- general_chat: Casual conversation
+- find_jobs: User wants to search for freelance work on platforms like Upwork
+- schedule_meeting: User wants to CHECK CALENDAR AVAILABILITY or SCHEDULE A MEETING
+  Examples: "is my calendar free?", "what meetings do I have?", "check my availability", 
+           "what's on my schedule?", "am I busy today?", "schedule with @username", 
+           "book a meeting", "get my calendly link"
+- check_payments: User asks about payments, invoices, or financial transactions
+- search_info: User wants to look up information on the web
+- general_chat: Casual conversation, greetings, or unclear requests
 
 Return ONLY valid JSON in this format:
 {
-  "action": "find_jobs",
+  "action": "schedule_meeting",
   "confidence": 0.95,
   "parameters": {
-    "query": "Python",
-    "budget_min": 200,
-    "budget_max": 1000
+    "action": "check_availability",
+    "target_user": "@username"
   },
   "raw_query": "original user message"
 }
@@ -50,8 +52,14 @@ Rules:
 - Always include "action", "confidence" (0-1), "parameters", "raw_query"
 - Extract relevant parameters from the message
 - If unclear, use "general_chat" with low confidence
-- For find_jobs: extract skills, budget range, urgency
-- For schedule_meeting: extract preferred times, duration
+- For find_jobs: extract "query" (skills), "budget_min", "budget_max", "urgency"
+- For schedule_meeting: 
+  * ALWAYS include "action" parameter: "check_availability" OR "schedule_meeting"
+  * Use "check_availability" when user asks about their calendar, events, or availability
+  * Use "schedule_meeting" when user wants to book time or get a booking link
+  * Extract "target_user" if scheduling with someone (e.g., "@john" from "schedule with @john")
+- For check_payments: extract "type" (balance, recent, specific invoice)
+- For search_info: extract "query" (search terms)
 - Be concise. No explanations outside JSON.
 """
 

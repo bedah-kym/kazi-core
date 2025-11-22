@@ -1,40 +1,56 @@
 ### SYS DESIGN FOR MATHIA PROJECT
 This project is designed to create an interactive chatbot interface for users to communicate with each other and with an AI-powered assistant. The system is built using Django for the backend and HTML/CSS/JavaScript for the frontend. The chatbot supports real-time messaging, emoji integration, and a responsive design for various devices.
+
 The main components of the system include:
 1. **Frontend (HTML/CSS/JavaScript)**:
    - User interface for chat interactions.
    - Real-time message display and input handling.
    - Emoji picker integration.
+   - **Calendly Integration Panel**: UI for connecting Calendly accounts and viewing status.
 2. **Backend (Django)**:
    - Handles user authentication and session management.
    - Manages WebSocket connections for real-time communication.
+   - **MCP Router (Orchestration)**: Routes user intents to appropriate connectors (Calendly, Upwork, Stripe, Search).
+   - **Calendly Connector**: Real-time integration with Calendly API for checking availability and scheduling.
    - Processes incoming messages and generates responses using AI models.
 3. **WebSocket Communication**:
    - Enables real-time messaging between users and the chatbot.
 4. **Database**:
-   - Stores user data, chat history, and message logs.
+   - Stores user data, chat history, message logs, and **Calendly Profiles** (encrypted tokens).
 5. **AI Integration**:
    - Utilizes AI models to generate responses based on user input.
+
 ### SETUP INSTRUCTIONS
 1. Clone the repository to your local machine.
 2. Navigate to the project directory and create a virtual environment.
 3. Install the required dependencies using `pip install -r requirements.txt`.
 4. Set up the database by running migrations with `python manage.py migrate`.
-5. Start the Django development server using `python manage.py runserver`.
-6. Open your web browser and navigate to `http://localhost:8000` to access the chatbot interface.
+5. Configure environment variables in `.env`:
+   ```
+   CALENDLY_CLIENT_ID=your_client_id
+   CALENDLY_CLIENT_SECRET=your_client_secret
+   ```
+6. Start the Django development server using `python manage.py runserver`.
+7. Open your web browser and navigate to `http://localhost:8000` to access the chatbot interface.
+
 ### USAGE
 1. Register or log in to your account.
 2. Start a new chat session or join an existing one.
 3. Type your messages in the input box and hit enter to send.
 4. Use the emoji picker to add emojis to your messages.
-5. Interact with the AI-powered chatbot for assistance or information.
+5. **Calendly Features**:
+   - Connect your account via the UI or `/calendly connect`.
+   - Ask "What's on my calendar?" to see upcoming meetings.
+   - Ask "Schedule a meeting" to get your booking link.
+   - Type `/schedule @username` to get a team member's booking link.
+
 ### CONTRIBUTING
 1. Fork the repository and create a new branch for your feature or bug fix.
 2. Make your changes and ensure that the code follows the project's coding standards.
 3. Test your changes thoroughly.
 4. Submit a pull request with a detailed description of your changes.
 
-### Mermaid Diagram for userto user communication
+### Mermaid Diagram for user to user communication
 ```mermaid  
 sequenceDiagram
     participant User1
@@ -46,17 +62,40 @@ sequenceDiagram
     User2->>WebSocketServer: Send reply
     WebSocketServer->>User1: Forward reply  
 ```
+
 ### Mermaid Diagram for user to AI communication
 ```mermaid
 sequenceDiagram
     participant User
     participant WebSocketServer
+    participant MCPRouter
     participant AI
 
     User->>WebSocketServer: Send message
-    WebSocketServer->>AI: Forward message
-    AI->>WebSocketServer: Generate response
+    WebSocketServer->>MCPRouter: Route intent
+    MCPRouter->>AI: Generate response
+    AI->>MCPRouter: Response text
+    MCPRouter->>WebSocketServer: Forward response
     WebSocketServer->>User: Forward response    
+```
+
+### Mermaid Diagram for Calendly Integration
+```mermaid
+sequenceDiagram
+    participant User
+    participant Chatbot
+    participant MCPRouter
+    participant CalendarConnector
+    participant CalendlyAPI
+
+    User->>Chatbot: "Check my calendar"
+    Chatbot->>MCPRouter: route(intent="check_availability")
+    MCPRouter->>CalendarConnector: execute()
+    CalendarConnector->>CalendlyAPI: GET /scheduled_events
+    CalendlyAPI-->>CalendarConnector: Events JSON
+    CalendarConnector-->>MCPRouter: Formatted events
+    MCPRouter-->>Chatbot: Response
+    Chatbot-->>User: Display meetings
 ```
 
 ### mermmaid for the overall system architecture as is in the codebase 
@@ -68,7 +107,12 @@ graph TD;
     B -->|Communicates via| D[WebSocket];
     B -->|Stores Data in| E[Database];
     A -->|Interacts with| F[Frontend HTML/CSS/JS];
+    B -->|Orchestrates via| G[MCP Router];
+    G -->|Connects to| H[Calendly API];
+    G -->|Connects to| I[Upwork API (Mock)];
+    G -->|Connects to| J[Stripe API (Mock)];
 ```
+
 ### MATHIA — System Architecture & Developer Guide
 
    This README replaces the old, high-level doc and maps the current codebase to clear system diagrams and a short systems-design for adding an AI moderation/assistant feature.
@@ -77,18 +121,21 @@ graph TD;
    - Create accurate Mermaid diagrams for current codebase: Done
    - Add architecture/component diagrams reflecting Channels/Redis/ASGI/encryption: Done
    - Add one extra system design for integrating AI for moderation & assistant: Done
+   - **Integrate Calendly API**: Done (Real-time availability and scheduling)
 
    High-level summary
    - Backend: Django (ASGI) using Channels + Daphne for WebSocket support.
    - Realtime: Django Channels with Redis channel layer and Redis used for presence and caching.
    - Encryption: per-room AES-GCM encryption is implemented in `chatbot/consumers.py` (messages are stored encrypted).
    - APIs: DRF endpoints live under the `Api` app (`Api/views.py`) for creating replies and reading chatroom/message objects.
+   - **Orchestration**: `MCPRouter` in `orchestration/mcp_router.py` handles tool execution.
 
    Important files and where to look
    - `Backend/Backend/settings.py` — ASGI, Channels, Redis, DB and cache configuration.
    - `Backend/chatbot/consumers.py` — WebSocket consumer, presence, encryption/decryption, rate-limiting, file handling.
-   - `Backend/Api/views.py` — DRF views for Chatroom / Mathia replies.
-   - `Backend/chatbot/models.py` — chat models (Chatroom, Message, Member). (Open this for message storage shapes.)
+   - `Backend/Api/views.py` — DRF views for Chatroom / Mathia replies and **Calendly OAuth**.
+   - `Backend/orchestration/mcp_router.py` — **MCP Router and Connectors**.
+   - `Backend/users/models.py` — **CalendlyProfile model**.
 
    Developer contract (small)
    - Inputs: WebSocket JSON commands from authenticated users (commands: `fetch_messages`, `new_message`, `file_message`, `typing`).
@@ -101,6 +148,7 @@ graph TD;
    - Key rotation / invalid key — decryption fails and messages cannot be read; consumers log the error.
    - Large files — `file_message` paths store files via Django storage; ensure MEDIA_ROOT has capacity and permissions.
    - Rate limiting — enforced per-minute using Django cache; tune `CHAT_RATE_LIMIT` in `Backend/Backend/settings.py`.
+   - **Calendly Token Expiry**: Access tokens expire; re-authentication is currently required on 401 errors.
 
    How the live system pieces fit together (component graph)
 
@@ -117,7 +165,8 @@ graph TD;
       DjangoHTTP -->|CRUD| SQLite
       DjangoHTTP -->|cache| Redis
       ChatConsumer -->|file uploads| MEDIA[uploads/ (MEDIA_ROOT)]
-      ChatConsumer -->|optional AI| AIService[External AI / internal ML service]
+      ChatConsumer -->|Orchestrates| MCP[MCP Router]
+      MCP -->|API| Calendly[Calendly API]
    ```
 
    Sequence: User → User (current code)

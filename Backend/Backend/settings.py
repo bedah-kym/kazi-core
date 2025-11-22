@@ -57,7 +57,7 @@ CALENDLY_CLIENT_SECRET = os.environ.get('CALENDLY_CLIENT_SECRET')
 # Application definition
 
 INSTALLED_APPS = [
-    # 'daphne',  # Commented out for verification script compatibility
+    'daphne',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',

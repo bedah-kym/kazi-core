@@ -1,403 +1,438 @@
 {% load static %}
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="dark">
 
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
   <meta http-equiv="x-ua-compatible" content="ie=edge" />
   <title>KwikChat — Sign in</title>
-  <!-- Bootstrap (utilities only for layout) -->
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-  <!-- Font Awesome for icons -->
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Font Awesome -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
-  <!-- Inter font -->
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
-    rel="stylesheet">
-  <!-- Optional legacy styles kept for compatibility -->
-  <link href="{% static 'css/chatbase.css' %}" rel="stylesheet">
+
+  <!-- Inter font (shadcn default) -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+  <script>
+    // Tailwind config for shadcn-like design system
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            border: 'hsl(var(--border))',
+            input: 'hsl(var(--input))',
+            ring: 'hsl(var(--ring))',
+            background: 'hsl(var(--background))',
+            foreground: 'hsl(var(--foreground))',
+            primary: {
+              DEFAULT: 'hsl(var(--primary))',
+              foreground: 'hsl(var(--primary-foreground))',
+            },
+            secondary: {
+              DEFAULT: 'hsl(var(--secondary))',
+              foreground: 'hsl(var(--secondary-foreground))',
+            },
+            muted: {
+              DEFAULT: 'hsl(var(--muted))',
+              foreground: 'hsl(var(--muted-foreground))',
+            },
+            accent: {
+              DEFAULT: 'hsl(var(--accent))',
+              foreground: 'hsl(var(--accent-foreground))',
+            },
+            destructive: {
+              DEFAULT: 'hsl(var(--destructive))',
+              foreground: 'hsl(var(--destructive-foreground))',
+            },
+            card: {
+              DEFAULT: 'hsl(var(--card))',
+              foreground: 'hsl(var(--card-foreground))',
+            },
+          },
+          borderRadius: {
+            lg: 'var(--radius)',
+            md: 'calc(var(--radius) - 2px)',
+            sm: 'calc(var(--radius) - 4px)',
+          },
+          fontFamily: {
+            sans: ['Inter', 'system-ui', 'sans-serif'],
+          },
+        },
+      },
+    }
+  </script>
 
   <style>
+    /* Shadcn UI Color System */
     :root {
-      --bg-1: #0f1724;
-      --accent-1: #00e0a8;
-      /* mint */
-      --accent-2: #7b61ff;
-      /* purple */
-      --glass: rgba(255, 255, 255, 0.06);
-      --card-bg: linear-gradient(135deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02));
+      --background: 0 0% 100%;
+      --foreground: 222.2 84% 4.9%;
+      --card: 0 0% 100%;
+      --card-foreground: 222.2 84% 4.9%;
+      --primary: 222.2 47.4% 11.2%;
+      --primary-foreground: 210 40% 98%;
+      --secondary: 210 40% 96.1%;
+      --secondary-foreground: 222.2 47.4% 11.2%;
+      --muted: 210 40% 96.1%;
+      --muted-foreground: 215.4 16.3% 46.9%;
+      --accent: 210 40% 96.1%;
+      --accent-foreground: 222.2 47.4% 11.2%;
+      --destructive: 0 84.2% 60.2%;
+      --destructive-foreground: 210 40% 98%;
+      --border: 214.3 31.8% 91.4%;
+      --input: 214.3 31.8% 91.4%;
+      --ring: 222.2 84% 4.9%;
+      --radius: 0.5rem;
     }
 
-    html,
+    .dark {
+      --background: 222.2 84% 4.9%;
+      --foreground: 210 40% 98%;
+      --card: 222.2 84% 4.9%;
+      --card-foreground: 210 40% 98%;
+      --primary: 210 40% 98%;
+      --primary-foreground: 222.2 47.4% 11.2%;
+      --secondary: 217.2 32.6% 17.5%;
+      --secondary-foreground: 210 40% 98%;
+      --muted: 217.2 32.6% 17.5%;
+      --muted-foreground: 215 20.2% 65.1%;
+      --accent: 217.2 32.6% 17.5%;
+      --accent-foreground: 210 40% 98%;
+      --destructive: 0 62.8% 30.6%;
+      --destructive-foreground: 210 40% 98%;
+      --border: 217.2 32.6% 17.5%;
+      --input: 217.2 32.6% 17.5%;
+      --ring: 212.7 26.8% 83.9%;
+    }
+
+    * {
+      border-color: hsl(var(--border));
+    }
+
     body {
-      height: 100%;
+      font-family: 'Inter', system-ui, sans-serif;
     }
 
-    body {
-      margin: 0;
-      font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial;
-      background: radial-gradient(1200px 600px at 10% 10%, #05223a 0%, transparent 15%),
-        radial-gradient(800px 500px at 90% 90%, #1f0444 0%, transparent 12%),
-        var(--bg-1);
-      color: #e6eef8;
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      overflow: hidden;
-    }
-
-    /* floating gradient blobs */
-    .blob {
-      position: absolute;
-      filter: blur(60px) saturate(120%);
-      opacity: 0.75;
-      transform: translate3d(0, 0, 0);
-      mix-blend-mode: screen;
-      animation: floaty 12s ease-in-out infinite;
-      will-change: transform, opacity;
-    }
-
-    .blob.b1 {
-      width: 520px;
-      height: 520px;
-      background: linear-gradient(135deg, var(--accent-1), #00b4ff);
-      left: -10%;
-      top: -15%;
-      animation-duration: 18s
-    }
-
-    .blob.b2 {
-      width: 420px;
-      height: 420px;
-      background: linear-gradient(135deg, var(--accent-2), #ff66b3);
-      right: -8%;
-      bottom: -20%;
-      animation-duration: 16s
-    }
-
-    .blob.b3 {
-      width: 300px;
-      height: 300px;
-      background: linear-gradient(135deg, #00ffd5, #7be4ff);
-      left: 50%;
-      top: 70%;
-      opacity: 0.55;
-      animation-duration: 20s
-    }
-
-    @keyframes floaty {
-      0% {
-        transform: translateY(0) translateX(0) scale(1)
-      }
-
-      50% {
-        transform: translateY(-24px) translateX(12px) scale(1.03)
-      }
-
-      100% {
-        transform: translateY(0) translateX(0) scale(1)
-      }
-    }
-
-    .card-wrap {
-      width: 420px;
-      max-width: 92vw;
-      position: relative;
-      z-index: 5;
-      border-radius: 20px;
-      padding: 2.25rem;
-      background: var(--card-bg);
-      box-shadow: 0 10px 40px rgba(2, 6, 23, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.02);
-      backdrop-filter: blur(10px) saturate(120%);
-      border: 1px solid rgba(255, 255, 255, 0.04);
-      transform-origin: center center;
-    }
-
-    .brand {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      margin-bottom: 1.25rem;
-    }
-
-    .logo {
-      width: 56px;
-      height: 56px;
-      border-radius: 12px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: linear-gradient(135deg, var(--accent-1), var(--accent-2));
-      box-shadow: 0 6px 22px rgba(123, 97, 255, 0.28), 0 2px 6px rgba(0, 0, 0, 0.4);
-      color: #001118;
-      font-weight: 800;
-      font-size: 20px;
-      transform: translateZ(0);
-    }
-
-    .brand h1 {
-      font-size: 1.15rem;
-      margin: 0;
-      font-weight: 800;
-      letter-spacing: 0.4px;
-      color: #e8f6f2
-    }
-
-    .brand p {
-      margin: 0;
-      font-size: 0.85rem;
-      color: rgba(230, 238, 248, 0.75)
-    }
-
-    .fancy-note {
-      font-size: 0.85rem;
-      color: rgba(230, 238, 248, 0.6);
-      margin-bottom: 1rem
-    }
-
-    /* Floating label inputs */
-    .form-group {
-      position: relative;
-      margin-bottom: 1rem
-    }
-
-    .form-input {
-      width: 100%;
-      padding: 14px 14px;
-      border-radius: 12px;
-      background: transparent;
-      border: 1px solid rgba(255, 255, 255, 0.06);
-      color: inherit;
-      font-size: 0.95rem;
-      outline: none;
-      transition: box-shadow .18s ease, border-color .18s ease, transform .18s ease;
-    }
-
-    .form-input:focus {
-      box-shadow: 0 6px 20px rgba(123, 97, 255, 0.08);
-      border-color: rgba(123, 97, 255, 0.6)
-    }
-
-    label.floating {
-      position: absolute;
-      left: 14px;
-      top: 12px;
-      pointer-events: none;
-      color: rgba(230, 238, 248, 0.6);
-      transition: transform .16s ease, font-size .16s ease, top .16s ease
-    }
-
-    .form-input:not(:placeholder-shown)+label.floating,
-    .form-input:focus+label.floating {
-      transform: translateY(-14px);
-      font-size: 0.72rem;
-      top: 8px;
-      color: var(--accent-1)
-    }
-
-    .validation-icon {
-      position: absolute;
-      right: 14px;
-      top: 14px;
-      color: #ff6b6b;
-      opacity: 0;
-      transition: opacity .12s
-    }
-
-    .form-input.error {
-      border-color: #ff6b6b;
-      box-shadow: 0 6px 20px rgba(255, 107, 107, 0.06)
-    }
-
-    .form-input.error~.validation-icon {
-      opacity: 1
-    }
-
-    .btn-kwik {
-      display: inline-flex;
-      align-items: center;
-      gap: 10px;
-      justify-content: center;
-      padding: 12px 18px;
-      border-radius: 12px;
-      border: none;
-      cursor: pointer;
-      background: linear-gradient(90deg, var(--accent-1), var(--accent-2));
-      color: #001118;
-      font-weight: 700;
-      box-shadow: 0 8px 30px rgba(123, 97, 255, 0.18);
-      transition: transform .18s ease, box-shadow .18s ease, filter .12s ease;
-    }
-
-    .btn-kwik:active {
-      transform: translateY(1px) scale(.998)
-    }
-
-    .btn-kwik:hover {
-      filter: brightness(1.03);
-      transform: translateY(-3px) scale(1.01)
-    }
-
-    .btn-kwik .loader {
-      width: 18px;
-      height: 18px;
-      border-radius: 50%;
-      border: 2px solid rgba(255, 255, 255, 0.9);
-      border-top-color: transparent;
-      animation: spin .8s linear infinite;
-      display: none
-    }
-
-    .btn-kwik.loading .loader {
-      display: inline-block;
-      margin-right: 6px
-    }
-
-    .small-quiet {
-      font-size: 0.82rem;
-      color: rgba(230, 238, 248, 0.55);
-      margin-top: .75rem
-    }
-
-    @keyframes spin {
-      to {
-        transform: rotate(360deg)
-      }
-    }
-
-    /* Responsive tweaks */
-    @media (max-width:420px) {
-      .card-wrap {
-        padding: 1.5rem;
-        border-radius: 14px
-      }
+    /* Custom smooth transitions */
+    .theme-transition {
+      transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
     }
   </style>
 </head>
 
-<body>
-  <!-- animated blobs -->
-  <div class="blob b1" aria-hidden></div>
-  <div class="blob b2" aria-hidden></div>
-  <div class="blob b3" aria-hidden></div>
+<body class="bg-background text-foreground theme-transition min-h-screen">
 
-  <div class="card-wrap">
-    <form method="post" id="loginForm" novalidate>
-      {% csrf_token %}
-      <div class="brand">
-        <div class="logo" id="kwikLogo">
-          <i class="fa-solid fa-bolt"></i>
+  <!-- Theme Toggle Button (Fixed top-right) -->
+  <button id="themeToggle"
+    class="fixed top-4 right-4 z-50 p-2.5 rounded-md bg-card border border-border hover:bg-accent transition-colors"
+    aria-label="Toggle theme">
+    <i class="fas fa-moon dark:hidden text-foreground"></i>
+    <i class="fas fa-sun hidden dark:inline text-foreground"></i>
+  </button>
+
+  <div class="min-h-screen flex items-center justify-center p-4">
+    <div class="w-full max-w-5xl">
+      <div class="grid lg:grid-cols-2 gap-8 items-center">
+
+        <!-- Left Column - Branding & Info -->
+        <div class="hidden lg:flex flex-col justify-center space-y-6 pr-8">
+          <div class="space-y-4">
+            <div class="flex items-center space-x-3">
+              <div class="w-12 h-12 rounded-lg bg-primary flex items-center justify-center">
+                <i class="fas fa-bolt text-primary-foreground text-xl"></i>
+              </div>
+              <h1 class="text-3xl font-bold tracking-tight">KwikChat</h1>
+            </div>
+            <p class="text-xl text-muted-foreground leading-relaxed">
+              Fast, secure, and intelligent messaging for modern teams.
+            </p>
+          </div>
+
+          <div class="space-y-4 pt-6">
+            <div class="flex items-start space-x-3">
+              <div class="w-8 h-8 rounded-md bg-muted flex items-center justify-center flex-shrink-0 mt-0.5">
+                <i class="fas fa-shield-alt text-sm text-muted-foreground"></i>
+              </div>
+              <div>
+                <h3 class="font-semibold text-sm mb-1">Enterprise Security</h3>
+                <p class="text-sm text-muted-foreground">End-to-end encryption for all your conversations</p>
+              </div>
+            </div>
+
+            <div class="flex items-start space-x-3">
+              <div class="w-8 h-8 rounded-md bg-muted flex items-center justify-center flex-shrink-0 mt-0.5">
+                <i class="fas fa-robot text-sm text-muted-foreground"></i>
+              </div>
+              <div>
+                <h3 class="font-semibold text-sm mb-1">AI-Powered Assistant</h3>
+                <p class="text-sm text-muted-foreground">Smart replies and contextual suggestions</p>
+              </div>
+            </div>
+
+            <div class="flex items-start space-x-3">
+              <div class="w-8 h-8 rounded-md bg-muted flex items-center justify-center flex-shrink-0 mt-0.5">
+                <i class="fas fa-bolt text-sm text-muted-foreground"></i>
+              </div>
+              <div>
+                <h3 class="font-semibold text-sm mb-1">Lightning Fast</h3>
+                <p class="text-sm text-muted-foreground">Real-time messaging with zero lag</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="pt-6 border-t border-border">
+            <p class="text-sm text-muted-foreground">
+              "This platform has transformed how our team communicates. It's fast, intuitive, and just works."
+            </p>
+            <div class="flex items-center space-x-2 mt-3">
+              <div class="w-8 h-8 rounded-full bg-muted"></div>
+              <div class="text-sm">
+                <p class="font-medium">Sarah Johnson</p>
+                <p class="text-muted-foreground text-xs">Product Manager, TechCorp</p>
+              </div>
+            </div>
+          </div>
         </div>
-        <div>
-          <h1>KwikChat</h1>
-          <p class="fancy-note">Sign in to continue — fast, friendly messaging</p>
+
+        <!-- Right Column - Login Form -->
+        <div class="w-full">
+          <div class="bg-card border border-border rounded-lg p-8 shadow-sm theme-transition">
+            <div class="mb-8">
+              <h2 class="text-2xl font-semibold tracking-tight mb-2">Welcome back</h2>
+              <p class="text-sm text-muted-foreground">
+                Enter your credentials to sign in to your account
+              </p>
+            </div>
+
+            <!-- Error Messages -->
+            {% if form.errors %}
+            <div class="mb-6 p-4 rounded-md bg-destructive/10 border border-destructive/20" role="alert">
+              <div class="flex items-center space-x-2">
+                <i class="fas fa-exclamation-circle text-destructive text-sm"></i>
+                <p class="text-sm text-destructive font-medium">Invalid username or password. Please try again.</p>
+              </div>
+            </div>
+            {% endif %}
+
+            {% if messages %}
+            {% for message in messages %}
+            <div class="mb-6 p-4 rounded-md bg-primary/10 border border-primary/20" role="status">
+              <div class="flex items-center space-x-2">
+                <i class="fas fa-info-circle text-primary text-sm"></i>
+                <p class="text-sm text-primary font-medium">{{ message }}</p>
+              </div>
+            </div>
+            {% endfor %}
+            {% endif %}
+
+            <form method="post" id="loginForm" novalidate class="space-y-6">
+              {% csrf_token %}
+
+              <!-- Username -->
+              <div class="space-y-2">
+                <label for="username" class="text-sm font-medium block">
+                  Username
+                </label>
+                <div class="relative">
+                  <input type="text" name="username" id="username"
+                    class="w-full px-3 py-2 bg-background border border-input rounded-md text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background transition-all theme-transition"
+                    placeholder="Enter your username" required minlength="3" autocomplete="username">
+                </div>
+              </div>
+
+              <!-- Password -->
+              <div class="space-y-2">
+                <div class="flex items-center justify-between">
+                  <label for="password" class="text-sm font-medium block">
+                    Password
+                  </label>
+                  <a href="#" class="text-sm text-primary hover:underline">
+                    Forgot password?
+                  </a>
+                </div>
+                <div class="relative">
+                  <input type="password" name="password" id="password"
+                    class="w-full px-3 py-2 bg-background border border-input rounded-md text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background transition-all theme-transition pr-10"
+                    placeholder="Enter your password" required minlength="8" autocomplete="current-password">
+                  <button type="button" id="togglePassword"
+                    class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                    aria-label="Toggle password visibility">
+                    <i class="fas fa-eye text-sm"></i>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Remember Me -->
+              <div class="flex items-center space-x-2">
+                <input type="checkbox" name="remember" id="remember"
+                  class="w-4 h-4 rounded border-input text-primary focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background cursor-pointer">
+                <label for="remember" class="text-sm text-muted-foreground cursor-pointer select-none">
+                  Remember me for 30 days
+                </label>
+              </div>
+
+              <!-- Submit Button -->
+              <button type="submit" id="submitBtn"
+                class="w-full py-2.5 px-4 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2">
+                <span id="btnSpinner" class="hidden">
+                  <svg class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z">
+                    </path>
+                  </svg>
+                </span>
+                <span id="btnText">
+                  <i class="fas fa-sign-in-alt mr-2"></i>Sign in
+                </span>
+              </button>
+
+              <!-- Divider -->
+              <div class="relative my-6">
+                <div class="absolute inset-0 flex items-center">
+                  <div class="w-full border-t border-border"></div>
+                </div>
+                <div class="relative flex justify-center text-xs uppercase">
+                  <span class="bg-card px-2 text-muted-foreground">Or continue with</span>
+                </div>
+              </div>
+
+              <!-- Social Login -->
+              <div class="grid grid-cols-2 gap-4">
+                <button type="button" onclick="alert('Google SSO coming soon!')"
+                  class="py-2.5 px-4 border border-input bg-background hover:bg-accent hover:text-accent-foreground rounded-md text-sm font-medium transition-colors flex items-center justify-center space-x-2">
+                  <i class="fab fa-google"></i>
+                  <span>Google</span>
+                </button>
+                <button type="button" onclick="alert('GitHub SSO coming soon!')"
+                  class="py-2.5 px-4 border border-input bg-background hover:bg-accent hover:text-accent-foreground rounded-md text-sm font-medium transition-colors flex items-center justify-center space-x-2">
+                  <i class="fab fa-github"></i>
+                  <span>GitHub</span>
+                </button>
+              </div>
+            </form>
+
+            <!-- Footer -->
+            <div class="mt-8 pt-6 border-t border-border text-center">
+              <p class="text-sm text-muted-foreground">
+                Don't have an account?
+                <a href="#" class="text-primary hover:underline font-medium">Sign up</a>
+              </p>
+            </div>
+          </div>
+
+          <!-- Mobile branding (shown only on small screens) -->
+          <div class="lg:hidden mt-8 text-center">
+            <p class="text-xs text-muted-foreground">
+              © 2025 KwikChat. All rights reserved.
+            </p>
+          </div>
         </div>
-      </div>
 
-      {% if form.errors %}
-      <div class="error-message" role="alert"
-        style="background:rgba(255,90,90,0.06);padding:10px;border-radius:10px;margin-bottom:1rem;color:#ffdfe0;border:1px solid rgba(255,90,90,0.06)">
-        <i class="fas fa-exclamation-circle me-2"></i>
-        <span>Invalid username or password. Please try again.</span>
       </div>
-      {% endif %}
-
-      {% if messages %}
-      {% for message in messages %}
-      <div class="error-message {% if message.tags %}{{ message.tags }}{% endif %}" role="status"
-        style="background:rgba(255,255,255,0.02);padding:10px;border-radius:10px;margin-bottom:1rem;color:rgba(230,238,248,0.9);border:1px solid rgba(255,255,255,0.02)">
-        <i class="fas fa-info-circle me-2"></i>
-        <span>{{ message }}</span>
-      </div>
-      {% endfor %}
-      {% endif %}
-
-      <div class="form-group">
-        <input type="text" name="username" id="username" class="form-input" placeholder=" " required minlength="3"
-          autocomplete="username">
-        <label for="username" class="floating">Username</label>
-        <i class="fas fa-exclamation-circle validation-icon" aria-hidden></i>
-      </div>
-
-      <div class="form-group">
-        <input type="password" name="password" id="password" class="form-input" placeholder=" " required minlength="8"
-          autocomplete="current-password">
-        <label for="password" class="floating">Password</label>
-        <i class="fas fa-exclamation-circle validation-icon" aria-hidden></i>
-      </div>
-
-      <div class="d-grid gap-2">
-        <button type="submit" id="submitBtn" class="btn-kwik" aria-live="polite">
-          <div class="loader" aria-hidden></div>
-          <span><i class="fas fa-sign-in-alt"></i> Sign in</span>
-        </button>
-      </div>
-
-      <div class="small-quiet">New here? <a href="#" style="color:var(--accent-1);text-decoration:none">Create an
-          account</a></div>
-    </form>
+    </div>
   </div>
 
-  <!-- Libraries: GSAP for smooth entrance animation (CDN) + Bootstrap JS for potential components -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-
   <script>
-    // Preserve original form behavior (server-side auth) while enhancing client UX
-    (function () {
-      const form = document.getElementById('loginForm');
-      const submitBtn = document.getElementById('submitBtn');
-      const inputs = form.querySelectorAll('.form-input[required]');
+    // ========================================
+    // Theme Toggle with localStorage persistence
+    // ========================================
+    const themeToggle = document.getElementById('themeToggle');
+    const html = document.documentElement;
 
-      // GSAP entrance for the card and logo
-      gsap.from('.card-wrap', { duration: 0.9, y: 16, opacity: 0, scale: 0.99, ease: 'power3.out' });
-      gsap.from('#kwikLogo', { duration: 1.2, rotation: -8, scale: 0.88, ease: 'elastic.out(1,0.6)', delay: 0.12 });
+    // Load theme from localStorage or default to dark
+    const currentTheme = localStorage.getItem('theme') || 'dark';
+    html.classList.toggle('dark', currentTheme === 'dark');
 
-      // Floating blobs subtle transform
-      gsap.to('.blob.b1', { duration: 16, x: 40, y: -40, ease: 'sine.inOut', yoyo: true, repeat: -1 });
-      gsap.to('.blob.b2', { duration: 14, x: -30, y: 28, ease: 'sine.inOut', yoyo: true, repeat: -1 });
-      gsap.to('.blob.b3', { duration: 18, x: 8, y: -18, ease: 'sine.inOut', yoyo: true, repeat: -1 });
+    themeToggle.addEventListener('click', () => {
+      const isDark = html.classList.contains('dark');
+      html.classList.toggle('dark');
+      localStorage.setItem('theme', isDark ? 'light' : 'dark');
+    });
 
-      // Input validation helpers
-      function validateInputEl(el) {
-        const ok = el.checkValidity();
-        el.classList.toggle('error', !ok);
-        return ok;
+    // ========================================
+    // Form handling
+    // ========================================
+    const form = document.getElementById('loginForm');
+    const submitBtn = document.getElementById('submitBtn');
+    const btnText = document.getElementById('btnText');
+    const btnSpinner = document.getElementById('btnSpinner');
+    const inputs = form.querySelectorAll('input[required]');
+    const togglePassword = document.getElementById('togglePassword');
+    const passwordInput = document.getElementById('password');
+
+    // Password visibility toggle
+    togglePassword.addEventListener('click', () => {
+      const type = passwordInput.type === 'password' ? 'text' : 'password';
+      passwordInput.type = type;
+      const icon = togglePassword.querySelector('i');
+      icon.classList.toggle('fa-eye');
+      icon.classList.toggle('fa-eye-slash');
+    });
+
+    // Input validation
+    function validateInput(input) {
+      const isValid = input.checkValidity();
+      if (!isValid) {
+        input.classList.add('border-destructive');
+        input.classList.remove('border-input');
+      } else {
+        input.classList.remove('border-destructive');
+        input.classList.add('border-input');
+      }
+      return isValid;
+    }
+
+    inputs.forEach(input => {
+      input.addEventListener('blur', () => validateInput(input));
+      input.addEventListener('input', () => {
+        if (input.classList.contains('border-destructive')) {
+          validateInput(input);
+        }
+      });
+    });
+
+    // Form submission
+    form.addEventListener('submit', (e) => {
+      let isValid = true;
+
+      inputs.forEach(input => {
+        if (!validateInput(input)) {
+          isValid = false;
+        }
+      });
+
+      if (!isValid) {
+        e.preventDefault();
+        const firstError = form.querySelector('.border-destructive');
+        if (firstError) firstError.focus();
+        return;
       }
 
-      inputs.forEach(i => {
-        i.addEventListener('input', () => validateInputEl(i));
-        i.addEventListener('blur', () => validateInputEl(i));
-      });
+      // Show loading state
+      submitBtn.disabled = true;
+      btnText.classList.add('hidden');
+      btnSpinner.classList.remove('hidden');
+    });
 
-      form.addEventListener('submit', function (e) {
-        let ok = true;
-        inputs.forEach(i => { if (!validateInputEl(i)) ok = false; });
-        if (!ok) {
-          e.preventDefault(); // keep focus on errors
-          const first = form.querySelector('.form-input.error'); if (first) first.focus();
-          return;
-        }
-
-        // nice micro-interaction while the server processes the login
-        submitBtn.classList.add('loading'); submitBtn.setAttribute('aria-disabled', 'true'); submitBtn.disabled = true;
-
-        // subtle animated pulse to show something is happening
-        gsap.fromTo(submitBtn, { scale: 1 }, { scale: 0.995, duration: 0.5, yoyo: true, repeat: -1, ease: 'sine.inOut' });
-        // allow normal form submit to server
-      });
-
-      // Restore state on page show (back/refresh)
-      window.addEventListener('pageshow', function (event) {
-        if (event.persisted) { submitBtn.classList.remove('loading'); submitBtn.disabled = false; inputs.forEach(i => i.classList.remove('error')); }
-      });
-
-      // Small accessible enhancement: pressing Enter on inputs should submit
-      inputs.forEach(i => i.addEventListener('keyup', function (e) { if (e.key === 'Enter') form.requestSubmit?.(); }));
-    })();
+    // Restore state on back/refresh
+    window.addEventListener('pageshow', (event) => {
+      if (event.persisted) {
+        submitBtn.disabled = false;
+        btnText.classList.remove('hidden');
+        btnSpinner.classList.add('hidden');
+        inputs.forEach(input => {
+          input.classList.remove('border-destructive');
+          input.classList.add('border-input');
+        });
+      }
+    });
   </script>
 </body>
-
 
 </html>

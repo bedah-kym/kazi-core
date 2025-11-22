@@ -205,30 +205,135 @@ class UpworkConnector(BaseConnector):
 
 
 class CalendarConnector(BaseConnector):
-    """Mock Calendly connector - returns fake availability"""
+    """Real Calendly connector using CalendlyProfile"""
     
     async def execute(self, parameters: Dict, context: Dict) -> Dict:
-        """Get available meeting slots"""
-        logger.info(f"CalendarConnector called with: {parameters}")
+        """
+        Execute Calendly actions:
+        - check_availability: Get scheduled events
+        - schedule_meeting: Get booking link
+        """
+        from users.models import CalendlyProfile
+        from django.contrib.auth import get_user_model
+        import requests
         
-        # Mock available slots for next 3 days
-        now = datetime.now()
-        slots = []
+        User = get_user_model()
+        user_id = context.get("user_id")
+        action = parameters.get("action", "check_availability") # Default action
         
-        for day in range(1, 4):
-            date = now + timedelta(days=day)
-            for hour in [10, 14, 16]:
-                slots.append({
-                    "start": date.replace(hour=hour, minute=0).isoformat(),
-                    "end": date.replace(hour=hour + 1, minute=0).isoformat(),
-                    "available": True
+        target_user_name = parameters.get("target_user")
+        
+        try:
+            # Get current user
+            try:
+                user = await sync_to_async(User.objects.get)(pk=user_id)
+            except User.DoesNotExist:
+                return {"status": "error", "message": "User not found"}
+
+            # Get profile
+            try:
+                profile = await sync_to_async(lambda: getattr(user, 'calendly', None))()
+            except Exception:
+                profile = None
+
+            if not profile or not await sync_to_async(lambda: profile.is_connected)():
+                return {
+                    "status": "error", 
+                    "message": "You are not connected to Calendly. Please connect first.",
+                    "action_required": "connect_calendly"
+                }
+
+            # Handle "schedule" with another user
+            if target_user_name:
+                # Clean username (remove @)
+                target_username = target_user_name.lstrip('@')
+                try:
+                    target_user = await sync_to_async(User.objects.get)(username=target_username)
+                    target_profile = await sync_to_async(lambda: getattr(target_user, 'calendly', None))()
+                    
+                    if not target_profile or not await sync_to_async(lambda: target_profile.is_connected)():
+                        return {
+                            "status": "error",
+                            "message": f"User @{target_username} has not connected their Calendly yet."
+                        }
+                    
+                    booking_link = await sync_to_async(lambda: target_profile.booking_link)()
+                    return {
+                        "status": "success",
+                        "type": "booking_link",
+                        "booking_link": booking_link,
+                        "message": f"Here is the booking link for @{target_username}"
+                    }
+                except User.DoesNotExist:
+                    return {
+                        "status": "error", 
+                        "message": f"User @{target_username} not found."
+                    }
+
+            # Handle "check availability" / "list meetings"
+            access_token = await sync_to_async(profile.get_access_token)()
+            if not access_token:
+                 return {
+                    "status": "error", 
+                    "message": "Could not retrieve access token. Please reconnect Calendly.",
+                    "action_required": "connect_calendly"
+                }
+                
+            # Fetch events
+            headers = {'Authorization': f'Bearer {access_token}'}
+            user_uri = await sync_to_async(lambda: profile.calendly_user_uri)()
+            
+            # Run request in thread to avoid blocking
+            def fetch_events():
+                return requests.get(
+                    'https://api.calendly.com/scheduled_events', 
+                    headers=headers, 
+                    params={'user': user_uri, 'status': 'active', 'sort': 'start_time:asc'}
+                )
+            
+            response = await sync_to_async(fetch_events)()
+            
+            if response.status_code == 401:
+                 return {
+                    "status": "error", 
+                    "message": "Calendly authorization failed. Please reconnect.",
+                    "action_required": "connect_calendly"
+                }
+            
+            if response.status_code != 200:
+                logger.error(f"Calendly API error: {response.text}")
+                return {
+                    "status": "error",
+                    "message": "Failed to fetch Calendly events."
+                }
+                
+            data = response.json()
+            events = data.get('collection', [])
+            
+            # Format events
+            formatted_events = []
+            for event in events[:5]: # Top 5
+                start_time = event.get('start_time')
+                name = event.get('name')
+                formatted_events.append({
+                    "start": start_time,
+                    "title": name,
+                    "url": event.get('uri')
                 })
-        
-        return {
-            "slots": slots[:5],  # Return first 5 slots
-            "timezone": "UTC",
-            "booking_url": "https://calendly.com/mathia/mock"
-        }
+                
+            return {
+                "status": "success",
+                "type": "events",
+                "events": formatted_events,
+                "message": f"You have {len(formatted_events)} upcoming meetings." if formatted_events else "You have no upcoming meetings scheduled."
+            }
+
+        except Exception as e:
+            logger.error(f"CalendarConnector error: {e}")
+            return {
+                "status": "error",
+                "message": f"An error occurred: {str(e)}"
+            }
 
 
 class StripeConnector(BaseConnector):

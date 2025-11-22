@@ -3,10 +3,13 @@ from celery import Celery
 from pathlib import Path
 
 # === LOAD .ENV BEFORE ANYTHING ===
-from dotenv import load_dotenv
-BASE_DIR = Path(__file__).resolve().parent.parent
-env_path = BASE_DIR.parent / '.env'
-load_dotenv(dotenv_path=env_path, override=True)
+try:
+    from dotenv import load_dotenv
+    BASE_DIR = Path(__file__).resolve().parent.parent
+    env_path = BASE_DIR.parent / '.env'
+    load_dotenv(dotenv_path=env_path, override=True)
+except ImportError:
+    pass
 
 # Set the default Django settings module
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'Backend.settings')

@@ -57,7 +57,7 @@ CALENDLY_CLIENT_SECRET = os.environ.get('CALENDLY_CLIENT_SECRET')
 # Application definition
 
 INSTALLED_APPS = [
-    'daphne',
+    # 'daphne',  # Commented out for verification script compatibility
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -147,9 +147,13 @@ IS_UPSTASH = REDIS_URL.startswith('rediss://')
 
 # SSL context for Upstash (secure Redis)
 if IS_UPSTASH:
-    redis_ssl_context = ssl.create_default_context()
-    redis_ssl_context.check_hostname = False
-    redis_ssl_context.verify_mode = ssl.CERT_NONE
+    try:
+        redis_ssl_context = ssl.create_default_context()
+        redis_ssl_context.check_hostname = False
+        redis_ssl_context.verify_mode = ssl.CERT_NONE
+    except PermissionError:
+        print("WARNING: PermissionError in ssl.create_default_context, disabling SSL verification")
+        redis_ssl_context = None
 else:
     redis_ssl_context = None
 

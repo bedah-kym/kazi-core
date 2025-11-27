@@ -138,3 +138,8 @@ GitHub.sublime-settings
 
 Backend/uploads/
 
+Backend/staticfiles/
+Backend/mediafiles/ 
+
+Backend/venv/
+Backend/staticfiles/

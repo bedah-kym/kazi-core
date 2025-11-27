@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/4.1/ref/settings/
 """
 import os    
 from pathlib import Path
+import dj_database_url
 # load environment variables from project .env
 try:
     from dotenv import load_dotenv
@@ -43,12 +44,13 @@ except Exception:
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'set-DJANGO_SECRET_KEY-env-var')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.environ.get('DJANGO_DEBUG', 'True').lower() in ('1', 'true', 'yes')
+# SECURITY WARNING: don't run with debug turned on in production!
+DEBUG = os.environ.get('DJANGO_DEBUG', 'False').lower() in ('1', 'true', 'yes')
 
 ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
 
 # you can set a comma-separated list in .env, e.g. DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1
-CSRF_TRUSTED_ORIGINS = os.environ.get('DJANGO_CSRF_TRUSTED_ORIGINS', '').split(',') if os.environ.get('DJANGO_CSRF_TRUSTED_ORIGINS') else []
+CSRF_TRUSTED_ORIGINS = [url for url in os.environ.get('DJANGO_CSRF_TRUSTED_ORIGINS', 'http://localhost:8000').split(',') if url]
 
 # Calendly app credentials (set in .env)
 CALENDLY_CLIENT_ID = os.environ.get('CALENDLY_CLIENT_ID')
@@ -77,6 +79,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -120,11 +123,15 @@ CHANNEL_LAYERS = {
 # Database
 # https://docs.djangoproject.com/en/4.1/ref/settings/#databases
 
+# Database
+# https://docs.djangoproject.com/en/4.1/ref/settings/#databases
+
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
-    }
+    'default': dj_database_url.config(
+        default=os.environ.get('DATABASE_URL', 'sqlite:///' + str(BASE_DIR / 'db.sqlite3')),
+        conn_max_age=600,
+        conn_health_checks=True,
+    )
 }
 # Redis configuration for Celery, Caching, and Channels
 # Replace your Redis configuration section with this:
@@ -140,7 +147,7 @@ USE_TZ = True
 
 
 # Redis configuration for Celery, Caching, and Channels
-REDIS_URL = os.environ.get('REDIS_URL', 'rediss://default:ASlnAAIncDI4ODQ3N2EyNDY1ZjE0OWRkOTM1MDZjMjQ1ZjQ5Yjk2MHAyMTA1OTk@exact-eft-10599.upstash.io:6379')
+REDIS_URL = os.environ.get('REDIS_URL', 'redis://default:eyiHJLU1pYolD4iknOdwts2GC0wQQRFY@redis-13289.c10.us-east-1-3.ec2.cloud.redislabs.com:13289')
 
 # Parse Upstash URL to check if it's secure
 IS_UPSTASH = REDIS_URL.startswith('rediss://')
@@ -216,7 +223,7 @@ else:
         "default": {
             "BACKEND": "channels_redis.core.RedisChannelLayer",
             "CONFIG": {
-                "hosts": [("127.0.0.1", 6379)],
+                "hosts": [REDIS_URL],
             },
         },
     }
@@ -275,6 +282,8 @@ LOGOUT_REDIRECT_URL = 'users:login'
 # https://docs.djangoproject.com/en/4.1/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.1/ref/settings/#default-auto-field

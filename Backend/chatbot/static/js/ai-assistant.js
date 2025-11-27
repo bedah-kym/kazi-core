@@ -209,6 +209,11 @@ class MathiaAssistant {
         this.chatSocket.onmessage = (e) => {
             const data = JSON.parse(e.data);
 
+            // Call original handler FIRST to display user message
+            if (originalOnMessage) {
+                originalOnMessage.call(this.chatSocket, e);
+            }
+
             // Handle streaming chunks
             if (data.command === 'ai_stream') {
                 this.handleStreamChunk(data.chunk, data.is_final);
@@ -227,10 +232,6 @@ class MathiaAssistant {
                 data.message?.content?.includes('@mathia') &&
                 data.message?.member === this.username) {
                 this.showAIThinking();
-            }
-
-            if (originalOnMessage) {
-                originalOnMessage.call(this.chatSocket, e);
             }
         };
     }

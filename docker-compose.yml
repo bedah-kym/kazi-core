@@ -14,11 +14,11 @@ services:
       - CELERY_RESULT_BACKEND=${REDIS_URL}
       - REDIS_URL=${REDIS_URL}
       - DATABASE_URL=postgres://mathia_user:mathia_password@db:5432/mathia_db
-      - HF_API_TOKEN=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
-      - ANTHROPIC_API_KEY=sk-6666666666666666666666666666666666666666666666666666666666666666
-      - CALENDLY_CLIENT_ID=Z0nYua52AKHj-QINQCVvr5y7Ntf2qQvLG-FKPYX4Xgo
-      - Webhook_signing_key=FBW-rA17kBUaFxjMuGWoUqMkIR7Yh_HCtND9oG4L0Mo
-      - CALENDLY_CLIENT_SECRET=yG-8orCWmtbDgqvrZobZ9siWU0Rpcr-npPl8sHs8DNg
+      - HF_API_TOKEN=${HF_API_TOKEN}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - CALENDLY_CLIENT_ID=${CALENDLY_CLIENT_ID}
+      - Webhook_signing_key=${Webhook_signing_key}
+      - CALENDLY_CLIENT_SECRET=${CALENDLY_CLIENT_SECRET}
     depends_on:
       - db
 

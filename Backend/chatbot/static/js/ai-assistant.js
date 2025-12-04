@@ -129,7 +129,7 @@ class MathiaAssistant {
 
         // Toggle quick prompts visibility when @mathia is typed
         this.messageInput.addEventListener('input', (e) => {
-            if (e.target.value.includes('@mathia')) {
+            if (e.target.value.toLowerCase().includes('@mathia')) {
                 promptsContainer.classList.add('active');
             } else {
                 promptsContainer.classList.remove('active');
@@ -227,9 +227,9 @@ class MathiaAssistant {
                 return;
             }
 
-            // Detect @mathia trigger
+            // Detect @mathia trigger (Case Insensitive)
             if (data.command === 'new_message' &&
-                data.message?.content?.includes('@mathia') &&
+                data.message?.content?.toLowerCase().includes('@mathia') &&
                 data.message?.member === this.username) {
                 this.showAIThinking();
             }

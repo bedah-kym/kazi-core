@@ -243,31 +243,46 @@ class CalendarConnector(BaseConnector):
                     "action_required": "connect_calendly"
                 }
 
-            # Handle "schedule" with another user
-            if target_user_name:
-                # Clean username (remove @)
-                target_username = target_user_name.lstrip('@')
-                try:
-                    target_user = await sync_to_async(User.objects.get)(username=target_username)
-                    target_profile = await sync_to_async(lambda: getattr(target_user, 'calendly', None))()
-                    
-                    if not target_profile or not await sync_to_async(lambda: target_profile.is_connected)():
+            # Handle "schedule_meeting"
+            if action == "schedule_meeting":
+                if target_user_name:
+                    # Schedule with another user
+                    target_username = target_user_name.lstrip('@')
+                    try:
+                        target_user = await sync_to_async(User.objects.get)(username=target_username)
+                        target_profile = await sync_to_async(lambda: getattr(target_user, 'calendly', None))()
+                        
+                        if not target_profile or not await sync_to_async(lambda: target_profile.is_connected)():
+                            return {
+                                "status": "error",
+                                "message": f"User @{target_username} has not connected their Calendly yet."
+                            }
+                        
+                        booking_link = await sync_to_async(lambda: target_profile.booking_link)()
                         return {
-                            "status": "error",
-                            "message": f"User @{target_username} has not connected their Calendly yet."
+                            "status": "success",
+                            "type": "booking_link",
+                            "booking_link": booking_link,
+                            "message": f"Here is the booking link for @{target_username}"
                         }
-                    
-                    booking_link = await sync_to_async(lambda: target_profile.booking_link)()
+                    except User.DoesNotExist:
+                        return {
+                            "status": "error", 
+                            "message": f"User @{target_username} not found."
+                        }
+                else:
+                    # Return own booking link
+                    booking_link = await sync_to_async(lambda: profile.booking_link)()
+                    if not booking_link:
+                         return {
+                            "status": "error",
+                            "message": "You don't have a booking link configured. Please check your Calendly settings."
+                        }
                     return {
                         "status": "success",
                         "type": "booking_link",
                         "booking_link": booking_link,
-                        "message": f"Here is the booking link for @{target_username}"
-                    }
-                except User.DoesNotExist:
-                    return {
-                        "status": "error", 
-                        "message": f"User @{target_username} not found."
+                        "message": "Here is your booking link."
                     }
 
             # Handle "check availability" / "list meetings"
@@ -284,21 +299,33 @@ class CalendarConnector(BaseConnector):
             user_uri = await sync_to_async(lambda: profile.calendly_user_uri)()
             
             # Run request in thread to avoid blocking
-            def fetch_events():
+            def fetch_events(token=None):
+                req_headers = headers
+                if token:
+                    req_headers = {'Authorization': f'Bearer {token}'}
+                    
                 return requests.get(
                     'https://api.calendly.com/scheduled_events', 
-                    headers=headers, 
+                    headers=req_headers, 
                     params={'user': user_uri, 'status': 'active', 'sort': 'start_time:asc'}
                 )
             
             response = await sync_to_async(fetch_events)()
             
+            # Handle 401 - Token Expired
             if response.status_code == 401:
-                 return {
-                    "status": "error", 
-                    "message": "Calendly authorization failed. Please reconnect.",
-                    "action_required": "connect_calendly"
-                }
+                logger.info("Calendly token expired. Attempting refresh...")
+                new_token = await self._refresh_token(profile)
+                
+                if new_token:
+                    # Retry with new token
+                    response = await sync_to_async(fetch_events)(new_token)
+                else:
+                     return {
+                        "status": "error", 
+                        "message": "Calendly authorization failed. Please reconnect.",
+                        "action_required": "connect_calendly"
+                    }
             
             if response.status_code != 200:
                 logger.error(f"Calendly API error: {response.text}")
@@ -334,6 +361,62 @@ class CalendarConnector(BaseConnector):
                 "status": "error",
                 "message": f"An error occurred: {str(e)}"
             }
+
+    async def _refresh_token(self, profile):
+        """Refresh the Calendly access token"""
+        from django.conf import settings
+        import requests
+        
+        refresh_token = await sync_to_async(profile.get_refresh_token)()
+        if not refresh_token:
+            logger.error("No refresh token available")
+            return None
+            
+        try:
+            def do_refresh():
+                return requests.post(
+                    'https://auth.calendly.com/oauth/token',
+                    data={
+                        'grant_type': 'refresh_token',
+                        'refresh_token': refresh_token,
+                        'client_id': settings.CALENDLY_CLIENT_ID,
+                        'client_secret': settings.CALENDLY_CLIENT_SECRET
+                    }
+                )
+            
+            response = await sync_to_async(do_refresh)()
+            
+            if response.status_code == 200:
+                data = response.json()
+                new_access = data.get('access_token')
+                new_refresh = data.get('refresh_token')
+                
+                # Update profile
+                def update_profile():
+                    # We need to re-encrypt and save
+                    from cryptography.fernet import Fernet
+                    import base64, hashlib
+                    
+                    secret = (settings.SECRET_KEY or 'changeme').encode('utf-8')
+                    hash = hashlib.sha256(secret).digest()
+                    fernet_key = base64.urlsafe_b64encode(hash)
+                    f = Fernet(fernet_key)
+                    
+                    profile.encrypted_access_token = f.encrypt(new_access.encode('utf-8')).decode('utf-8')
+                    if new_refresh:
+                        profile.encrypted_refresh_token = f.encrypt(new_refresh.encode('utf-8')).decode('utf-8')
+                    profile.save()
+                    return new_access
+                
+                return await sync_to_async(update_profile)()
+            else:
+                logger.error(f"Token refresh failed: {response.text}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error refreshing token: {e}")
+            return None
+
 
 
 class StripeConnector(BaseConnector):

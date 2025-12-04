@@ -57,6 +57,39 @@ class LLMClient:
         
         raise Exception("No valid API keys configured for Anthropic or Hugging Face.")
 
+    async def stream_text(
+        self, 
+        system_prompt: str, 
+        user_prompt: str, 
+        temperature: float = 0.7,
+        max_tokens: int = 1000
+    ):
+        """
+        Stream text generation. Yields chunks of text.
+        """
+        # Try Claude first (skipping streaming for now as it requires different handling)
+        if self.anthropic_key:
+             # For now, just return full response as a single chunk if using Claude
+             # (Future TODO: Implement Claude streaming)
+            try:
+                full_text = await self._call_claude(system_prompt, user_prompt, temperature, max_tokens)
+                yield full_text
+                return
+            except Exception as e:
+                logger.warning(f"Claude API failed: {e}. Falling back to Hugging Face.")
+
+        # Fallback to Hugging Face
+        if self.hf_key:
+            try:
+                async for chunk in self._stream_huggingface(system_prompt, user_prompt, temperature, max_tokens):
+                    yield chunk
+                return
+            except Exception as e:
+                logger.error(f"Hugging Face API failed: {e}")
+                raise Exception(f"All LLM providers failed. Last error: {e}")
+
+        raise Exception("No valid API keys configured for Anthropic or Hugging Face.")
+
     async def _call_claude(self, system_prompt: str, user_prompt: str, temperature: float, max_tokens: int) -> str:
         """Call Anthropic API"""
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -140,6 +173,47 @@ class LLMClient:
             except Exception:
                 # Fallback: just return the raw data stringified
                 return str(data)
+
+    async def _stream_huggingface(self, system_prompt: str, user_prompt: str, temperature: float, max_tokens: int):
+        """Stream from Hugging Face Router (OpenAI-compatible SSE)"""
+        
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": user_prompt})
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            async with client.stream(
+                "POST",
+                self.hf_url,
+                headers={
+                    "Authorization": f"Bearer {self.hf_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": self.hf_model,
+                    "messages": messages,
+                    "max_tokens": max_tokens,
+                    "temperature": temperature,
+                    "stream": True,
+                },
+            ) as response:
+                if response.status_code != 200:
+                    error_text = await response.aread()
+                    raise Exception(f"HF Stream Error {response.status_code}: {error_text}")
+
+                async for line in response.aiter_lines():
+                    if line.startswith("data: "):
+                        data_str = line[6:]
+                        if data_str.strip() == "[DONE]":
+                            break
+                        try:
+                            data = json.loads(data_str)
+                            delta = data["choices"][0]["delta"]
+                            if "content" in delta:
+                                yield delta["content"]
+                        except Exception:
+                            continue
 
     def extract_json(self, text: str) -> Dict:
         """

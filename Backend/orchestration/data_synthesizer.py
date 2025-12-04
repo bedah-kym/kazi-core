@@ -37,6 +37,27 @@ class DataSynthesizer:
             logger.error(f"Synthesis error: {e}")
             return "I found the information but had trouble formatting it."
 
+    async def synthesize_stream(self, intent: Dict, result: Dict, use_llm: bool = True):
+        """
+        Stream the synthesized response
+        """
+        try:
+            # 1. Basic formatting (fallback)
+            basic_response = self._format_basic(intent, result)
+            
+            # 2. LLM Enhancement (if enabled)
+            if use_llm:
+                async for chunk in self._enhance_with_llm_stream(intent, result, basic_response):
+                    yield chunk
+                return
+            
+            # If not using LLM, simulate stream or just yield once
+            yield basic_response
+            
+        except Exception as e:
+            logger.error(f"Synthesis stream error: {e}")
+            yield "I found the information but had trouble formatting it."
+
     def _format_basic(self, intent: Dict, result: Dict) -> str:
         """Basic template-based formatting"""
         action = intent.get("action")
@@ -87,6 +108,33 @@ Please generate a natural response for the user.
             logger.error(f"LLM enhancement failed: {e}")
             return basic_response
 
+    async def _enhance_with_llm_stream(self, intent: Dict, result: Dict, basic_response: str):
+        """Use LLM to make the response conversational (streaming)"""
+        try:
+            system_prompt = """You are Mathia, a helpful personal assistant.
+Convert the provided structured data into a natural, friendly response.
+Keep it concise but informative.
+Do not make up facts not present in the data.
+If the data indicates an error, explain it clearly."""
+
+            user_prompt = f"""
+User Intent: {json.dumps(intent)}
+System Data: {json.dumps(result)}
+Basic Summary: {basic_response}
+
+Please generate a natural response for the user.
+"""
+            async for chunk in self.llm.stream_text(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                temperature=0.7
+            ):
+                yield chunk
+            
+        except Exception as e:
+            logger.error(f"LLM enhancement stream failed: {e}")
+            yield basic_response
+
 
 _synthesizer = None
 
@@ -105,11 +153,19 @@ async def synthesize_response(
 ) -> str:
     """
     Convenience function to synthesize a response
-    
-    Usage:
-        from orchestration.data_synthesizer import synthesize_response
-        
-        response = await synthesize_response(intent, result, use_llm=True)
     """
     synth = get_synthesizer()
     return await synth.synthesize(intent, result, use_llm)
+
+
+async def synthesize_response_stream(
+    intent: Dict, 
+    result: Dict, 
+    use_llm: bool = False
+):
+    """
+    Convenience function to stream a synthesized response
+    """
+    synth = get_synthesizer()
+    async for chunk in synth.synthesize_stream(intent, result, use_llm):
+        yield chunk

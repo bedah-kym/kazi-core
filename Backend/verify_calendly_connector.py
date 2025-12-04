@@ -5,22 +5,13 @@ import sys
 from unittest.mock import MagicMock, patch
 from datetime import datetime
 
-import ssl
-# Mock ssl.create_default_context to avoid PermissionError on some systems
-original_create_default_context = ssl.create_default_context
-def mock_create_default_context(*args, **kwargs):
-    try:
-        return original_create_default_context(*args, **kwargs)
-    except PermissionError:
-        print("WARNING: PermissionError in ssl.create_default_context, returning mock context")
-        return MagicMock()
-ssl.create_default_context = mock_create_default_context
 
-# Mock daphne to avoid ModuleNotFoundError
-sys.modules['daphne'] = MagicMock()
 
 # Setup Django environment
-sys.path.append(r'c:\Users\user\Desktop\Dev2\MATHIA-PROJECT\Backend')
+# Setup Django environment
+from pathlib import Path
+BASE_DIR = Path(__file__).resolve().parent
+sys.path.append(str(BASE_DIR))
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'Backend.settings')
 django.setup()
 
@@ -110,6 +101,16 @@ async def verify_calendly():
     
     if result["status"] == "success" and result["booking_link"] == "https://calendly.com/test_user":
         print("SUCCESS: Retrieved booking link correctly.")
+        print(f"Link: {result['booking_link']}")
+    else:
+        print(f"FAILURE: {result}")
+
+    # Test 3: Schedule Meeting (Self - No target)
+    print("\nTest 3: Schedule Meeting (Self)")
+    result = await connector.execute({"action": "schedule_meeting"}, context)
+    
+    if result["status"] == "success" and result["booking_link"] == "https://calendly.com/test_user":
+        print("SUCCESS: Retrieved self booking link correctly.")
         print(f"Link: {result['booking_link']}")
     else:
         print(f"FAILURE: {result}")

@@ -608,14 +608,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 logger.info("=== NEW MESSAGE SUCCESS ===")
 
                 # === ORCHESTRATION: Full pipeline ===
-                if message_content.startswith('@mathia'):
+                if message_content.lower().startswith('@mathia'):
                     logger.info(f"Step 16: @mathia detected! Starting orchestration...")
                     
                     from orchestration.intent_parser import parse_intent
                     from orchestration.mcp_router import route_intent
                     from orchestration.data_synthesizer import synthesize_response
                     
-                    ai_query = message_content.replace('@mathia', '').strip()
+                    ai_query = message_content[7:].strip()
                     
                     if ai_query:
                         # Step 1: Parse intent
@@ -627,6 +627,31 @@ class ChatConsumer(AsyncWebsocketConsumer):
                         
                         logger.info(f"Intent: {intent}")
                         
+                        # Helper to broadcast chunks (Buffered)
+                        # We use a mutable container for closure state
+                        stream_state = {'buffer': [], 'last_send': 0}
+                        
+                        async def broadcast_chunk(chunk_text, is_final=False):
+                            import time
+                            stream_state['buffer'].append(chunk_text)
+                            
+                            current_time = time.time()
+                            joined_text = "".join(stream_state['buffer'])
+                            
+                            # Send if buffer > 10 chars OR > 0.1s passed OR is_final
+                            if len(joined_text) > 20 or (current_time - stream_state['last_send']) > 0.2 or is_final:
+                                if joined_text or is_final:
+                                    await self.channel_layer.group_send(
+                                        self.room_group_name,
+                                        {
+                                            "type": "ai_stream_chunk",
+                                            "chunk": joined_text,
+                                            "is_final": is_final
+                                        }
+                                    )
+                                    stream_state['buffer'] = []
+                                    stream_state['last_send'] = current_time
+
                         # Step 2: Route if high confidence & not general chat
                         if intent["confidence"] > 0.7 and intent["action"] != "general_chat":
                             # Route through MCP
@@ -639,28 +664,34 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             logger.info(f"MCP result: {result['status']}")
                             
                             if result["status"] == "success":
-                                # Step 3: Synthesize natural language response
-                                response = await synthesize_response(
+                                # Step 3: Synthesize natural language response (STREAMING)
+                                from orchestration.data_synthesizer import synthesize_response_stream
+                                
+                                async for chunk in synthesize_response_stream(
                                     intent, 
                                     result, 
-                                    use_llm=False  # Set True for LLM-enhanced responses
-                                )
+                                    use_llm=True
+                                ):
+                                    await broadcast_chunk(chunk)
+                                    
                             else:
-                                response = f"❌ {result['message']}"
-                            
-                            await self.send_message({
-                                'member': 'mathia',
-                                'content': response,
-                                'timestamp': str(timezone.now())
-                            })
+                                await broadcast_chunk(f"❌ {result['message']}")
                         else:
-                            # Fallback to general AI
-                            generate_ai_response.delay(room_id, member_user.id, ai_query)
-                            await self.send_message({
-                                'member': 'mathia',
-                                'content': "Thinking... 🤔",
-                                'timestamp': str(timezone.now())
-                            })
+                            # Fallback to LLM for general chat or low confidence (STREAMING)
+                            from orchestration.llm_client import get_llm_client
+                            llm_client = get_llm_client()
+                            
+                            async for chunk in llm_client.stream_text(
+                                system_prompt="You are Mathia, a helpful AI assistant. Be concise and friendly.",
+                                user_prompt=ai_query,
+                                temperature=0.7,
+                                max_tokens=500
+                            ):
+                                await broadcast_chunk(chunk)
+                        
+                        # End stream
+                        await broadcast_chunk("", is_final=True)
+
             else:
                 await self.send_chat_message({
                     'member': 'security system',

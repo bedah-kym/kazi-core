@@ -100,10 +100,13 @@ def calendly_callback(request):
             event_type_name = first.get('name') or first.get('resource', {}).get('name')
             booking_link = first.get('scheduling_url') or first.get('resource', {}).get('scheduling_url')
 
-    profile.connect(access_token, refresh_token, calendly_user_uri, event_type_uri, event_type_name, booking_link)
-    # In a real app register webhook here
-    return Response({'status': 'connected', 'booking_link': booking_link})
+    # Fallback: try to get scheduling_url from user info if not found in event types
+    if not booking_link:
+        user_resource = userinfo.get('resource') or userinfo.get('data') or userinfo
+        booking_link = user_resource.get('scheduling_url')
 
+    profile.connect(access_token, refresh_token, calendly_user_uri, event_type_uri, event_type_name, booking_link)
+    return Response({'ok': True, 'connected': True})
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])

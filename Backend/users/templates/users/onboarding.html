@@ -222,23 +222,23 @@
         <div class="onboarding-progress">
             <div class="progress-steps">
                 <div class="progress-step {% if step == 1 %}active{% elif step > 1 %}completed{% endif %}">
-                    <div class="progress-step-circle">{% if step > 1 %}<i class="fas fa-check"></i>{% else %}1{% endif
-                        %}</div>
+                    <div class="progress-step-circle">{% if step > 1 %}<i class="fas fa-check"></i>{% else %}1{% endif%}
+                    </div>
                     <div class="progress-step-label">Account Type</div>
                 </div>
                 <div class="progress-step {% if step == 2 %}active{% elif step > 2 %}completed{% endif %}">
-                    <div class="progress-step-circle">{% if step > 2 %}<i class="fas fa-check"></i>{% else %}2{% endif
-                        %}</div>
+                    <div class="progress-step-circle">{% if step > 2 %}<i class="fas fa-check"></i>{% else %}2{% endif%}
+                    </div>
                     <div class="progress-step-label">Workspace</div>
                 </div>
                 <div class="progress-step {% if step == 3 %}active{% elif step > 3 %}completed{% endif %}">
-                    <div class="progress-step-circle">{% if step > 3 %}<i class="fas fa-check"></i>{% else %}3{% endif
-                        %}</div>
+                    <div class="progress-step-circle">{% if step > 3 %}<i class="fas fa-check"></i>{% else %}3{% endif%}
+                    </div>
                     <div class="progress-step-label">Plan</div>
                 </div>
                 <div class="progress-step {% if step == 4 %}active{% elif step > 4 %}completed{% endif %}">
-                    <div class="progress-step-circle">{% if step > 4 %}<i class="fas fa-check"></i>{% else %}4{% endif
-                        %}</div>
+                    <div class="progress-step-circle">{% if step > 4 %}<i class="fas fa-check"></i>{% else %}4{% endif%}
+                    </div>
                     <div class="progress-step-label">Integrations</div>
                 </div>
             </div>
@@ -352,7 +352,7 @@
                 <div class="form-actions">
                     {% if step > 1 %}
                     <button type="button" class="btn btn-outline"
-                        onclick="window.location.href='?step={{ step|add:'-1' }}'">
+                        onclick="window.location.href='?step={{ step|add:-1 }}'">
                         <i class="fas fa-arrow-left me-2"></i>Back
                     </button>
                     {% else %}

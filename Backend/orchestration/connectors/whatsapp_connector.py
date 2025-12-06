@@ -2,7 +2,7 @@
 import logging
 import os
 from django.conf import settings
-from ..mcp_router import BaseConnector
+from ..base_connector import BaseConnector
 from twilio.rest import Client
 from twilio.base.exceptions import TwilioRestException
 

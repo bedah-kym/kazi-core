@@ -10,6 +10,7 @@ from django.core.cache import cache
 from django_redis import get_redis_connection
 from asgiref.sync import sync_to_async
 import httpx
+from .base_connector import BaseConnector
 from .connectors.whatsapp_connector import WhatsAppConnector
 from .connectors.intersend_connector import IntersendPayConnector
 

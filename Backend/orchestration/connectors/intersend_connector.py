@@ -1,10 +1,11 @@
 
 import logging
 import os
+from django.conf import settings
+from ..base_connector import BaseConnector
+from decimal import Decimal
+from users.models import Wallet, WalletTransaction
 import uuid
-from ..mcp_router import BaseConnector
-from users.models import Wallet, Workspace
-from intasend import IntaSend
 
 logger = logging.getLogger(__name__)
 
@@ -18,13 +19,18 @@ class IntersendPayConnector(BaseConnector):
         self.api_key = os.environ.get('INTASEND_API_KEY')
         self.is_test = os.environ.get('INTASEND_IS_TEST', 'True').lower() == 'true'
         
-        if self.publishable_key and self.api_key:
-             self.intasend = IntaSend(
-                public_key=self.publishable_key,
-                secret_key=self.api_key,
-                test=self.is_test
-            )
-        else:
+        try:
+            from intasend import IntaSend
+            if self.publishable_key and self.api_key:
+                self.intasend = IntaSend(
+                    public_key=self.publishable_key,
+                    secret_key=self.api_key,
+                    test=self.is_test
+                )
+            else:
+                self.intasend = None
+        except ImportError:
+            logger.warning("intasend-python not installed. Using mock mode.")
             self.intasend = None
 
     async def execute(self, intent: dict, user) -> dict:
@@ -49,23 +55,21 @@ class IntersendPayConnector(BaseConnector):
                 phone_number=intent.get("phone_number")
             )
         elif action == "check_status":
-             return self.check_status(intent.get("invoice_id"))
+            return self.check_status(intent.get("invoice_id"))
             
         return {"error": f"Unknown Intersend action: {action}"}
 
     def create_payment_link(self, amount, currency, description, phone_number=None, email=None, user=None):
         if not self.intasend:
-             print(f"[Intersend-Mock] Creating link for {currency} {amount}")
-             mock_ref = str(uuid.uuid4())
-             return {
-                 "payment_link": f"https://payment.intasend.com/pay/{mock_ref}",
-                 "reference": mock_ref,
-                 "status": "generated"
-             }
+            print(f"[Intersend-Mock] Creating link for {currency} {amount}")
+            mock_ref = str(uuid.uuid4())
+            return {
+                "payment_link": f"https://payment.intasend.com/pay/{mock_ref}",
+                "reference": mock_ref,
+                "status": "generated"
+            }
         
-        # Use simple M-Pesa STK Push directly if phone is provided, or just return check out URL
         try:
-            # IntaSend SDK 'collect' method usually triggers STK push directly
             if phone_number:
                 service = self.intasend.collect
                 response = service.mpesa_stk_push(
@@ -76,13 +80,7 @@ class IntersendPayConnector(BaseConnector):
                 )
                 return response
             
-            # If no phone, generate checkout URL (generic)
-            # SDK might not have a direct "generate link" independent of wallet/checkout. 
-            # We can use the Checkout API if available, but STK push is cleaner for this demo.
-            # Assuming we want a "payment request" link logic:
-            # For now, return a manually constructed link if the SDK doesn't support 'create_link' perfectly 
-            # or rely on the frontend to render the IntaSend button with the public key.
-            return {"message": "Please use the frontend button with the publishable key or provide a phone number for STK push."}
+            return {"message": "Please provide phone number for STK push or use frontend button with publishable key."}
 
         except Exception as e:
             logger.error(f"Intersend Create Link Error: {e}")
@@ -91,21 +89,31 @@ class IntersendPayConnector(BaseConnector):
     def withdraw_to_mpesa(self, user, amount, phone_number):
         try:
             workspace = user.workspace
-            wallet = workspace.wallet
-        except Exception:
-            return {"error": "User has no wallet configured"}
+            wallet = Wallet.objects.get(workspace=workspace, currency='KES')
+        except Exception as e:
+            return {"error": f"User has no wallet configured: {str(e)}"}
 
-        # Atomic withdrawal from local wallet first
-        reference = f"WD-{uuid.uuid4()}"
-        success, msg = wallet.withdraw(amount, reference, f"Withdrawal to {phone_number}")
+        # Check balance
+        if wallet.balance < Decimal(str(amount)):
+            return {"error": "Insufficient balance"}
         
-        if not success:
-            return {"error": msg}
+        # Deduct from wallet
+        wallet.balance -= Decimal(str(amount))
+        wallet.save()
+        
+        # Log transaction
+        WalletTransaction.objects.create(
+            wallet=wallet,
+            type='withdrawal',
+            amount=Decimal(str(amount)),
+            description=f"Withdrawal to M-Pesa {phone_number}",
+            metadata={'phone': phone_number}
+        )
         
         if not self.intasend:
-             # Mock success
-             print(f"[Intersend-Mock] Payout {amount} to {phone_number}")
-             return {"status": "success", "transaction_id": reference, "message": "Funds sent to M-Pesa (Mock)"}
+            # Mock success
+            print(f"[Intersend-Mock] Payout {amount} to {phone_number}")
+            return {"status": "success", "message": "Funds sent to M-Pesa (Mock)"}
              
         try:
             service = self.intasend.transfer
@@ -115,26 +123,29 @@ class IntersendPayConnector(BaseConnector):
                     {'name': f'Withdrawal for {user.username}', 'account': phone_number, 'amount': str(amount)}
                 ]
             )
-            
-            # Check response status mostly to confirm scheduling
-            # If IntaSend fails, we should REFUND the wallet here!
-            # Using simple check:
-            # response format depends on SDK version, assuming standard dict
             return response
             
         except Exception as e:
             # REFUND WALLET
-            print(f"Refund due to error: {e}")
-            wallet.deposit(amount, f"REFUND-{reference}", "System Refund - API Error")
-            return {"error": f"Payout failed using SDK: {str(e)}"}
+            logger.error(f"Refund due to error: {e}")
+            wallet.balance += Decimal(str(amount))
+            wallet.save()
+            
+            WalletTransaction.objects.create(
+                wallet=wallet,
+                type='refund',
+                amount=Decimal(str(amount)),
+                description=f"Refund - API Error",
+                metadata={'error': str(e)}
+            )
+            return {"error": f"Payout failed: {str(e)}"}
 
     def check_status(self, invoice_id):
         if not self.intasend:
             return {"status": "COMPLETED", "mock": True}
         
         try:
-            # SDK helper for status checking might be:
             service = self.intasend.collect
             return service.status(invoice_id=invoice_id)
         except Exception as e:
-             return {"error": str(e)}
+            return {"error": str(e)}

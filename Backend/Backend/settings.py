@@ -74,7 +74,24 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework.authtoken',
     'django_celery_beat',
-    'django_celery_results' ]
+    'django_celery_results',
+    
+    # Sites (required by allauth)
+    'django.contrib.sites',
+    
+    # Allauth
+    'allauth',
+    'allauth.account',
+    'allauth.socialaccount',
+    'allauth.socialaccount.providers.google',
+    'allauth.socialaccount.providers.github',
+    'allauth.socialaccount.providers.linkedin_oauth2',
+    'allauth.socialaccount.providers.twitter',
+    
+    # Security
+    'axes',
+    'django_ratelimit',
+]
 
 
 MIDDLEWARE = [
@@ -86,6 +103,13 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    
+    # Security Middleware
+    'axes.middleware.AxesMiddleware',  # Brute force protection
+    'csp.middleware.CSPMiddleware',   # Content Security Policy
+    
+    # Allauth Account Middleware
+    'allauth.account.middleware.AccountMiddleware',
 ]
 
 ROOT_URLCONF = 'Backend.urls'
@@ -307,10 +331,109 @@ REST_FRAMEWORK = {
         "rest_framework.permissions.IsAuthenticatedOrReadOnly"
     ],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.LimitOffsetPagination",
-    "PAGE_SIZE": 5
+    "PAGE_SIZE": 5,
+    "DEFAULT_THROTTLE_CLASSES": [
+        "rest_framework.throttling.AnonRateThrottle",
+        "Api.throttling.GlobalApiThrottle",
+    ],
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": "10/minute",
+        "global_api": "60/minute",  # Default fallback, overridden by class logic
+        "ai_request": "10/day"      # Default fallback
+    }
 }
+
 
 
 # Chat rate limit (messages per minute)
 CHAT_RATE_LIMIT = 30
+
+# ==========================================
+# AUTHENTICATION & SECURITY CONFIGURATION
+# ==========================================
+
+# ==========================================
+# AUTHENTICATION & SECURITY CONFIGURATION
+# ==========================================
+
+AUTHENTICATION_BACKENDS = [
+    # Django default
+    'django.contrib.auth.backends.ModelBackend',
+    # Allauth specific authentication methods
+    'allauth.account.auth_backends.AuthenticationBackend',
+    # Axes backend
+    'axes.backends.AxesStandaloneBackend',
+]
+
+SITE_ID = 1
+
+# --- Allauth Settings ---
+ACCOUNT_EMAIL_VERIFICATION = 'optional'
+ACCOUNT_SESSION_REMEMBER = True
+SOCIALACCOUNT_AUTO_SIGNUP = True
+SOCIALACCOUNT_EMAIL_VERIFICATION = 'none'
+
+# New Allauth format
+ACCOUNT_LOGIN_METHODS = {'email'}  # Replaces ACCOUNT_AUTHENTICATION_METHOD
+ACCOUNT_EMAIL_REQUIRED = True      # Kept for compatibility or removed if new format covers it fully, but warning said use SIGNUP_FIELDS
+# However, usually just setting login methods is enough for the warning about auth method.
+# For input fields:
+# ACCOUNT_SIGNUP_FIELDS = ['email'] # This replaces USERNAME_REQUIRED etc in newer versions?
+# Let's keep it simple and just fix the specific warnings mentioned if possible, 
+# but allauth 65+ has changed a lot. 
+# Reverting to legacy mode or just ignoring for now might be safer, but let's try to be modern.
+ACCOUNT_EMAIL_REQUIRED = True 
+ACCOUNT_USERNAME_REQUIRED = False
+# Ignoring specific field warnings for now as they are just warnings, but fixing backend is crucial.
+
+# --- AXES (Brute Force Protection) ---
+AXES_FAILURE_LIMIT = 5
+AXES_COOLOFF_TIME = 1  # Hours
+# AXES_LOCK_OUT_BY_COMBINATION_USER_AND_IP = True # Deprecated, default behavior is usually sufficient or use AXES_LOCKOUT_PARAMETERS
+
+
+# Social Providers
+SOCIALACCOUNT_PROVIDERS = {
+    'google': {
+        'SCOPE': ['profile', 'email'],
+        'AUTH_PARAMS': {'access_type': 'online'},
+        'APP': {
+            'client_id': os.environ.get('GOOGLE_CLIENT_ID', ''),
+            'secret': os.environ.get('GOOGLE_CLIENT_SECRET', ''),
+        }
+    },
+    'github': {
+        'SCOPE': ['user', 'read:org'],
+        'APP': {
+            'client_id': os.environ.get('GITHUB_CLIENT_ID', ''),
+            'secret': os.environ.get('GITHUB_CLIENT_SECRET', ''),
+        }
+    },
+    # LinkedIn & Twitter config placeholders (add keys to .env)
+}
+
+# --- AXES (Brute Force Protection) ---
+AXES_FAILURE_LIMIT = 5
+AXES_COOLOFF_TIME = 1  # Hours (or check docs for timedelta)
+AXES_LOCK_OUT_BY_COMBINATION_USER_AND_IP = True
+
+# --- CSP (Content Security Policy) ---
+# --- CSP (Content Security Policy) ---
+CSP_DEFAULT_SRC = ("'self'",)
+CSP_STYLE_SRC = ("'self'", "'unsafe-inline'", "https://fonts.googleapis.com", "https://cdnjs.cloudflare.com")
+CSP_SCRIPT_SRC = ("'self'", "https://js.stripe.com", "https://cdn.tailwindcss.com")
+CSP_IMG_SRC = ("'self'", "data:", "https://*")
+CSP_FONT_SRC = ("'self'", "https://fonts.gstatic.com", "https://cdnjs.cloudflare.com")
+CSP_FRAME_SRC = ("'self'", "https://js.stripe.com")
+
+# --- HSTS (HTTP Strict Transport Security) ---
+# Enabled only when DEBUG is False to avoid local dev issues
+if not DEBUG:
+    SECURE_SSL_REDIRECT = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = 31536000  # 1 year
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+
 

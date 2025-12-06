@@ -26,6 +26,7 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('chatbot/',include('chatbot.urls')),
     path('accounts/',include('users.urls')),
+    path('accounts/', include('allauth.urls')),  # Social Auth URLs
     path('api/',include('Api.urls')),
     path('auth/', obtain_auth_token),
     path('api-auth/', include('rest_framework.urls')),

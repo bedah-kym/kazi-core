@@ -10,6 +10,8 @@ from django.core.cache import cache
 from django_redis import get_redis_connection
 from asgiref.sync import sync_to_async
 import httpx
+from .connectors.whatsapp_connector import WhatsAppConnector
+from .connectors.intersend_connector import IntersendPayConnector
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +34,8 @@ class MCPRouter:
             "get_weather": WeatherConnector(),
             "search_gif": GiphyConnector(),
             "convert_currency": CurrencyConnector(),
+            "send_whatsapp": WhatsAppConnector(),
+            "payment_action": IntersendPayConnector(),
         }
     
     async def route(self, intent: Dict, user_context: Dict) -> Dict:

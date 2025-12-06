@@ -1,0 +1,398 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <title>Welcome to KwikChat</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="{% static 'css/context-panel.css' %}" rel="stylesheet">
+    <link rel="icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
+
+    <style>
+        body {
+            background: hsl(var(--background));
+            min-height: 100vh;
+        }
+
+        .onboarding-container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 3rem 2rem;
+        }
+
+        .onboarding-progress {
+            margin-bottom: 3rem;
+        }
+
+        .progress-steps {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 1rem;
+        }
+
+        .progress-step {
+            flex: 1;
+            text-align: center;
+            position: relative;
+        }
+
+        .progress-step-circle {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: hsl(var(--muted));
+            color: hsl(var(--muted-foreground));
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 0.5rem;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+
+        .progress-step.active .progress-step-circle {
+            background: hsl(var(--primary));
+            color: hsl(var(--primary-foreground));
+        }
+
+        .progress-step.completed .progress-step-circle {
+            background: hsl(140, 60%, 50%);
+            color: white;
+        }
+
+        .progress-step-label {
+            font-size: 0.875rem;
+            color: hsl(var(--muted-foreground));
+        }
+
+        .progress-step.active .progress-step-label {
+            color: hsl(var(--foreground));
+            font-weight: 600;
+        }
+
+        .onboarding-card {
+            background: hsl(var(--card));
+            border: 1px solid hsl(var(--border));
+            border-radius: var(--radius);
+            padding: 3rem;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+        }
+
+        .onboarding-header {
+            text-align: center;
+            margin-bottom: 2.5rem;
+        }
+
+        .onboarding-title {
+            font-size: 1.875rem;
+            font-weight: 700;
+            color: hsl(var(--foreground));
+            margin-bottom: 0.75rem;
+        }
+
+        .onboarding-subtitle {
+            color: hsl(var(--muted-foreground));
+            font-size: 1rem;
+        }
+
+        .account-type-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .account-type-card {
+            background: hsl(var(--background));
+            border: 2px solid hsl(var(--border));
+            border-radius: var(--radius);
+            padding: 2rem 1.5rem;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .account-type-card:hover {
+            border-color: hsl(var(--ring));
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+            transform: translateY(-2px);
+        }
+
+        .account-type-card.selected {
+            border-color: hsl(var(--primary));
+            background: hsl(var(--accent));
+        }
+
+        .account-type-icon {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .account-type-name {
+            font-weight: 600;
+            font-size: 1.125rem;
+            margin-bottom: 0.5rem;
+            color: hsl(var(--foreground));
+        }
+
+        .account-type-desc {
+            font-size: 0.875rem;
+            color: hsl(var(--muted-foreground));
+        }
+
+        .plan-card {
+            background: hsl(var(--background));
+            border: 2px solid hsl(var(--border));
+            border-radius: var(--radius);
+            padding: 2rem;
+            margin-bottom: 1rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .plan-card:hover {
+            border-color: hsl(var(--ring));
+        }
+
+        .plan-card.selected {
+            border-color: hsl(var(--primary));
+            background: hsl(var(--accent));
+        }
+
+        .plan-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .plan-name {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: hsl(var(--foreground));
+        }
+
+        .plan-price {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: hsl(var(--primary));
+        }
+
+        .form-actions {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 2rem;
+        }
+
+        .btn {
+            padding: 0.75rem 1.5rem;
+            border-radius: calc(var(--radius) - 2px);
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: hsl(var(--primary));
+            color: hsl(var(--primary-foreground));
+            border: none;
+        }
+
+        .btn-primary:hover {
+            opacity: 0.9;
+        }
+
+        .btn-outline {
+            background: transparent;
+            border: 1px solid hsl(var(--border));
+            color: hsl(var(--foreground));
+        }
+
+        .btn-outline:hover {
+            background: hsl(var(--accent));
+        }
+    </style>
+</head>
+
+<body>
+    <div class="onboarding-container">
+        <!-- Progress Indicator -->
+        <div class="onboarding-progress">
+            <div class="progress-steps">
+                <div class="progress-step {% if step == 1 %}active{% elif step > 1 %}completed{% endif %}">
+                    <div class="progress-step-circle">{% if step > 1 %}<i class="fas fa-check"></i>{% else %}1{% endif
+                        %}</div>
+                    <div class="progress-step-label">Account Type</div>
+                </div>
+                <div class="progress-step {% if step == 2 %}active{% elif step > 2 %}completed{% endif %}">
+                    <div class="progress-step-circle">{% if step > 2 %}<i class="fas fa-check"></i>{% else %}2{% endif
+                        %}</div>
+                    <div class="progress-step-label">Workspace</div>
+                </div>
+                <div class="progress-step {% if step == 3 %}active{% elif step > 3 %}completed{% endif %}">
+                    <div class="progress-step-circle">{% if step > 3 %}<i class="fas fa-check"></i>{% else %}3{% endif
+                        %}</div>
+                    <div class="progress-step-label">Plan</div>
+                </div>
+                <div class="progress-step {% if step == 4 %}active{% elif step > 4 %}completed{% endif %}">
+                    <div class="progress-step-circle">{% if step > 4 %}<i class="fas fa-check"></i>{% else %}4{% endif
+                        %}</div>
+                    <div class="progress-step-label">Integrations</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Onboarding Card -->
+        <div class="onboarding-card">
+            <form method="post" id="onboardingForm">
+                {% csrf_token %}
+
+                <!-- Step 1: Account Type -->
+                {% if step == 1 %}
+                <div class="onboarding-header">
+                    <h1 class="onboarding-title">What best describes you?</h1>
+                    <p class="onboarding-subtitle">We'll personalize your experience based on this</p>
+                </div>
+
+                <div class="account-type-grid">
+                    <div class="account-type-card" data-type="personal">
+                        <div class="account-type-icon">🎨</div>
+                        <div class="account-type-name">Personal Brand</div>
+                        <div class="account-type-desc">Freelancer or creator</div>
+                    </div>
+                    <div class="account-type-card" data-type="team">
+                        <div class="account-type-icon">👥</div>
+                        <div class="account-type-name">Team</div>
+                        <div class="account-type-desc">Small agency or team</div>
+                    </div>
+                    <div class="account-type-card" data-type="business">
+                        <div class="account-type-icon">🏢</div>
+                        <div class="account-type-name">Business</div>
+                        <div class="account-type-desc">Growing company</div>
+                    </div>
+                </div>
+                <input type="hidden" name="account_type" id="accountTypeInput">
+
+                <!-- Step 2: Workspace Setup -->
+                {% elif step == 2 %}
+                <div class="onboarding-header">
+                    <h1 class="onboarding-title">Set up your workspace</h1>
+                    <p class="onboarding-subtitle">Give your workspace a name</p>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">Workspace Name</label>
+                    <input type="text" class="form-control" name="workspace_name" placeholder="My Creative Studio"
+                        required>
+                </div>
+
+                <!-- Step 3: Plan Selection -->
+                {% elif step == 3 %}
+                <div class="onboarding-header">
+                    <h1 class="onboarding-title">Choose your plan</h1>
+                    <p class="onboarding-subtitle">Start free, upgrade anytime</p>
+                </div>
+
+                <div class="plan-card selected" data-plan="free">
+                    <div class="plan-header">
+                        <div class="plan-name">Free</div>
+                        <div class="plan-price">$0<small>/mo</small></div>
+                    </div>
+                    <ul class="list-unstyled">
+                        <li><i class="fas fa-check text-success me-2"></i>60 requests/min</li>
+                        <li><i class="fas fa-check text-success me-2"></i>10 AI requests/day</li>
+                        <li><i class="fas fa-check text-success me-2"></i>Basic integrations</li>
+                    </ul>
+                </div>
+
+                <div class="plan-card" data-plan="pro">
+                    <div class="plan-header">
+                        <div class="plan-name">Pro</div>
+                        <div class="plan-price">$29<small>/mo</small></div>
+                    </div>
+                    <ul class="list-unstyled">
+                        <li><i class="fas fa-check text-success me-2"></i>1000 requests/min</li>
+                        <li><i class="fas fa-check text-success me-2"></i>500 AI requests/day</li>
+                        <li><i class="fas fa-check text-success me-2"></i>All integrations</li>
+                        <li><i class="fas fa-check text-success me-2"></i>Priority support</li>
+                    </ul>
+                </div>
+                <input type="hidden" name="plan" id="planInput" value="free">
+
+                <!-- Step 4: Integrations -->
+                {% elif step == 4 %}
+                <div class="onboarding-header">
+                    <h1 class="onboarding-title">Connect your tools</h1>
+                    <p class="onboarding-subtitle">You can skip this and set up later</p>
+                </div>
+
+                <div class="integration-card mb-3">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <h5><i class="fas fa-calendar me-2"></i>Calendly</h5>
+                            <small class="text-muted">Schedule meetings with clients</small>
+                        </div>
+                        <a href="#" class="btn btn-sm btn-outline">Connect</a>
+                    </div>
+                </div>
+
+                <div class="integration-card mb-3">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <h5><i class="fab fa-whatsapp me-2"></i>WhatsApp</h5>
+                            <small class="text-muted">Send invoices via WhatsApp</small>
+                        </div>
+                        <a href="#" class="btn btn-sm btn-outline">Connect</a>
+                    </div>
+                </div>
+                {% endif %}
+
+                <div class="form-actions">
+                    {% if step > 1 %}
+                    <button type="button" class="btn btn-outline"
+                        onclick="window.location.href='?step={{ step|add:'-1' }}'">
+                        <i class="fas fa-arrow-left me-2"></i>Back
+                    </button>
+                    {% else %}
+                    <div></div>
+                    {% endif %}
+
+                    <button type="submit" class="btn btn-primary">
+                        {% if step == 4 %}
+                        Finish <i class="fas fa-check ms-2"></i>
+                        {% else %}
+                        Next <i class="fas fa-arrow-right ms-2"></i>
+                        {% endif %}
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-1.10.2.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+    <script>
+        // Account type selection
+        document.querySelectorAll('.account-type-card').forEach(card => {
+            card.addEventListener('click', function () {
+                document.querySelectorAll('.account-type-card').forEach(c => c.classList.remove('selected'));
+                this.classList.add('selected');
+                document.getElementById('accountTypeInput').value = this.dataset.type;
+            });
+        });
+
+        // Plan selection
+        document.querySelectorAll('.plan-card').forEach(card => {
+            card.addEventListener('click', function () {
+                document.querySelectorAll('.plan-card').forEach(c => c.classList.remove('selected'));
+                this.classList.add('selected');
+                document.getElementById('planInput').value = this.dataset.plan;
+            });
+        });
+    </script>
+</body>
+
+</html>

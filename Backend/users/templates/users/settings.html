@@ -1,0 +1,229 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <title>Settings - KwikChat</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="{% static 'css/chatbase.css' %}" rel="stylesheet">
+    <link href="{% static 'css/context-panel.css' %}" rel="stylesheet">
+    <link rel="icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
+
+    <style>
+        .settings-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+            background: hsl(var(--background));
+            min-height: 100vh;
+        }
+
+        .settings-nav {
+            background: hsl(var(--card));
+            border: 1px solid hsl(var(--border));
+            border-radius: var(--radius);
+            padding: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .settings-nav .nav-link {
+            color: hsl(var(--foreground));
+            padding: 0.75rem 1rem;
+            border-radius: calc(var(--radius) - 2px);
+            transition: all 0.2s;
+        }
+
+        .settings-nav .nav-link:hover {
+            background: hsl(var(--accent));
+        }
+
+        .settings-nav .nav-link.active {
+            background: hsl(var(--primary));
+            color: hsl(var(--primary-foreground));
+        }
+
+        .integration-card {
+            background: hsl(var(--card));
+            border: 1px solid hsl(var(--border));
+            border-radius: var(--radius);
+            padding: 1.5rem;
+            margin-bottom: 1rem;
+            transition: all 0.2s;
+        }
+
+        .integration-card:hover {
+            border-color: hsl(var(--ring));
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+        }
+
+        .integration-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 1rem;
+        }
+
+        .integration-icon {
+            width: 3rem;
+            height: 3rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: var(--radius);
+            font-size: 1.5rem;
+            margin-right: 1rem;
+        }
+
+        .integration-status {
+            padding: 0.25rem 0.75rem;
+            border-radius: calc(var(--radius) - 2px);
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+
+        .status-connected {
+            background: hsl(140, 60%, 95%);
+            color: hsl(140, 60%, 30%);
+        }
+
+        .status-disconnected {
+            background: hsl(var(--muted));
+            color: hsl(var(--muted-foreground));
+        }
+
+        .dark-mode .status-connected {
+            background: hsl(140, 60%, 15%);
+            color: hsl(140, 60%, 75%);
+        }
+    </style>
+</head>
+
+<body>
+    <button class="dark-mode-toggle" id="darkModeToggle" aria-label="Toggle dark mode">
+        <i class="fas fa-moon"></i>
+    </button>
+
+    <div class="settings-container">
+        <div class="wallet-header">
+            <div>
+                <h1 class="dashboard-title"><i class="fas fa-cog me-2"></i>Settings</h1>
+                <p class="dashboard-subtitle">Manage integrations and preferences</p>
+            </div>
+            <a href="{% url 'users:dashboard' %}" class="btn btn-outline-secondary">
+                <i class="fas fa-arrow-left me-2"></i>Back
+            </a>
+        </div>
+
+        <!-- Settings Navigation -->
+        <ul class="nav settings-nav">
+            <li class="nav-item">
+                <a class="nav-link active" href="#integrations"><i class="fas fa-plug me-2"></i>Integrations</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="#profile"><i class="fas fa-user me-2"></i>Profile</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="#workspace"><i class="fas fa-briefcase me-2"></i>Workspace</a>
+            </li>
+        </ul>
+
+        <!-- Integrations Section -->
+        <div id="integrations">
+            <h3 class="mb-4">Connected Services</h3>
+
+            <!-- WhatsApp -->
+            <div class="integration-card">
+                <div class="integration-header">
+                    <div class="d-flex align-items-center">
+                        <div class="integration-icon"
+                            style="background: hsl(140, 100%, 95%); color: hsl(140, 100%, 30%);">
+                            <i class="fab fa-whatsapp"></i>
+                        </div>
+                        <div>
+                            <h5 class="mb-1">WhatsApp Business</h5>
+                            <p class="text-muted small mb-0">Send invoices and sync messages via WhatsApp</p>
+                        </div>
+                    </div>
+                    <span class="integration-status status-disconnected">Disconnected</span>
+                </div>
+                <button class="btn btn-primary btn-sm">
+                    <i class="fas fa-link me-2"></i>Connect WhatsApp
+                </button>
+            </div>
+
+            <!-- IntaSend -->
+            <div class="integration-card">
+                <div class="integration-header">
+                    <div class="d-flex align-items-center">
+                        <div class="integration-icon"
+                            style="background: hsl(210, 100%, 95%); color: hsl(210, 100%, 35%);">
+                            <i class="fas fa-wallet"></i>
+                        </div>
+                        <div>
+                            <h5 class="mb-1">IntaSend Pay (Kenya)</h5>
+                            <p class="text-muted small mb-0">Accept M-Pesa, card, and bank payments</p>
+                        </div>
+                    </div>
+                    <span class="integration-status status-disconnected">Disconnected</span>
+                </div>
+                <button class="btn btn-primary btn-sm">
+                    <i class="fas fa-link me-2"></i>Connect IntaSend
+                </button>
+            </div>
+
+            <!-- Mailgun -->
+            <div class="integration-card">
+                <div class="integration-header">
+                    <div class="d-flex align-items-center">
+                        <div class="integration-icon" style="background: hsl(0, 70%, 95%); color: hsl(0, 70%, 40%);">
+                            <i class="fas fa-envelope"></i>
+                        </div>
+                        <div>
+                            <h5 class="mb-1">Mailgun</h5>
+                            <p class="text-muted small mb-0">Send reminder emails and notifications</p>
+                        </div>
+                    </div>
+                    <span class="integration-status status-disconnected">Disconnected</span>
+                </div>
+                <button class="btn btn-primary btn-sm">
+                    <i class="fas fa-link me-2"></i>Connect Mailgun
+                </button>
+            </div>
+
+            <!-- Calendly -->
+            <div class="integration-card">
+                <div class="integration-header">
+                    <div class="d-flex align-items-center">
+                        <div class="integration-icon"
+                            style="background: hsl(210, 100%, 95%); color: hsl(210, 100%, 35%);">
+                            <i class="fas fa-calendar"></i>
+                        </div>
+                        <div>
+                            <h5 class="mb-1">Calendly</h5>
+                            <p class="text-muted small mb-0">Schedule meetings with clients</p>
+                        </div>
+                    </div>
+                    {% if calendly_connected %}
+                    <span class="integration-status status-connected">
+                        <i class="fas fa-check-circle me-1"></i>Connected
+                    </span>
+                    {% else %}
+                    <span class="integration-status status-disconnected">Disconnected</span>
+                    {% endif %}
+                </div>
+                <button class="btn btn-outline-secondary btn-sm">
+                    <i class="fas fa-cog me-2"></i>Configure
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-1.10.2.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{% static 'js/main.js'%}"></script>
+</body>
+
+</html>

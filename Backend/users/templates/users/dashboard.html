@@ -1,0 +1,374 @@
+{% load static %}
+{% load humanize %}
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <title>Dashboard - KwikChat</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="{% static 'css/chatbase.css' %}" rel="stylesheet">
+    <link href="{% static 'css/context-panel.css' %}" rel="stylesheet">
+    <link rel="icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
+
+    <style>
+        /* Dashboard-specific shadcn styles */
+        .dashboard-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+            background: hsl(var(--background));
+            min-height: 100vh;
+        }
+
+        .dashboard-header {
+            margin-bottom: 2rem;
+        }
+
+        .dashboard-title {
+            font-size: 2rem;
+            font-weight: 700;
+            color: hsl(var(--foreground));
+            margin-bottom: 0.5rem;
+        }
+
+        .dashboard-subtitle {
+            color: hsl(var(--muted-foreground));
+            font-size: 1rem;
+        }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background: hsl(var(--card));
+            border: 1px solid hsl(var(--border));
+            border-radius: var(--radius);
+            padding: 1.5rem;
+            transition: all 0.2s;
+        }
+
+        .stat-card:hover {
+            border-color: hsl(var(--ring));
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+            transform: translateY(-2px);
+        }
+
+        .stat-card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 1rem;
+        }
+
+        .stat-label {
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: hsl(var(--muted-foreground));
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .stat-icon {
+            width: 2.5rem;
+            height: 2.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: var(--radius);
+            font-size: 1.25rem;
+        }
+
+        .stat-icon-primary {
+            background: hsl(var(--primary));
+            color: hsl(var(--primary-foreground));
+        }
+
+        .stat-icon-success {
+            background: hsl(140, 60%, 95%);
+            color: hsl(140, 60%, 30%);
+        }
+
+        .stat-icon-warning {
+            background: hsl(30, 100%, 95%);
+            color: hsl(30, 100%, 35%);
+        }
+
+        .stat-icon-info {
+            background: hsl(210, 100%, 95%);
+            color: hsl(210, 100%, 35%);
+        }
+
+        .dark-mode .stat-icon-success {
+            background: hsl(140, 60%, 15%);
+            color: hsl(140, 60%, 75%);
+        }
+
+        .dark-mode .stat-icon-warning {
+            background: hsl(30, 100%, 15%);
+            color: hsl(30, 100%, 75%);
+        }
+
+        .dark-mode .stat-icon-info {
+            background: hsl(210, 100%, 15%);
+            color: hsl(210, 100%, 75%);
+        }
+
+        .stat-value {
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: hsl(var(--foreground));
+            line-height: 1;
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-change {
+            font-size: 0.875rem;
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+        }
+
+        .stat-change-positive {
+            color: hsl(140, 60%, 40%);
+        }
+
+        .stat-change-negative {
+            color: hsl(var(--destructive));
+        }
+
+        /* Activity Feed */
+        .activity-section {
+            background: hsl(var(--card));
+            border: 1px solid hsl(var(--border));
+            border-radius: var(--radius);
+            padding: 1.5rem;
+        }
+
+        .activity-header {
+            display: flex;
+            align-items: center;
+            justify-content: between;
+            margin-bottom: 1.5rem;
+            border-bottom: 1px solid hsl(var(--border));
+            padding-bottom: 1rem;
+        }
+
+        .activity-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: hsl(var(--foreground));
+        }
+
+        .activity-item {
+            display: flex;
+            gap: 1rem;
+            padding: 1rem 0;
+            border-bottom: 1px solid hsl(var(--border));
+            transition: background 0.2s;
+        }
+
+        .activity-item:last-child {
+            border-bottom: none;
+        }
+
+        .activity-item:hover {
+            background: hsl(var(--accent));
+            margin: 0 -1rem;
+            padding: 1rem;
+            border-radius: calc(var(--radius) - 4px);
+        }
+
+        .activity-icon {
+            width: 2.5rem;
+            height: 2.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        .activity-content {
+            flex: 1;
+        }
+
+        .activity-text {
+            color: hsl(var(--foreground));
+            margin-bottom: 0.25rem;
+        }
+
+        .activity-meta {
+            font-size: 0.875rem;
+            color: hsl(var(--muted-foreground));
+        }
+
+        /* Quick Actions */
+        .quick-actions {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .quick-action-btn {
+            padding: 1rem;
+            background: hsl(var(--card));
+            border: 1px solid hsl(var(--border));
+            border-radius: var(--radius);
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-decoration: none;
+            color: hsl(var(--foreground));
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .quick-action-btn:hover {
+            background: hsl(var(--accent));
+            border-color: hsl(var(--ring));
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+        }
+
+        .quick-action-icon {
+            font-size: 1.5rem;
+            color: hsl(var(--primary));
+        }
+    </style>
+</head>
+
+<body>
+    <button class="dark-mode-toggle" id="darkModeToggle" aria-label="Toggle dark mode">
+        <i class="fas fa-moon"></i>
+    </button>
+
+    <div class="dashboard-container">
+        <!-- Header -->
+        <div class="dashboard-header">
+            <h1 class="dashboard-title">Welcome back, {{ user.first_name|default:user.username }}! 👋</h1>
+            <p class="dashboard-subtitle">Here's what's happening with your workspace today</p>
+        </div>
+
+        <!-- Stats Grid -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-card-header">
+                    <span class="stat-label">Total Messages</span>
+                    <div class="stat-icon stat-icon-primary">
+                        <i class="fas fa-comments"></i>
+                    </div>
+                </div>
+                <div class="stat-value">{{ total_messages|default:0|intcomma }}</div>
+                <div class="stat-change stat-change-positive">
+                    <i class="fas fa-arrow-up"></i>
+                    <span>12% from last week</span>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-card-header">
+                    <span class="stat-label">Active Rooms</span>
+                    <div class="stat-icon stat-icon-info">
+                        <i class="fas fa-door-open"></i>
+                    </div>
+                </div>
+                <div class="stat-value">{{ active_rooms|default:0 }}</div>
+                <div class="stat-change stat-change-positive">
+                    <i class="fas fa-arrow-up"></i>
+                    <span>3 new this week</span>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-card-header">
+                    <span class="stat-label">Reminders</span>
+                    <div class="stat-icon stat-icon-warning">
+                        <i class="fas fa-bell"></i>
+                    </div>
+                </div>
+                <div class="stat-value">{{ pending_reminders|default:0 }}</div>
+                <div class="stat-change">
+                    <span class="text-muted">{{ upcoming_today|default:0 }} due today</span>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-card-header">
+                    <span class="stat-label">Wallet Balance</span>
+                    <div class="stat-icon stat-icon-success">
+                        <i class="fas fa-wallet"></i>
+                    </div>
+                </div>
+                <div class="stat-value">KES {{ wallet_balance|default:0|floatformat:0|intcomma }}</div>
+                <div class="stat-change">
+                    <a href="{% url 'users:wallet' %}" class="text-decoration-none">
+                        <small>View transactions →</small>
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Quick Actions -->
+        <div class="quick-actions">
+            <a href="{% url 'chatbot:redirect_to_home' %}" class="quick-action-btn">
+                <i class="fas fa-comment-dots quick-action-icon"></i>
+                <span>Start Chatting</span>
+            </a>
+            <a href="{% url 'users:reminders' %}" class="quick-action-btn">
+                <i class="fas fa-plus-circle quick-action-icon"></i>
+                <span>Create Reminder</span>
+            </a>
+            <a href="{% url 'users:settings' %}" class="quick-action-btn">
+                <i class="fas fa-plug quick-action-icon"></i>
+                <span>Connect Apps</span>
+            </a>
+            <a href="{% url 'users:wallet' %}" class="quick-action-btn">
+                <i class="fas fa-money-bill-wave quick-action-icon"></i>
+                <span>Add Funds</span>
+            </a>
+        </div>
+
+        <!-- Recent Activity -->
+        <div class="activity-section">
+            <div class="activity-header">
+                <h2 class="activity-title"><i class="fas fa-clock me-2"></i>Recent Activity</h2>
+            </div>
+
+            {% if recent_activity %}
+            {% for activity in recent_activity %}
+            <div class="activity-item">
+                <div class="activity-icon {{ activity.icon_class }}">
+                    <i class="{{ activity.icon }}"></i>
+                </div>
+                <div class="activity-content">
+                    <div class="activity-text">{{ activity.text }}</div>
+                    <div class="activity-meta">{{ activity.timestamp|naturaltime }}</div>
+                </div>
+            </div>
+            {% endfor %}
+            {% else %}
+            <div class="text-center text-muted py-4">
+                <i class="fas fa-inbox fa-3x mb-3 opacity-25"></i>
+                <p>No recent activity. Start chatting with Mathia!</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-1.10.2.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{% static 'js/main.js'%}"></script>
+</body>
+
+</html>

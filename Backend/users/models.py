@@ -88,9 +88,18 @@ class Workspace(models.Model):
         ('pro', 'Pro'),
         ('agency', 'Agency'),
     )
+    ACCOUNT_TYPE_CHOICES = (
+        ('personal', 'Personal Brand'),
+        ('team', 'Team'),
+        ('business', 'Business'),
+    )
+    
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='workspace')
+    owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='owned_workspaces', null=True)
     name = models.CharField(max_length=255, default="My Workspace")
     plan = models.CharField(max_length=20, choices=PLAN_CHOICES, default='free')
+    account_type = models.CharField(max_length=20, choices=ACCOUNT_TYPE_CHOICES, default='personal')
+    onboarding_completed = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

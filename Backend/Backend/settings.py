@@ -247,6 +247,11 @@ MODERATION_FLAG_THRESHOLD = 3
 HF_API_TOKEN = os.environ.get('HF_API_TOKEN', '')
 HF_MONTHLY_LIMIT = 10000  # e.g., 10,000 tokens per month
 
+# External API Keys for Connectors
+OPENWEATHER_API_KEY = os.environ.get('OPENWEATHER_API_KEY', '')
+GIPHY_API_KEY = os.environ.get('GIPHY_API_KEY', '')
+EXCHANGE_RATE_API_KEY = os.environ.get('EXCHANGE_RATE_API_KEY', '')
+
 # Password validation
 # https://docs.djangoproject.com/en/4.1/ref/settings/#auth-password-validators
 

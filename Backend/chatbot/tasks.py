@@ -149,6 +149,10 @@ def process_pending_batches():
     Periodic task to process batches that haven't been processed
     Runs every 5 minutes via Celery Beat
     """
+    # Skip in DEBUG mode
+    if settings.DEBUG:
+        return {"queued": 0, "skipped": "DEBUG mode"}
+    
     pending_batches = ModerationBatch.objects.filter(
         status='pending',
         created_at__lte=timezone.now() - timezone.timedelta(minutes=5)

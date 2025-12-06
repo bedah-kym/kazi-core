@@ -29,6 +29,9 @@ class MCPRouter:
             "schedule_meeting": CalendarConnector(),
             "check_payments": StripeConnector(),
             "search_info": SearchConnector(),
+            "get_weather": WeatherConnector(),
+            "search_gif": GiphyConnector(),
+            "convert_currency": CurrencyConnector(),
         }
     
     async def route(self, intent: Dict, user_context: Dict) -> Dict:
@@ -106,11 +109,6 @@ class MCPRouter:
         
         cache.set(cache_key, current + 1, 3600)  # 1 hour TTL
         
-        # TODO: Add auth checks when real APIs are connected
-        # if intent["action"] == "find_jobs":
-        #     if not await self._check_upwork_auth(user_id):
-        #         return {"valid": False, "reason": "Upwork not connected"}
-        
         return {"valid": True, "reason": None}
     
     async def _cache_result(self, intent: Dict, context: Dict, result: Any):
@@ -132,7 +130,7 @@ class MCPRouter:
 
 
 # ============================================
-# MOCK CONNECTORS (Replace with real APIs later)
+# CONNECTORS
 # ============================================
 
 class BaseConnector:
@@ -146,21 +144,12 @@ class UpworkConnector(BaseConnector):
     """Mock Upwork API connector - returns fake job listings"""
     
     async def execute(self, parameters: Dict, context: Dict) -> List[Dict]:
-        """
-        Search for jobs on Upwork
-        
-        Parameters:
-            query: Search keywords
-            budget_min: Minimum budget
-            budget_max: Maximum budget
-        """
+        """Search for jobs on Upwork"""
         logger.info(f"UpworkConnector called with: {parameters}")
         
-        # Simulate API delay
         import asyncio
         await asyncio.sleep(0.5)
         
-        # Mock data
         query = parameters.get("query", "Python")
         budget_max = parameters.get("budget_max", 5000)
         
@@ -185,52 +174,31 @@ class UpworkConnector(BaseConnector):
                 "client_rating": 4.9,
                 "url": "https://upwork.com/jobs/mock-002"
             },
-            {
-                "id": "job_003",
-                "title": f"{query} API Integration",
-                "budget": f"${budget_max // 2}-${budget_max - 100}",
-                "description": f"Need help integrating {query} with our backend",
-                "posted": "1 day ago",
-                "proposals": 3,
-                "client_rating": 4.5,
-                "url": "https://upwork.com/jobs/mock-003"
-            }
         ]
         
-        return {
-            "jobs": jobs,
-            "total": len(jobs),
-            "query": query
-        }
+        return {"jobs": jobs, "total": len(jobs), "query": query}
 
 
 class CalendarConnector(BaseConnector):
     """Real Calendly connector using CalendlyProfile"""
     
     async def execute(self, parameters: Dict, context: Dict) -> Dict:
-        """
-        Execute Calendly actions:
-        - check_availability: Get scheduled events
-        - schedule_meeting: Get booking link
-        """
+        """Execute Calendly actions"""
         from users.models import CalendlyProfile
         from django.contrib.auth import get_user_model
         import requests
         
         User = get_user_model()
         user_id = context.get("user_id")
-        action = parameters.get("action", "check_availability") # Default action
-        
+        action = parameters.get("action", "check_availability")
         target_user_name = parameters.get("target_user")
         
         try:
-            # Get current user
             try:
                 user = await sync_to_async(User.objects.get)(pk=user_id)
             except User.DoesNotExist:
                 return {"status": "error", "message": "User not found"}
 
-            # Get profile
             try:
                 profile = await sync_to_async(lambda: getattr(user, 'calendly', None))()
             except Exception:
@@ -243,124 +211,65 @@ class CalendarConnector(BaseConnector):
                     "action_required": "connect_calendly"
                 }
 
-            # Handle "schedule_meeting"
             if action == "schedule_meeting":
                 if target_user_name:
-                    # Schedule with another user
                     target_username = target_user_name.lstrip('@')
                     try:
                         target_user = await sync_to_async(User.objects.get)(username=target_username)
                         target_profile = await sync_to_async(lambda: getattr(target_user, 'calendly', None))()
                         
                         if not target_profile or not await sync_to_async(lambda: target_profile.is_connected)():
-                            return {
-                                "status": "error",
-                                "message": f"User @{target_username} has not connected their Calendly yet."
-                            }
+                            return {"status": "error", "message": f"User @{target_username} has not connected their Calendly yet."}
                         
                         booking_link = await sync_to_async(lambda: target_profile.booking_link)()
-                        return {
-                            "status": "success",
-                            "type": "booking_link",
-                            "booking_link": booking_link,
-                            "message": f"Here is the booking link for @{target_username}"
-                        }
+                        return {"status": "success", "type": "booking_link", "booking_link": booking_link, "message": f"Here is the booking link for @{target_username}"}
                     except User.DoesNotExist:
-                        return {
-                            "status": "error", 
-                            "message": f"User @{target_username} not found."
-                        }
+                        return {"status": "error", "message": f"User @{target_username} not found."}
                 else:
-                    # Return own booking link
                     booking_link = await sync_to_async(lambda: profile.booking_link)()
                     if not booking_link:
-                         return {
-                            "status": "error",
-                            "message": "You don't have a booking link configured. Please check your Calendly settings."
-                        }
-                    return {
-                        "status": "success",
-                        "type": "booking_link",
-                        "booking_link": booking_link,
-                        "message": "Here is your booking link."
-                    }
+                        return {"status": "error", "message": "You don't have a booking link configured."}
+                    return {"status": "success", "type": "booking_link", "booking_link": booking_link, "message": "Here is your booking link."}
 
-            # Handle "check availability" / "list meetings"
             access_token = await sync_to_async(profile.get_access_token)()
             if not access_token:
-                 return {
-                    "status": "error", 
-                    "message": "Could not retrieve access token. Please reconnect Calendly.",
-                    "action_required": "connect_calendly"
-                }
+                return {"status": "error", "message": "Could not retrieve access token. Please reconnect Calendly.", "action_required": "connect_calendly"}
                 
-            # Fetch events
             headers = {'Authorization': f'Bearer {access_token}'}
             user_uri = await sync_to_async(lambda: profile.calendly_user_uri)()
             
-            # Run request in thread to avoid blocking
             def fetch_events(token=None):
                 req_headers = headers
                 if token:
                     req_headers = {'Authorization': f'Bearer {token}'}
-                    
-                return requests.get(
-                    'https://api.calendly.com/scheduled_events', 
-                    headers=req_headers, 
-                    params={'user': user_uri, 'status': 'active', 'sort': 'start_time:asc'}
-                )
+                return requests.get('https://api.calendly.com/scheduled_events', headers=req_headers, params={'user': user_uri, 'status': 'active', 'sort': 'start_time:asc'})
             
             response = await sync_to_async(fetch_events)()
             
-            # Handle 401 - Token Expired
             if response.status_code == 401:
                 logger.info("Calendly token expired. Attempting refresh...")
                 new_token = await self._refresh_token(profile)
-                
                 if new_token:
-                    # Retry with new token
                     response = await sync_to_async(fetch_events)(new_token)
                 else:
-                     return {
-                        "status": "error", 
-                        "message": "Calendly authorization failed. Please reconnect.",
-                        "action_required": "connect_calendly"
-                    }
+                    return {"status": "error", "message": "Calendly authorization failed. Please reconnect.", "action_required": "connect_calendly"}
             
             if response.status_code != 200:
                 logger.error(f"Calendly API error: {response.text}")
-                return {
-                    "status": "error",
-                    "message": "Failed to fetch Calendly events."
-                }
+                return {"status": "error", "message": "Failed to fetch Calendly events."}
                 
             data = response.json()
             events = data.get('collection', [])
             
-            # Format events
             formatted_events = []
-            for event in events[:5]: # Top 5
-                start_time = event.get('start_time')
-                name = event.get('name')
-                formatted_events.append({
-                    "start": start_time,
-                    "title": name,
-                    "url": event.get('uri')
-                })
+            for event in events[:5]:
+                formatted_events.append({"start": event.get('start_time'), "title": event.get('name'), "url": event.get('uri')})
                 
-            return {
-                "status": "success",
-                "type": "events",
-                "events": formatted_events,
-                "message": f"You have {len(formatted_events)} upcoming meetings." if formatted_events else "You have no upcoming meetings scheduled."
-            }
+            return {"status": "success", "type": "events", "events": formatted_events, "message": f"You have {len(formatted_events)} upcoming meetings." if formatted_events else "You have no upcoming meetings scheduled."}
 
         except Exception as e:
             logger.error(f"CalendarConnector error: {e}")
-            return {
-                "status": "error",
-                "message": f"An error occurred: {str(e)}"
-            }
+            return {"status": "error", "message": f"An error occurred: {str(e)}"}
 
     async def _refresh_token(self, profile):
         """Refresh the Calendly access token"""
@@ -374,15 +283,7 @@ class CalendarConnector(BaseConnector):
             
         try:
             def do_refresh():
-                return requests.post(
-                    'https://auth.calendly.com/oauth/token',
-                    data={
-                        'grant_type': 'refresh_token',
-                        'refresh_token': refresh_token,
-                        'client_id': settings.CALENDLY_CLIENT_ID,
-                        'client_secret': settings.CALENDLY_CLIENT_SECRET
-                    }
-                )
+                return requests.post('https://auth.calendly.com/oauth/token', data={'grant_type': 'refresh_token', 'refresh_token': refresh_token, 'client_id': settings.CALENDLY_CLIENT_ID, 'client_secret': settings.CALENDLY_CLIENT_SECRET})
             
             response = await sync_to_async(do_refresh)()
             
@@ -391,9 +292,7 @@ class CalendarConnector(BaseConnector):
                 new_access = data.get('access_token')
                 new_refresh = data.get('refresh_token')
                 
-                # Update profile
                 def update_profile():
-                    # We need to re-encrypt and save
                     from cryptography.fernet import Fernet
                     import base64, hashlib
                     
@@ -418,7 +317,6 @@ class CalendarConnector(BaseConnector):
             return None
 
 
-
 class StripeConnector(BaseConnector):
     """Mock Stripe connector - returns fake payment data"""
     
@@ -430,73 +328,194 @@ class StripeConnector(BaseConnector):
             "balance": 1250.50,
             "currency": "USD",
             "recent_payments": [
-                {
-                    "id": "pay_001",
-                    "amount": 500.00,
-                    "status": "completed",
-                    "date": "2025-01-08",
-                    "description": "Python Development Project"
-                },
-                {
-                    "id": "pay_002",
-                    "amount": 750.50,
-                    "status": "pending",
-                    "date": "2025-01-10",
-                    "description": "API Integration Work"
-                }
+                {"id": "pay_001", "amount": 500.00, "status": "completed", "date": "2025-01-08", "description": "Python Development Project"},
+                {"id": "pay_002", "amount": 750.50, "status": "pending", "date": "2025-01-10", "description": "API Integration Work"}
             ]
         }
 
 
 class SearchConnector(BaseConnector):
-    """
-    Web search connector using LLM capabilities
-    Falls back gracefully if Claude (Anthropic) is not available
-    """
+    """Web search connector using LLM capabilities"""
     
     def __init__(self):
         from .llm_client import get_llm_client
         self.llm = get_llm_client()
     
     async def execute(self, parameters: Dict, context: Dict) -> Dict:
-        """
-        Perform web search
-        """
+        """Perform web search"""
         query = parameters.get("query")
         if not query:
             return {"error": "No search query provided"}
             
-        # Check if we have Claude capabilities (Anthropic key)
         if not self.llm.anthropic_key:
-            logger.warning("Search requested but Anthropic key missing. HF fallback cannot search web.")
-            return {
-                "results": [],
-                "summary": "I apologize, but I cannot browse the live web right now because my advanced search module (Claude) is not active. I can only answer based on my internal knowledge.",
-                "source": "system_fallback"
-            }
+            logger.warning("Search requested but Anthropic key missing.")
+            return {"results": [], "summary": "I cannot browse the live web right now.", "source": "system_fallback"}
             
-        # If we have Claude, use it for search
         try:
-            system_prompt = "You are a helpful research assistant. Search the web for the user's query and provide a summary."
-            response = await self.llm.generate_text(
-                system_prompt=system_prompt,
-                user_prompt=f"Search for: {query}",
-                temperature=0.7
-            )
-            
-            return {
-                "results": [{"title": "Search Result", "snippet": response[:200] + "..."}],
-                "summary": response,
-                "source": "claude_search"
-            }
-            
+            system_prompt = "You are a helpful research assistant."
+            response = await self.llm.generate_text(system_prompt=system_prompt, user_prompt=f"Search for: {query}", temperature=0.7)
+            return {"results": [{"title": "Search Result", "snippet": response[:200] + "..."}], "summary": response, "source": "claude_search"}
         except Exception as e:
             logger.error(f"Search failed: {e}")
-            return {
-                "results": [],
-                "summary": "Search failed due to an internal error.",
-                "error": str(e)
-            }
+            return {"results": [], "summary": "Search failed.", "error": str(e)}
+
+
+class WeatherConnector(BaseConnector):
+    """Weather connector using OpenWeatherMap API"""
+    
+    async def execute(self, parameters: Dict, context: Dict) -> Dict:
+        """Get weather for a city"""
+        from django.conf import settings
+        
+        city = parameters.get("city", parameters.get("location", "Nairobi"))
+        api_key = getattr(settings, 'OPENWEATHER_API_KEY', '')
+        
+        if not api_key:
+            logger.warning("Weather requested but OPENWEATHER_API_KEY not configured")
+            return {"status": "error", "message": "Weather service is not configured. Please add OPENWEATHER_API_KEY to your environment."}
+        
+        try:
+            url = "https://api.openweathermap.org/data/2.5/weather"
+            params = {"q": city, "appid": api_key, "units": "metric"}
+            
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(url, params=params)
+                
+                if response.status_code == 404:
+                    return {"status": "error", "message": f"City '{city}' not found."}
+                
+                if response.status_code != 200:
+                    logger.error(f"OpenWeatherMap error: {response.text}")
+                    return {"status": "error", "message": "Failed to fetch weather data."}
+                
+                data = response.json()
+                weather = data.get("weather", [{}])[0]
+                main = data.get("main", {})
+                wind = data.get("wind", {})
+                
+                return {
+                    "status": "success",
+                    "city": data.get("name", city),
+                    "country": data.get("sys", {}).get("country", ""),
+                    "temperature": round(main.get("temp", 0), 1),
+                    "feels_like": round(main.get("feels_like", 0), 1),
+                    "humidity": main.get("humidity", 0),
+                    "description": weather.get("description", "").capitalize(),
+                    "wind_speed": round(wind.get("speed", 0) * 3.6, 1),
+                    "message": f"🌡️ {data.get('name', city)}: {round(main.get('temp', 0), 1)}°C, {weather.get('description', '').capitalize()}. Humidity: {main.get('humidity', 0)}%, Wind: {round(wind.get('speed', 0) * 3.6, 1)} km/h"
+                }
+                
+        except Exception as e:
+            logger.error(f"Weather fetch error: {e}")
+            return {"status": "error", "message": f"Weather lookup failed: {str(e)}"}
+
+
+class GiphyConnector(BaseConnector):
+    """GIPHY connector for searching and returning GIFs"""
+    
+    async def execute(self, parameters: Dict, context: Dict) -> Dict:
+        """Search GIPHY for a GIF"""
+        from django.conf import settings
+        import random
+        
+        query = parameters.get("query", parameters.get("search", "funny"))
+        api_key = getattr(settings, 'GIPHY_API_KEY', '')
+        
+        if not api_key:
+            logger.warning("GIPHY requested but GIPHY_API_KEY not configured")
+            return {"status": "error", "message": "GIF service is not configured. Please add GIPHY_API_KEY to your environment."}
+        
+        try:
+            url = "https://api.giphy.com/v1/gifs/search"
+            params = {"api_key": api_key, "q": query, "limit": 10, "rating": "pg-13"}
+            
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(url, params=params)
+                
+                if response.status_code != 200:
+                    logger.error(f"GIPHY error: {response.text}")
+                    return {"status": "error", "message": "Failed to search for GIFs."}
+                
+                data = response.json()
+                gifs = data.get("data", [])
+                
+                if not gifs:
+                    return {"status": "error", "message": f"No GIFs found for '{query}'."}
+                
+                gif = random.choice(gifs)
+                images = gif.get("images", {})
+                fixed = images.get("fixed_height", {})
+                original = images.get("original", {})
+                
+                return {
+                    "status": "success",
+                    "query": query,
+                    "title": gif.get("title", ""),
+                    "url": fixed.get("url", original.get("url", "")),
+                    "giphy_url": gif.get("url", ""),
+                    "message": f"🎬 Here's a GIF for '{query}'!",
+                    "embed_html": f'<img src="{fixed.get("url", original.get("url", ""))}" alt="{query} GIF" style="max-width: 300px; border-radius: 8px;" />'
+                }
+                
+        except Exception as e:
+            logger.error(f"GIPHY fetch error: {e}")
+            return {"status": "error", "message": f"GIF search failed: {str(e)}"}
+
+
+class CurrencyConnector(BaseConnector):
+    """Currency conversion connector using ExchangeRate-API"""
+    
+    async def execute(self, parameters: Dict, context: Dict) -> Dict:
+        """Convert currency"""
+        from django.conf import settings
+        
+        try:
+            amount = float(parameters.get("amount", 1))
+        except (ValueError, TypeError):
+            return {"status": "error", "message": "Invalid amount. Please provide a valid number."}
+            
+        from_currency = parameters.get("from_currency", parameters.get("from", "USD")).upper()
+        to_currency = parameters.get("to_currency", parameters.get("to", "KES")).upper()
+        api_key = getattr(settings, 'EXCHANGE_RATE_API_KEY', '')
+        
+        if not api_key:
+            logger.warning("Currency conversion requested but EXCHANGE_RATE_API_KEY not configured")
+            return {"status": "error", "message": "Currency service is not configured. Please add EXCHANGE_RATE_API_KEY to your environment."}
+        
+        try:
+            url = f"https://v6.exchangerate-api.com/v6/{api_key}/pair/{from_currency}/{to_currency}/{amount}"
+            
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(url)
+                
+                if response.status_code != 200:
+                    logger.error(f"ExchangeRate-API error: {response.text}")
+                    return {"status": "error", "message": "Failed to fetch exchange rates."}
+                
+                data = response.json()
+                
+                if data.get("result") != "success":
+                    error_type = data.get("error-type", "unknown")
+                    if error_type == "unsupported-code":
+                        return {"status": "error", "message": "Currency code not supported. Use valid ISO codes like USD, EUR, KES."}
+                    return {"status": "error", "message": f"Currency conversion failed: {error_type}"}
+                
+                conversion_result = data.get("conversion_result", 0)
+                rate = data.get("conversion_rate", 0)
+                
+                return {
+                    "status": "success",
+                    "amount": amount,
+                    "from_currency": from_currency,
+                    "to_currency": to_currency,
+                    "rate": round(rate, 4),
+                    "result": round(conversion_result, 2),
+                    "message": f"💱 {amount:,.2f} {from_currency} = {conversion_result:,.2f} {to_currency} (Rate: 1 {from_currency} = {rate:.4f} {to_currency})"
+                }
+                
+        except Exception as e:
+            logger.error(f"Currency conversion error: {e}")
+            return {"status": "error", "message": f"Currency conversion failed: {str(e)}"}
 
 
 _router = None
@@ -510,8 +529,6 @@ def get_mcp_router() -> MCPRouter:
 
 
 async def route_intent(intent: Dict, user_context: Dict) -> Dict:
-    """
-    Convenience function to route an intent
-    """
+    """Convenience function to route an intent"""
     router = get_mcp_router()
     return await router.route(intent, user_context)

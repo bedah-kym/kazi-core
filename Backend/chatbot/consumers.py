@@ -424,6 +424,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
         Buffer messages in Redis and trigger moderation when batch is ready
         Returns True if batch was triggered
         """
+        # Skip moderation in DEBUG mode to save Redis operations
+        if settings.DEBUG:
+            return False
+        
         room = await self.get_current_chatroom(room_id)
         
         # Skip if moderation disabled for this room
@@ -629,16 +633,26 @@ class ChatConsumer(AsyncWebsocketConsumer):
                         
                         # Helper to broadcast chunks (Buffered)
                         # We use a mutable container for closure state
-                        stream_state = {'buffer': [], 'last_send': 0}
+                                                # Helper to broadcast chunks (Buffered & Whitespace Filtered)
+                        # We use a mutable container for closure state
+                        stream_state = {'buffer': [], 'last_send': 0, 'first_token_sent': False}
                         
                         async def broadcast_chunk(chunk_text, is_final=False):
                             import time
+                            
+                            # Filter leading whitespace if first token hasn't been sent
+                            if not stream_state['first_token_sent'] and not is_final:
+                                if not chunk_text.strip():
+                                    return # Ignore pure whitespace at start
+                                chunk_text = chunk_text.lstrip() # Trim leading space of first word
+                                stream_state['first_token_sent'] = True
+                                
                             stream_state['buffer'].append(chunk_text)
                             
                             current_time = time.time()
                             joined_text = "".join(stream_state['buffer'])
                             
-                            # Send if buffer > 10 chars OR > 0.1s passed OR is_final
+                            # Send if buffer > 20 chars OR > 0.2s passed OR is_final
                             if len(joined_text) > 20 or (current_time - stream_state['last_send']) > 0.2 or is_final:
                                 if joined_text or is_final:
                                     await self.channel_layer.group_send(
@@ -651,8 +665,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                     )
                                     stream_state['buffer'] = []
                                     stream_state['last_send'] = current_time
-
-                        # Step 2: Route if high confidence & not general chat
+                        
                         if intent["confidence"] > 0.7 and intent["action"] != "general_chat":
                             # Route through MCP
                             result = await route_intent(intent, {

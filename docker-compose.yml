@@ -19,6 +19,9 @@ services:
       - CALENDLY_CLIENT_ID=${CALENDLY_CLIENT_ID}
       - Webhook_signing_key=${Webhook_signing_key}
       - CALENDLY_CLIENT_SECRET=${CALENDLY_CLIENT_SECRET}
+      - OPENWEATHER_API_KEY=${OPENWEATHER_API_KEY}
+      - GIPHY_API_KEY=${GIPHY_API_KEY}
+      - EXCHANGE_RATE_API_KEY=${EXCHANGE_RATE_API_KEY}
     depends_on:
       - db
 

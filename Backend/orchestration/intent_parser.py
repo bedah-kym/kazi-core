@@ -20,7 +20,10 @@ class IntentParser:
         "schedule_meeting", 
         "check_payments",
         "search_info",
-        "general_chat"
+        "general_chat",
+        "get_weather",
+        "search_gif",
+        "convert_currency",
     ]
     
     SYSTEM_PROMPT = """You are an intent classifier for Mathia, a personal assistant.
@@ -35,15 +38,20 @@ Supported actions:
            "book a meeting", "get my calendly link"
 - check_payments: User asks about payments, invoices, or financial transactions
 - search_info: User wants to look up information on the web
+- get_weather: User asks about weather in a city
+  Examples: "what's the weather?", "weather in London", "is it raining in NYC?", "how cold is it in Nairobi?"
+- search_gif: User wants a GIF
+  Examples: "/gif celebrate", "send me a funny gif", "gif of a cat", "show me a dancing gif"
+- convert_currency: User wants currency conversion
+  Examples: "convert 100 USD to EUR", "$50 in KES", "how much is 1000 yen in dollars?", "exchange rate for pounds"
 - general_chat: Casual conversation, greetings, or unclear requests
 
 Return ONLY valid JSON in this format:
 {
-  "action": "schedule_meeting",
+  "action": "get_weather",
   "confidence": 0.95,
   "parameters": {
-    "action": "check_availability",
-    "target_user": "@username"
+    "city": "Nairobi"
   },
   "raw_query": "original user message"
 }
@@ -60,6 +68,9 @@ Rules:
   * Extract "target_user" if scheduling with someone (e.g., "@john" from "schedule with @john")
 - For check_payments: extract "type" (balance, recent, specific invoice)
 - For search_info: extract "query" (search terms)
+- For get_weather: extract "city" or "location" (default to "Nairobi" if not specified)
+- For search_gif: extract "query" (the gif search term, e.g., "celebrate", "cat", "thumbs up")
+- For convert_currency: extract "amount", "from_currency", "to_currency" (defaults: amount=1, from=USD, to=KES)
 - Be concise. No explanations outside JSON.
 """
 

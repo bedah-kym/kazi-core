@@ -97,3 +97,42 @@ class AIConversation(models.Model):
     
     def __str__(self):
         return f"AI Conv - {self.user.username} - Room {self.room.id} ({self.message_count} msgs)"
+
+
+class Reminder(models.Model):
+    """
+    Scheduled reminders/notifications for users.
+    Processable via Celery beat or scheduled tasks.
+    """
+    PRIORITY_CHOICES = [
+        ('low', 'Low'),
+        ('medium', 'Medium'),
+        ('high', 'High'),
+    ]
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('sent', 'Sent'),
+        ('failed', 'Failed'),
+        ('cancelled', 'Cancelled'),
+    ]
+
+    user = models.ForeignKey(user, on_delete=models.CASCADE, related_name='reminders')
+    room = models.ForeignKey(Chatroom, on_delete=models.SET_NULL, null=True, blank=True)
+    content = models.TextField()  # "Remind me to call John"
+    scheduled_time = models.DateTimeField()
+    priority = models.CharField(max_length=10, choices=PRIORITY_CHOICES, default='medium')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    
+    # Delivery channels
+    via_email = models.BooleanField(default=True)
+    via_whatsapp = models.BooleanField(default=False)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    error_log = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ['scheduled_time']
+
+    def __str__(self):
+        return f"Reminder for {self.user.username}: {self.content[:30]}..."

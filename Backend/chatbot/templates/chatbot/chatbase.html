@@ -12,6 +12,8 @@
     <link href="{% static 'css/chatbase.css' %}" rel="stylesheet">
     <!-- AI Assistant Styles -->
     <link href="{% static 'css/ai-assistant.css' %}" rel="stylesheet">
+    <!-- Context Panel Styles -->
+    <link href="{% static 'css/context-panel.css' %}" rel="stylesheet">
     <!--favicon-->
     <link rel="icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
     <!-- Highlight.js CSS -->
@@ -244,6 +246,29 @@
         </div>
     </div>
 
+    <!-- Context Panel Toggle Button -->
+    <button class="context-panel-toggle" id="contextPanelToggle" title="AI Memory & Notes">
+        <i class="fas fa-brain"></i>
+    </button>
+
+    <!-- Context Panel (Shadcn-inspired) -->
+    <div class="context-panel" id="contextPanel">
+        <div class="context-panel-header">
+            <h2 class="context-panel-title">
+                <i class="fas fa-brain"></i>
+                AI Memory
+            </h2>
+            <p class="context-panel-subtitle">Context & Important Notes</p>
+        </div>
+
+        <div class="context-panel-content" id="contextPanelContent">
+            <div class="context-loading">
+                <div class="spinner"></div>
+                <p style="margin-top: 0.75rem;">Loading context...</p>
+            </div>
+        </div>
+    </div>
+
     <!-- CALENDAR MODAL - Main calendar management modal -->
     <div class="modal fade" id="calendarModal" tabindex="-1" aria-labelledby="calendarModalLabel" aria-hidden="true">
         <div class="modal-dialog modal-dialog-scrollable" style="max-width: 500px;">
@@ -374,6 +399,7 @@
     <script src="{% static 'js/ai-assistant.js' %}"></script>
     <script src="{% static 'js/calendar.js' %}"></script>
     <script src="{% static 'js/search.js'%}"></script>
+    <script src="{% static 'js/context-panel.js' %}"></script>
 
     <!-- Inline styles for calendar button and dark mode support -->
     <style>

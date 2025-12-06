@@ -24,10 +24,17 @@ class DataSynthesizer:
         Convert result data into a user-friendly response
         """
         try:
+            action = intent.get("action")
+            
             # 1. Basic formatting (fallback)
             basic_response = self._format_basic(intent, result)
             
-            # 2. LLM Enhancement (if enabled)
+            # 2. Skip LLM for media/formatted actions (to preserve markdown)
+            # These return pre-formatted messages with special syntax (images, etc)
+            if action in ["search_gif", "get_weather", "convert_currency"]:
+                return basic_response
+            
+            # 3. LLM Enhancement (if enabled for other actions)
             if use_llm:
                 return await self._enhance_with_llm(intent, result, basic_response)
             
@@ -86,7 +93,7 @@ class DataSynthesizer:
         elif action == "search_gif":
             url = data.get("url", "")
             message = data.get("message", "Here's a GIF!")
-            return f"{message}\n{url}"
+            return f"{message}\n![GIF]({url})"
         
         # NEW: Handle currency with pre-formatted message
         elif action == "convert_currency":

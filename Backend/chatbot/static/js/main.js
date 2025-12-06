@@ -54,6 +54,14 @@ chatSocket.onclose = function (e) {
 };
 
 // Message handling
+// Configure Marked options
+if (typeof marked !== 'undefined') {
+    marked.use({
+        breaks: true,
+        gfm: true
+    });
+}
+
 function createMessage(data) {
     if (!data || !data.member || !data.content || !data.timestamp) {
         console.error('Invalid message data:', data);
@@ -69,12 +77,35 @@ function createMessage(data) {
     msgListTag.id = 'tracker';
 
     const msgDivTag = document.createElement('div');
-    const msgdivtag = document.createElement('p');
-    const msgSpanTag = document.createElement('span');
-    const msgpTag = document.createElement('div');
-    const msgTextTag = document.createElement('div');
+    const msgdivtag = document.createElement('p'); // User name
+    const msgSpanTag = document.createElement('span'); // Container for message content
+    const msgpTag = document.createElement('div'); // Time wrapper
+    const msgTextTag = document.createElement('div'); // Actual message content
 
-    msgTextTag.innerHTML = data.content;
+    // MARKDOWN & SECURITY PROCESSING
+    let rawContent = data.content;
+    let safeHtml = rawContent;
+
+    // Check if libraries are loaded
+    if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
+        try {
+            // 1. Parse Markdown
+            const parsedHtml = marked.parse(rawContent);
+
+            // 2. Sanitize HTML (PREVENT XSS)
+            // Allow img tags but sanitise their src
+            safeHtml = DOMPurify.sanitize(parsedHtml, {
+                ADD_TAGS: ['img', 'code', 'pre'],
+                ADD_ATTR: ['src', 'alt', 'class', 'style', 'target']
+            });
+        } catch (e) {
+            console.error('Markdown processing error:', e);
+            // Fallback to text content if error
+            safeHtml = rawContent.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        }
+    }
+
+    msgTextTag.innerHTML = safeHtml;
     msgdivtag.innerHTML = data.member;
     msgpTag.innerHTML = time;
 
@@ -86,7 +117,8 @@ function createMessage(data) {
         msgTextTag.className = 'message other-message';
     }
 
-    if (data.content.includes('<img')) {
+    // Add sentimage class if it contains an image (legacy check + new markdown check)
+    if (data.content.includes('<img') || (safeHtml && safeHtml.includes('<img'))) {
         msgTextTag.classList.add('sentimage');
     }
 
@@ -99,6 +131,43 @@ function createMessage(data) {
     msgDivTag.appendChild(msgSpanTag);
     msgSpanTag.appendChild(msgTextTag);
     msgTextTag.appendChild(msgdivtag);
+
+    // Apply Syntax Highlighting & Copy Buttons
+    if (typeof hljs !== 'undefined') {
+        msgTextTag.querySelectorAll('pre code').forEach((block) => {
+            try {
+                // Force highlight even if language class is missing
+                hljs.highlightElement(block);
+            } catch (e) {
+                console.warn('Highlight warning:', e);
+            }
+
+            // Add Copy Button
+            const pre = block.parentElement;
+            if (pre && !pre.querySelector('.copy-btn')) {
+                // Ensure positioning
+                if (window.getComputedStyle(pre).position === 'static') {
+                    pre.style.position = 'relative';
+                }
+
+                const btn = document.createElement('button');
+                btn.className = 'copy-btn';
+                btn.innerHTML = '<i class="fas fa-copy"></i> Copy';
+                // Inline styles for safety
+                btn.style.cssText = 'position: absolute; top: 5px; right: 5px; padding: 4px 8px; font-size: 12px; border: none; border-radius: 4px; cursor: pointer; background: rgba(255,255,255,0.1); color: #fff; z-index: 10;';
+
+                btn.onclick = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    navigator.clipboard.writeText(block.textContent).then(() => {
+                        btn.innerHTML = '<i class="fas fa-check"></i> Copied!';
+                        setTimeout(() => btn.innerHTML = '<i class="fas fa-copy"></i> Copy', 2000);
+                    }).catch(err => console.error('Copy failed:', err));
+                };
+                pre.appendChild(btn);
+            }
+        });
+    }
 
     document.querySelector('#top-chat').appendChild(msgListTag);
     chatHistory.scrollTop = chatHistory.scrollHeight;

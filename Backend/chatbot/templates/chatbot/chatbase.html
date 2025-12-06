@@ -14,6 +14,55 @@
     <link href="{% static 'css/ai-assistant.css' %}" rel="stylesheet">
     <!--favicon-->
     <link rel="icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
+    <!-- Highlight.js CSS -->
+    <link rel="stylesheet"
+        href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <style>
+        /* Custom styles for code blocks */
+        pre {
+            position: relative;
+            padding: 0.5em;
+            border-radius: 6px;
+            background: #282c34;
+        }
+
+        pre code {
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 0.9em;
+        }
+
+        .copy-btn {
+            position: absolute;
+            top: 5px;
+            right: 5px;
+            padding: 2px 8px;
+            font-size: 12px;
+            color: #abb2bf;
+            background: rgba(255, 255, 255, 0.1);
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .copy-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .message img {
+            max-width: 100%;
+            border-radius: 8px;
+            margin-top: 5px;
+        }
+
+        .message p {
+            margin-bottom: 0.5rem;
+        }
+
+        .message p:last-child {
+            margin-bottom: 0;
+        }
+    </style>
 </head>
 
 <body>
@@ -299,6 +348,12 @@
 
     <!-- Scripts -->
     <script src="https://code.jquery.com/jquery-1.10.2.min.js"></script>
+
+    <!-- Markdown & Security Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 
     <!-- Calendly embed (for inline scheduling) -->

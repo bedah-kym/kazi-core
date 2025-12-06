@@ -8,9 +8,10 @@ from django.utils import timezone
 from datetime import timedelta
 from chatbot.models import Chatroom, Message, Reminder
 from users.models import Wallet
+from users.decorators import workspace_required
 
 
-@login_required
+@workspace_required
 def dashboard(request):
     """
     Main dashboard view showing workspace stats and recent activity

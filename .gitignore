@@ -146,3 +146,4 @@ Backend/staticfiles/
 Backend/mediafiles/
 mathia/
 
+Backend/celerybeat-schedule

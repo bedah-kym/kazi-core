@@ -135,4 +135,125 @@ class Reminder(models.Model):
         ordering = ['scheduled_time']
 
     def __str__(self):
-        return f"Reminder for {self.user.username}: {self.content[:30]}..."
+        return f"Reminder for {self.user.username}: {self.content[:30]}..."
+
+
+class RoomContext(models.Model):
+    """
+    3-Tier Context Storage for AI Memory
+    Tier 1: Hot storage (recent messages, active notes)
+    """
+    chatroom = models.OneToOneField(Chatroom, on_delete=models.CASCADE, related_name='context')
+    
+    # Compressed context summary (LLM-generated)
+    summary = models.TextField(blank=True, help_text="AI-generated summary of conversation")
+    
+    # Key participants and entities mentioned
+    participants = models.JSONField(default=list)  # ["John", "Sarah", "@mike"]
+    entities = models.JSONField(default=dict)  # {"people": [...], "companies": [...], "projects": [...]}
+    
+    # Active topics/themes
+    active_topics = models.JSONField(default=list)  # ["project_launch", "budget_discussion"]
+    
+    # Link to related rooms (cross-room context)
+    related_rooms = models.ManyToManyField('self', blank=True, symmetrical=False)
+    
+    # Metadata
+    message_count = models.IntegerField(default=0)
+    last_compressed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    def __str__(self):
+        return f"Context for Room {self.chatroom.id}"
+
+
+class RoomNote(models.Model):
+    """
+    Tier 2: Important notes/decisions extracted by AI or created by users
+    """
+    NOTE_TYPES = [
+        ('decision', 'Decision'),
+        ('action_item', 'Action Item'),
+        ('insight', 'Insight'),
+        ('reference', 'Reference'),
+        ('reminder', 'Reminder'),
+        ('written', 'Written Note'),
+    ]
+    
+    room_context = models.ForeignKey(RoomContext, on_delete=models.CASCADE, related_name='notes')
+    note_type = models.CharField(max_length=20, choices=NOTE_TYPES)
+    content = models.TextField()
+    
+    # Who created it (AI or User)
+    created_by = models.ForeignKey(user, on_delete=models.SET_NULL, null=True, blank=True)
+    is_ai_generated = models.BooleanField(default=False)
+    
+    # Importance/priority
+    priority = models.CharField(max_length=10, choices=[
+        ('low', 'Low'),
+        ('medium', 'Medium'),
+        ('high', 'High'),
+    ], default='medium')
+    
+    # Tags for searchability
+    tags = models.JSONField(default=list)  # ["budget", "deadline", "client_meeting"]
+    
+    # Linked message (if extracted from conversation)
+    source_message_id = models.IntegerField(null=True, blank=True)
+    
+    # Status tracking
+    is_completed = models.BooleanField(default=False)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['room_context', '-created_at']),
+            models.Index(fields=['note_type', 'is_completed']),
+        ]
+    
+    def __str__(self):
+        return f"{self.get_note_type_display()}: {self.content[:50]}..."
+
+
+class DailySummary(models.Model):
+    """
+    Tier 3: Cold storage - Daily/weekly compressed summaries
+    """
+    room_context = models.ForeignKey(RoomContext, on_delete=models.CASCADE, related_name='daily_summaries')
+    date = models.DateField()
+    
+    # AI-generated summary
+    summary = models.TextField(help_text="What happened today in this room")
+    
+    # Key highlights
+    highlights = models.JSONField(default=list)  # ["Decided on Q1 budget", "John joined team"]
+    
+    # Statistics
+    message_count = models.IntegerField(default=0)
+    participant_count = models.IntegerField(default=0)
+    notes_created = models.IntegerField(default=0)
+    
+    # Sentiment/tone (optional, AI-analyzed)
+    sentiment = models.CharField(max_length=20, blank=True, choices=[
+        ('positive', 'Positive'),
+        ('neutral', 'Neutral'),
+        ('negative', 'Negative'),
+    ])
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        unique_together = ['room_context', 'date']
+        ordering = ['-date']
+        indexes = [
+            models.Index(fields=['room_context', '-date']),
+        ]
+    
+    def __str__(self):
+        return f"Summary for Room {self.room_context.chatroom.id} on {self.date}"
+

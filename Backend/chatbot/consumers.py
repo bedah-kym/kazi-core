@@ -876,9 +876,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
             
             # Create message from AI bot
             def _create_ai_message():
-                ai_user, _ = User.objects.get_or_create(
+                ai_user, created = User.objects.get_or_create(
                     username='mathia',
-                    defaults={'is_active': False}
+                    defaults={
+                        'first_name': 'Mathia',
+                        'last_name': 'AI',
+                        'is_active': True,  # Activate so profile is visible
+                        'email': 'mathia@kwikchat.ai'
+                    }
                 )
                 ai_member, _ = Member.objects.get_or_create(User=ai_user)
                 

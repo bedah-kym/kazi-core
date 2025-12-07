@@ -21,4 +21,6 @@ urlpatterns = [
     path('reminders/', feature_views.reminders, name='reminders'),
     path('reminders/create/', frontend_views.create_reminder, name='create_reminder'),
     path('settings/', feature_views.settings, name='settings'),
+    path('settings/profile/', feature_views.profile_settings, name='profile_settings'),
+    path('settings/goals/', feature_views.goals_settings, name='goals_settings'),
 ]

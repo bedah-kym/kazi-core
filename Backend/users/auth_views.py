@@ -6,6 +6,7 @@ from django.contrib.auth import login, authenticate
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django.contrib.auth.models import User
+from django.urls import reverse
 from users.models import Workspace
 
 
@@ -71,18 +72,19 @@ def onboarding(request):
     if request.method == 'POST':
         if step == 1:
             # Save account type
-            account_type = request.POST.get('account_type')
+            account_type = request.POST.get('account_type', 'personal')
             request.session['onboarding_account_type'] = account_type
-            return redirect('?step=2')
+            return redirect(reverse('users:onboarding') + '?step=2')
         
         elif step == 2:
             # Create workspace
             workspace_name = request.POST.get('workspace_name', '')
-            account_type = request.session.get('onboarding_account_type', 'personal')
+            account_type = request.session.get('onboarding_account_type') or 'personal'
             
             workspace, created = Workspace.objects.get_or_create(
-                owner=request.user,
+                user=request.user,
                 defaults={
+                    'owner': request.user,
                     'name': workspace_name,
                     'account_type': account_type,
                     'plan': 'free'
@@ -94,7 +96,7 @@ def onboarding(request):
                 workspace.account_type = account_type
                 workspace.save()
             
-            return redirect('?step=3')
+            return redirect(reverse('users:onboarding') + '?step=3')
         
         elif step == 3:
             # Save plan selection
@@ -104,7 +106,7 @@ def onboarding(request):
             workspace.plan = plan
             workspace.save()
             
-            return redirect('?step=4')
+            return redirect(reverse('users:onboarding') + '?step=4')
         
         elif step == 4:
             # Complete onboarding

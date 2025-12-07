@@ -1,0 +1,215 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <title>Profile Settings - KwikChat</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="{% static 'css/chatbase.css' %}" rel="stylesheet">
+    <link href="{% static 'css/context-panel.css' %}" rel="stylesheet">
+    <link rel="icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
+
+    <style>
+        .settings-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+            background: hsl(var(--background));
+            min-height: 100vh;
+        }
+
+        .settings-nav {
+            background: hsl(var(--card));
+            border: 1px solid hsl(var(--border));
+            border-radius: var(--radius);
+            padding: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .settings-nav .nav-link {
+            color: hsl(var(--foreground));
+            padding: 0.75rem 1rem;
+            border-radius: calc(var(--radius) - 2px);
+            transition: all 0.2s;
+        }
+
+        .settings-nav .nav-link:hover {
+            background: hsl(var(--accent));
+        }
+
+        .settings-nav .nav-link.active {
+            background: hsl(var(--primary));
+            color: hsl(var(--primary-foreground));
+        }
+
+        .form-section {
+            background: hsl(var(--card));
+            border: 1px solid hsl(var(--border));
+            border-radius: var(--radius);
+            padding: 2rem;
+            margin-bottom: 2rem;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 0.5rem 1rem;
+            border: 1px solid hsl(var(--input));
+            border-radius: var(--radius);
+            background: hsl(var(--background));
+            color: hsl(var(--foreground));
+        }
+    </style>
+</head>
+
+<body>
+    <button class="dark-mode-toggle" id="darkModeToggle" aria-label="Toggle dark mode">
+        <i class="fas fa-moon"></i>
+    </button>
+
+    <div class="settings-container">
+        <!-- Messages -->
+        {% if messages %}
+        <div class="messages mb-4">
+            {% for message in messages %}
+            <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
+                {{ message }}
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <div class="wallet-header">
+            <div>
+                <h1 class="dashboard-title"><i class="fas fa-user-cog me-2"></i>Profile Settings</h1>
+                <p class="dashboard-subtitle">Manage your personal brand profile</p>
+            </div>
+            <a href="{% url 'users:dashboard' %}" class="btn btn-outline-secondary">
+                <i class="fas fa-arrow-left me-2"></i>Back
+            </a>
+        </div>
+
+        <!-- Settings Navigation -->
+        <ul class="nav settings-nav">
+            <li class="nav-item">
+                <a class="nav-link {% if active_tab == 'integrations' %}active{% endif %}"
+                    href="{% url 'users:settings' %}"><i class="fas fa-plug me-2"></i>Integrations</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if active_tab == 'profile' %}active{% endif %}"
+                    href="{% url 'users:profile_settings' %}"><i class="fas fa-user me-2"></i>Profile</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if active_tab == 'goals' %}active{% endif %}"
+                    href="{% url 'users:goals_settings' %}"><i class="fas fa-bullseye me-2"></i>Goals & AI</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="#workspace"><i class="fas fa-briefcase me-2"></i>Workspace</a>
+            </li>
+        </ul>
+
+        <form method="post" enctype="multipart/form-data">
+            {% csrf_token %}
+
+            <div class="form-section">
+                <h3 class="mb-4">Basic Information</h3>
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <label class="form-label">First Name</label>
+                        {{ user_form.first_name }}
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Last Name</label>
+                        {{ user_form.last_name }}
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Email</label>
+                    {{ user_form.email }}
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Bio</label>
+                    {{ profile_form.bio }}
+                </div>
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <label class="form-label">Location</label>
+                        {{ profile_form.location }}
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Website</label>
+                        {{ profile_form.website }}
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Avatar</label>
+                    {% if user.profile.avatar %}
+                    <img src="{{ user.profile.avatar.url }}" alt="Avatar" class="d-block mb-2 rounded-circle" width="64"
+                        height="64">
+                    {% endif %}
+                    {{ profile_form.avatar }}
+                </div>
+            </div>
+
+            <div class="form-section">
+                <h3 class="mb-4">Professional Details</h3>
+                <div class="mb-3">
+                    <label class="form-label">Account Type</label>
+                    {{ profile_form.user_type }}
+                </div>
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <label class="form-label">Industry</label>
+                        {{ profile_form.industry }}
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Role / Title</label>
+                        {{ profile_form.role }}
+                    </div>
+                </div>
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <label class="form-label">Company Name</label>
+                        {{ profile_form.company_name }}
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Company Size</label>
+                        {{ profile_form.company_size }}
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-section">
+                <h3 class="mb-4">Social & Preferences</h3>
+                <div class="mb-3">
+                    <label class="form-label">Social Links (JSON)</label>
+                    {{ profile_form.social_links }}
+                    <div class="form-text">e.g. {"twitter": "@mathia", "linkedin": "https://linkedin.com/in/..."}</div>
+                </div>
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <label class="form-label">Theme</label>
+                        {{ profile_form.theme_preference }}
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Notification Prefs (JSON)</label>
+                        {{ profile_form.notification_preferences }}
+                    </div>
+                </div>
+            </div>
+
+            <button type="submit" class="btn btn-primary btn-lg">
+                <i class="fas fa-save me-2"></i>Save Changes
+            </button>
+        </form>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-1.10.2.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{% static 'js/main.js'%}"></script>
+</body>
+
+</html>

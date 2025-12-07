@@ -298,21 +298,15 @@ MEDIA_URL = '/uploads/'  # Base URL for media files
 MEDIA_ROOT = os.path.join(BASE_DIR, 'uploads')  # Directory to store uploaded files
 
 STATIC_URL = 'static/'
-LOGIN_REDIRECT_URL = 'chatbot:redirect_to_home'
-LOGIN_URL='users:login'
-LOGOUT_REDIRECT_URL = 'users:login'
-
-# Internationalization
-# https://docs.djangoproject.com/en/4.1/topics/i18n/
-
-
-
-# Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/4.1/howto/static-files/
-
-STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
+STATICFILES_DIRS = [
+    BASE_DIR / 'static',
+]
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+
+LOGIN_REDIRECT_URL = 'users:dashboard'
+LOGIN_URL = 'users:login'
+LOGOUT_REDIRECT_URL = 'users:login'
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.1/ref/settings/#default-auto-field
@@ -398,18 +392,30 @@ SOCIALACCOUNT_PROVIDERS = {
         'SCOPE': ['profile', 'email'],
         'AUTH_PARAMS': {'access_type': 'online'},
         'APP': {
-            'client_id': os.environ.get('GOOGLE_CLIENT_ID', ''),
-            'secret': os.environ.get('GOOGLE_CLIENT_SECRET', ''),
+            'client_id': os.environ.get('GOOGLE_CLIENT_ID', 'dummy_google_client_id'),
+            'secret': os.environ.get('GOOGLE_CLIENT_SECRET', 'dummy_google_secret'),
         }
     },
     'github': {
         'SCOPE': ['user', 'read:org'],
         'APP': {
-            'client_id': os.environ.get('GITHUB_CLIENT_ID', ''),
-            'secret': os.environ.get('GITHUB_CLIENT_SECRET', ''),
+            'client_id': os.environ.get('GITHUB_CLIENT_ID', 'dummy_github_client_id'),
+            'secret': os.environ.get('GITHUB_CLIENT_SECRET', 'dummy_github_secret'),
         }
     },
-    # LinkedIn & Twitter config placeholders (add keys to .env)
+    'linkedin_oauth2': {
+        'SCOPE': ['r_liteprofile', 'r_emailaddress'],
+        'APP': {
+            'client_id': os.environ.get('LINKEDIN_CLIENT_ID', 'dummy_linkedin_id'),
+            'secret': os.environ.get('LINKEDIN_CLIENT_SECRET', 'dummy_linkedin_secret'),
+        }
+    },
+    'twitter': {
+        'APP': {
+            'client_id': os.environ.get('TWITTER_CLIENT_ID', 'dummy_twitter_id'),
+            'secret': os.environ.get('TWITTER_CLIENT_SECRET', 'dummy_twitter_secret'),
+        }
+    }
 }
 
 # --- AXES (Brute Force Protection) ---

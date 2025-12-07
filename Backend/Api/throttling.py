@@ -4,7 +4,7 @@ class AIRequestThrottle(UserRateThrottle):
     scope = 'ai_request'
 
     def get_rate(self):
-        user = self.scope_user
+        user = getattr(self, 'user', None)
         if not user or not user.is_authenticated:
             return '0/day'  # No AI for anon
         
@@ -27,7 +27,7 @@ class GlobalApiThrottle(UserRateThrottle):
     scope = 'global_api'
 
     def get_rate(self):
-        user = self.scope_user
+        user = getattr(self, 'user', None)
         if not user or not user.is_authenticated:
             return '60/min'
 

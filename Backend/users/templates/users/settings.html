@@ -120,10 +120,16 @@
         <!-- Settings Navigation -->
         <ul class="nav settings-nav">
             <li class="nav-item">
-                <a class="nav-link active" href="#integrations"><i class="fas fa-plug me-2"></i>Integrations</a>
+                <a class="nav-link {% if active_tab == 'integrations' %}active{% endif %}"
+                    href="{% url 'users:settings' %}"><i class="fas fa-plug me-2"></i>Integrations</a>
             </li>
             <li class="nav-item">
-                <a class="nav-link" href="#profile"><i class="fas fa-user me-2"></i>Profile</a>
+                <a class="nav-link {% if active_tab == 'profile' %}active{% endif %}"
+                    href="{% url 'users:profile_settings' %}"><i class="fas fa-user me-2"></i>Profile</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if active_tab == 'goals' %}active{% endif %}"
+                    href="{% url 'users:goals_settings' %}"><i class="fas fa-bullseye me-2"></i>Goals & AI</a>
             </li>
             <li class="nav-item">
                 <a class="nav-link" href="#workspace"><i class="fas fa-briefcase me-2"></i>Workspace</a>

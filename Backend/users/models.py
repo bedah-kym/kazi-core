@@ -82,6 +82,179 @@ class CalendlyProfile(models.Model):
 			return None
 
 
+class UserProfile(models.Model):
+	"""
+	User Profile with bio, avatar, and social links
+	"""
+	user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
+	
+	# Basic Info
+	bio = models.TextField(max_length=500, blank=True, help_text="Short bio or description")
+	avatar = models.ImageField(upload_to='avatars/', blank=True, null=True)
+	location = models.CharField(max_length=100, blank=True)
+	website = models.URLField(max_length=200, blank=True)
+	
+	# Professional Profile (NEW)
+	user_type = models.CharField(max_length=20, choices=[
+		('personal', 'Personal Brand'),
+		('team', 'Team'),
+		('business', 'Business')
+	], default='personal', help_text="Account type")
+	
+	industry = models.CharField(max_length=100, blank=True,
+		help_text="e.g., Design, Development, Marketing, Consulting")
+	
+	company_name = models.CharField(max_length=255, blank=True,
+		help_text="Company or brand name")
+	
+	company_size = models.CharField(max_length=20, blank=True, choices=[
+		('1', 'Just me'),
+		('2-5', '2-5 people'),
+		('6-10', '6-10 people'),
+		('11-25', '11-25 people'),
+		('26-50', '26-50 people'),
+		('50+', '50+ people')
+	])
+	
+	role = models.CharField(max_length=100, blank=True,
+		help_text="Job title/role (e.g., Founder, Designer, Developer)")
+	
+	# Social links (individual fields - backward compatible)
+	twitter_handle = models.CharField(max_length=50, blank=True)
+	linkedin_url = models.URLField(max_length=200, blank=True)
+	github_url = models.URLField(max_length=200, blank=True)
+	
+	# Social links as JSON for flexibility (NEW)
+	social_links = models.JSONField(default=dict, blank=True,
+		help_text='{"twitter": "@handle", "linkedin": "url", "github": "url", "portfolio": "url"}')
+	
+	# Onboarding tracking (NEW)
+	onboarding_completed = models.BooleanField(default=False)
+	onboarding_step = models.IntegerField(default=0,
+		help_text="Current onboarding step (0-6)")
+	
+	# Preferences (NEW)
+	notification_preferences = models.JSONField(default=dict, blank=True,
+		help_text='{"email_notifications": true, "push_notifications": false, "digest_frequency": "daily"}')
+	
+	theme_preference = models.CharField(max_length=10, choices=[
+		('light', 'Light'),
+		('dark', 'Dark'),
+		('auto', 'Auto')
+	], default='auto')
+	
+	# Existing preferences
+	timezone = models.CharField(max_length=50, default='UTC')
+	language = models.CharField(max_length=10, default='en')
+	
+	created_at = models.DateTimeField(auto_now_add=True)
+	updated_at = models.DateTimeField(auto_now=True)
+	
+	def __str__(self):
+		return f"{self.user.username}'s Profile"
+	
+	def get_display_name(self):
+		"""Returns full name if available, otherwise username"""
+		if self.user.first_name and self.user.last_name:
+			return f"{self.user.first_name} {self.user.last_name}"
+		elif self.user.first_name:
+			return self.user.first_name
+		return self.user.username
+	
+	def get_avatar_url(self):
+		"""Returns avatar URL or default placeholder"""
+		if self.avatar:
+			return self.avatar.url
+		# Return default avatar based on username initial
+		initial = self.user.username[0].upper()
+		return f"https://ui-avatars.com/api/?name={initial}&background=4f8cff&color=fff&size=128"
+	
+	def consolidate_social_links(self):
+		"""Migrate individual social fields to social_links JSON"""
+		if not self.social_links:
+			self.social_links = {}
+		
+		if self.twitter_handle and 'twitter' not in self.social_links:
+			self.social_links['twitter'] = self.twitter_handle
+		if self.linkedin_url and 'linkedin' not in self.social_links:
+			self.social_links['linkedin'] = self.linkedin_url
+		if self.github_url and 'github' not in self.social_links:
+			self.social_links['github'] = self.github_url
+		
+		return self.social_links
+
+
+class GoalProfile(models.Model):
+	"""
+	AI personalization engine: User goals, skills, needs, and roadmap
+	"""
+	workspace = models.OneToOneField('Workspace', on_delete=models.CASCADE, related_name='goals')
+	
+	# Professional Goals
+	goals = models.JSONField(default=list, blank=True,
+		help_text='["grow_audience", "increase_revenue", "book_more_clients", etc.]')
+	custom_goals = models.TextField(blank=True, help_text="Free-form custom goals")
+	
+	# Skills & Expertise
+	industry = models.CharField(max_length=100, blank=True,
+		help_text="Primary industry (Design, Dev, Marketing, etc.)")
+	skills = models.JSONField(default=list, blank=True,
+		help_text='["React", "SEO", "Copywriting", "B2B Sales"]')
+	experience_level = models.CharField(max_length=20, choices=[
+		('beginner', 'Beginner'),
+		('intermediate', 'Intermediate'),
+		('expert', 'Expert'),
+	], default='intermediate')
+	
+	# Current Needs (What user wants help with)
+	needs = models.JSONField(default=list, blank=True,
+		help_text='["content_ideas", "engagement_strategies", "lead_generation", etc.]')
+	custom_needs = models.TextField(blank=True)
+	
+	# Use Cases (How they use KwikChat)
+	use_cases = models.JSONField(default=list, blank=True,
+		help_text='["client_management", "team_collaboration", "social_monitoring", etc.]')
+	
+	# Brand Roadmap (Timeline-based goals)
+	roadmap = models.JSONField(default=list, blank=True,
+		help_text='[{"quarter": "Q1 2025", "goals": ["Launch newsletter"], "status": "in_progress"}]')
+	
+	# Target Metrics
+	target_revenue = models.DecimalField(max_digits=10, decimal_places=2,
+		null=True, blank=True, help_text="Revenue goal (e.g., $10,000 MRR)")
+	target_followers = models.IntegerField(null=True, blank=True,
+		help_text="Social media follower target")
+	target_clients = models.IntegerField(null=True, blank=True,
+		help_text="Client acquisition target")
+	target_email_subscribers = models.IntegerField(null=True, blank=True)
+	
+	# AI Context
+	ai_personalization_enabled = models.BooleanField(default=True,
+		help_text="Allow AI to use goals for personalized suggestions")
+	
+	updated_at = models.DateTimeField(auto_now=True)
+	created_at = models.DateTimeField(auto_now_add=True)
+	
+	def __str__(self):
+		return f"Goals for {self.workspace.name}"
+	
+	def get_active_goals(self):
+		"""Return goals formatted for AI context"""
+		return {
+			'professional_goals': self.goals,
+			'custom_goals': self.custom_goals,
+			'skills': self.skills,
+			'needs': self.needs,
+			'roadmap': [r for r in self.roadmap if r.get('status') != 'completed'],
+			'targets': {
+				'revenue': float(self.target_revenue) if self.target_revenue else None,
+				'followers': self.target_followers,
+				'clients': self.target_clients,
+				'email_subscribers': self.target_email_subscribers
+			}
+		}
+
+
 class Workspace(models.Model):
     PLAN_CHOICES = (
         ('free', 'Free'),
@@ -169,5 +342,3 @@ class WalletTransaction(models.Model):
 
     def __str__(self):
         return f"{self.type} {self.currency} {self.amount} - {self.status}"
-
-

@@ -445,27 +445,36 @@
         <div class="row g-0">
             <div class="col-md-4 col-lg-3 people-list">
                 <div class="p-3 people-list-content">
-                    <div class="search-bar input-group mb-3">
-                        <span class="input-group-text p-3 bg-light border-0">
-                            <i class=""></i>
-                        </span>
-                        <input type="text" class="form-control border-0 bg-light" id="search"
-                            placeholder="Search People...">
-                        <span class="input-group-text bg-light border-0">
-                            <i class="fas fa-search text-muted"></i>
-                        </span>
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <div class="search-bar input-group flex-grow-1 me-2 mb-0">
+                            <span class="input-group-text p-3 bg-light border-0">
+                                <i class=""></i>
+                            </span>
+                            <input type="text" class="form-control border-0 bg-light" id="search"
+                                placeholder="Search People...">
+                            <span class="input-group-text bg-light border-0">
+                                <i class="fas fa-search text-muted"></i>
+                            </span>
+                        </div>
+                        <button class="btn btn-primary rounded-circle" data-bs-toggle="modal"
+                            data-bs-target="#createRoomModal" title="Create New Room">
+                            <i class="fas fa-plus"></i>
+                        </button>
                     </div>
                     <ul class="list-unstyled chat-list">
                         {% for chatroom in chatrooms %}
-                        <li class="clearfix {% if chatroom.id == room_name %}active{% endif %}">
-                            <a href="{% url 'chatbot:bot-home' chatroom.id %}" class="text-decoration-none">
+                        <li class="clearfix {% if chatroom.id == room_name %}active{% endif %}"
+                            id="room-li-{{ chatroom.id }}">
+                            <a href="{% url 'chatbot:bot-home' chatroom.id %}" class="text-decoration-none"
+                                onclick="switchRoom(event, {{ chatroom.id }}, '{{ chatroom.name|escapejs }}')">
                                 <div class="d-flex align-items-center">
-                                    <img src="https://bootdey.com/img/Content/avatar/avatar1.png"
-                                        class="avatar-img me-2" alt="avatar">
+                                    <img src="{{ chatroom.avatar }}" class="avatar-img me-2" alt="avatar">
                                     <div>
                                         <div class="fw-bold">
-                                            {{ room_member }}
-                                            <span class="status-dot sidebar-dot" data-user="{{ room_member }}"></span>
+                                            {{ chatroom.name }}
+                                            <!-- Valid user for status dot might be tricky in groups, 
+                                                 using display name for now if it's a single user -->
+                                            <span class="status-dot sidebar-dot" data-user="{{ chatroom.name }}"></span>
                                         </div>
                                     </div>
                                 </div>
@@ -652,6 +661,48 @@
             <div class="context-loading">
                 <div class="spinner"></div>
                 <p style="margin-top: 0.75rem;">Loading context...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- CREATE ROOM MODAL -->
+    <div class="modal fade" id="createRoomModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Create New Room</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <div class="row g-3">
+                        <div class="col-6">
+                            <form action="{% url 'chatbot:create_room' %}" method="POST">
+                                {% csrf_token %}
+                                <input type="hidden" name="room_type" value="general">
+                                <button type="submit" class="btn btn-outline-primary w-100 h-100 p-4 border-2">
+                                    <div class="text-center">
+                                        <i class="fas fa-robot fa-3x mb-3 text-primary"></i>
+                                        <h5 class="mb-1">General Room</h5>
+                                        <small class="text-muted">Chat with Mathia AI</small>
+                                    </div>
+                                </button>
+                            </form>
+                        </div>
+                        <div class="col-6">
+                            <form action="{% url 'chatbot:create_room' %}" method="POST">
+                                {% csrf_token %}
+                                <input type="hidden" name="room_type" value="private">
+                                <button type="submit" class="btn btn-outline-secondary w-100 h-100 p-4 border-2">
+                                    <div class="text-center">
+                                        <i class="fas fa-lock fa-3x mb-3 text-secondary"></i>
+                                        <h5 class="mb-1">Private Room</h5>
+                                        <small class="text-muted">Your private space</small>
+                                    </div>
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>

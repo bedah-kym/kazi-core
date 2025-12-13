@@ -5,55 +5,55 @@ class ContextPanel {
         this.toggle = document.getElementById('contextPanelToggle');
         this.isOpen = false;
         this.roomId = roomName; // From Django template
-        
+
         this.init();
     }
-    
+
     init() {
         if (!this.panel || !this.toggle) return;
-        
+
         this.toggle.addEventListener('click', () => this.togglePanel());
         this.loadContext();
-        
+
         // Refresh context every 30 seconds
         setInterval(() => this.loadContext(), 30000);
     }
-    
+
     togglePanel() {
         this.isOpen = !this.isOpen;
         this.panel.classList.toggle('open');
         this.toggle.classList.toggle('active');
-        
+
         if (this.isOpen && !this.panel.dataset.loaded) {
             this.loadContext();
         }
     }
-    
+
     async loadContext() {
         const contentEl = document.getElementById('contextPanelContent');
         if (!contentEl) return;
-        
+
         try {
             // Fetch context from Django API endpoint
-            const response = await fetch(`/api/rooms/${this.roomId}/context/`);
-            
+            const response = await fetch(`/chatbot/api/rooms/${this.roomId}/context/`);
+
             if (!response.ok) {
                 throw new Error('Failed to fetch context');
             }
-            
+
             const data = await response.json();
             this.renderContext(data);
             this.panel.dataset.loaded = 'true';
-            
+
         } catch (error) {
             console.error('Context load error:', error);
             this.renderError();
         }
     }
-    
+
     renderContext(context) {
         const contentEl = document.getElementById('contextPanelContent');
-        
+
         contentEl.innerHTML = `
             <!-- AI Summary -->
             <div class="context-summary-card">
@@ -95,8 +95,8 @@ class ContextPanel {
                     <div class="notes-title">
                         <i class="fas fa-sticky-note"></i>
                         Notes
-                        ${context.recent_notes && context.recent_notes.length > 0 ? 
-                            `<span class="notes-count">${context.recent_notes.length}</span>` : ''}
+                        ${context.recent_notes && context.recent_notes.length > 0 ?
+                `<span class="notes-count">${context.recent_notes.length}</span>` : ''}
                     </div>
                 </div>
                 
@@ -116,7 +116,7 @@ class ContextPanel {
             ` : ''}
         `;
     }
-    
+
     renderNotes(notes) {
         if (!notes || notes.length === 0) {
             return `
@@ -126,7 +126,7 @@ class ContextPanel {
                 </div>
             `;
         }
-        
+
         return notes.map(note => `
             <div class="note-card">
                 <div class="note-card-header">
@@ -147,7 +147,7 @@ class ContextPanel {
             </div>
         `).join('');
     }
-    
+
     getNoteIcon(type) {
         const icons = {
             'decision': '<i class="fas fa-check-circle"></i>',
@@ -159,13 +159,13 @@ class ContextPanel {
         };
         return icons[type] || '<i class="fas fa-note-sticky"></i>';
     }
-    
+
     formatNoteType(type) {
-        return type.split('_').map(word => 
+        return type.split('_').map(word =>
             word.charAt(0).toUpperCase() + word.slice(1)
         ).join(' ');
     }
-    
+
     renderError() {
         const contentEl = document.getElementById('contextPanelContent');
         contentEl.innerHTML = `
@@ -175,7 +175,7 @@ class ContextPanel {
             </div>
         `;
     }
-    
+
     escapeHtml(text) {
         const div = document.createElement('div');
         div.textContent = text;

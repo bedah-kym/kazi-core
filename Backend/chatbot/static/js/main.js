@@ -1,5 +1,105 @@
-var chatSocket = new ReconnectingWebSocket(
-    'ws://' + window.location.host + '/ws/chat/' + roomName + '/');
+// Global variables
+let chatSocket = null;
+let currentRoomId = roomName; // roomName defined in template
+let otherUserMember = otherUser; // otherUser defined in template
+
+// Initialize first connection
+connectToChat(roomName);
+
+function connectToChat(roomId) {
+    if (chatSocket) {
+        chatSocket.close();
+    }
+
+    console.log(`🔌 Connecting to room ${roomId}...`);
+    chatSocket = new ReconnectingWebSocket(
+        'ws://' + window.location.host + '/ws/chat/' + roomId + '/'
+    );
+
+    // Initialize chat connection
+    chatSocket.onopen = function (e) {
+        console.log('✅ WebSocket connection established for room ' + roomId);
+        document.querySelectorAll('.status-dot').forEach(dot => {
+            dot.classList.remove('online', 'offline');
+        });
+        FetchMessages(roomId);
+    };
+
+    chatSocket.onclose = function (e) {
+        console.error('❌ Chat socket closed');
+        document.querySelectorAll('.status-dot').forEach(dot => {
+            dot.classList.remove('online');
+            dot.classList.add('offline');
+        });
+    };
+
+    // WebSocket message handling
+    chatSocket.onmessage = function (e) {
+        const data = JSON.parse(e.data);
+        if (data.command === 'typing' && data.from !== username) {
+            document.getElementById('typing-user').textContent = data.from;
+            showTypingIndicator();
+            clearTimeout(typingTimer);
+            typingTimer = setTimeout(hideTypingIndicator, 3000);
+            return;
+        }
+        if (data.command === 'presence_snapshot' || data.command === 'presence') { handlePresenceUpdate(data); return; }
+        if (data.command === 'messages') {
+            // Clear existing messages first if it's a fresh fetch
+            // But usually fetch_messages command clears lazily or we clear on switch
+            for (let i = data.messages.length - 1; i >= 0; i--) createMessage(data.messages[i]);
+            scrollToLastMessage();
+            return;
+        }
+        if (data.command === 'new_message') { createMessage(data.message); scrollToLastMessage(); return; }
+        if (data.command === 'error') { console.error('Error from server:', data.message); return; }
+        console.warn('Unknown command:', data);
+    };
+}
+
+/**
+ * Switch Room Function (SPA Style)
+ */
+function switchRoom(event, roomId, roomDisplayName) {
+    event.preventDefault();
+    console.log(`🔄 Switching to room ${roomId} (${roomDisplayName})`);
+
+    if (currentRoomId === roomId) return; // Already here
+
+    // 1. Update UI State
+    document.querySelectorAll('.chat-list li').forEach(li => li.classList.remove('active'));
+    document.getElementById(`room-li-${roomId}`)?.classList.add('active');
+
+    // Update Header
+    document.querySelector('.chat-header h6').textContent = roomDisplayName;
+    // Update global var for other logic
+    otherUserMember = roomDisplayName;
+    if (typeof otherUser !== 'undefined') {
+        otherUser = roomDisplayName;
+    }
+
+    // Clear Chat History
+    document.getElementById('top-chat').innerHTML = '';
+
+    // 2. Update URL (without reload)
+    const newUrl = `/chatbot/home/${roomId}/`;
+    window.history.pushState({ path: newUrl, roomId: roomId }, '', newUrl);
+
+    // 3. Reconnect WebSocket
+    currentRoomId = roomId;
+    roomName = roomId; // Update global legacy var
+    connectToChat(roomId);
+}
+
+// Handle Browser Back Button
+window.addEventListener('popstate', function (event) {
+    if (event.state && event.state.roomId) {
+        // We could store names in state to fully restore, 
+        // but for now just reloading might be safer to sync everything, 
+        // or we can just reconnect
+        location.reload();
+    }
+});
 
 // Hamburger menu toggle
 (function () {
@@ -36,22 +136,7 @@ var chatSocket = new ReconnectingWebSocket(
     });
 })();
 
-// Initialize chat connection
-chatSocket.onopen = function (e) {
-    console.log('WebSocket connection established');
-    document.querySelectorAll('.status-dot').forEach(dot => {
-        dot.classList.remove('online', 'offline');
-    });
-    FetchMessages();
-};
-
-chatSocket.onclose = function (e) {
-    console.error('Chat socket closed unexpectedly');
-    document.querySelectorAll('.status-dot').forEach(dot => {
-        dot.classList.remove('online');
-        dot.classList.add('offline');
-    });
-};
+// ... (Rest of existing code: createMessage, FetchMessages, etc.)
 
 // Message handling
 // Configure Marked options
@@ -173,10 +258,12 @@ function createMessage(data) {
     chatHistory.scrollTop = chatHistory.scrollHeight;
 }
 
-function FetchMessages() {
+function FetchMessages(rId) {
+    // Use rId if provided, otherwise global roomName
+    const targetRoom = rId || roomName;
     chatSocket.send(JSON.stringify({
         "command": "fetch_messages",
-        "chatid": roomName
+        "chatid": targetRoom
     }));
 }
 

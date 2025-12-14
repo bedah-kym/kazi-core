@@ -1,102 +1,162 @@
 // Global variables
-let chatSocket = null;
-let currentRoomId = roomName; // roomName defined in template
-let otherUserMember = otherUser; // otherUser defined in template
+// MULTI-ROOM ARCHITECTURE
+const activeRooms = {}; // { roomId: { socket: WebSocket, initialized: bool } }
+let currentRoomId = roomName; // roomName defined in template (initial room)
+let usernameGlobal = username; // username defined in template
 
-// Initialize first connection
-connectToChat(roomName);
+// Initialize
+initRoom(roomName);
 
-function connectToChat(roomId) {
-    if (chatSocket) {
-        chatSocket.close();
+/**
+ * Initialize a room (UI + Socket)
+ */
+function initRoom(roomId) {
+    console.log(`🚀 Initializing room ${roomId}`);
+
+    // 1. Create UI Container if missing
+    getOrCreateRoomUI(roomId);
+
+    // 2. Connect Socket if missing
+    if (!activeRooms[roomId] || !activeRooms[roomId].socket) {
+        connectToChat(roomId);
     }
 
-    console.log(`🔌 Connecting to room ${roomId}...`);
-    chatSocket = new ReconnectingWebSocket(
+    // 3. Set as Active
+    activateRoomUI(roomId);
+}
+
+/**
+ * Ensure the DOM elements for this room exist
+ */
+function getOrCreateRoomUI(roomId) {
+    const container = document.getElementById('chat-rooms-container');
+    let roomDiv = document.getElementById(`room-container-${roomId}`);
+
+    if (!roomDiv) {
+        // Create wrapper
+        roomDiv = document.createElement('div');
+        roomDiv.id = `room-container-${roomId}`;
+        roomDiv.className = 'room-view';
+        roomDiv.style.display = 'none'; // Hidden by default
+
+        // Create Message List
+        const ul = document.createElement('ul');
+        ul.id = `messages-room-${roomId}`;
+        ul.className = 'list-unstyled mb-0';
+
+        // Create Typing Indicator specific to this room
+        const typingDiv = document.createElement('div');
+        typingDiv.className = 'typing-indicator';
+        typingDiv.id = `typing-indicator-${roomId}`;
+        typingDiv.style.display = 'none';
+        typingDiv.innerHTML = '<em class="user-name"></em><span></span><span></span><span></span>';
+
+        roomDiv.appendChild(ul);
+        roomDiv.appendChild(typingDiv);
+        container.appendChild(roomDiv);
+    }
+    return roomDiv;
+}
+
+/**
+ * Switch valid visible room
+ */
+function activateRoomUI(roomId) {
+    // Hide all rooms
+    document.querySelectorAll('.room-view').forEach(el => el.style.display = 'none');
+
+    // Show target room (create if strictly missing, though initRoom handles this)
+    const target = getOrCreateRoomUI(roomId);
+    target.style.display = 'block';
+
+    // Scroll to bottom
+    const container = document.getElementById('chat-rooms-container');
+    container.scrollTop = container.scrollHeight;
+}
+
+function connectToChat(roomId) {
+    if (activeRooms[roomId] && activeRooms[roomId].socket) {
+        console.log(`Checking connection for ${roomId}: ${activeRooms[roomId].socket.readyState}`);
+        if (activeRooms[roomId].socket.readyState === WebSocket.OPEN) return;
+    }
+
+    console.log(`🔌 Connecting socket for room ${roomId}...`);
+    const socket = new ReconnectingWebSocket(
         'ws://' + window.location.host + '/ws/chat/' + roomId + '/'
     );
 
+    activeRooms[roomId] = { socket: socket, initialized: false };
+
     // Initialize chat connection
-    chatSocket.onopen = function (e) {
+    socket.onopen = function (e) {
         console.log('✅ WebSocket connection established for room ' + roomId);
-        document.querySelectorAll('.status-dot').forEach(dot => {
-            dot.classList.remove('online', 'offline');
-        });
-        FetchMessages(roomId);
+        // We only fetch messages once per session to avoid dups if we reconnect
+        // OR we can clear and fetch. For multi-room persistence, better to check if empty.
+        const ul = document.getElementById(`messages-room-${roomId}`);
+        if (ul && ul.children.length === 0) {
+            FetchMessages(roomId);
+        }
     };
 
-    chatSocket.onclose = function (e) {
-        console.error('❌ Chat socket closed');
-        document.querySelectorAll('.status-dot').forEach(dot => {
-            dot.classList.remove('online');
-            dot.classList.add('offline');
-        });
+    socket.onclose = function (e) {
+        console.error(`❌ Chat socket closed for room ${roomId}`);
     };
 
     // WebSocket message handling
-    chatSocket.onmessage = function (e) {
+    socket.onmessage = function (e) {
         const data = JSON.parse(e.data);
-        if (data.command === 'typing' && data.from !== username) {
-            document.getElementById('typing-user').textContent = data.from;
-            showTypingIndicator();
-            clearTimeout(typingTimer);
-            typingTimer = setTimeout(hideTypingIndicator, 3000);
+        const rId = roomId; // Closure capture
+
+        if (data.command === 'typing' && data.from !== usernameGlobal) {
+            const indicator = document.getElementById(`typing-indicator-${rId}`);
+            if (indicator) {
+                indicator.querySelector('.user-name').textContent = data.from;
+                indicator.style.display = 'flex';
+                // Clear existing timer if we stored it (omitted for brevity, simple toggle)
+                setTimeout(() => indicator.style.display = 'none', 3000);
+            }
             return;
         }
         if (data.command === 'presence_snapshot' || data.command === 'presence') { handlePresenceUpdate(data); return; }
         if (data.command === 'messages') {
-            // Clear existing messages first if it's a fresh fetch
-            // But usually fetch_messages command clears lazily or we clear on switch
-            for (let i = data.messages.length - 1; i >= 0; i--) createMessage(data.messages[i]);
-            scrollToLastMessage();
+            for (let i = data.messages.length - 1; i >= 0; i--) createMessage(data.messages[i], rId);
+            scrollToLastMessage(rId);
             return;
         }
-        if (data.command === 'new_message') { createMessage(data.message); scrollToLastMessage(); return; }
+        if (data.command === 'new_message') { createMessage(data.message, rId); scrollToLastMessage(rId); return; }
         if (data.command === 'error') { console.error('Error from server:', data.message); return; }
-        console.warn('Unknown command:', data);
     };
 }
 
 /**
- * Switch Room Function (SPA Style)
+ * Switch Room Function (SPA Style + Concurrency)
  */
 function switchRoom(event, roomId, roomDisplayName) {
     event.preventDefault();
     console.log(`🔄 Switching to room ${roomId} (${roomDisplayName})`);
 
-    if (currentRoomId === roomId) return; // Already here
+    if (currentRoomId === roomId) return;
 
-    // 1. Update UI State
+    // 1. Update UI Sidebar State
     document.querySelectorAll('.chat-list li').forEach(li => li.classList.remove('active'));
     document.getElementById(`room-li-${roomId}`)?.classList.add('active');
 
     // Update Header
     document.querySelector('.chat-header h6').textContent = roomDisplayName;
-    // Update global var for other logic
-    otherUserMember = roomDisplayName;
-    if (typeof otherUser !== 'undefined') {
-        otherUser = roomDisplayName;
-    }
-
-    // Clear Chat History
-    document.getElementById('top-chat').innerHTML = '';
 
     // 2. Update URL (without reload)
     const newUrl = `/chatbot/home/${roomId}/`;
     window.history.pushState({ path: newUrl, roomId: roomId }, '', newUrl);
 
-    // 3. Reconnect WebSocket
+    // 3. Multi-Room Switch
     currentRoomId = roomId;
-    roomName = roomId; // Update global legacy var
-    connectToChat(roomId);
+    initRoom(roomId); // Ensures socket is active and UI is shown
 }
 
 // Handle Browser Back Button
 window.addEventListener('popstate', function (event) {
     if (event.state && event.state.roomId) {
-        // We could store names in state to fully restore, 
-        // but for now just reloading might be safer to sync everything, 
-        // or we can just reconnect
+        // Just reload for safety on back button for now, or implement reverse switch
         location.reload();
     }
 });

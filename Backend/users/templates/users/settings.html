@@ -137,96 +137,272 @@
         </ul>
 
         <!-- Integrations Section -->
+        <!-- Integrations Section -->
         <div id="integrations">
-            <h3 class="mb-4">Connected Services</h3>
+            <h3 class="mb-4">Connected Platforms</h3>
 
-            <!-- WhatsApp -->
-            <div class="integration-card">
-                <div class="integration-header">
-                    <div class="d-flex align-items-center">
-                        <div class="integration-icon"
-                            style="background: hsl(140, 100%, 95%); color: hsl(140, 100%, 30%);">
-                            <i class="fab fa-whatsapp"></i>
-                        </div>
-                        <div>
-                            <h5 class="mb-1">WhatsApp Business</h5>
-                            <p class="text-muted small mb-0">Send invoices and sync messages via WhatsApp</p>
+            <!-- Communication Section -->
+            <div class="mb-5">
+                <h6 class="text-muted text-uppercase fw-bold mb-3"><i class="fas fa-comments me-2"></i>Communication
+                </h6>
+                <div class="row g-4">
+                    <!-- WhatsApp -->
+                    <div class="col-md-6">
+                        <div class="integration-card h-100">
+                            <div class="integration-header">
+                                <div class="d-flex align-items-center">
+                                    <div class="integration-icon"
+                                        style="background: hsl(140, 100%, 95%); color: hsl(140, 100%, 30%);">
+                                        <i class="fab fa-whatsapp"></i>
+                                    </div>
+                                    <div>
+                                        <h5 class="mb-1">WhatsApp Business</h5>
+                                        <p class="text-muted small mb-0">Send invoices and sync messages</p>
+                                    </div>
+                                </div>
+                                {% if whatsapp_connected %}
+                                <span class="integration-status status-connected"><i
+                                        class="fas fa-check-circle me-1"></i>Connected</span>
+                                {% else %}
+                                <span class="integration-status status-disconnected">Disconnected</span>
+                                {% endif %}
+                            </div>
+                            {% if whatsapp_connected %}
+                            <form action="{% url 'users:disconnect_integration' 'whatsapp' %}" method="post"
+                                class="d-inline">
+                                {% csrf_token %}
+                                <button type="submit" class="btn btn-outline-danger btn-sm w-100 mt-2">
+                                    <i class="fas fa-unlink me-2"></i>Disconnect
+                                </button>
+                            </form>
+                            {% else %}
+                            <button class="btn btn-primary btn-sm w-100 mt-2" data-bs-toggle="modal"
+                                data-bs-target="#whatsappModal">
+                                <i class="fas fa-link me-2"></i>Connect WhatsApp
+                            </button>
+                            {% endif %}
                         </div>
                     </div>
-                    <span class="integration-status status-disconnected">Disconnected</span>
+
+                    <!-- Mailgun -->
+                    <div class="col-md-6">
+                        <div class="integration-card h-100">
+                            <div class="integration-header">
+                                <div class="d-flex align-items-center">
+                                    <div class="integration-icon"
+                                        style="background: hsl(0, 70%, 95%); color: hsl(0, 70%, 40%);">
+                                        <i class="fas fa-envelope"></i>
+                                    </div>
+                                    <div>
+                                        <h5 class="mb-1">Mailgun</h5>
+                                        <p class="text-muted small mb-0">Send email reminders</p>
+                                    </div>
+                                </div>
+                                {% if mailgun_connected %}
+                                <span class="integration-status status-connected"><i
+                                        class="fas fa-check-circle me-1"></i>Connected</span>
+                                {% else %}
+                                <span class="integration-status status-disconnected">Disconnected</span>
+                                {% endif %}
+                            </div>
+                            {% if mailgun_connected %}
+                            <form action="{% url 'users:disconnect_integration' 'mailgun' %}" method="post"
+                                class="d-inline">
+                                {% csrf_token %}
+                                <button type="submit" class="btn btn-outline-danger btn-sm w-100 mt-2">
+                                    <i class="fas fa-unlink me-2"></i>Disconnect
+                                </button>
+                            </form>
+                            {% else %}
+                            <button class="btn btn-primary btn-sm w-100 mt-2" data-bs-toggle="modal"
+                                data-bs-target="#mailgunModal">
+                                <i class="fas fa-link me-2"></i>Connect Mailgun
+                            </button>
+                            {% endif %}
+                        </div>
+                    </div>
                 </div>
-                <button class="btn btn-primary btn-sm">
-                    <i class="fas fa-link me-2"></i>Connect WhatsApp
-                </button>
             </div>
 
-            <!-- IntaSend -->
-            <div class="integration-card">
-                <div class="integration-header">
-                    <div class="d-flex align-items-center">
-                        <div class="integration-icon"
-                            style="background: hsl(210, 100%, 95%); color: hsl(210, 100%, 35%);">
-                            <i class="fas fa-wallet"></i>
-                        </div>
-                        <div>
-                            <h5 class="mb-1">IntaSend Pay (Kenya)</h5>
-                            <p class="text-muted small mb-0">Accept M-Pesa, card, and bank payments</p>
+            <!-- Payments Section -->
+            <div class="mb-5">
+                <h6 class="text-muted text-uppercase fw-bold mb-3"><i class="fas fa-credit-card me-2"></i>Payments</h6>
+                <div class="row g-4">
+                    <!-- IntaSend -->
+                    <div class="col-md-6">
+                        <div class="integration-card h-100">
+                            <div class="integration-header">
+                                <div class="d-flex align-items-center">
+                                    <div class="integration-icon"
+                                        style="background: hsl(210, 100%, 95%); color: hsl(210, 100%, 35%);">
+                                        <i class="fas fa-wallet"></i>
+                                    </div>
+                                    <div>
+                                        <h5 class="mb-1">IntaSend Pay (Kenya)</h5>
+                                        <p class="text-muted small mb-0">M-Pesa, Card, Bank payments</p>
+                                    </div>
+                                </div>
+                                {% if intasend_connected %}
+                                <span class="integration-status status-connected"><i
+                                        class="fas fa-check-circle me-1"></i>Connected</span>
+                                {% else %}
+                                <span class="integration-status status-disconnected">Disconnected</span>
+                                {% endif %}
+                            </div>
+                            {% if intasend_connected %}
+                            <form action="{% url 'users:disconnect_integration' 'intasend' %}" method="post"
+                                class="d-inline">
+                                {% csrf_token %}
+                                <button type="submit" class="btn btn-outline-danger btn-sm w-100 mt-2">
+                                    <i class="fas fa-unlink me-2"></i>Disconnect
+                                </button>
+                            </form>
+                            {% else %}
+                            <button class="btn btn-primary btn-sm w-100 mt-2" data-bs-toggle="modal"
+                                data-bs-target="#intasendModal">
+                                <i class="fas fa-link me-2"></i>Connect IntaSend
+                            </button>
+                            {% endif %}
                         </div>
                     </div>
-                    <span class="integration-status status-disconnected">Disconnected</span>
                 </div>
-                <button class="btn btn-primary btn-sm">
-                    <i class="fas fa-link me-2"></i>Connect IntaSend
-                </button>
             </div>
 
-            <!-- Mailgun -->
-            <div class="integration-card">
-                <div class="integration-header">
-                    <div class="d-flex align-items-center">
-                        <div class="integration-icon" style="background: hsl(0, 70%, 95%); color: hsl(0, 70%, 40%);">
-                            <i class="fas fa-envelope"></i>
-                        </div>
-                        <div>
-                            <h5 class="mb-1">Mailgun</h5>
-                            <p class="text-muted small mb-0">Send reminder emails and notifications</p>
+            <!-- Scheduling Section -->
+            <div class="mb-5">
+                <h6 class="text-muted text-uppercase fw-bold mb-3"><i class="fas fa-calendar-alt me-2"></i>Scheduling
+                </h6>
+                <div class="row g-4">
+                    <!-- Calendly -->
+                    <div class="col-md-6">
+                        <div class="integration-card h-100">
+                            <div class="integration-header">
+                                <div class="d-flex align-items-center">
+                                    <div class="integration-icon"
+                                        style="background: hsl(210, 100%, 95%); color: hsl(210, 100%, 35%);">
+                                        <i class="fas fa-calendar"></i>
+                                    </div>
+                                    <div>
+                                        <h5 class="mb-1">Calendly</h5>
+                                        <p class="text-muted small mb-0">Client meeting scheduling</p>
+                                    </div>
+                                </div>
+                                {% if calendly_connected %}
+                                <span class="integration-status status-connected">
+                                    <i class="fas fa-check-circle me-1"></i>Connected
+                                </span>
+                                {% else %}
+                                <span class="integration-status status-disconnected">Disconnected</span>
+                                {% endif %}
+                            </div>
+                            <button class="btn btn-outline-secondary btn-sm w-100 mt-2">
+                                <i class="fas fa-cog me-2"></i>Configure
+                            </button>
                         </div>
                     </div>
-                    <span class="integration-status status-disconnected">Disconnected</span>
                 </div>
-                <button class="btn btn-primary btn-sm">
-                    <i class="fas fa-link me-2"></i>Connect Mailgun
-                </button>
-            </div>
-
-            <!-- Calendly -->
-            <div class="integration-card">
-                <div class="integration-header">
-                    <div class="d-flex align-items-center">
-                        <div class="integration-icon"
-                            style="background: hsl(210, 100%, 95%); color: hsl(210, 100%, 35%);">
-                            <i class="fas fa-calendar"></i>
-                        </div>
-                        <div>
-                            <h5 class="mb-1">Calendly</h5>
-                            <p class="text-muted small mb-0">Schedule meetings with clients</p>
-                        </div>
-                    </div>
-                    {% if calendly_connected %}
-                    <span class="integration-status status-connected">
-                        <i class="fas fa-check-circle me-1"></i>Connected
-                    </span>
-                    {% else %}
-                    <span class="integration-status status-disconnected">Disconnected</span>
-                    {% endif %}
-                </div>
-                <button class="btn btn-outline-secondary btn-sm">
-                    <i class="fas fa-cog me-2"></i>Configure
-                </button>
             </div>
         </div>
     </div>
 
+    <!-- Modals -->
+    <!-- WhatsApp Modal -->
+    <div class="modal fade" id="whatsappModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <form action="{% url 'users:connect_whatsapp' %}" method="POST">
+                    {% csrf_token %}
+                    <div class="modal-header">
+                        <h5 class="modal-title">Connect WhatsApp Business</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="mb-3">
+                            <label class="form-label">Phone Number</label>
+                            <input type="text" name="phone_number" class="form-control" placeholder="+254..." required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Twilio Account SID</label>
+                            <input type="text" name="account_sid" class="form-control" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Twilio Auth Token</label>
+                            <input type="password" name="auth_token" class="form-control" required>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Connect</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Mailgun Modal -->
+    <div class="modal fade" id="mailgunModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <form action="{% url 'users:connect_mailgun' %}" method="POST">
+                    {% csrf_token %}
+                    <div class="modal-header">
+                        <h5 class="modal-title">Connect Mailgun</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="mb-3">
+                            <label class="form-label">API Key</label>
+                            <input type="text" name="api_key" class="form-control" placeholder="key-..." required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Domain</label>
+                            <input type="text" name="domain" class="form-control" placeholder="mg.yourdomain.com"
+                                required>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Connect</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- IntaSend Modal -->
+    <div class="modal fade" id="intasendModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <form action="{% url 'users:connect_intasend' %}" method="POST">
+                    {% csrf_token %}
+                    <div class="modal-header">
+                        <h5 class="modal-title">Connect IntaSend Pay</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="mb-3">
+                            <label class="form-label">Publishable Key</label>
+                            <input type="text" name="public_key" class="form-control" placeholder="ISPubKey..."
+                                required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">API Key (Secret)</label>
+                            <input type="password" name="api_key" class="form-control" placeholder="ISSecret..."
+                                required>
+                        </div>
+                        <div class="form-check">
+                            <input type="checkbox" name="is_test" class="form-check-input" id="isTest" checked>
+                            <label class="form-check-label" for="isTest">Test Mode / Sandbox</label>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Connect</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
     <script src="https://code.jquery.com/jquery-1.10.2.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="{% static 'js/main.js'%}"></script>

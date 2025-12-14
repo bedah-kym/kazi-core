@@ -59,9 +59,25 @@ def settings(request):
     """
     workspace = request.user.workspace
     
+    # Get integration status
+    from .models import UserIntegration, CalendlyProfile
+    
+    # Check Calendly (Legacy model)
+    try:
+        calendly_connected = request.user.calendly.is_connected
+    except (CalendlyProfile.DoesNotExist, AttributeError):
+        calendly_connected = False
+
+    # Check other integrations
+    integrations = UserIntegration.objects.filter(user=request.user, is_connected=True).values_list('integration_type', flat=True)
+    
     context = {
         'workspace': workspace,
         'active_tab': 'integrations',
+        'calendly_connected': calendly_connected,
+        'whatsapp_connected': 'whatsapp' in integrations,
+        'intasend_connected': 'intasend' in integrations,
+        'mailgun_connected': 'mailgun' in integrations,
     }
     
     return render(request, 'users/settings.html', context)

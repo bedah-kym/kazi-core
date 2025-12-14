@@ -25,6 +25,36 @@ class WhatsAppConnector(BaseConnector):
         else:
             self.client = None
 
+    def validate_credentials(self, account_sid, auth_token):
+        """
+        Validate credentials by initializing a temporary client and fetching account info.
+        """
+        try:
+            temp_client = Client(account_sid, auth_token)
+            # Fetch account details to verify credentials
+            account = temp_client.api.v2010.accounts(account_sid).fetch()
+            return True, "Credentials valid"
+        except Exception as e:
+            logger.error(f"WhatsApp Validation Error: {e}")
+            return False, str(e)
+            
+    def send_test_message(self, to, account_sid, auth_token, from_number):
+        """
+        Send a test message using provided credentials (not the env vars).
+        """
+        try:
+            temp_client = Client(account_sid, auth_token)
+            to_number = to if to.startswith('whatsapp:') else f"whatsapp:{to}"
+            
+            message = temp_client.messages.create(
+                from_=from_number,
+                to=to_number,
+                body="Hello from KwikChat! Your WhatsApp integration is now connected."
+            )
+            return {"status": "sent", "sid": message.sid}
+        except Exception as e:
+             return {"error": str(e)}
+
     async def execute(self, intent: dict, user) -> dict:
         """
         Execute a WhatsApp action.

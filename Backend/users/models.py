@@ -90,7 +90,7 @@ class UserProfile(models.Model):
 	
 	# Basic Info
 	bio = models.TextField(max_length=500, blank=True, help_text="Short bio or description")
-	avatar = models.ImageField(upload_to='avatars/', blank=True, null=True)
+	avatar = models.FileField(upload_to='avatars/', blank=True, null=True)
 	location = models.CharField(max_length=100, blank=True)
 	website = models.URLField(max_length=200, blank=True)
 	
@@ -342,3 +342,39 @@ class WalletTransaction(models.Model):
 
     def __str__(self):
         return f"{self.type} {self.currency} {self.amount} - {self.status}"
+
+
+class UserIntegration(models.Model):
+    """
+    Generic model to store credentials for various third-party integrations
+    (WhatsApp, Mailgun, IntaSend, etc.) replacing ad-hoc profiles.
+    """
+    INTEGRATION_TYPES = (
+        ('whatsapp', 'WhatsApp Business'),
+        ('mailgun', 'Mailgun'),
+        ('intasend', 'IntaSend Pay'),
+        ('calendly', 'Calendly'), # Keeping explicit CalendlyProfile for now for backward compat, but can migrate later
+        ('gmail', 'Gmail'),
+        ('notion', 'Notion'),
+    )
+    
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='integrations')
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name='integrations', null=True, blank=True)
+    integration_type = models.CharField(max_length=50, choices=INTEGRATION_TYPES)
+    is_connected = models.BooleanField(default=False)
+    
+    # Security: Credentials should be encrypted before storage
+    encrypted_credentials = models.TextField(blank=True, null=True)
+    
+    # Extra data (e.g. phone number, domain, webhook IDs)
+    metadata = models.JSONField(default=dict, blank=True)
+    
+    connected_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        unique_together = ('user', 'integration_type')
+
+    def __str__(self):
+        return f"{self.integration_type} - {self.user.username}"
+

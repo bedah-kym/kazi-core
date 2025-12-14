@@ -5,6 +5,7 @@ from . import dashboard_views
 from . import frontend_views
 from . import feature_views
 from . import auth_views as custom_auth
+from . import integrations_views
 
 app_name='users'
 urlpatterns = [
@@ -23,4 +24,10 @@ urlpatterns = [
     path('settings/', feature_views.settings, name='settings'),
     path('settings/profile/', feature_views.profile_settings, name='profile_settings'),
     path('settings/goals/', feature_views.goals_settings, name='goals_settings'),
+    
+    # Integrations
+    path('integrations/whatsapp/connect/', integrations_views.connect_whatsapp, name='connect_whatsapp'),
+    path('integrations/mailgun/connect/', integrations_views.connect_mailgun, name='connect_mailgun'),
+    path('integrations/intasend/connect/', integrations_views.connect_intasend, name='connect_intasend'),
+    path('integrations/disconnect/<str:integration_type>/', integrations_views.disconnect_integration, name='disconnect_integration'),
 ]

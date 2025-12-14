@@ -146,15 +146,6 @@ def create_room(request):
                     
                     # Welcome message
                     import django.utils.timezone
-                    Message.objects.create(
-                        member=mathia_member,
-                        content="Welcome to your new General room! I'm here to help.",
-                        timestamp=django.utils.timezone.now()
-                    ).chats.add(new_room, through_defaults=None) # Correct M2M usage if not through signal
-                    # Actually Chatroom.chats is M2M. We need to add message to room.
-                    # The message model doesn't link to room directly in this schema (based on usage in consumers usually),
-                    # but Chatroom has `chats` M2M. 
-                    # Let's double check model: Chatroom.chats = ManyToManyField(Message)
                     msg = Message.objects.create(
                         member=mathia_member,
                         content="Welcome to your new General room! I'm here to help.",
@@ -172,6 +163,40 @@ def create_room(request):
     # If GET, maybe redirect to home or show a simple error/form
     return redirect('chatbot:welcomepage')
 
+
+
+@login_required
+def invite_user(request):
+    """
+    API View to invite a user to a room via email.
+    """
+    if request.method == 'POST':
+        room_id = request.POST.get('room_id')
+        email = request.POST.get('email')
+        
+        if not room_id or not email:
+             return JsonResponse({'status': 'error', 'message': 'Missing room_id or email'}, status=400)
+
+        # Security Check: Ensure requester is in the room
+        room = get_object_or_404(Chatroom, id=room_id, participants__User=request.user)
+        
+        User = get_user_model()
+        try:
+            invited_user = User.objects.get(email=email)
+            invited_member, _ = Member.objects.get_or_create(User=invited_user)
+            
+            if room.participants.filter(User=invited_user).exists():
+                return JsonResponse({'status': 'info', 'message': 'User is already in the room'})
+            
+            room.participants.add(invited_member)
+            return JsonResponse({'status': 'success', 'message': f'Added {invited_user.username} to the room'})
+            
+        except User.DoesNotExist:
+            return JsonResponse({'status': 'error', 'message': 'User with this email does not exist'}, status=404)
+        except Exception as e:
+             return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+
+    return JsonResponse({'status': 'error', 'message': 'Invalid request method'}, status=405)
 
 
 def get_last_10messages(chatid):

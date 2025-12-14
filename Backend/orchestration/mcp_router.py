@@ -13,6 +13,7 @@ import httpx
 from .base_connector import BaseConnector
 from .connectors.whatsapp_connector import WhatsAppConnector
 from .connectors.intersend_connector import IntersendPayConnector
+from .connectors.mailgun_connector import MailgunConnector
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,8 @@ class MCPRouter:
             "convert_currency": CurrencyConnector(),
             "send_whatsapp": WhatsAppConnector(),
             "payment_action": IntersendPayConnector(),
+            "send_email": MailgunConnector(),
+            "set_reminder": ReminderConnector(),
         }
     
     async def route(self, intent: Dict, user_context: Dict) -> Dict:
@@ -521,6 +524,80 @@ class CurrencyConnector(BaseConnector):
         except Exception as e:
             logger.error(f"Currency conversion error: {e}")
             return {"status": "error", "message": f"Currency conversion failed: {str(e)}"}
+
+
+class ReminderConnector(BaseConnector):
+    """
+    Sets reminders for the user
+    Expects LLM to return ISO time or relative time string
+    """
+    
+    async def execute(self, parameters: Dict, context: Dict) -> Dict:
+        """Create a reminder"""
+        from chatbot.models import Reminder, Chatroom
+        from django.contrib.auth import get_user_model
+        from django.utils import timezone
+        import dateutil.parser
+        from asgiref.sync import sync_to_async
+        
+        User = get_user_model()
+        user_id = context.get("user_id")
+        room_id = context.get("room_id")
+        
+        content = parameters.get("content", "Reminder")
+        time_str = parameters.get("time")
+        priority = parameters.get("priority", "medium")
+        
+        if not time_str:
+            return {"status": "error", "message": "When should I remind you?"}
+            
+        try:
+            # 1. Try ISO parsing (LLM should prefer this)
+            try:
+                scheduled_time = dateutil.parser.parse(time_str)
+            except Exception:
+                # 2. Fallback: simple check if it's a number (minutes)
+                # In robust prod, use dateparser
+                if "min" in time_str or time_str.isdigit():
+                    minutes = int(''.join(filter(str.isdigit, time_str)))
+                    scheduled_time = timezone.now() + timedelta(minutes=minutes)
+                else:
+                    return {"status": "error", "message": f"I couldn't understand the time '{time_str}'. Please use format like '10 minutes' or '5pm'."}
+            
+            # Ensure timezone aware
+            if timezone.is_naive(scheduled_time):
+                scheduled_time = timezone.make_aware(scheduled_time)
+                
+            if scheduled_time < timezone.now():
+                # Assume tomorrow if time has passed today (simple heuristic)
+                scheduled_time += timedelta(days=1)
+            
+            # Create Reminder
+            user = await sync_to_async(User.objects.get)(pk=user_id)
+            room = await sync_to_async(Chatroom.objects.get)(pk=room_id) if room_id else None
+            
+            reminder = await sync_to_async(Reminder.objects.create)(
+                user=user,
+                room=room,
+                content=content,
+                scheduled_time=scheduled_time,
+                priority=priority,
+                status='pending'
+            )
+            
+            # Format friendly time display
+            local_time = scheduled_time.strftime("%I:%M %p")
+            
+            return {
+                "status": "success",
+                "message": f"✅ I've set a reminder: '{content}' for {local_time}.",
+                "reminder_id": reminder.id,
+                "timestamp": scheduled_time.isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"Reminder error: {e}")
+            return {"status": "error", "message": "Failed to set reminder."}
 
 
 _router = None

@@ -3,7 +3,8 @@ from django.utils import timezone
 from django.core.cache import cache
 import logging
 import json
-from .models import Message, Chatroom, ModerationBatch, UserModerationStatus, AIConversation
+from .models import Message, Chatroom, ModerationBatch, UserModerationStatus, AIConversation, Reminder
+from .context_manager import ContextManager
 from django.contrib.auth import get_user_model
 import os
 import traceback
@@ -213,6 +214,7 @@ def generate_ai_response(self, room_id, user_id, user_message):
                 "Be concise, polite, and professional. "
                 "Encourage respectful collaboration, and flag or refuse to generate content that includes harassment, spam, or scams. "
                 "You can summarize conversations, clarify task details, and offer neutral guidance—never make legal, financial, or medical claims."
+                f"\n\n{ContextManager.get_context_prompt(room_id)}"
             ),
         }
         ]
@@ -365,3 +367,33 @@ def cleanup_old_moderation_batches():
     
     logger.info(f"Cleaned up {deleted[0]} old moderation batches")
     return {"deleted": deleted[0]}
+
+
+@shared_task
+def check_due_reminders():
+    """
+    Periodic task to check for due reminders and send notifications
+    """
+    now = timezone.now()
+    due_reminders = Reminder.objects.filter(
+        status='pending',
+        scheduled_time__lte=now
+    )
+    
+    count = 0
+    for reminder in due_reminders:
+        try:
+            # 1. Send Notification (Email/WhatsApp)
+            logger.info(f"Sending reminder {reminder.id}: {reminder.content}")
+            
+            # For MVP, we mark as sent. 
+            count += 1
+            reminder.status = 'sent'
+            reminder.save()
+            
+        except Exception as e:
+            logger.error(f"Error sending reminder {reminder.id}: {e}")
+            reminder.status = 'failed'
+            reminder.save()
+            
+    return {"processed": count}

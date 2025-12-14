@@ -547,6 +547,10 @@
                                 </a>
                             </div>
 
+                            <button class="btn btn-light me-2" data-bs-toggle="modal" data-bs-target="#inviteUserModal"
+                                title="Invite User">
+                                <i class="fas fa-user-plus"></i>
+                            </button>
                             <button class="btn btn-light me-2" id="searchToggle" title="Search in chat">
                                 <i class="fas fa-search"></i>
                             </button>
@@ -603,14 +607,9 @@
                     </div>
                 </div>
 
-                <div class="chat-history">
-                    <ul id="top-chat" class="list-unstyled mb-0">
-                        <!-- Messages will be inserted here -->
-                    </ul>
-                    <div class="typing-indicator" id="typing-indicator" style="display:none;">
-                        <em id="typing-user" class="user-name"></em>
-                        <span></span><span></span><span></span>
-                    </div>
+                <div class="chat-history" id="chat-rooms-container">
+                    <!-- Dynamic Room Containers will be injected here by JS -->
+                    <!-- Initial placeholder/loading state can go here -->
                 </div>
 
                 <div class="file-preview">
@@ -661,6 +660,29 @@
             <div class="context-loading">
                 <div class="spinner"></div>
                 <p style="margin-top: 0.75rem;">Loading context...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- INVITE USER MODAL -->
+    <div class="modal fade" id="inviteUserModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Invite User</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <form id="inviteUserForm" onsubmit="handleInviteUser(event)">
+                        <div class="mb-3">
+                            <label for="inviteEmail" class="form-label">User Email</label>
+                            <input type="email" class="form-control" id="inviteEmail" required
+                                placeholder="user@example.com">
+                        </div>
+                        <div id="inviteMessage" class="mb-3 text-center"></div>
+                        <button type="submit" class="btn btn-primary w-100">Invite</button>
+                    </form>
+                </div>
             </div>
         </div>
     </div>

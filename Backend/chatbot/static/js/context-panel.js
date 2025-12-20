@@ -240,7 +240,6 @@ class ContextPanel {
                 </div>
             `;
         }
-
         return notes.map(note => `
             <div class="note-card">
                 <div class="note-card-header">
@@ -313,7 +312,13 @@ class ContextPanel {
         }
         return cookieValue;
     }
+    closeContextPanel() {
+        const panel = document.getElementById('contextPanel');
+        panel.classList.add('closed');
+    }
+
 }
+
 
 // Initialize on page load and expose to window for onClick handlers
 document.addEventListener('DOMContentLoaded', () => {

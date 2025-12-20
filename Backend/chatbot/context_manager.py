@@ -28,12 +28,11 @@ class ContextManager:
         """
         try:
             # 1. Get Local Room Context
-            context_obj, created = RoomContext.objects.get_or_create(room=chatroom)
+            context_obj, created = RoomContext.objects.get_or_create(chatroom=chatroom)
             
             # 2. Get Recent Local Notes
             local_notes = RoomNote.objects.filter(
-                room_context=context_obj,
-                is_archived=False
+                room_context=context_obj
             ).order_by('-created_at')[:5] # Last 5 active notes
             
             # Format Local Data
@@ -51,9 +50,10 @@ class ContextManager:
             
             # Determine "Key User" (usually room creator or owner)
             key_user = None
+            """
             if chatroom.name.startswith('private_'):
                 # Private room logic (if applicable)
-                pass
+                pass """
             
             # Use the first admin or just standard cross-room fetch based on workspace if we had it.
             # Here we'll search notes created by participants of this room in OTHER rooms.
@@ -62,8 +62,7 @@ class ContextManager:
             
             global_notes = RoomNote.objects.filter(
                 created_by__in=users,
-                priority='high',
-                is_archived=False
+                priority='high'
             ).exclude(room_context=context_obj).order_by('-created_at')[:3]
             
             if global_notes:
@@ -121,7 +120,7 @@ class ContextManager:
         """
         Manually add a note to the context
         """
-        context, _ = RoomContext.objects.get_or_create(room=chatroom)
+        context, _ = RoomContext.objects.get_or_create(chatroom=chatroom)
         
         note = RoomNote.objects.create(
             room_context=context,

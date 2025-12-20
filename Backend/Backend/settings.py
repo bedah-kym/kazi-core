@@ -300,7 +300,7 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'uploads')  # Directory to store uploaded fi
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 STATICFILES_DIRS = [
-    BASE_DIR / 'static',
+    BASE_DIR / 'chatbot/static',
 ]
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 

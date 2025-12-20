@@ -221,10 +221,18 @@ class MathiaAssistant {
 
         // NEW: Handle saved message after streaming completes
         if (data.command === 'ai_message_saved') {
-            // Remove streaming container
-            const streamContainer = document.querySelector('.ai-stream-container');
-            if (streamContainer) {
-                streamContainer.remove();
+            console.log('📝 AI message saved event received');
+            // Remove streaming container from THIS room specifically
+            const chatList = this.getCurrentMessageList();
+            if (chatList) {
+                const streamContainer = chatList.querySelector('.ai-stream-container');
+                if (streamContainer) {
+                    streamContainer.remove();
+                }
+                const thinkingIndicator = chatList.querySelector('.mathia-thinking');
+                if (thinkingIndicator) {
+                    thinkingIndicator.remove();
+                }
             }
 
             // Use createMessage() for proper markdown rendering and dropdown
@@ -232,6 +240,7 @@ class MathiaAssistant {
                 const roomId = typeof currentRoomId !== 'undefined' ? currentRoomId : roomName;
                 createMessage(data.message, roomId);
             }
+            this.isThinking = false;
             return;
         }
 

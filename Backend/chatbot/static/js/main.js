@@ -56,16 +56,22 @@ function initRoom(roomId) {
     // 1. Create UI Container if missing
     getOrCreateRoomUI(roomId);
 
-    // Show Loader
-    showRoomLoader(roomId);
+    // 2. Room Switch / Loader Logic
+    const roomRecord = activeRooms[roomId];
 
-    // 2. Connect Socket if missing
-    if (!activeRooms[roomId] || !activeRooms[roomId].socket) {
+    if (roomRecord && roomRecord.socket && roomRecord.socket.readyState === WebSocket.OPEN) {
+        console.log(`♻️ Room ${roomId} already connected, skipping init`);
+        activateRoomUI(roomId);
+        // Ensure loader is hidden if it was somehow left over
+        hideRoomLoader(roomId);
+        // Refresh messages for consistency
+        FetchMessages(roomId);
+    } else {
+        // Show Loader for new/reconnecting rooms
+        showRoomLoader(roomId);
         connectToChat(roomId);
+        activateRoomUI(roomId);
     }
-
-    // 3. Set as Active
-    activateRoomUI(roomId);
 }
 
 /**
@@ -135,10 +141,8 @@ function connectToChat(roomId) {
     // Initialize chat connection
     socket.onopen = function (e) {
         console.log('✅ WebSocket connection established for room ' + roomId);
-        const ul = document.getElementById(`messages-room-${roomId}`);
-        if (ul && ul.children.length === 0) {
-            FetchMessages(roomId);
-        }
+        // Always fetch messages on open to ensure sync and hide loader
+        FetchMessages(roomId);
     };
 
     socket.onclose = function (e) {
@@ -333,6 +337,18 @@ function createMessage(data, roomId) {
     msgdivtag.className = 'user-name';
     msgSpanTag.className = 'message-data-time';
     msgpTag.className = 'time-label';
+
+    // SPECIAL STYLING FOR MATHIA
+    const isMathia = data.member && (data.member.toLowerCase() === 'mathia' || data.member.toLowerCase() === '@mathia');
+
+    if (isMathia) {
+        msgTextTag.classList.add('mathia-message');
+        // Add Badge to the bubble
+        const badge = document.createElement('div');
+        badge.className = 'mathia-badge';
+        badge.innerHTML = '<i class="fas fa-robot"></i> <span>Mathia AI</span>';
+        msgTextTag.insertBefore(badge, msgTextTag.firstChild);
+    }
 
     msgListTag.appendChild(msgDivTag);
     msgDivTag.appendChild(msgpTag);

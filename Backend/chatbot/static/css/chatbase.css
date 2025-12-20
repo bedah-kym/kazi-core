@@ -61,6 +61,12 @@ body {
 
 }
 
+.room-view {
+    position: relative;
+    min-height: 400px;
+    height: 100%;
+}
+
 .people-list-content {
     flex: 1;
     overflow-y: auto;
@@ -1574,6 +1580,73 @@ em-emoji-picker {
 
 .modal-top-left .modal-body {
     height: 600px;
+}
+
+/* Room Loading Overlay */
+.room-loader-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(255, 255, 255, 0.7);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    transition: opacity 0.4s ease, visibility 0.4s;
+}
+
+[data-theme="dark"] .room-loader-overlay {
+    background: rgba(32, 33, 36, 0.6);
+}
+
+.room-loader-content {
+    text-align: center;
+}
+
+.room-loader-spinner {
+    width: 50px;
+    height: 50px;
+    border: 4px solid rgba(79, 140, 255, 0.1);
+    border-left-color: var(--primary-color);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin: 0 auto 15px;
+}
+
+.room-loader-text {
+    font-weight: 600;
+    color: var(--primary-color);
+    font-size: 1rem;
+    animation: pulseText 1.5s ease-in-out infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@keyframes pulseText {
+
+    0%,
+    100% {
+        opacity: 0.6;
+    }
+
+    50% {
+        opacity: 1;
+    }
+}
+
+.loader-hidden {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
 }
 
 /* small adjustment when compact density selected */

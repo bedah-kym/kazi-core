@@ -9,6 +9,8 @@ from rest_framework import status
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from datetime import timedelta
+from django.core.files.storage import default_storage
+from django.core.files.base import ContentFile
 from chatbot.models import Chatroom, Message, RoomContext, RoomNote, DocumentUpload
 from chatbot.context_manager import ContextManager
 
@@ -34,6 +36,15 @@ def pin_message_to_notes(request, room_id, message_id):
         # Get the message
         message = get_object_or_404(Message, id=message_id)
         
+        # Get decrypted content from request body (frontend sends decrypted content)
+        message_content = request.data.get('message_content', '')
+        
+        if not message_content:
+            return Response(
+                {"error": "Message content is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
         # Get or create room context
         room_context, _ = RoomContext.objects.get_or_create(chatroom=chatroom)
         
@@ -49,13 +60,13 @@ def pin_message_to_notes(request, room_id, message_id):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Create note
+        # Create note with decrypted content
         note = RoomNote.objects.create(
             room_context=room_context,
             note_type='reference',
-            content=f"Pinned message: {message.content[:100]}...",
+            content=f"Pinned message: {message_content[:100]}...",
             source_message_id=message_id,
-            source_message_content=message.content,
+            source_message_content=message_content,  # Store decrypted content
             created_by=request.user,
             is_ai_generated=False,
             priority='medium'
@@ -93,19 +104,23 @@ def reply_to_message(request, room_id, message_id):
                 status=status.HTTP_403_FORBIDDEN
             )
         
+        # Get decrypted content from request body (frontend sends decrypted content)
+        message_content = request.data.get('message_content', '')
+        
+        if not message_content:
+            return Response(
+                {"error": "Message content is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
         # Get the message being replied to
         original_message = get_object_or_404(Message, id=message_id)
+        member_name = original_message.member.User.username if original_message.member else "Unknown"
         
-        # Return the message content for frontend to include in reply
+        # Return the decrypted message content for frontend to include in reply
         return Response({
             "success": True,
-            "original_message": {
-                "id": original_message.id,
-                "content": original_message.content,
-                "member": original_message.member.User.username if original_message.member else "Unknown",
-                "timestamp": original_message.timestamp
-            },
-            "reply_prefix": f"Replying to {original_message.member.User.username}: \"{original_message.content[:50]}...\"\n\n"
+            "reply_prefix": f"Replying to {member_name}: \"{message_content[:50]}...\"\n\n"
         }, status=status.HTTP_200_OK)
         
     except Exception as e:
@@ -242,27 +257,32 @@ def upload_document_to_ai(request, room_id):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Save file (placeholder - actual file handling would use Django storage)
+        # Save file correctly using Django's storage system
         file_path = f"documents/{room_id}/{uploaded_file.name}"
+        stored_path = default_storage.save(file_path, ContentFile(uploaded_file.read()))
         
-        # Create upload record
-        DocumentUpload.objects.create(
+        # Create upload record with pending status
+        doc = DocumentUpload.objects.create(
             user=request.user,
             chatroom=chatroom,
             file_type=file_type,
-            file_path=file_path,
+            file_path=stored_path,
             file_size=uploaded_file.size,
+            status='pending',
             quota_window_start=timezone.now()
         )
         
-        # TODO: Process document with Claude API (implement in Phase 2)
+        # Trigger background task for extraction
+        from .tasks import process_document_task
+        process_document_task.delay(doc.id)
         
         return Response({
             "success": True,
+            "document_id": doc.id,
             "file_name": uploaded_file.name,
             "file_type": file_type,
-            "file_size": uploaded_file.size,
-            "message": "Document uploaded successfully",
+            "status": "pending",
+            "message": "Document uploaded and queued for processing",
             "remaining_uploads": quota_limit - (recent_uploads + 1)
         }, status=status.HTTP_201_CREATED)
         

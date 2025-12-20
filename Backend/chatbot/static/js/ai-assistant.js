@@ -171,7 +171,7 @@ class MathiaAssistant {
     // AI TYPING INDICATOR
     // ============================================
     showAIThinking() {
-        if (this.isThinking) return;
+        if (this.isThinking || document.querySelector('.mathia-thinking')) return;
         this.isThinking = true;
 
         const thinkingIndicator = document.createElement('li');

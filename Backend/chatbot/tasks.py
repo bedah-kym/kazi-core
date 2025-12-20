@@ -3,8 +3,10 @@ from django.utils import timezone
 from django.core.cache import cache
 import logging
 import json
-from .models import Message, Chatroom, ModerationBatch, UserModerationStatus, AIConversation, Reminder
+from .models import Message, Chatroom, ModerationBatch, UserModerationStatus, AIConversation, Reminder, DocumentUpload
 from .context_manager import ContextManager
+import PyPDF2
+from PIL import Image
 from django.contrib.auth import get_user_model
 import os
 import traceback
@@ -139,7 +141,7 @@ def moderate_message_batch(self, batch_id):
         return {"error": "batch_not_found"}
     except Exception as e:
         logger.error(f"Error in moderate_message_batch: {e}")
-        logger.error(f"Full traceback: {traceback.format_exc()}")
+        logger.error(traceback.format_exc())
         # Retry on failure
         raise self.retry(exc=e)
 
@@ -323,6 +325,7 @@ def generate_ai_response(self, room_id, user_id, user_message):
         logger.error(f"Error generating AI response: {e}")
         raise self.retry(exc=e)
 
+
 @shared_task
 def moderate_text_realtime(text_content):
     """
@@ -397,3 +400,97 @@ def check_due_reminders():
             reminder.save()
             
     return {"processed": count}
+
+
+@shared_task(bind=True, max_retries=2, default_retry_delay=30)
+def process_document_task(self, document_id):
+    """
+    Extract text and metadata from uploaded documents
+    """
+    try:
+        doc = DocumentUpload.objects.get(id=document_id)
+        doc.status = 'processing'
+        doc.save()
+        
+        logger.info(f"Processing document {document_id} ({doc.file_type})")
+        
+        file_path = doc.file_path
+        # If using local storage, file_path needs to be joined with MEDIA_ROOT
+        full_path = os.path.join(settings.MEDIA_ROOT, file_path)
+        
+        if not os.path.exists(full_path):
+            doc.status = 'failed'
+            doc.processed_text = "File not found on storage"
+            doc.save()
+            return {"error": "file_not_found"}
+            
+        extracted_text = ""
+        metadata = {}
+        
+        if doc.file_type == 'pdf':
+            extracted_text, metadata = extract_text_from_pdf(full_path)
+        elif doc.file_type == 'image':
+            extracted_text, metadata = extract_text_from_image(full_path)
+            
+        doc.processed_text = extracted_text
+        doc.extracted_metadata = metadata
+        doc.status = 'completed'
+        doc.save()
+        
+        logger.info(f"Successfully processed document {document_id}")
+        return {"status": "success", "length": len(extracted_text)}
+        
+    except DocumentUpload.DoesNotExist:
+        logger.error(f"Document {document_id} not found")
+        return {"error": "doc_not_found"}
+    except Exception as e:
+        logger.error(f"Error processing document {document_id}: {e}")
+        logger.error(traceback.format_exc())
+        
+        # Update status to failed
+        try:
+            doc = DocumentUpload.objects.get(id=document_id)
+            doc.status = 'failed'
+            doc.save()
+        except:
+            pass
+            
+        raise self.retry(exc=e)
+
+
+def extract_text_from_pdf(file_path):
+    """Utility to extract text from a PDF file"""
+    text = ""
+    metadata = {}
+    try:
+        with open(file_path, 'rb') as f:
+            reader = PyPDF2.PdfReader(f)
+            metadata = {
+                "pages": len(reader.pages),
+                "info": reader.metadata if reader.metadata else {}
+            }
+            
+            # Extract from first 10 pages to avoid prompt bloat
+            for i in range(min(len(reader.pages), 10)):
+                text += reader.pages[i].extract_text() + "\n"
+                
+        return text.strip(), metadata
+    except Exception as e:
+        logger.error(f"PDF extraction error: {e}")
+        return f"Extraction failed: {str(e)}", {}
+
+
+def extract_text_from_image(file_path):
+    """Utility to extract metadata and basic info from an image"""
+    metadata = {}
+    try:
+        with Image.open(file_path) as img:
+            metadata = {
+                "format": img.format,
+                "size": img.size,
+                "mode": img.mode
+            }
+        return "Indexed image metadata.", metadata
+    except Exception as e:
+        logger.error(f"Image extraction error: {e}")
+        return f"Image extraction failed: {str(e)}", {}

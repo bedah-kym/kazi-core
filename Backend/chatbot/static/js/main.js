@@ -16,6 +16,38 @@ window.getCurrentSocket = getCurrentSocket;
 initRoom(roomName);
 
 /**
+ * Room Loader Management
+ */
+function showRoomLoader(roomId) {
+    const container = document.getElementById(`room-container-${roomId}`);
+    if (!container) return;
+
+    // Remove existing if any
+    hideRoomLoader(roomId);
+
+    const loader = document.createElement('div');
+    loader.className = 'room-loader-overlay';
+    loader.id = `loader-room-${roomId}`;
+    loader.innerHTML = `
+        <div class="room-loader-content">
+            <div class="room-loader-spinner"></div>
+            <div class="room-loader-text">Loading Room...</div>
+        </div>
+    `;
+    container.appendChild(loader);
+}
+
+function hideRoomLoader(roomId) {
+    const loader = document.getElementById(`loader-room-${roomId}`);
+    if (loader) {
+        loader.classList.add('loader-hidden');
+        setTimeout(() => loader.remove(), 400);
+    }
+}
+window.showRoomLoader = showRoomLoader;
+window.hideRoomLoader = hideRoomLoader;
+
+/**
  * Initialize a room (UI + Socket)
  */
 function initRoom(roomId) {
@@ -23,6 +55,9 @@ function initRoom(roomId) {
 
     // 1. Create UI Container if missing
     getOrCreateRoomUI(roomId);
+
+    // Show Loader
+    showRoomLoader(roomId);
 
     // 2. Connect Socket if missing
     if (!activeRooms[roomId] || !activeRooms[roomId].socket) {
@@ -133,6 +168,8 @@ function connectToChat(roomId) {
                 createMessage(data.messages[i], rId);
             }
             scrollToLastMessage(rId);
+            // Hide Loader after messages loaded
+            hideRoomLoader(rId);
             return;
         }
         if (data.command === 'new_message') {
@@ -429,6 +466,11 @@ if (chatSubmit) {
         if (message) {
             const socket = getCurrentSocket();
             if (socket && socket.readyState === WebSocket.OPEN) {
+                // INSTANT THINKING: If it's an AI trigger, show thinking immediately
+                if (message.toLowerCase().includes('@mathia') && window.mathiaAssistant) {
+                    window.mathiaAssistant.showAIThinking();
+                }
+
                 socket.send(JSON.stringify({
                     'message': message,
                     'from': username,

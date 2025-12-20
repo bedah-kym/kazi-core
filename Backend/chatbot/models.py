@@ -268,11 +268,24 @@ class DocumentUpload(models.Model):
         ('image', 'Image'),
     ]
     
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('processing', 'Processing'),
+        ('completed', 'Completed'),
+        ('failed', 'Failed'),
+    ]
+    
     user = models.ForeignKey(user, on_delete=models.CASCADE, related_name='document_uploads')
     chatroom = models.ForeignKey(Chatroom, on_delete=models.CASCADE, related_name='document_uploads')
     file_type = models.CharField(max_length=10, choices=FILE_TYPE_CHOICES)
     file_path = models.CharField(max_length=500)
     file_size = models.IntegerField(help_text="File size in bytes")
+    
+    # AI Processing fields
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    processed_text = models.TextField(blank=True, help_text="Extracted text content from the document")
+    extracted_metadata = models.JSONField(default=dict, blank=True, help_text="Metadata found during processing")
+    
     quota_window_start = models.DateTimeField(help_text="Start of the 10-hour quota window")
     uploaded_at = models.DateTimeField(auto_now_add=True)
     
@@ -281,7 +294,8 @@ class DocumentUpload(models.Model):
         indexes = [
             models.Index(fields=['user', 'quota_window_start']),
             models.Index(fields=['chatroom', '-uploaded_at']),
+            models.Index(fields=['status']),
         ]
     
     def __str__(self):
-        return f"{self.user.username} - {self.file_type} - {self.uploaded_at}"
+        return f"{self.user.username} - {self.file_type} - {self.status} - {self.uploaded_at}"

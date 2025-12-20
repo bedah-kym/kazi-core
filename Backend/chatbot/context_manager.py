@@ -6,7 +6,7 @@ Supports Cross-Room context sharing for high-priority notes.
 import logging
 import json
 from django.utils import timezone
-from .models import RoomContext, RoomNote, AIConversation
+from .models import RoomContext, RoomNote, AIConversation, DocumentUpload
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ class ContextManager:
         """
         try:
             # 1. Get Local Room Context
-            context_obj, created = RoomContext.objects.get_or_create(chatroom=chatroom)
+            context_obj, created = RoomContext.objects.get_or_create(chatroom=room)
             
             # 2. Get Recent Local Notes
             local_notes = RoomNote.objects.filter(
@@ -51,13 +51,13 @@ class ContextManager:
             # Determine "Key User" (usually room creator or owner)
             key_user = None
             """
-            if chatroom.name.startswith('private_'):
+            if room.name.startswith('private_'):
                 # Private room logic (if applicable)
                 pass """
             
             # Use the first admin or just standard cross-room fetch based on workspace if we had it.
             # Here we'll search notes created by participants of this room in OTHER rooms.
-            participants = chatroom.participants.all()
+            participants = room.participants.all()
             users = [m.User for m in participants]
             
             global_notes = RoomNote.objects.filter(
@@ -67,6 +67,21 @@ class ContextManager:
             
             if global_notes:
                 context_data['global_notes'] = [ContextManager._format_note(n) for n in global_notes]
+            
+            # 4. Get Processed Documents Context
+            # Fetch the 3 most recent successfully processed documents for this room
+            docs = DocumentUpload.objects.filter(
+                chatroom=room,
+                status='completed'
+            ).order_by('-uploaded_at')[:3]
+            
+            if docs:
+                context_data['documents'] = [{
+                    "id": d.id,
+                    "type": d.file_type,
+                    "text": d.processed_text[:2000], # Limit per doc
+                    "metadata": d.extracted_metadata
+                } for d in docs]
                 
             return context_data
             
@@ -105,6 +120,14 @@ class ContextManager:
                 prompt_parts.append("RELEVANT MEMORY (From other chats):")
                 for note in data['global_notes']:
                     prompt_parts.append(f"- [MEMORY] {note['content']}")
+            
+            # Add Document Context
+            if data.get('documents'):
+                prompt_parts.append("REFERENCED DOCUMENTS:")
+                for doc in data['documents']:
+                    prompt_parts.append(f"--- DOCUMENT ID {doc['id']} ({doc['type']}) ---")
+                    prompt_parts.append(doc['text'])
+                    prompt_parts.append("--- END DOCUMENT ---")
                     
             if not prompt_parts:
                 return ""

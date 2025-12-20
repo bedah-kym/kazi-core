@@ -131,7 +131,10 @@ class MessageActions {
                 headers: {
                     'Content-Type': 'application/json',
                     'X-CSRFToken': getCookie('csrftoken')
-                }
+                },
+                body: JSON.stringify({
+                    message_content: messageContent  // Send decrypted content
+                })
             });
 
             const data = await response.json();
@@ -164,7 +167,10 @@ class MessageActions {
                 headers: {
                     'Content-Type': 'application/json',
                     'X-CSRFToken': getCookie('csrftoken')
-                }
+                },
+                body: JSON.stringify({
+                    message_content: messageContent  // Send decrypted content
+                })
             });
 
             const data = await response.json();
@@ -445,15 +451,13 @@ class MessageActions {
             const data = await response.json();
 
             if (response.ok) {
-                this.showToast('Document uploaded successfully!', 'success');
+                this.showToast('Document uploaded! Mathia is indexing it now.', 'success');
                 setTimeout(() => {
                     this.closeUploadModal();
                 }, 1500);
 
                 // Update quota
                 await this.fetchQuota();
-
-                // TODO: Send document to AI for processing
             } else {
                 if (response.status === 429) {
                     this.showToast(`Upload limit reached. Resets in ${data.resets_in_hours} hours.`, 'warning');

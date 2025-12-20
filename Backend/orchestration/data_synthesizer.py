@@ -84,20 +84,12 @@ class DataSynthesizer:
             
         elif action == "search_info":
             return data.get("summary", "Here is what I found.")
-        
-        # NEW: Handle weather with pre-formatted message
-        elif action == "get_weather":
-            return data.get("message", str(data))
-        
+         
         # NEW: Handle GIF with message AND full URL
         elif action == "search_gif":
             url = data.get("url", "")
             message = data.get("message", "Here's a GIF!")
             return f"{message}\n![GIF]({url})"
-        
-        # NEW: Handle currency with pre-formatted message
-        elif action == "convert_currency":
-            return data.get("message", str(data))
             
         return str(data)
 

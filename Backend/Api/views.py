@@ -200,25 +200,30 @@ class CreateReply(generics.ListCreateAPIView):
 class GetMessage(generics.RetrieveAPIView):
     serializer_class = ChatroomSerializer
     lookup_field="room"
-    #permission_classes =[IsStaffEditorPermissions]
+    permission_classes =[IsAuthenticated]
 
-    def get_queryset(request):
-        room_id = request.kwargs['room']
-        room = Chatroom.objects.get(id=room_id)
-        qs = room
-        return qs
+    def get_queryset(self):
+        room_id = self.kwargs['room']
+        # Security Fix: Only allow access if user is participant
+        return Chatroom.objects.filter(id=room_id, participants__User=self.request.user)
 
     def get_object(self):
-        queryset  = self.get_queryset()
-        obj = queryset.chats.last()
+        # This implementation is a bit non-standard for RetrieveAPIView which expects one object.
+        # But keeping logic mostly as is, just safer.
+        # get_queryset returns a queryset of rooms (should be 0 or 1)
+        qs = self.get_queryset()
+        room = get_object_or_404(qs) # This validates room exists and user is member
+        obj = room.chats.last()
         return obj
 
 class GetAllMessages(generics.ListAPIView):
     serializer_class = ChatroomSerializer
+    permission_classes =[IsAuthenticated]
 
-    def get_queryset(request):
-        room_id = request.kwargs['room']
-        room = Chatroom.objects.get(id=room_id)
+    def get_queryset(self):
+        room_id = self.kwargs['room']
+        # Security Fix: Only allow access if user is participant
+        room = get_object_or_404(Chatroom, id=room_id, participants__User=self.request.user)
         qs = room.chats.all()
         return qs
     

@@ -24,6 +24,7 @@ class IntentParser:
         "get_weather",
         "search_gif",
         "convert_currency",
+        "set_reminder",
     ]
     
     SYSTEM_PROMPT = """You are an intent classifier for Mathia, a personal assistant.
@@ -44,6 +45,9 @@ Supported actions:
   Examples: "/gif celebrate", "send me a funny gif", "gif of a cat", "show me a dancing gif"
 - convert_currency: User wants currency conversion
   Examples: "convert 100 USD to EUR", "$50 in KES", "how much is 1000 yen in dollars?", "exchange rate for pounds"
+- set_reminder: extract "content" (what to remind), "time" (when), "priority" (low/medium/high)
+  Examples: "remind me to call John in 10 mins", "reminder at 5pm: submit report", "don't forget to buy milk tomorrow (high priority)"
+  NOTE: For "time", try to normalize to relative inputs (e.g. "10 minutes", "5pm today") or ISO if possible, but raw string is okay.
 - general_chat: Casual conversation, greetings, or unclear requests
 
 Return ONLY valid JSON in this format:
@@ -71,6 +75,7 @@ Rules:
 - For get_weather: extract "city" or "location" (default to "Nairobi" if not specified)
 - For search_gif: extract "query" (the gif search term, e.g., "celebrate", "cat", "thumbs up")
 - For convert_currency: extract "amount", "from_currency", "to_currency" (defaults: amount=1, from=USD, to=KES)
+- For set_reminder: extract "content" (what to remind), "time" (when), "priority" (low/medium/high)
 - Be concise. No explanations outside JSON.
 """
 
@@ -113,7 +118,10 @@ Rules:
     
     def _build_user_prompt(self, message: str, context: Optional[Dict]) -> str:
         """Build the user prompt with context"""
-        prompt = f'User message: "{message}"'
+        from django.utils import timezone
+        
+        prompt = f'Current Time: {timezone.now().isoformat()}\n'
+        prompt += f'User message: "{message}"'
         
         if context:
             prompt += f'\n\nUser context: {json.dumps(context)}'

@@ -339,10 +339,21 @@
         if (!profileScheduleBtn) return
 
         const username = window.otherUser || ''
-        if (!username) return
+        if (!username) {
+            // Hide button if no username
+            profileScheduleBtn.style.display = 'none'
+            return
+        }
 
         try {
             const res = await fetch(`/api/calendly/user/username/${encodeURIComponent(username)}/booking-link/`)
+
+            if (!res.ok) {
+                console.warn('[calendar] Failed to fetch booking link:', res.status)
+                profileScheduleBtn.style.display = 'none'
+                return
+            }
+
             const data = await res.json()
 
             if (data.isConnected) {
@@ -352,6 +363,7 @@
             }
         } catch (err) {
             console.error('[calendar] Update profile button error:', err)
+            profileScheduleBtn.style.display = 'none'
         }
     }
 

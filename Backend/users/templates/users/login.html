@@ -302,18 +302,29 @@
                 </div>
               </div>
 
+              {% load socialaccount %}
               <!-- Social Login -->
               <div class="grid grid-cols-2 gap-4">
-                <button type="button" onclick="alert('Google SSO coming soon!')"
+                <a href="{% provider_login_url 'google' %}"
                   class="py-2.5 px-4 border border-input bg-background hover:bg-accent hover:text-accent-foreground rounded-md text-sm font-medium transition-colors flex items-center justify-center space-x-2">
                   <i class="fab fa-google"></i>
                   <span>Google</span>
-                </button>
-                <button type="button" onclick="alert('GitHub SSO coming soon!')"
+                </a>
+                <a href="{% provider_login_url 'github' %}"
                   class="py-2.5 px-4 border border-input bg-background hover:bg-accent hover:text-accent-foreground rounded-md text-sm font-medium transition-colors flex items-center justify-center space-x-2">
                   <i class="fab fa-github"></i>
                   <span>GitHub</span>
-                </button>
+                </a>
+                <a href="{% provider_login_url 'linkedin_oauth2' %}"
+                  class="py-2.5 px-4 border border-input bg-background hover:bg-accent hover:text-accent-foreground rounded-md text-sm font-medium transition-colors flex items-center justify-center space-x-2">
+                  <i class="fab fa-linkedin"></i>
+                  <span>LinkedIn</span>
+                </a>
+                <a href="{% provider_login_url 'twitter' %}"
+                  class="py-2.5 px-4 border border-input bg-background hover:bg-accent hover:text-accent-foreground rounded-md text-sm font-medium transition-colors flex items-center justify-center space-x-2">
+                  <i class="fab fa-twitter"></i>
+                  <span>Twitter</span>
+                </a>
               </div>
             </form>
 

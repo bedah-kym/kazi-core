@@ -97,3 +97,205 @@ class AIConversation(models.Model):
     
     def __str__(self):
         return f"AI Conv - {self.user.username} - Room {self.room.id} ({self.message_count} msgs)"
+
+
+class Reminder(models.Model):
+    """
+    Scheduled reminders/notifications for users.
+    Processable via Celery beat or scheduled tasks.
+    """
+    PRIORITY_CHOICES = [
+        ('low', 'Low'),
+        ('medium', 'Medium'),
+        ('high', 'High'),
+    ]
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('sent', 'Sent'),
+        ('failed', 'Failed'),
+        ('cancelled', 'Cancelled'),
+    ]
+
+    user = models.ForeignKey(user, on_delete=models.CASCADE, related_name='reminders')
+    room = models.ForeignKey(Chatroom, on_delete=models.SET_NULL, null=True, blank=True)
+    content = models.TextField()  # "Remind me to call John"
+    scheduled_time = models.DateTimeField()
+    priority = models.CharField(max_length=10, choices=PRIORITY_CHOICES, default='medium')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    
+    # Delivery channels
+    via_email = models.BooleanField(default=True)
+    via_whatsapp = models.BooleanField(default=False)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    error_log = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ['scheduled_time']
+
+    def __str__(self):
+        return f"Reminder for {self.user.username}: {self.content[:30]}..."
+
+
+class RoomContext(models.Model):
+    """
+    3-Tier Context Storage for AI Memory
+    Tier 1: Hot storage (recent messages, active notes)
+    """
+    chatroom = models.OneToOneField(Chatroom, on_delete=models.CASCADE, related_name='context')
+    
+    # Compressed context summary (LLM-generated)
+    summary = models.TextField(blank=True, help_text="AI-generated summary of conversation")
+    
+    # Key participants and entities mentioned
+    participants = models.JSONField(default=list)  # ["John", "Sarah", "@mike"]
+    entities = models.JSONField(default=dict)  # {"people": [...], "companies": [...], "projects": [...]}
+    
+    # Active topics/themes
+    active_topics = models.JSONField(default=list)  # ["project_launch", "budget_discussion"]
+    
+    # Link to related rooms (cross-room context)
+    related_rooms = models.ManyToManyField('self', blank=True, symmetrical=False)
+    
+    # Metadata
+    message_count = models.IntegerField(default=0)
+    last_compressed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    def __str__(self):
+        return f"Context for Room {self.chatroom.id}"
+
+
+class RoomNote(models.Model):
+    """
+    Tier 2: Important notes/decisions extracted by AI or created by users
+    """
+    NOTE_TYPES = [
+        ('decision', 'Decision'),
+        ('action_item', 'Action Item'),
+        ('insight', 'Insight'),
+        ('reference', 'Reference'),
+        ('reminder', 'Reminder'),
+        ('written', 'Written Note'),
+    ]
+    
+    room_context = models.ForeignKey(RoomContext, on_delete=models.CASCADE, related_name='notes')
+    note_type = models.CharField(max_length=20, choices=NOTE_TYPES)
+    content = models.TextField()
+    
+    # Who created it (AI or User)
+    created_by = models.ForeignKey(user, on_delete=models.SET_NULL, null=True, blank=True)
+    is_ai_generated = models.BooleanField(default=False)
+    
+    # Importance/priority
+    priority = models.CharField(max_length=10, choices=[
+        ('low', 'Low'),
+        ('medium', 'Medium'),
+        ('high', 'High'),
+    ], default='medium')
+    
+    # Tags for searchability
+    tags = models.JSONField(default=list)  # ["budget", "deadline", "client_meeting"]
+    
+    # Linked message (if extracted from conversation)
+    source_message_id = models.IntegerField(null=True, blank=True)
+    source_message_content = models.TextField(blank=True, help_text="Full content of the pinned message")
+    
+    # Status tracking
+    is_completed = models.BooleanField(default=False)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['room_context', '-created_at']),
+            models.Index(fields=['note_type', 'is_completed']),
+        ]
+    
+    def __str__(self):
+        return f"{self.get_note_type_display()}: {self.content[:50]}..."
+
+
+class DailySummary(models.Model):
+    """
+    Tier 3: Cold storage - Daily/weekly compressed summaries
+    """
+    room_context = models.ForeignKey(RoomContext, on_delete=models.CASCADE, related_name='daily_summaries')
+    date = models.DateField()
+    
+    # AI-generated summary
+    summary = models.TextField(help_text="What happened today in this room")
+    
+    # Key highlights
+    highlights = models.JSONField(default=list)  # ["Decided on Q1 budget", "John joined team"]
+    
+    # Statistics
+    message_count = models.IntegerField(default=0)
+    participant_count = models.IntegerField(default=0)
+    notes_created = models.IntegerField(default=0)
+    
+    # Sentiment/tone (optional, AI-analyzed)
+    sentiment = models.CharField(max_length=20, blank=True, choices=[
+        ('positive', 'Positive'),
+        ('neutral', 'Neutral'),
+        ('negative', 'Negative'),
+    ])
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        unique_together = ['room_context', 'date']
+        ordering = ['-date']
+        indexes = [
+            models.Index(fields=['room_context', '-date']),
+        ]
+    
+    def __str__(self):
+        return f"Summary for Room {self.room_context.chatroom.id} on {self.date}"
+
+
+class DocumentUpload(models.Model):
+    """
+    Track document uploads for rate limiting and quota management
+    """
+    FILE_TYPE_CHOICES = [
+        ('pdf', 'PDF'),
+        ('image', 'Image'),
+    ]
+    
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('processing', 'Processing'),
+        ('completed', 'Completed'),
+        ('failed', 'Failed'),
+    ]
+    
+    user = models.ForeignKey(user, on_delete=models.CASCADE, related_name='document_uploads')
+    chatroom = models.ForeignKey(Chatroom, on_delete=models.CASCADE, related_name='document_uploads')
+    file_type = models.CharField(max_length=10, choices=FILE_TYPE_CHOICES)
+    file_path = models.CharField(max_length=500)
+    file_size = models.IntegerField(help_text="File size in bytes")
+    
+    # AI Processing fields
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    processed_text = models.TextField(blank=True, help_text="Extracted text content from the document")
+    extracted_metadata = models.JSONField(default=dict, blank=True, help_text="Metadata found during processing")
+    
+    quota_window_start = models.DateTimeField(help_text="Start of the 10-hour quota window")
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['-uploaded_at']
+        indexes = [
+            models.Index(fields=['user', 'quota_window_start']),
+            models.Index(fields=['chatroom', '-uploaded_at']),
+            models.Index(fields=['status']),
+        ]
+    
+    def __str__(self):
+        return f"{self.user.username} - {self.file_type} - {self.status} - {self.uploaded_at}"

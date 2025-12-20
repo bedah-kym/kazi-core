@@ -1,5 +1,234 @@
-var chatSocket = new ReconnectingWebSocket(
-    'ws://' + window.location.host + '/ws/chat/' + roomName + '/');
+// Global variables
+// MULTI-ROOM ARCHITECTURE
+const activeRooms = {}; // { roomId: { socket: WebSocket, initialized: bool } }
+let currentRoomId = roomName; // roomName defined in template (initial room)
+let usernameGlobal = username; // username defined in template
+const userPresenceMap = new Map();
+
+// Helper function to get current socket
+function getCurrentSocket() {
+    const room = activeRooms[currentRoomId];
+    return room ? room.socket : null;
+}
+window.getCurrentSocket = getCurrentSocket;
+
+// Initialize
+initRoom(roomName);
+
+/**
+ * Room Loader Management
+ */
+function showRoomLoader(roomId) {
+    const container = document.getElementById(`room-container-${roomId}`);
+    if (!container) return;
+
+    // Remove existing if any
+    hideRoomLoader(roomId);
+
+    const loader = document.createElement('div');
+    loader.className = 'room-loader-overlay';
+    loader.id = `loader-room-${roomId}`;
+    loader.innerHTML = `
+        <div class="room-loader-content">
+            <div class="room-loader-spinner"></div>
+            <div class="room-loader-text">Loading Room...</div>
+        </div>
+    `;
+    container.appendChild(loader);
+}
+
+function hideRoomLoader(roomId) {
+    const loader = document.getElementById(`loader-room-${roomId}`);
+    if (loader) {
+        loader.classList.add('loader-hidden');
+        setTimeout(() => loader.remove(), 400);
+    }
+}
+window.showRoomLoader = showRoomLoader;
+window.hideRoomLoader = hideRoomLoader;
+
+/**
+ * Initialize a room (UI + Socket)
+ */
+function initRoom(roomId) {
+    console.log(`🚀 Initializing room ${roomId}`);
+
+    // 1. Create UI Container if missing
+    getOrCreateRoomUI(roomId);
+
+    // 2. Room Switch / Loader Logic
+    const roomRecord = activeRooms[roomId];
+
+    if (roomRecord && roomRecord.socket && roomRecord.socket.readyState === WebSocket.OPEN) {
+        console.log(`♻️ Room ${roomId} already connected, skipping init`);
+        activateRoomUI(roomId);
+        // Ensure loader is hidden if it was somehow left over
+        hideRoomLoader(roomId);
+        // Refresh messages for consistency
+        FetchMessages(roomId);
+    } else {
+        // Show Loader for new/reconnecting rooms
+        showRoomLoader(roomId);
+        connectToChat(roomId);
+        activateRoomUI(roomId);
+    }
+}
+
+/**
+ * Ensure the DOM elements for this room exist
+ */
+function getOrCreateRoomUI(roomId) {
+    const container = document.getElementById('chat-rooms-container');
+    let roomDiv = document.getElementById(`room-container-${roomId}`);
+
+    if (!roomDiv) {
+        // Create wrapper
+        roomDiv = document.createElement('div');
+        roomDiv.id = `room-container-${roomId}`;
+        roomDiv.className = 'room-view';
+        roomDiv.style.display = 'none';
+
+        // Create Message List
+        const ul = document.createElement('ul');
+        ul.id = `messages-room-${roomId}`;
+        ul.className = 'list-unstyled mb-0';
+
+        // Create Typing Indicator specific to this room
+        const typingDiv = document.createElement('div');
+        typingDiv.className = 'typing-indicator';
+        typingDiv.id = `typing-indicator-${roomId}`;
+        typingDiv.style.display = 'none';
+        typingDiv.innerHTML = '<em class="user-name"></em><span></span><span></span><span></span>';
+
+        roomDiv.appendChild(ul);
+        roomDiv.appendChild(typingDiv);
+        container.appendChild(roomDiv);
+    }
+    return roomDiv;
+}
+
+/**
+ * Switch valid visible room
+ */
+function activateRoomUI(roomId) {
+    // Hide all rooms
+    document.querySelectorAll('.room-view').forEach(el => el.style.display = 'none');
+
+    // Show target room
+    const target = getOrCreateRoomUI(roomId);
+    target.style.display = 'block';
+
+    // Scroll to bottom
+    const messagesList = document.getElementById(`messages-room-${roomId}`);
+    if (messagesList) {
+        messagesList.scrollTop = messagesList.scrollHeight;
+    }
+}
+
+function connectToChat(roomId) {
+    if (activeRooms[roomId] && activeRooms[roomId].socket) {
+        console.log(`Checking connection for ${roomId}: ${activeRooms[roomId].socket.readyState}`);
+        if (activeRooms[roomId].socket.readyState === WebSocket.OPEN) return;
+    }
+
+    console.log(`🔌 Connecting socket for room ${roomId}...`);
+    const socket = new ReconnectingWebSocket(
+        'ws://' + window.location.host + '/ws/chat/' + roomId + '/'
+    );
+
+    activeRooms[roomId] = { socket: socket, initialized: false };
+
+    // Initialize chat connection
+    socket.onopen = function (e) {
+        console.log('✅ WebSocket connection established for room ' + roomId);
+        // Always fetch messages on open to ensure sync and hide loader
+        FetchMessages(roomId);
+    };
+
+    socket.onclose = function (e) {
+        console.error(`❌ Chat socket closed for room ${roomId}`);
+    };
+
+    // WebSocket message handling
+    socket.onmessage = function (e) {
+        const data = JSON.parse(e.data);
+        const rId = roomId;
+
+        if (data.command === 'typing' && data.from !== usernameGlobal) {
+            const indicator = document.getElementById(`typing-indicator-${rId}`);
+            if (indicator) {
+                indicator.querySelector('.user-name').textContent = data.from;
+                indicator.style.display = 'flex';
+                setTimeout(() => indicator.style.display = 'none', 3000);
+            }
+            return;
+        }
+        if (data.command === 'presence_snapshot' || data.command === 'presence') {
+            handlePresenceUpdate(data);
+            return;
+        }
+        if (data.command === 'messages') {
+            for (let i = data.messages.length - 1; i >= 0; i--) {
+                createMessage(data.messages[i], rId);
+            }
+            scrollToLastMessage(rId);
+            // Hide Loader after messages loaded
+            hideRoomLoader(rId);
+            return;
+        }
+        if (data.command === 'new_message') {
+            createMessage(data.message, rId);
+            scrollToLastMessage(rId);
+            if (window.mathiaAssistant) {
+                window.mathiaAssistant.checkForTrigger(data);
+            }
+            return;
+        }
+        // AI Integration
+        if (data.command === 'ai_stream' || data.command === 'ai_message' || data.command === 'ai_message_saved') {
+            if (window.mathiaAssistant) {
+                window.mathiaAssistant.handleMessage(data);
+            }
+            return;
+        }
+        if (data.command === 'error') {
+            console.error('Error from server:', data.message);
+            return;
+        }
+    };
+}
+
+/**
+ * Switch Room Function (SPA Style + Concurrency)
+ */
+function switchRoom(event, roomId, roomDisplayName) {
+    event.preventDefault();
+    console.log(`🔄 Switching to room ${roomId} (${roomDisplayName})`);
+
+    if (currentRoomId === roomId) return;
+
+    // 1. Update UI Sidebar State
+    document.querySelectorAll('.chat-list li').forEach(li => li.classList.remove('active'));
+    document.getElementById(`room-li-${roomId}`)?.classList.add('active');
+
+    // Update Header
+    document.querySelector('.chat-header h6').textContent = roomDisplayName;
+
+    // 2. Update URL (without reload)
+    const newUrl = `/chatbot/home/${roomId}/`;
+    window.history.pushState({ path: newUrl, roomId: roomId }, '', newUrl);
+
+    // 3. Multi-Room Switch
+    currentRoomId = roomId;
+    initRoom(roomId);
+}
+
+// Handle Browser Back Button
+window.addEventListener('popstate', function (event) {
+    if (event.state && event.state.roomId) {
+        location.reload();
+    }
+});
 
 // Hamburger menu toggle
 (function () {
@@ -7,7 +236,6 @@ var chatSocket = new ReconnectingWebSocket(
 
     window.addEventListener('load', function () {
         const menuToggle = document.getElementById('menuToggle');
-        console.log('Menu toggle button found:', menuToggle);
         if (menuToggle) {
             menuToggle.onclick = function (e) {
                 e.preventDefault();
@@ -18,7 +246,6 @@ var chatSocket = new ReconnectingWebSocket(
             };
         }
 
-        // Close menu when clicking outside
         document.body.onclick = function (e) {
             if (menuOpen) {
                 const peopleList = document.querySelector('.people-list');
@@ -36,24 +263,6 @@ var chatSocket = new ReconnectingWebSocket(
     });
 })();
 
-// Initialize chat connection
-chatSocket.onopen = function (e) {
-    console.log('WebSocket connection established');
-    document.querySelectorAll('.status-dot').forEach(dot => {
-        dot.classList.remove('online', 'offline');
-    });
-    FetchMessages();
-};
-
-chatSocket.onclose = function (e) {
-    console.error('Chat socket closed unexpectedly');
-    document.querySelectorAll('.status-dot').forEach(dot => {
-        dot.classList.remove('online');
-        dot.classList.add('offline');
-    });
-};
-
-// Message handling
 // Configure Marked options
 if (typeof marked !== 'undefined') {
     marked.use({
@@ -62,12 +271,22 @@ if (typeof marked !== 'undefined') {
     });
 }
 
-function createMessage(data) {
+// FIX: createMessage now accepts roomId parameter
+function createMessage(data, roomId) {
     if (!data || !data.member || !data.content || !data.timestamp) {
         console.error('Invalid message data:', data);
         return;
     }
-    const chatHistory = document.querySelector('.chat-history');
+
+    // Use provided roomId or fall back to currentRoomId
+    const targetRoomId = roomId || currentRoomId;
+    const messagesList = document.getElementById(`messages-room-${targetRoomId}`);
+
+    if (!messagesList) {
+        console.error(`Messages list not found for room ${targetRoomId}`);
+        return;
+    }
+
     const formattedTime = new Date(data.timestamp).toLocaleTimeString();
     const time = `<span class="time-label">${formattedTime}</span>`;
 
@@ -77,30 +296,24 @@ function createMessage(data) {
     msgListTag.id = 'tracker';
 
     const msgDivTag = document.createElement('div');
-    const msgdivtag = document.createElement('p'); // User name
-    const msgSpanTag = document.createElement('span'); // Container for message content
-    const msgpTag = document.createElement('div'); // Time wrapper
-    const msgTextTag = document.createElement('div'); // Actual message content
+    const msgdivtag = document.createElement('p');
+    const msgSpanTag = document.createElement('span');
+    const msgpTag = document.createElement('div');
+    const msgTextTag = document.createElement('div');
 
     // MARKDOWN & SECURITY PROCESSING
     let rawContent = data.content;
     let safeHtml = rawContent;
 
-    // Check if libraries are loaded
     if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
         try {
-            // 1. Parse Markdown
             const parsedHtml = marked.parse(rawContent);
-
-            // 2. Sanitize HTML (PREVENT XSS)
-            // Allow img tags but sanitise their src
             safeHtml = DOMPurify.sanitize(parsedHtml, {
                 ADD_TAGS: ['img', 'code', 'pre'],
                 ADD_ATTR: ['src', 'alt', 'class', 'style', 'target']
             });
         } catch (e) {
             console.error('Markdown processing error:', e);
-            // Fallback to text content if error
             safeHtml = rawContent.replace(/</g, "&lt;").replace(/>/g, "&gt;");
         }
     }
@@ -117,7 +330,6 @@ function createMessage(data) {
         msgTextTag.className = 'message other-message';
     }
 
-    // Add sentimage class if it contains an image (legacy check + new markdown check)
     if (data.content.includes('<img') || (safeHtml && safeHtml.includes('<img'))) {
         msgTextTag.classList.add('sentimage');
     }
@@ -126,26 +338,37 @@ function createMessage(data) {
     msgSpanTag.className = 'message-data-time';
     msgpTag.className = 'time-label';
 
+    // SPECIAL STYLING FOR MATHIA
+    const isMathia = data.member && (
+        data.member.toLowerCase().includes('mathia')
+    );
+
+    if (isMathia) {
+        msgTextTag.classList.add('mathia-message');
+        // Add Badge to the bubble
+        const badge = document.createElement('div');
+        badge.className = 'mathia-badge';
+        badge.innerHTML = '<i class="fas fa-robot"></i> <span>Mathia AI</span>';
+        msgTextTag.insertBefore(badge, msgTextTag.firstChild);
+    }
+
     msgListTag.appendChild(msgDivTag);
     msgDivTag.appendChild(msgpTag);
     msgDivTag.appendChild(msgSpanTag);
     msgSpanTag.appendChild(msgTextTag);
     msgTextTag.appendChild(msgdivtag);
 
-    // Apply Syntax Highlighting & Copy Buttons
+    // Syntax Highlighting & Copy Buttons
     if (typeof hljs !== 'undefined') {
         msgTextTag.querySelectorAll('pre code').forEach((block) => {
             try {
-                // Force highlight even if language class is missing
                 hljs.highlightElement(block);
             } catch (e) {
                 console.warn('Highlight warning:', e);
             }
 
-            // Add Copy Button
             const pre = block.parentElement;
             if (pre && !pre.querySelector('.copy-btn')) {
-                // Ensure positioning
                 if (window.getComputedStyle(pre).position === 'static') {
                     pre.style.position = 'relative';
                 }
@@ -153,7 +376,6 @@ function createMessage(data) {
                 const btn = document.createElement('button');
                 btn.className = 'copy-btn';
                 btn.innerHTML = '<i class="fas fa-copy"></i> Copy';
-                // Inline styles for safety
                 btn.style.cssText = 'position: absolute; top: 5px; right: 5px; padding: 4px 8px; font-size: 12px; border: none; border-radius: 4px; cursor: pointer; background: rgba(255,255,255,0.1); color: #fff; z-index: 10;';
 
                 btn.onclick = (e) => {
@@ -169,25 +391,57 @@ function createMessage(data) {
         });
     }
 
-    document.querySelector('#top-chat').appendChild(msgListTag);
-    chatHistory.scrollTop = chatHistory.scrollHeight;
+    messagesList.appendChild(msgListTag);
+
+    // Add dropdown menu to AI messages
+    if (window.messageActions && data.id) {
+        const isAIMessage = data.member && (data.member.toLowerCase() === 'mathia' || data.member.toLowerCase() === '@mathia');
+        const isFailed = data.status === 'failed' || data.error === true;
+
+        if (isAIMessage) {
+            // Wait for DOM to be ready
+            setTimeout(() => {
+                window.messageActions.addDropdownToMessage(
+                    msgTextTag,  // message element
+                    data.id,     // message ID
+                    data.content, // message content
+                    true,        // isAIMessage
+                    isFailed     // isFailed
+                );
+            }, 50);
+        }
+    }
+
+    // Auto-scroll if we're viewing this room
+    if (targetRoomId === currentRoomId) {
+        messagesList.scrollTop = messagesList.scrollHeight;
+    }
 }
 
-function FetchMessages() {
-    chatSocket.send(JSON.stringify({
+// FIX: FetchMessages now uses room-specific socket
+function FetchMessages(roomId) {
+    const targetRoom = roomId || currentRoomId;
+    const room = activeRooms[targetRoom];
+
+    if (!room || !room.socket) {
+        console.error(`No socket available for room ${targetRoom}`);
+        return;
+    }
+
+    room.socket.send(JSON.stringify({
         "command": "fetch_messages",
-        "chatid": roomName
+        "chatid": targetRoom
     }));
 }
 
-function scrollToLastMessage() {
-    const elements = document.querySelectorAll('#tracker');
-    if (elements.length > 0) elements[elements.length - 1].scrollIntoView();
+// FIX: scrollToLastMessage now room-specific
+function scrollToLastMessage(roomId) {
+    const targetRoom = roomId || currentRoomId;
+    const messagesList = document.getElementById(`messages-room-${targetRoom}`);
+    if (messagesList) {
+        messagesList.scrollTop = messagesList.scrollHeight;
+    }
 }
-
-// Typing indicator
-function showTypingIndicator() { document.querySelector('.typing-indicator')?.style.setProperty('display', 'flex'); }
-function hideTypingIndicator() { document.querySelector('.typing-indicator')?.style.setProperty('display', 'none'); }
 
 function getCookie(name) {
     const cookies = document.cookie.split(';');
@@ -198,24 +452,56 @@ function getCookie(name) {
     return null;
 }
 
+// FIX: Typing indicator now uses current socket
 let typingTimer;
 const chatInput = document.querySelector('#chat-message-input');
 if (chatInput) {
     chatInput.addEventListener('input', function () {
-        chatSocket.send(JSON.stringify({ 'command': 'typing', 'from': username, "chatid": roomName }));
+        const socket = getCurrentSocket();
+        if (socket && socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({
+                'command': 'typing',
+                'from': username,
+                "chatid": currentRoomId
+            }));
+        }
     });
-    chatInput.addEventListener('keyup', function (e) { if (e.keyCode === 13) document.querySelector('#chat-message-submit')?.click(); });
+
+    chatInput.addEventListener('keyup', function (e) {
+        if (e.keyCode === 13) {
+            document.querySelector('#chat-message-submit')?.click();
+        }
+    });
 }
 
+// FIX: Submit button now uses current socket
 const chatSubmit = document.querySelector('#chat-message-submit');
-if (chatSubmit) chatSubmit.addEventListener('click', function () {
-    const messageInputDom = document.querySelector('#chat-message-input');
-    const message = messageInputDom?.value?.trim();
-    if (message) {
-        chatSocket.send(JSON.stringify({ 'message': message, 'from': username, 'command': 'new_message', "chatid": roomName }));
-        if (messageInputDom) messageInputDom.value = '';
-    }
-});
+if (chatSubmit) {
+    chatSubmit.addEventListener('click', function () {
+        const messageInputDom = document.querySelector('#chat-message-input');
+        const message = messageInputDom?.value?.trim();
+
+        if (message) {
+            const socket = getCurrentSocket();
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                // INSTANT THINKING: If it's an AI trigger, show thinking immediately
+                if (message.toLowerCase().includes('@mathia') && window.mathiaAssistant) {
+                    window.mathiaAssistant.showAIThinking();
+                }
+
+                socket.send(JSON.stringify({
+                    'message': message,
+                    'from': username,
+                    'command': 'new_message',
+                    "chatid": currentRoomId
+                }));
+                if (messageInputDom) messageInputDom.value = '';
+            } else {
+                console.error('Socket not ready for room:', currentRoomId);
+            }
+        }
+    });
+}
 
 // File handling
 function initFileHandlers() {
@@ -227,10 +513,12 @@ function initFileHandlers() {
     fileInputEl.addEventListener('change', function (event) {
         const file = event.target.files[0];
         if (!file) return;
+
         const filePreview = document.querySelector('.file-preview');
         const previewContent = filePreview?.querySelector('.preview-content');
         const fileName = filePreview?.querySelector('.file-name');
         const progressBar = filePreview?.querySelector('.upload-progress-bar');
+
         if (fileName) fileName.textContent = file.name;
         if (previewContent) previewContent.innerHTML = '';
         if (progressBar) progressBar.style.width = '0%';
@@ -238,67 +526,66 @@ function initFileHandlers() {
 
         if (file.type.startsWith('image/') && previewContent) {
             const reader = new FileReader();
-            reader.onload = function (e) { previewContent.innerHTML = `<img src="${e.target.result}" alt="preview">`; };
+            reader.onload = function (e) {
+                previewContent.innerHTML = `<img src="${e.target.result}" alt="preview">`;
+            };
             reader.readAsDataURL(file);
         } else if (previewContent) {
             previewContent.innerHTML = `<i class="fas fa-file fa-3x"></i>`;
         }
 
-        const formData = new FormData(); formData.append('file', file);
+        const formData = new FormData();
+        formData.append('file', file);
         const csrfToken = getCookie('csrftoken');
 
         let progress = 0;
         const progressInterval = setInterval(() => {
-            progress += 10; if (progressBar) progressBar.style.width = `${progress}%`;
-            if (progress >= 100) { clearInterval(progressInterval); setTimeout(() => { if (filePreview) filePreview.style.display = 'none'; }, 500); }
+            progress += 10;
+            if (progressBar) progressBar.style.width = `${progress}%`;
+            if (progress >= 100) {
+                clearInterval(progressInterval);
+                setTimeout(() => {
+                    if (filePreview) filePreview.style.display = 'none';
+                }, 500);
+            }
         }, 200);
 
-        fetch('/uploads/', { method: 'POST', body: formData, headers: { 'X-CSRFToken': csrfToken } })
+        fetch('/uploads/', {
+            method: 'POST',
+            body: formData,
+            headers: { 'X-CSRFToken': csrfToken }
+        })
             .then(response => response.json())
             .then(data => {
                 const messageHtml = file.type.startsWith('image/')
                     ? `<img src="${data.fileUrl}" alt="uploaded image" />`
                     : `<a href="${data.fileUrl}" target="_blank">${file.name}</a>`;
 
-                chatSocket.send(JSON.stringify({
-                    message: messageHtml,
-                    from: username,
-                    command: 'new_message',
-                    chatid: roomName
-                }));
+                const socket = getCurrentSocket();
+                if (socket && socket.readyState === WebSocket.OPEN) {
+                    socket.send(JSON.stringify({
+                        message: messageHtml,
+                        from: username,
+                        command: 'new_message',
+                        chatid: currentRoomId
+                    }));
+                }
             })
             .catch(error => console.error('Error uploading file:', error));
     });
 
     const closePreview = document.querySelector('.close-preview');
-    if (closePreview) closePreview.addEventListener('click', function () {
-        const fp = document.querySelector('.file-preview');
-        if (fp) fp.style.display = 'none';
-        const fi = document.querySelector('#fileInput');
-        if (fi) fi.value = '';
-    });
+    if (closePreview) {
+        closePreview.addEventListener('click', function () {
+            const fp = document.querySelector('.file-preview');
+            if (fp) fp.style.display = 'none';
+            const fi = document.querySelector('#fileInput');
+            if (fi) fi.value = '';
+        });
+    }
 }
 
-// WebSocket message handling
-chatSocket.onmessage = function (e) {
-    const data = JSON.parse(e.data);
-    if (data.command === 'typing' && data.from !== username) { document.getElementById('typing-user').textContent = data.from; showTypingIndicator(); clearTimeout(typingTimer); typingTimer = setTimeout(hideTypingIndicator, 3000); return; }
-    if (data.command === 'presence_snapshot' || data.command === 'presence') { handlePresenceUpdate(data); return; }
-    if (data.command === 'messages') { for (let i = data.messages.length - 1; i >= 0; i--) createMessage(data.messages[i]); scrollToLastMessage(); return; }
-    if (data.command === 'new_message') { createMessage(data.message); scrollToLastMessage(); return; }
-    if (data.command === 'error') { console.error('Error from server:', data.message); return; }
-    console.warn('Unknown command:', data);
-};
-// ============================================
 // PRESENCE MANAGEMENT SYSTEM
-// ============================================
-
-// Track all user statuses globally
-const userPresenceMap = new Map();
-
-/**
- * Log all current user states - useful for debugging
- */
 function logAllUserStates() {
     console.log('=== ALL USER PRESENCE STATES ===');
     if (userPresenceMap.size === 0) {
@@ -320,19 +607,12 @@ function logAllUserStates() {
     console.log('================================');
 }
 
-/**
- * Update presence for a specific user
- */
 function updateUserPresence(user, status, lastSeen) {
-    console.log(`📍 Updating presence for ${user}: ${status}`);
+    console.log(`🔍 Updating presence for ${user}: ${status}`);
 
-    // Update the global presence map
     userPresenceMap.set(user, { status, lastSeen });
 
-    // Update sidebar dots for this specific user
     const dots = document.querySelectorAll(`[data-user="${user}"], .sidebar-dot[data-user="${user}"]`);
-    console.log(`Found ${dots.length} sidebar dots for ${user}`);
-
     dots.forEach(dot => {
         dot.classList.toggle('online', status === 'online');
         dot.classList.toggle('offline', status !== 'online');
@@ -341,23 +621,13 @@ function updateUserPresence(user, status, lastSeen) {
         }
     });
 
-    // Update header ONLY if this is the specific user for this chat
-    // For 1-on-1 chats, otherUser is defined
-    // For group chats, you might want different logic
     if (typeof otherUser !== 'undefined' && user === otherUser) {
-        console.log(`📌 Updating header for ${user} (this is otherUser)`);
         updateHeaderPresence(user, status, lastSeen);
-    } else {
-        console.log(`⏭️  Skipping header update for ${user} (otherUser is: ${typeof otherUser !== 'undefined' ? otherUser : 'undefined'})`);
     }
 
-    // Log all states after each update
     logAllUserStates();
 }
 
-/**
- * Update the header presence indicator
- */
 function updateHeaderPresence(user, status, lastSeen) {
     const headerDot = document.getElementById('header-presence');
     const headerLast = document.getElementById('header-lastseen');
@@ -379,57 +649,32 @@ function updateHeaderPresence(user, status, lastSeen) {
             headerLast.style.color = '#999';
         }
     }
-
-    console.log(`✅ Header updated for ${user}: ${status}`);
 }
 
-/**
- * Handle incoming presence updates from WebSocket
- */
 function handlePresenceUpdate(data) {
-    console.log('🔔 handlePresenceUpdate called with:', data);
+    console.log('📡 handlePresenceUpdate called with:', data);
 
     if (data.command === 'presence_snapshot') {
         const presenceList = data.presence || [];
-        console.log(`📸 Processing presence snapshot (${presenceList.length} users)`);
-
-        // Clear existing presence data
         userPresenceMap.clear();
-
-        // Process all users in the snapshot
         presenceList.forEach(entry => {
-            console.log(`  📦 Snapshot: ${entry.user} -> ${entry.status}`);
             updateUserPresence(entry.user, entry.status, entry.last_seen);
         });
-
-        // After processing snapshot, update group chat header if needed
         updateGroupChatHeader();
-
     } else if (data.command === 'presence') {
-        console.log(`🔄 Processing individual presence update: ${data.user} -> ${data.status}`);
         updateUserPresence(data.user, data.status, data.last_seen);
-
-        // Update group header after individual update
         updateGroupChatHeader();
     }
 }
 
-/**
- * For GROUP CHATS: Show count of online users
- */
 function updateGroupChatHeader() {
-    // Skip if this is a 1-on-1 chat
-    if (typeof otherUser !== 'undefined') {
-        console.log('⏭️  Skipping group header update (this is 1-on-1 chat)');
-        return;
-    }
+    if (typeof otherUser !== 'undefined') return;
 
     const headerLast = document.getElementById('header-lastseen');
     if (!headerLast) return;
 
     const onlineCount = Array.from(userPresenceMap.values())
         .filter(p => p.status === 'online').length;
-
     const totalCount = userPresenceMap.size;
 
     if (onlineCount > 0) {
@@ -439,28 +684,17 @@ function updateGroupChatHeader() {
         headerLast.textContent = `${totalCount} members`;
         headerLast.style.color = '#999';
     }
-
-    console.log(`👥 Group header updated: ${onlineCount}/${totalCount} online`);
 }
 
-/**
- * Get current presence status for a user
- */
 function getUserPresence(username) {
     return userPresenceMap.get(username) || { status: 'offline', lastSeen: null };
 }
 
-/**
- * Check if a specific user is online
- */
 function isUserOnline(username) {
     const presence = userPresenceMap.get(username);
     return presence ? presence.status === 'online' : false;
 }
 
-/**
- * Convert a date to human-readable "last seen" format
- */
 function humanizeLastSeen(date) {
     if (!date) return '';
     const now = new Date();
@@ -478,63 +712,165 @@ function humanizeLastSeen(date) {
     return date.toLocaleDateString();
 }
 
-// ============================================
-// EXPOSE TO WINDOW FOR DEBUGGING
-// ============================================
+// Debug commands
 window.presenceDebug = {
     logAllStates: logAllUserStates,
     getPresence: getUserPresence,
     isOnline: isUserOnline,
     getUserMap: () => userPresenceMap,
     forceUpdate: (user, status, lastSeen) => {
-        console.log(`🔧 Manual presence update triggered`);
         updateUserPresence(user, status, lastSeen);
     }
 };
 
-console.log('💡 Presence system loaded. Debug commands available via window.presenceDebug');
-console.log('   - window.presenceDebug.logAllStates()');
-console.log('   - window.presenceDebug.getPresence(username)');
-console.log('   - window.presenceDebug.isOnline(username)');
-console.log('   - window.presenceDebug.getUserMap()');
-// ============================================
-// PEOPLE SEARCH FUNCTIONALITY
-// ============================================
+// PEOPLE SEARCH
 function levenshtein(a, b) { a = String(a || ''); b = String(b || ''); if (a === b) return 0; if (!a.length) return b.length; if (!b.length) return a.length; let prev = new Array(b.length + 1).fill(0).map((_, i) => i); for (let i = 0; i < a.length; i++) { let curr = [i + 1]; for (let j = 0; j < b.length; j++) { curr[j + 1] = Math.min(curr[j] + 1, prev[j + 1] + 1, prev[j] + (a[i] === b[j] ? 0 : 1)); } prev = curr; } return prev[b.length]; }
 
 function animateItemVisibility(li, show) { li.classList.add('people-anim'); if (show) { li.style.display = ''; requestAnimationFrame(() => li.classList.remove('fade-hidden')); } else { li.classList.add('fade-hidden'); li.addEventListener('transitionend', function onEnd(e) { if (e.propertyName === 'opacity') { li.style.display = 'none'; li.removeEventListener('transitionend', onEnd); } }); } }
 
-function humanizeLastSeen(date) { if (!date) return ''; const now = new Date(); const diff = Math.floor((now - date) / 1000); if (diff < 10) return 'just now'; if (diff < 60) return `${diff}s ago`; if (diff < 3600) return `${Math.floor(diff / 60)}m ago`; if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`; const days = Math.floor(diff / 86400); if (days === 1) return `Yesterday ${date.toLocaleTimeString()}`; return `${days}d ago`; }
-
 function toggleEmojiPicker() { const element = document.querySelector('em-emoji-picker'); if (!element) return; element.style.display = element.style.display === 'none' ? '' : 'none'; }
 
 function initPeopleSearch() {
-    const input = document.getElementById('search'); if (!input) return; let timeout; input.addEventListener('input', (e) => { clearTimeout(timeout); timeout = setTimeout(() => performPeopleSearch(e.target.value.trim()), 180); }); input.addEventListener('search', (e) => { if (!e.target.value) performPeopleSearch(''); }); document.addEventListener('keydown', (e) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); input.focus(); } });
+    const input = document.getElementById('search');
+    if (!input) return;
+    let timeout;
+    input.addEventListener('input', (e) => {
+        clearTimeout(timeout);
+        timeout = setTimeout(() => performPeopleSearch(e.target.value.trim()), 180);
+    });
+    input.addEventListener('search', (e) => {
+        if (!e.target.value) performPeopleSearch('');
+    });
+    document.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+            e.preventDefault();
+            input.focus();
+        }
+    });
 }
 
-function performPeopleSearch(query) { const raw = (query || '').trim(); const q = raw.toLowerCase(); const tokenMatch = raw.match(/^(u:|e:)(.*)$/i); let token = null; let tokenQuery = ''; if (tokenMatch) { token = tokenMatch[1].toLowerCase().replace(':', ''); tokenQuery = tokenMatch[2].trim().toLowerCase(); } document.querySelectorAll('.chat-list li').forEach(li => { const nameEl = li.querySelector('.fw-bold'); if (!nameEl) return; if (!nameEl.dataset.originalName) { const orig = Array.from(nameEl.childNodes).filter(n => n.nodeType === Node.TEXT_NODE).map(n => n.textContent).join('').trim(); nameEl.dataset.originalName = orig; } const original = nameEl.dataset.originalName || ''; if (!q) { restoreNameText(nameEl); animateItemVisibility(li, true); return; } const searchable = [original.toLowerCase()]; const anchor = li.querySelector('a'); const datasetSource = (li.dataset && Object.keys(li.dataset).length) ? li.dataset : (anchor?.dataset || {}); if (datasetSource.username) searchable.push(String(datasetSource.username).toLowerCase()); if (datasetSource.email) searchable.push(String(datasetSource.email).toLowerCase()); if (datasetSource.user) searchable.push(String(datasetSource.user).toLowerCase()); let matches = false; if (token) { const field = token === 'u' ? (datasetSource.username || datasetSource.user || '') : (datasetSource.email || ''); matches = field ? field.toLowerCase().includes(tokenQuery) : original.toLowerCase().includes(tokenQuery); } else { if (searchable.some(s => s.includes(q))) matches = true; else if (q.length >= 3) { const best = Math.max(...searchable.map(s => { const dist = levenshtein(q, s); return 1 - (dist / Math.max(q.length, s.length, 1)); })); matches = best >= 0.45; } } if (matches) { highlightNameText(nameEl, q); animateItemVisibility(li, true); } else { restoreNameText(nameEl); animateItemVisibility(li, false); } }); }
+function performPeopleSearch(query) {
+    const raw = (query || '').trim();
+    const q = raw.toLowerCase();
+    const tokenMatch = raw.match(/^(u:|e:)(.*)$/i);
+    let token = null;
+    let tokenQuery = '';
+    if (tokenMatch) {
+        token = tokenMatch[1].toLowerCase().replace(':', '');
+        tokenQuery = tokenMatch[2].trim().toLowerCase();
+    }
+    document.querySelectorAll('.chat-list li').forEach(li => {
+        const nameEl = li.querySelector('.fw-bold');
+        if (!nameEl) return;
+        if (!nameEl.dataset.originalName) {
+            const orig = Array.from(nameEl.childNodes).filter(n => n.nodeType === Node.TEXT_NODE).map(n => n.textContent).join('').trim();
+            nameEl.dataset.originalName = orig;
+        }
+        const original = nameEl.dataset.originalName || '';
+        if (!q) {
+            restoreNameText(nameEl);
+            animateItemVisibility(li, true);
+            return;
+        }
+        const searchable = [original.toLowerCase()];
+        const anchor = li.querySelector('a');
+        const datasetSource = (li.dataset && Object.keys(li.dataset).length) ? li.dataset : (anchor?.dataset || {});
+        if (datasetSource.username) searchable.push(String(datasetSource.username).toLowerCase());
+        if (datasetSource.email) searchable.push(String(datasetSource.email).toLowerCase());
+        if (datasetSource.user) searchable.push(String(datasetSource.user).toLowerCase());
+        let matches = false;
+        if (token) {
+            const field = token === 'u' ? (datasetSource.username || datasetSource.user || '') : (datasetSource.email || '');
+            matches = field ? field.toLowerCase().includes(tokenQuery) : original.toLowerCase().includes(tokenQuery);
+        } else {
+            if (searchable.some(s => s.includes(q))) matches = true;
+            else if (q.length >= 3) {
+                const best = Math.max(...searchable.map(s => {
+                    const dist = levenshtein(q, s);
+                    return 1 - (dist / Math.max(q.length, s.length, 1));
+                }));
+                matches = best >= 0.45;
+            }
+        }
+        if (matches) {
+            highlightNameText(nameEl, q);
+            animateItemVisibility(li, true);
+        } else {
+            restoreNameText(nameEl);
+            animateItemVisibility(li, false);
+        }
+    });
+}
 
-function restoreNameText(nameEl) { const original = nameEl.dataset.originalName || ''; Array.from(nameEl.childNodes).filter(n => n.nodeType === Node.TEXT_NODE).forEach(n => n.remove()); if (original) nameEl.insertBefore(document.createTextNode(original + ' '), nameEl.firstChild || null); }
+function restoreNameText(nameEl) {
+    const original = nameEl.dataset.originalName || '';
+    Array.from(nameEl.childNodes).filter(n => n.nodeType === Node.TEXT_NODE).forEach(n => n.remove());
+    if (original) nameEl.insertBefore(document.createTextNode(original + ' '), nameEl.firstChild || null);
+}
 
-function highlightNameText(nameEl, query) { const original = nameEl.dataset.originalName || ''; const regex = new RegExp(escapeRegex(query), 'ig'); const textNodes = Array.from(nameEl.childNodes).filter(n => n.nodeType === Node.TEXT_NODE); const text = textNodes.map(n => n.textContent).join(''); if (!regex.test(text)) { restoreNameText(nameEl); nameEl.classList.add('fuzzy-match'); setTimeout(() => nameEl.classList.remove('fuzzy-match'), 900); return; } const parts = text.split(regex); const matches = text.match(regex) || []; const frag = document.createDocumentFragment(); for (let i = 0; i < parts.length; i++) { frag.appendChild(document.createTextNode(parts[i])); if (i < matches.length) { const span = document.createElement('span'); span.className = 'search-highlight'; span.textContent = matches[i]; frag.appendChild(span); } } textNodes.forEach(n => n.remove()); nameEl.insertBefore(frag, nameEl.firstChild || null); if (nameEl.firstChild?.nodeType === Node.TEXT_NODE && !/\s$/.test(nameEl.firstChild.textContent)) nameEl.firstChild.textContent += ' '; }
+function highlightNameText(nameEl, query) {
+    const original = nameEl.dataset.originalName || '';
+    const regex = new RegExp(escapeRegex(query), 'ig');
+    const textNodes = Array.from(nameEl.childNodes).filter(n => n.nodeType === Node.TEXT_NODE);
+    const text = textNodes.map(n => n.textContent).join('');
+    if (!regex.test(text)) {
+        restoreNameText(nameEl);
+        nameEl.classList.add('fuzzy-match');
+        setTimeout(() => nameEl.classList.remove('fuzzy-match'), 900);
+        return;
+    }
+    const parts = text.split(regex);
+    const matches = text.match(regex) || [];
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i < parts.length; i++) {
+        frag.appendChild(document.createTextNode(parts[i]));
+        if (i < matches.length) {
+            const span = document.createElement('span');
+            span.className = 'search-highlight';
+            span.textContent = matches[i];
+            frag.appendChild(span);
+        }
+    }
+    textNodes.forEach(n => n.remove());
+    nameEl.insertBefore(frag, nameEl.firstChild || null);
+    if (nameEl.firstChild?.nodeType === Node.TEXT_NODE && !/\s$/.test(nameEl.firstChild.textContent)) nameEl.firstChild.textContent += ' ';
+}
 
-function escapeRegex(string) { return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+function escapeRegex(string) {
+    return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 // Emoji & init
 function initEmojiPicker() {
     const savedTheme = localStorage.getItem('theme') || 'light';
     document.body.setAttribute('data-theme', savedTheme);
-    const pickerOptions = { onEmojiSelect: function (emoji) { const input = document.getElementById('chat-message-input'); if (input) input.value += emoji.native; toggleEmojiPicker(); }, theme: savedTheme };
-    try { const picker = new EmojiMart.Picker(pickerOptions); picker.style.display = 'none'; document.body.appendChild(picker); } catch (e) { /* emoji lib may not be present */ }
+    const pickerOptions = {
+        onEmojiSelect: function (emoji) {
+            const input = document.getElementById('chat-message-input');
+            if (input) input.value += emoji.native;
+            toggleEmojiPicker();
+        },
+        theme: savedTheme
+    };
+    try {
+        const picker = new EmojiMart.Picker(pickerOptions);
+        picker.style.display = 'none';
+        document.body.appendChild(picker);
+    } catch (e) {
+        console.log('Emoji picker not loaded');
+    }
     document.getElementById('emoji')?.addEventListener('click', toggleEmojiPicker);
     document.getElementById('darkModeToggle')?.addEventListener('click', () => {
         const currentTheme = document.body.getAttribute('data-theme');
         const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
-        document.body.setAttribute('data-theme', newTheme); localStorage.setItem('theme', newTheme); document.querySelector('em-emoji-picker')?.setAttribute('theme', newTheme);
+        document.body.setAttribute('data-theme', newTheme);
+        localStorage.setItem('theme', newTheme);
+        document.querySelector('em-emoji-picker')?.setAttribute('theme', newTheme);
     });
 }
 
-document.addEventListener('DOMContentLoaded', function () { initEmojiPicker(); initFileHandlers(); initPeopleSearch(); });
-
-// placeholder
-function placeholder() { return null; }
+document.addEventListener('DOMContentLoaded', function () {
+    initEmojiPicker();
+    initFileHandlers();
+    initPeopleSearch();
+});

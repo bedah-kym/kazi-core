@@ -116,6 +116,25 @@
     font-size: 0.875rem;
     color: hsl(var(--muted-foreground));
     margin-top: 0.25rem;
+    margin-bottom: 0;
+}
+
+/* Close Button */
+.context-panel-close {
+    font-size: 1.25rem;
+    color: hsl(var(--muted-foreground));
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    transition: all 0.2s;
+    padding: 0.25rem;
+    line-height: 1;
+}
+
+.context-panel-close:hover {
+    color: hsl(var(--foreground));
+    background: hsl(var(--accent));
+    border-radius: calc(var(--radius) - 2px);
 }
 
 /* Panel Content */
@@ -300,6 +319,28 @@
     background: hsl(var(--secondary));
     color: hsl(var(--secondary-foreground));
     border-radius: calc(var(--radius) - 2px);
+}
+
+/* Note Form */
+.note-form-card {
+    background: hsl(var(--card));
+    border: 1px solid hsl(var(--border));
+    border-radius: var(--radius);
+    padding: 1rem;
+    margin-bottom: 1rem;
+}
+
+.note-form-card .form-control,
+.note-form-card .form-select {
+    background: hsl(var(--background));
+    border-color: hsl(var(--border));
+    color: hsl(var(--foreground));
+}
+
+.note-form-card .form-control:focus,
+.note-form-card .form-select:focus {
+    border-color: hsl(var(--ring));
+    box-shadow: 0 0 0 2px hsl(var(--ring) / 0.2);
 }
 
 /* Empty State */

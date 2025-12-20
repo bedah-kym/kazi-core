@@ -201,6 +201,7 @@ class RoomNote(models.Model):
     
     # Linked message (if extracted from conversation)
     source_message_id = models.IntegerField(null=True, blank=True)
+    source_message_content = models.TextField(blank=True, help_text="Full content of the pinned message")
     
     # Status tracking
     is_completed = models.BooleanField(default=False)
@@ -257,3 +258,30 @@ class DailySummary(models.Model):
     def __str__(self):
         return f"Summary for Room {self.room_context.chatroom.id} on {self.date}"
 
+
+class DocumentUpload(models.Model):
+    """
+    Track document uploads for rate limiting and quota management
+    """
+    FILE_TYPE_CHOICES = [
+        ('pdf', 'PDF'),
+        ('image', 'Image'),
+    ]
+    
+    user = models.ForeignKey(user, on_delete=models.CASCADE, related_name='document_uploads')
+    chatroom = models.ForeignKey(Chatroom, on_delete=models.CASCADE, related_name='document_uploads')
+    file_type = models.CharField(max_length=10, choices=FILE_TYPE_CHOICES)
+    file_path = models.CharField(max_length=500)
+    file_size = models.IntegerField(help_text="File size in bytes")
+    quota_window_start = models.DateTimeField(help_text="Start of the 10-hour quota window")
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['-uploaded_at']
+        indexes = [
+            models.Index(fields=['user', 'quota_window_start']),
+            models.Index(fields=['chatroom', '-uploaded_at']),
+        ]
+    
+    def __str__(self):
+        return f"{self.user.username} - {self.file_type} - {self.uploaded_at}"

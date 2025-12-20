@@ -633,12 +633,16 @@ class ChatConsumer(AsyncWebsocketConsumer):
                         
                         # Helper to broadcast chunks (Buffered)
                         # We use a mutable container for closure state
-                                                # Helper to broadcast chunks (Buffered & Whitespace Filtered)
+                        # Helper to broadcast chunks (Buffered & Whitespace Filtered)
                         # We use a mutable container for closure state
-                        stream_state = {'buffer': [], 'last_send': 0, 'first_token_sent': False}
+                        stream_state = {'buffer': [], 'last_send': 0, 'first_token_sent': False, 'full_response': []}
                         
                         async def broadcast_chunk(chunk_text, is_final=False):
                             import time
+                            
+                            # Store all chunks to build full response
+                            if chunk_text:
+                                stream_state['full_response'].append(chunk_text)
                             
                             # Filter leading whitespace if first token hasn't been sent
                             if not stream_state['first_token_sent'] and not is_final:
@@ -704,6 +708,65 @@ class ChatConsumer(AsyncWebsocketConsumer):
                         
                         # End stream
                         await broadcast_chunk("", is_final=True)
+                        
+                        # === NEW: Save complete AI message to database ===
+                        full_response_text = "".join(stream_state['full_response'])
+                        
+                        if full_response_text.strip():
+                            logger.info(f"Saving AI message to database: {full_response_text[:100]}...")
+                            
+                            # Encrypt the AI response
+                            encrypted_message = await self.encrypt_message({
+                                'content': full_response_text,
+                                'timestamp': str(timezone.now())
+                            })
+                            
+                            if encrypted_message:
+                                # Create Mathia user/member if not exists
+                                def _create_ai_message():
+                                    ai_user, _ = User.objects.get_or_create(
+                                        username='mathia',
+                                        defaults={
+                                            'first_name': 'Mathia',
+                                            'last_name': 'AI',
+                                            'is_active': True,
+                                            'email': 'mathia@kwikchat.ai'
+                                        }
+                                    )
+                                    # Use filter().first() to handle duplicate Members
+                                    ai_member = Member.objects.filter(User=ai_user).first()
+                                    if not ai_member:
+                                        ai_member = Member.objects.create(User=ai_user)
+                                    
+                                    payload = json.dumps({
+                                        'data': encrypted_message['data'],
+                                        'nonce': encrypted_message['nonce'],
+                                    })
+                                    
+                                    return Message.objects.create(
+                                        member=ai_member,
+                                        content=payload,
+                                        timestamp=timezone.now()
+                                    )
+                                
+                                ai_message = await sync_to_async(_create_ai_message)()
+                                
+                                # Add to chatroom
+                                current_chat = await self.get_current_chatroom(room_id)
+                                if current_chat:
+                                    await sync_to_async(current_chat.chats.add)(ai_message)
+                                    await sync_to_async(current_chat.save)()
+                                    logger.info(f"AI message saved with ID: {ai_message.id}")
+                                    
+                                    # Broadcast saved message to clients for proper rendering
+                                    message_json = await self.message_to_json(ai_message)
+                                    await self.channel_layer.group_send(
+                                        self.room_group_name,
+                                        {
+                                            "type": "ai_message_saved",
+                                            "message": message_json
+                                        }
+                                    )
 
             else:
                 await self.send_chat_message({
@@ -885,7 +948,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
                         'email': 'mathia@kwikchat.ai'
                     }
                 )
-                ai_member, _ = Member.objects.get_or_create(User=ai_user)
+                # Use filter().first() to handle duplicate Members
+                ai_member = Member.objects.filter(User=ai_user).first()
+                if not ai_member:
+                    ai_member = Member.objects.create(User=ai_user)
                 
                 payload = json.dumps({
                     'data': encrypted_message['data'],
@@ -924,6 +990,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
             "command": "ai_stream",
             "chunk": event.get('chunk'),
             "is_final": event.get('is_final', False)
+        }))
+    
+    async def ai_message_saved(self, event):
+        """Send saved AI message to client for proper rendering with dropdown"""
+        await self.send(text_data=json.dumps({
+            "command": "ai_message_saved",
+            "message": event.get('message')
         }))
         
     @classmethod
@@ -985,6 +1058,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 final_content = db_content
 
             return {
+                'id': message.id,
                 'member': username,
                 'content': final_content,
                 'timestamp': str(message.timestamp)

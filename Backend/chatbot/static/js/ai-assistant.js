@@ -3,8 +3,7 @@
 // ============================================
 
 class MathiaAssistant {
-    constructor(chatSocket, username) {
-        this.chatSocket = chatSocket;
+    constructor(username) {
         this.username = username;
         this.isThinking = false;
         this.messageInput = document.getElementById('chat-message-input');
@@ -17,7 +16,7 @@ class MathiaAssistant {
         console.log('🤖 Mathia AI Assistant initialized');
         this.setupAutocomplete();
         this.setupQuickPrompts();
-        this.listenForAIMessages();
+        // this.listenForAIMessages(); // Handled via main.js handleMessage callback
     }
 
     // ============================================
@@ -161,6 +160,13 @@ class MathiaAssistant {
         document.getElementById('chat-message-submit').click();
     }
 
+    getCurrentMessageList() {
+        if (typeof currentRoomId !== 'undefined') {
+            return document.getElementById(`messages-room-${currentRoomId}`);
+        }
+        return document.getElementById(`messages-room-${roomName}`);
+    }
+
     // ============================================
     // AI TYPING INDICATOR
     // ============================================
@@ -185,10 +191,10 @@ class MathiaAssistant {
             </div>
         `;
 
-        const chatList = document.getElementById('top-chat');
+        const chatList = this.getCurrentMessageList();
         if (chatList) {
             chatList.appendChild(thinkingIndicator);
-            this.chatHistory.scrollTop = this.chatHistory.scrollHeight;
+            chatList.scrollTop = chatList.scrollHeight;
         }
     }
 
@@ -203,37 +209,46 @@ class MathiaAssistant {
     // ============================================
     // LISTEN FOR AI MESSAGES
     // ============================================
-    listenForAIMessages() {
-        const originalOnMessage = this.chatSocket.onmessage;
+    // ============================================
+    // HANDLE AI MESSAGES (Called from main.js)
+    // ============================================
+    handleMessage(data) {
+        // Handle streaming chunks
+        if (data.command === 'ai_stream') {
+            this.handleStreamChunk(data.chunk, data.is_final);
+            return;
+        }
 
-        this.chatSocket.onmessage = (e) => {
-            const data = JSON.parse(e.data);
-
-            // Call original handler FIRST to display user message
-            if (originalOnMessage) {
-                originalOnMessage.call(this.chatSocket, e);
+        // NEW: Handle saved message after streaming completes
+        if (data.command === 'ai_message_saved') {
+            // Remove streaming container
+            const streamContainer = document.querySelector('.ai-stream-container');
+            if (streamContainer) {
+                streamContainer.remove();
             }
 
-            // Handle streaming chunks
-            if (data.command === 'ai_stream') {
-                this.handleStreamChunk(data.chunk, data.is_final);
-                return;
+            // Use createMessage() for proper markdown rendering and dropdown
+            if (typeof createMessage === 'function') {
+                const roomId = typeof currentRoomId !== 'undefined' ? currentRoomId : roomName;
+                createMessage(data.message, roomId);
             }
+            return;
+        }
 
-            // Handle complete AI message
-            if (data.command === 'ai_message') {
-                this.hideAIThinking();
-                this.displayAIMessage(data.message);
-                return;
-            }
+        // Handle complete AI message (legacy/fallback)
+        if (data.command === 'ai_message') {
+            this.hideAIThinking();
+            this.displayAIMessage(data.message);
+            return;
+        }
+    }
 
-            // Detect @mathia trigger (Case Insensitive)
-            if (data.command === 'new_message' &&
-                data.message?.content?.toLowerCase().includes('@mathia') &&
-                data.message?.member === this.username) {
-                this.showAIThinking();
-            }
-        };
+    checkForTrigger(data) {
+        if (data.command === 'new_message' &&
+            data.message?.content?.toLowerCase().includes('@mathia') &&
+            data.message?.member === this.username) {
+            this.showAIThinking();
+        }
     }
 
     handleStreamChunk(chunk, isFinal) {
@@ -243,7 +258,9 @@ class MathiaAssistant {
 
         if (!streamContainer) {
             // Create streaming message container
-            const chatList = document.getElementById('top-chat');
+            const chatList = this.getCurrentMessageList();
+            if (!chatList) return;
+
             const msgListTag = document.createElement('li');
             msgListTag.className = 'clearfix mathia-message-item ai-stream-container';
 
@@ -269,7 +286,8 @@ class MathiaAssistant {
         contentDiv.textContent += chunk;
 
         // Scroll to bottom
-        this.chatHistory.scrollTop = this.chatHistory.scrollHeight;
+        const chatList = this.getCurrentMessageList();
+        if (chatList) chatList.scrollTop = chatList.scrollHeight;
 
         if (isFinal) {
             streamContainer.classList.remove('ai-stream-container');
@@ -277,7 +295,7 @@ class MathiaAssistant {
     }
 
     displayAIMessage(messageData) {
-        const chatList = document.getElementById('top-chat');
+        const chatList = this.getCurrentMessageList();
         if (!chatList) return;
 
         const formattedTime = new Date(messageData.timestamp).toLocaleTimeString();
@@ -299,7 +317,7 @@ class MathiaAssistant {
         `;
 
         chatList.appendChild(msgListTag);
-        this.chatHistory.scrollTop = this.chatHistory.scrollHeight;
+        chatList.scrollTop = chatList.scrollHeight;
 
         // Animate entrance
         setTimeout(() => {
@@ -327,11 +345,10 @@ class MathiaAssistant {
 // INITIALIZE ON PAGE LOAD
 // ============================================
 document.addEventListener('DOMContentLoaded', function () {
-    // Wait for chatSocket to be defined in main.js
     const initMathia = setInterval(() => {
-        if (typeof chatSocket !== 'undefined' && typeof username !== 'undefined') {
+        if (typeof username !== 'undefined') {
             clearInterval(initMathia);
-            window.mathiaAssistant = new MathiaAssistant(chatSocket, username);
+            window.mathiaAssistant = new MathiaAssistant(username);
             console.log('✅ Mathia AI Assistant ready');
         }
     }, 100);

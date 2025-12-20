@@ -10,6 +10,7 @@ function getCurrentSocket() {
     const room = activeRooms[currentRoomId];
     return room ? room.socket : null;
 }
+window.getCurrentSocket = getCurrentSocket;
 
 // Initialize
 initRoom(roomName);
@@ -137,6 +138,16 @@ function connectToChat(roomId) {
         if (data.command === 'new_message') {
             createMessage(data.message, rId);
             scrollToLastMessage(rId);
+            if (window.mathiaAssistant) {
+                window.mathiaAssistant.checkForTrigger(data);
+            }
+            return;
+        }
+        // AI Integration
+        if (data.command === 'ai_stream' || data.command === 'ai_message' || data.command === 'ai_message_saved') {
+            if (window.mathiaAssistant) {
+                window.mathiaAssistant.handleMessage(data);
+            }
             return;
         }
         if (data.command === 'error') {
@@ -326,6 +337,25 @@ function createMessage(data, roomId) {
     }
 
     messagesList.appendChild(msgListTag);
+
+    // Add dropdown menu to AI messages
+    if (window.messageActions && data.id) {
+        const isAIMessage = data.member && (data.member.toLowerCase() === 'mathia' || data.member.toLowerCase() === '@mathia');
+        const isFailed = data.status === 'failed' || data.error === true;
+
+        if (isAIMessage) {
+            // Wait for DOM to be ready
+            setTimeout(() => {
+                window.messageActions.addDropdownToMessage(
+                    msgTextTag,  // message element
+                    data.id,     // message ID
+                    data.content, // message content
+                    true,        // isAIMessage
+                    isFailed     // isFailed
+                );
+            }, 50);
+        }
+    }
 
     // Auto-scroll if we're viewing this room
     if (targetRoomId === currentRoomId) {

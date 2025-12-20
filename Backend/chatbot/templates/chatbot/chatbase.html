@@ -14,6 +14,8 @@
     <link href="{% static 'css/ai-assistant.css' %}" rel="stylesheet">
     <!-- Context Panel Styles (Inlined for reliability) -->
     <link href="{% static 'css/context-panel.css'%}" rel="stylesheet">
+    <!-- Message Actions Styles -->
+    <link href="{% static 'css/message-actions.css'%}" rel="stylesheet">
     <!--favicon-->
     <link rel="icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
     <!-- Highlight.js CSS -->
@@ -275,19 +277,24 @@
     <button class="context-panel-toggle" id="contextPanelToggle" title="AI Memory & Notes">
         <i class="fas fa-brain"></i>
     </button>
-    <!-- Close button in header -->
-    <button class="btn btn-link text-muted p-0" id="closeContextPanel">
-        <i class="fas fa-times"></i>
-    </button>
 
     <!-- Context Panel (Shadcn-inspired) -->
     <div class="context-panel" id="contextPanel">
         <div class="context-panel-header">
-            <h2 class="context-panel-title">
-                <i class="fas fa-brain"></i>
-                AI Memory
-            </h2>
-            <p class="context-panel-subtitle">Context & Important Notes</p>
+            <div class="d-flex justify-content-between align-items-start w-100">
+                <div>
+                    <h2 class="context-panel-title">
+                        <i class="fas fa-brain"></i>
+                        AI Memory
+                    </h2>
+                    <p class="context-panel-subtitle">Context & Important Notes</p>
+                </div>
+                <!-- Close button in header -->
+                <button class="btn btn-link text-muted p-0 context-panel-close" id="closeContextPanel"
+                    title="Close panel">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
         </div>
 
         <div class="context-panel-content" id="contextPanelContent">
@@ -490,6 +497,7 @@
     </script>
 
     <script src="{% static 'js/main.js'%}"></script>
+    <script src="{% static 'js/message-actions.js'%}"></script>
     <script src="{% static 'js/ai-assistant.js' %}"></script>
     <script src="{% static 'js/calendar.js' %}"></script>
     <script src="{% static 'js/search.js'%}"></script>

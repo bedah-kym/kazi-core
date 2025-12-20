@@ -28,7 +28,7 @@ class ContextManager:
         """
         try:
             # 1. Get Local Room Context
-            context_obj, created = RoomContext.objects.get_or_create(chatroom=room)
+            context_obj, created = RoomContext.objects.get_or_create(chatroom=chatroom)
             
             # 2. Get Recent Local Notes
             local_notes = RoomNote.objects.filter(
@@ -51,13 +51,13 @@ class ContextManager:
             # Determine "Key User" (usually room creator or owner)
             key_user = None
             """
-            if room.name.startswith('private_'):
+            if chatroom.name.startswith('private_'):
                 # Private room logic (if applicable)
                 pass """
             
             # Use the first admin or just standard cross-room fetch based on workspace if we had it.
             # Here we'll search notes created by participants of this room in OTHER rooms.
-            participants = room.participants.all()
+            participants = chatroom.participants.all()
             users = [m.User for m in participants]
             
             global_notes = RoomNote.objects.filter(
@@ -71,7 +71,7 @@ class ContextManager:
             # 4. Get Processed Documents Context
             # Fetch the 3 most recent successfully processed documents for this room
             docs = DocumentUpload.objects.filter(
-                chatroom=room,
+                chatroom=chatroom,
                 status='completed'
             ).order_by('-uploaded_at')[:3]
             

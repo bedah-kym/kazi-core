@@ -339,7 +339,9 @@ function createMessage(data, roomId) {
     msgpTag.className = 'time-label';
 
     // SPECIAL STYLING FOR MATHIA
-    const isMathia = data.member && (data.member.toLowerCase() === 'mathia' || data.member.toLowerCase() === '@mathia');
+    const isMathia = data.member && (
+        data.member.toLowerCase().includes('mathia')
+    );
 
     if (isMathia) {
         msgTextTag.classList.add('mathia-message');

@@ -222,17 +222,15 @@ class MathiaAssistant {
         // NEW: Handle saved message after streaming completes
         if (data.command === 'ai_message_saved') {
             console.log('📝 AI message saved event received');
-            // Remove streaming container from THIS room specifically
+            this.isThinking = false;
+
+            // Remove ALL temporary AI states from THIS room
             const chatList = this.getCurrentMessageList();
             if (chatList) {
-                const streamContainer = chatList.querySelector('.ai-stream-container');
-                if (streamContainer) {
-                    streamContainer.remove();
-                }
-                const thinkingIndicator = chatList.querySelector('.mathia-thinking');
-                if (thinkingIndicator) {
-                    thinkingIndicator.remove();
-                }
+                // Remove any streaming containers
+                chatList.querySelectorAll('.ai-stream-container').forEach(el => el.remove());
+                // Remove any thinking indicators
+                chatList.querySelectorAll('.mathia-thinking').forEach(el => el.remove());
             }
 
             // Use createMessage() for proper markdown rendering and dropdown
@@ -240,7 +238,6 @@ class MathiaAssistant {
                 const roomId = typeof currentRoomId !== 'undefined' ? currentRoomId : roomName;
                 createMessage(data.message, roomId);
             }
-            this.isThinking = false;
             return;
         }
 
@@ -290,17 +287,16 @@ class MathiaAssistant {
             streamContainer = msgListTag;
         }
 
-        // Append chunk to content
+        // Append chunk to content (use innnerText to avoid HTML injection but keep line breaks)
         const contentDiv = streamContainer.querySelector('.stream-content');
-        contentDiv.textContent += chunk;
+        contentDiv.innerText += chunk;
 
         // Scroll to bottom
         const chatList = this.getCurrentMessageList();
         if (chatList) chatList.scrollTop = chatList.scrollHeight;
 
-        if (isFinal) {
-            streamContainer.classList.remove('ai-stream-container');
-        }
+        // DO NOT remove ai-stream-container class here. 
+        // We need it so ai_message_saved can find and remove it later.
     }
 
     displayAIMessage(messageData) {

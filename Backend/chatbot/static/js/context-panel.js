@@ -317,6 +317,14 @@ class ContextPanel {
         panel.classList.add('closed');
     }
 
+    updateRoom(newRoomId) {
+        if (!newRoomId || this.roomId === newRoomId) return;
+        this.roomId = newRoomId;
+        this.panel.dataset.loaded = 'false';
+        if (this.isOpen) {
+            this.loadContext();
+        }
+    }
 }
 
 

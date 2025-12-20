@@ -123,6 +123,11 @@ function activateRoomUI(roomId) {
     if (messagesList) {
         messagesList.scrollTop = messagesList.scrollHeight;
     }
+
+    // Update Context Panel
+    if (window.contextPanel) {
+        window.contextPanel.updateRoom(roomId);
+    }
 }
 
 function connectToChat(roomId) {

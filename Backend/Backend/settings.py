@@ -171,7 +171,11 @@ USE_TZ = True
 
 
 # Redis configuration for Celery, Caching, and Channels
-REDIS_URL = os.environ.get('REDIS_URL', 'redis://default:eyiHJLU1pYolD4iknOdwts2GC0wQQRFY@redis-13289.c10.us-east-1-3.ec2.cloud.redislabs.com:13289')
+REDIS_URL = os.environ.get('REDIS_URL')
+if not REDIS_URL and not DEBUG:
+    raise ValueError("REDIS_URL environment variable is required in production.")
+elif not REDIS_URL:
+    REDIS_URL = 'redis://127.0.0.1:6379/0'
 
 # Parse Upstash URL to check if it's secure
 IS_UPSTASH = REDIS_URL.startswith('rediss://')
@@ -426,8 +430,8 @@ AXES_LOCK_OUT_BY_COMBINATION_USER_AND_IP = True
 # --- CSP (Content Security Policy) ---
 # --- CSP (Content Security Policy) ---
 CSP_DEFAULT_SRC = ("'self'",)
-CSP_STYLE_SRC = ("'self'", "'unsafe-inline'", "https://fonts.googleapis.com", "https://cdnjs.cloudflare.com")
-CSP_SCRIPT_SRC = ("'self'", "https://js.stripe.com", "https://cdn.tailwindcss.com")
+CSP_STYLE_SRC = ("'self'", "'unsafe-inline'", "https://fonts.googleapis.com", "https://cdnjs.cloudflare.com", "https://cdn.jsdelivr.net")
+CSP_SCRIPT_SRC = ("'self'", "https://js.stripe.com", "https://cdn.tailwindcss.com", "https://cdn.jsdelivr.net", "https://assets.calendly.com", "https://code.jquery.com", "https://cdnjs.cloudflare.com")
 CSP_IMG_SRC = ("'self'", "data:", "https://*")
 CSP_FONT_SRC = ("'self'", "https://fonts.gstatic.com", "https://cdnjs.cloudflare.com")
 CSP_FRAME_SRC = ("'self'", "https://js.stripe.com")
@@ -441,5 +445,9 @@ if not DEBUG:
     SECURE_HSTS_SECONDS = 31536000  # 1 year
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SESSION_COOKIE_HTTPONLY = True
+    CSRF_COOKIE_HTTPONLY = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
 
 

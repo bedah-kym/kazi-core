@@ -161,10 +161,11 @@ class MathiaAssistant {
     }
 
     getCurrentMessageList() {
-        if (typeof currentRoomId !== 'undefined') {
-            return document.getElementById(`messages-room-${currentRoomId}`);
+        const roomId = window.currentRoomId || (typeof roomName !== 'undefined' ? roomName : null);
+        if (roomId) {
+            return document.getElementById(`messages-room-${roomId}`);
         }
-        return document.getElementById(`messages-room-${roomName}`);
+        return null;
     }
 
     // ============================================
@@ -235,8 +236,24 @@ class MathiaAssistant {
 
             // Use createMessage() for proper markdown rendering and dropdown
             if (typeof createMessage === 'function') {
-                const roomId = typeof currentRoomId !== 'undefined' ? currentRoomId : roomName;
+                const roomId = window.currentRoomId || (typeof roomName !== 'undefined' ? roomName : null);
                 createMessage(data.message, roomId);
+            }
+            return;
+        }
+
+        // Handle Mathia voice ready
+        if (data.command === 'ai_voice_ready') {
+            console.log('🎙️ AI voice response ready');
+            const roomId = window.currentRoomId || (typeof roomName !== 'undefined' ? roomName : null);
+            const msgContainer = document.querySelector(`[data-message-id="${data.message_id}"] .mathia-message`);
+            if (msgContainer && typeof renderVoiceBubble === 'function') {
+                renderVoiceBubble(msgContainer, {
+                    id: data.message_id,
+                    audio_url: data.audio_url,
+                    has_ai_voice: true,
+                    member: 'mathia'
+                });
             }
             return;
         }
@@ -252,7 +269,7 @@ class MathiaAssistant {
     checkForTrigger(data) {
         if (data.command === 'new_message' &&
             data.message?.content?.toLowerCase().includes('@mathia') &&
-            data.message?.member === this.username) {
+            data.message?.member === (this.username || window.usernameGlobal)) {
             this.showAIThinking();
         }
     }
@@ -351,9 +368,10 @@ class MathiaAssistant {
 // ============================================
 document.addEventListener('DOMContentLoaded', function () {
     const initMathia = setInterval(() => {
-        if (typeof username !== 'undefined') {
+        const uName = window.usernameGlobal || (typeof username !== 'undefined' ? username : null);
+        if (uName) {
             clearInterval(initMathia);
-            window.mathiaAssistant = new MathiaAssistant(username);
+            window.mathiaAssistant = new MathiaAssistant(uName);
             console.log('✅ Mathia AI Assistant ready');
         }
     }, 100);

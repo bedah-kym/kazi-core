@@ -123,10 +123,11 @@ class MessageActions {
      * Pin message to notes
      */
     async pinMessage(messageId, messageContent) {
+        if (!window.currentRoomId) return;
         this.closeDropdown();
 
         try {
-            const response = await fetch(`/chatbot/api/rooms/${currentRoomId}/messages/${messageId}/pin/`, {
+            const response = await fetch(`/chatbot/api/rooms/${window.currentRoomId}/messages/${messageId}/pin/`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -159,10 +160,11 @@ class MessageActions {
      * Reply to message
      */
     async replyToMessage(messageId, messageContent) {
+        if (!window.currentRoomId) return;
         this.closeDropdown();
 
         try {
-            const response = await fetch(`/chatbot/api/rooms/${currentRoomId}/messages/${messageId}/reply/`, {
+            const response = await fetch(`/chatbot/api/rooms/${window.currentRoomId}/messages/${messageId}/reply/`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -195,10 +197,11 @@ class MessageActions {
      * Retry failed AI message
      */
     async retryMessage(messageId) {
+        if (!window.currentRoomId) return;
         this.closeDropdown();
 
         try {
-            const response = await fetch(`/chatbot/api/rooms/${currentRoomId}/messages/${messageId}/retry/`, {
+            const response = await fetch(`/chatbot/api/rooms/${window.currentRoomId}/messages/${messageId}/retry/`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -320,8 +323,9 @@ class MessageActions {
      * Fetch upload quota
      */
     async fetchQuota() {
+        if (!window.currentRoomId) return;
         try {
-            const response = await fetch(`/chatbot/api/rooms/${currentRoomId}/documents/quota/`, {
+            const response = await fetch(`/chatbot/api/rooms/${window.currentRoomId}/documents/quota/`, {
                 headers: {
                     'X-CSRFToken': getCookie('csrftoken')
                 }
@@ -423,6 +427,7 @@ class MessageActions {
      * Upload file
      */
     async uploadFile(file) {
+        if (!window.currentRoomId) return;
         const formData = new FormData();
         formData.append('file', file);
 
@@ -437,7 +442,7 @@ class MessageActions {
                 if (progress >= 90) clearInterval(progressInterval);
             }, 100);
 
-            const response = await fetch(`/chatbot/api/rooms/${currentRoomId}/documents/upload/`, {
+            const response = await fetch(`/chatbot/api/rooms/${window.currentRoomId}/documents/upload/`, {
                 method: 'POST',
                 headers: {
                     'X-CSRFToken': getCookie('csrftoken')

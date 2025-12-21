@@ -5,12 +5,14 @@ import logging
 import json
 from .models import Message, Chatroom, ModerationBatch, UserModerationStatus, AIConversation, Reminder, DocumentUpload
 from .context_manager import ContextManager
-import PyPDF2
+import pypdf
 from PIL import Image
 from django.contrib.auth import get_user_model
 import os
 import traceback
 from django.conf import settings
+import openai
+from pydub import AudioSegment
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -317,12 +319,100 @@ def generate_ai_response(self, room_id, user_id, user_message):
             }
         )
         
-        logger.info(f"AI response sent to room {room_id}")
-        
         return {'status': 'success', 'ai_reply': ai_reply}
         
     except Exception as e:
         logger.error(f"Error generating AI response: {e}")
+        raise self.retry(exc=e)
+
+@shared_task(bind=True, max_retries=3)
+def transcribe_voice_note(self, message_id):
+    """Transcribe user voice note using OpenAI Whisper"""
+    try:
+        message = Message.objects.get(id=message_id)
+        if not message.audio_url:
+            return "No audio URL found"
+
+        file_path = os.path.join(settings.MEDIA_ROOT, message.audio_url)
+        
+        # OpenAI Whisper
+        client = openai.OpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
+        
+        with open(file_path, "rb") as audio_file:
+            transcript = client.audio.transcriptions.create(
+                model="whisper-1", 
+                file=audio_file
+            )
+        
+        message.voice_transcript = transcript.text
+        message.content = transcript.text # Update content so AI can read it
+        message.save()
+        
+        # Notify room via WebSocket
+        from channels.layers import get_channel_layer
+        from asgiref.sync import async_to_sync
+        channel_layer = get_channel_layer()
+        room = message.chatroom_set.first()
+        if room:
+            async_to_sync(channel_layer.group_send)(
+                f"chat_{room.id}",
+                {
+                    "type": "voice_transcription_ready",
+                    "message_id": message.id,
+                    "transcript": transcript.text
+                }
+            )
+        
+        return transcript.text
+    except Exception as e:
+        logger.error(f"Transcription error: {e}")
+        raise self.retry(exc=e)
+
+@shared_task(bind=True, max_retries=3)
+def generate_voice_response(self, message_id):
+    """Generate audio for AI response using OpenAI TTS"""
+    try:
+        message = Message.objects.get(id=message_id)
+        text = message.content
+        
+        # OpenAI TTS
+        client = openai.OpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
+        
+        response = client.audio.speech.create(
+            model="tts-1",
+            voice="alloy", # alloy, echo, fable, onyx, nova, shimmer
+            input=text
+        )
+        
+        # Save audio file
+        room_id = message.chatroom_set.first().id
+        voice_dir = os.path.join(settings.MEDIA_ROOT, 'ai_speech', str(room_id))
+        os.makedirs(voice_dir, exist_ok=True)
+        
+        file_name = f"reply_{message.id}.mp3"
+        file_path = os.path.join(voice_dir, file_name)
+        response.stream_to_file(file_path)
+        
+        message.audio_url = os.path.join('ai_speech', str(room_id), file_name)
+        message.has_ai_voice = True
+        message.save()
+        
+        # Notify room via WebSocket
+        from channels.layers import get_channel_layer
+        from asgiref.sync import async_to_sync
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            f"chat_{room_id}",
+            {
+                "type": "ai_voice_ready",
+                "message_id": message.id,
+                "audio_url": message.audio_url
+            }
+        )
+        
+        return message.audio_url
+    except Exception as e:
+        logger.error(f"TTS error: {e}")
         raise self.retry(exc=e)
 
 
@@ -464,7 +554,7 @@ def extract_text_from_pdf(file_path):
     metadata = {}
     try:
         with open(file_path, 'rb') as f:
-            reader = PyPDF2.PdfReader(f)
+            reader = pypdf.PdfReader(f)
             metadata = {
                 "pages": len(reader.pages),
                 "info": reader.metadata if reader.metadata else {}

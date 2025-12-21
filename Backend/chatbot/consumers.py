@@ -16,7 +16,7 @@ from cryptography.exceptions import InvalidKey
 import logging
 import asyncio
 from .models import Message, Member, Chatroom, UserModerationStatus, ModerationBatch
-from .tasks import moderate_message_batch, generate_ai_response
+from .tasks import moderate_message_batch, generate_ai_response, generate_voice_response
 from orchestration.intent_parser import parse_intent
 from django.conf import settings 
 logger = logging.getLogger(__name__)
@@ -758,6 +758,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                     await sync_to_async(current_chat.save)()
                                     logger.info(f"AI message saved with ID: {ai_message.id}")
                                     
+                                    # Trigger Mathia Voice Response (TTS)
+                                    generate_voice_response.delay(ai_message.id)
+                                    
                                     # Broadcast saved message to clients for proper rendering
                                     message_json = await self.message_to_json(ai_message)
                                     await self.channel_layer.group_send(
@@ -903,19 +906,35 @@ class ChatConsumer(AsyncWebsocketConsumer):
             "from":    event["from"],
         }))
 
-    async def send_chat_message(self, message):
-        await self.channel_layer.group_send(
-            self.room_group_name,
-            {
-                "type": "chat_message",
-                "message": message
-            }
-        )
+    async def ai_message_saved(self, event):
+        """AI message fully saved after streaming"""
+        await self.send_message({
+            "command": "ai_message_saved",
+            "message": event["message"]
+        })
 
-    async def chat_message(self, event):
-        await self.send(text_data=json.dumps(event["message"]))
+    async def ai_voice_ready(self, event):
+        """Mathia voice response is ready"""
+        await self.send_message({
+            "command": "ai_voice_ready",
+            "message_id": event["message_id"],
+            "audio_url": event["audio_url"]
+        })
+
+    async def voice_transcription_ready(self, event):
+        """User voice transcription is ready"""
+        await self.send_message({
+            "command": "voice_transcription_ready",
+            "message_id": event["message_id"],
+            "transcript": event["transcript"]
+        })
 
     async def send_message(self, message):
+        """Helper to send JSON to WebSocket"""
+        await self.send(text_data=json.dumps(message))
+
+    async def send_chat_message(self, message):
+        """Helper to send message to group"""
         await self.send(text_data=json.dumps(message))
         
     async def ai_response_message(self, event):

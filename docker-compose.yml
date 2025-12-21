@@ -1,4 +1,9 @@
 services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
   web:
     build: .
     command: gunicorn Backend.asgi:application -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
@@ -10,9 +15,9 @@ services:
       - .env
     environment:
       - DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,[::1],web
-      - CELERY_BROKER_URL=${REDIS_URL}
-      - CELERY_RESULT_BACKEND=${REDIS_URL}
-      - REDIS_URL=${REDIS_URL}
+      - CELERY_BROKER_URL=${REDIS_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${REDIS_URL:-redis://redis:6379/0}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - DATABASE_URL=postgres://mathia_user:mathia_password@db:5432/mathia_db
       - HF_API_TOKEN=${HF_API_TOKEN}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
@@ -24,6 +29,7 @@ services:
       - EXCHANGE_RATE_API_KEY=${EXCHANGE_RATE_API_KEY}
     depends_on:
       - db
+      - redis
 
   db:
     image: postgres:15-alpine
@@ -32,9 +38,9 @@ services:
     env_file:
       - .env
     environment:
-      - CELERY_BROKER_URL=${REDIS_URL}
-      - CELERY_RESULT_BACKEND=${REDIS_URL}
-      - REDIS_URL=${REDIS_URL}
+      - CELERY_BROKER_URL=${REDIS_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${REDIS_URL:-redis://redis:6379/0}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - DATABASE_URL=postgres://mathia_user:mathia_password@db:5432/mathia_db
 
   celery_worker:
@@ -45,12 +51,13 @@ services:
     env_file:
       - .env
     environment:
-      - CELERY_BROKER_URL=${REDIS_URL}
-      - CELERY_RESULT_BACKEND=${REDIS_URL}
-      - REDIS_URL=${REDIS_URL}
+      - CELERY_BROKER_URL=${REDIS_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${REDIS_URL:-redis://redis:6379/0}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - DATABASE_URL=postgres://mathia_user:mathia_password@db:5432/mathia_db
     depends_on:
       - db
+      - redis
 
   celery_beat:
     build: .
@@ -60,12 +67,13 @@ services:
     env_file:
       - .env
     environment:
-      - CELERY_BROKER_URL=${REDIS_URL}
-      - CELERY_RESULT_BACKEND=${REDIS_URL}
-      - REDIS_URL=${REDIS_URL}
+      - CELERY_BROKER_URL=${REDIS_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${REDIS_URL:-redis://redis:6379/0}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - DATABASE_URL=postgres://mathia_user:mathia_password@db:5432/mathia_db
     depends_on:
       - db
+      - redis
 
 volumes:
   postgres_data:

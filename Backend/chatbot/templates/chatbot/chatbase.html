@@ -21,6 +21,8 @@
     <!-- Highlight.js CSS -->
     <link rel="stylesheet"
         href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <!-- Driver.js CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/driver.js@1.0.1/dist/driver.css" />
     <style>
         /* Custom styles for code blocks */
         pre {
@@ -130,6 +132,9 @@
                         </button>
                         <button id="openSettings" class="btn btn-link">
                             <i class="fas fa-cog fa-spin"></i>
+                        </button>
+                        <button id="startTour" class="btn btn-link text-primary" title="Guided Tour">
+                            <i class="fas fa-wand-magic-sparkles"></i>
                         </button>
                     </div>
                 </div>
@@ -502,6 +507,9 @@
     <script src="{% static 'js/calendar.js' %}"></script>
     <script src="{% static 'js/search.js'%}"></script>
     <script src="{% static 'js/context-panel.js' %}"></script>
+    <!-- Driver.js -->
+    <script src="https://cdn.jsdelivr.net/npm/driver.js@1.0.1/dist/driver.js.iife.js"></script>
+    <script src="{% static 'js/onboarding.js' %}"></script>
 
     <!-- Inline styles for calendar button and dark mode support -->
     <style>
@@ -571,6 +579,26 @@
         body.dark-mode #upcomingMeetings .meeting-card:hover {
             background-color: #333;
             border-color: #4da3ff;
+        }
+
+        /* Pulse animation for the Tour button */
+        #startTour i {
+            animation: tour-pulse 2s infinite;
+        }
+
+        @keyframes tour-pulse {
+            0% {
+                transform: scale(1);
+            }
+
+            50% {
+                transform: scale(1.2) rotate(10deg);
+                color: #6c5ce7;
+            }
+
+            100% {
+                transform: scale(1);
+            }
         }
     </style>
 </body>

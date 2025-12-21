@@ -426,8 +426,8 @@ AXES_LOCK_OUT_BY_COMBINATION_USER_AND_IP = True
 # --- CSP (Content Security Policy) ---
 # --- CSP (Content Security Policy) ---
 CSP_DEFAULT_SRC = ("'self'",)
-CSP_STYLE_SRC = ("'self'", "'unsafe-inline'", "https://fonts.googleapis.com", "https://cdnjs.cloudflare.com")
-CSP_SCRIPT_SRC = ("'self'", "https://js.stripe.com", "https://cdn.tailwindcss.com")
+CSP_STYLE_SRC = ("'self'", "'unsafe-inline'", "https://fonts.googleapis.com", "https://cdnjs.cloudflare.com", "https://cdn.jsdelivr.net")
+CSP_SCRIPT_SRC = ("'self'", "https://js.stripe.com", "https://cdn.tailwindcss.com", "https://cdn.jsdelivr.net", "https://assets.calendly.com", "https://code.jquery.com", "https://cdnjs.cloudflare.com")
 CSP_IMG_SRC = ("'self'", "data:", "https://*")
 CSP_FONT_SRC = ("'self'", "https://fonts.gstatic.com", "https://cdnjs.cloudflare.com")
 CSP_FRAME_SRC = ("'self'", "https://js.stripe.com")

@@ -51,6 +51,8 @@ six>=1.16.0
 # AI/ML Integration
 huggingface-hub>=0.26.0
 anthropic>=0.40.0
+openai>=1.50.0
+pydub>=0.25.1
 
 # Authentication & Security
 django-allauth>=65.0.0

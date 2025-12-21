@@ -1,19 +1,26 @@
 // Global variables
 // MULTI-ROOM ARCHITECTURE
 const activeRooms = {}; // { roomId: { socket: WebSocket, initialized: bool } }
-let currentRoomId = roomName; // roomName defined in template (initial room)
-let usernameGlobal = username; // username defined in template
+window.currentRoomId = typeof roomName !== 'undefined' ? roomName : null;
+window.usernameGlobal = typeof username !== 'undefined' ? username : null;
 const userPresenceMap = new Map();
 
 // Helper function to get current socket
 function getCurrentSocket() {
-    const room = activeRooms[currentRoomId];
+    const room = activeRooms[window.currentRoomId];
     return room ? room.socket : null;
 }
 window.getCurrentSocket = getCurrentSocket;
 
-// Initialize
-initRoom(roomName);
+// Initialize when DOM is ready
+document.addEventListener('DOMContentLoaded', () => {
+    const initialRoomId = window.currentRoomId || (typeof roomName !== 'undefined' ? roomName : null);
+    if (initialRoomId) {
+        initRoom(initialRoomId);
+    } else {
+        console.warn('⚠️ No initial room ID found for initialization');
+    }
+});
 
 /**
  * Room Loader Management
@@ -111,12 +118,17 @@ function getOrCreateRoomUI(roomId) {
  * Switch valid visible room
  */
 function activateRoomUI(roomId) {
+    if (!roomId) return;
+
+    // Update global state
+    window.currentRoomId = roomId;
+
     // Hide all rooms
     document.querySelectorAll('.room-view').forEach(el => el.style.display = 'none');
 
     // Show target room
     const target = getOrCreateRoomUI(roomId);
-    target.style.display = 'block';
+    if (target) target.style.display = 'block';
 
     // Scroll to bottom
     const messagesList = document.getElementById(`messages-room-${roomId}`);
@@ -190,9 +202,17 @@ function connectToChat(roomId) {
             return;
         }
         // AI Integration
-        if (data.command === 'ai_stream' || data.command === 'ai_message' || data.command === 'ai_message_saved') {
+        if (data.command === 'ai_stream' || data.command === 'ai_message' || data.command === 'ai_message_saved' || data.command === 'ai_voice_ready') {
             if (window.mathiaAssistant) {
                 window.mathiaAssistant.handleMessage(data);
+            }
+            return;
+        }
+        if (data.command === 'voice_transcription_ready') {
+            const msgEl = document.querySelector(`[data-message-id="${data.message_id}"] .voice-transcript`);
+            if (msgEl) {
+                msgEl.textContent = data.transcript;
+                msgEl.style.display = 'block';
             }
             return;
         }
@@ -224,7 +244,7 @@ function switchRoom(event, roomId, roomDisplayName) {
     window.history.pushState({ path: newUrl, roomId: roomId }, '', newUrl);
 
     // 3. Multi-Room Switch
-    currentRoomId = roomId;
+    window.currentRoomId = roomId;
     initRoom(roomId);
 }
 
@@ -296,7 +316,8 @@ function createMessage(data, roomId) {
     const time = `<span class="time-label">${formattedTime}</span>`;
 
     const msgListTag = document.createElement('li');
-    msgListTag.classList.add(data.member === username ? 'my' : 'other');
+    const currentUsername = window.usernameGlobal || (typeof username !== 'undefined' ? username : null);
+    msgListTag.classList.add(data.member === currentUsername ? 'my' : 'other');
     msgListTag.className = 'clearfix';
     msgListTag.id = 'tracker';
 
@@ -338,10 +359,6 @@ function createMessage(data, roomId) {
     if (data.content.includes('<img') || (safeHtml && safeHtml.includes('<img'))) {
         msgTextTag.classList.add('sentimage');
     }
-
-    msgdivtag.className = 'user-name';
-    msgSpanTag.className = 'message-data-time';
-    msgpTag.className = 'time-label';
 
     // SPECIAL STYLING FOR MATHIA
     const isMathia = data.member && (
@@ -418,14 +435,78 @@ function createMessage(data, roomId) {
     }
 
     // Auto-scroll if we're viewing this room
-    if (targetRoomId === currentRoomId) {
+    const currentRid = window.currentRoomId || (typeof roomName !== 'undefined' ? roomName : null);
+    if (targetRoomId === currentRid) {
         messagesList.scrollTop = messagesList.scrollHeight;
     }
 }
 
+/**
+ * Render a premium voice bubble with WaveSurfer
+ */
+function renderVoiceBubble(container, data) {
+    const audioUrl = data.audio_url || '';
+    const currentUname = window.usernameGlobal || (typeof username !== 'undefined' ? username : null);
+    const transcript = data.voice_transcript || (data.member === currentUname ? 'Transcribing...' : '');
+
+    container.innerHTML = `
+        <div class="voice-bubble">
+            <button class="play-btn" id="play-${data.id}">
+                <i class="fas fa-play"></i>
+            </button>
+            <div id="waveform-${data.id}" class="voice-waveform"></div>
+            <span class="voice-duration" id="duration-${data.id}">0:00</span>
+        </div>
+        <div class="voice-transcript" style="${transcript ? '' : 'display:none;'}">
+            ${transcript}
+        </div>
+    `;
+
+    if (!audioUrl) return;
+
+    // Use a small timeout to ensure container is in DOM
+    setTimeout(() => {
+        const wavesurfer = WaveSurfer.create({
+            container: `#waveform-${data.id}`,
+            waveColor: '#667eea',
+            progressColor: '#5a3a82',
+            cursorColor: 'transparent',
+            barWidth: 2,
+            barRadius: 3,
+            responsive: true,
+            height: 25,
+            url: audioUrl.startsWith('/') ? audioUrl : `/media/${audioUrl}`,
+        });
+
+        const playBtn = document.getElementById(`play-${data.id}`);
+        const durationSpan = document.getElementById(`duration-${data.id}`);
+
+        playBtn.onclick = () => wavesurfer.playPause();
+
+        wavesurfer.on('play', () => playBtn.innerHTML = '<i class="fas fa-pause"></i>');
+        wavesurfer.on('pause', () => playBtn.innerHTML = '<i class="fas fa-play"></i>');
+        wavesurfer.on('finish', () => playBtn.innerHTML = '<i class="fas fa-play"></i>');
+
+        wavesurfer.on('ready', () => {
+            const duration = wavesurfer.getDuration();
+            const mins = Math.floor(duration / 60);
+            const secs = Math.floor(duration % 60);
+            durationSpan.textContent = `${mins}:${secs.toString().padStart(2, '0')}`;
+        });
+
+        wavesurfer.on('audioprocess', () => {
+            const current = wavesurfer.getCurrentTime();
+            const mins = Math.floor(current / 60);
+            const secs = Math.floor(current % 60);
+            durationSpan.textContent = `${mins}:${secs.toString().padStart(2, '0')}`;
+        });
+    }, 50);
+}
+
 // FIX: FetchMessages now uses room-specific socket
 function FetchMessages(roomId) {
-    const targetRoom = roomId || currentRoomId;
+    const targetRoom = roomId || window.currentRoomId || (typeof roomName !== 'undefined' ? roomName : null);
+    if (!targetRoom) return;
     const room = activeRooms[targetRoom];
 
     if (!room || !room.socket) {
@@ -440,8 +521,17 @@ function FetchMessages(roomId) {
 }
 
 // FIX: scrollToLastMessage now room-specific
+function getCurrentMessageList() {
+    const roomId = window.currentRoomId || (typeof roomName !== 'undefined' ? roomName : null);
+    if (roomId) {
+        return document.getElementById(`messages-room-${roomId}`);
+    }
+    return null;
+}
+
 function scrollToLastMessage(roomId) {
-    const targetRoom = roomId || currentRoomId;
+    const targetRoom = roomId || window.currentRoomId || (typeof roomName !== 'undefined' ? roomName : null);
+    if (!targetRoom) return;
     const messagesList = document.getElementById(`messages-room-${targetRoom}`);
     if (messagesList) {
         messagesList.scrollTop = messagesList.scrollHeight;
@@ -466,8 +556,8 @@ if (chatInput) {
         if (socket && socket.readyState === WebSocket.OPEN) {
             socket.send(JSON.stringify({
                 'command': 'typing',
-                'from': username,
-                "chatid": currentRoomId
+                'from': window.usernameGlobal,
+                "chatid": window.currentRoomId
             }));
         }
     });
@@ -496,13 +586,13 @@ if (chatSubmit) {
 
                 socket.send(JSON.stringify({
                     'message': message,
-                    'from': username,
+                    'from': window.usernameGlobal,
                     'command': 'new_message',
-                    "chatid": currentRoomId
+                    "chatid": window.currentRoomId
                 }));
                 if (messageInputDom) messageInputDom.value = '';
             } else {
-                console.error('Socket not ready for room:', currentRoomId);
+                console.error('Socket not ready for room:', window.currentRoomId);
             }
         }
     });
@@ -568,11 +658,14 @@ function initFileHandlers() {
 
                 const socket = getCurrentSocket();
                 if (socket && socket.readyState === WebSocket.OPEN) {
+                    const currentUname = window.usernameGlobal || (typeof username !== 'undefined' ? username : null);
+                    const currentRid = window.currentRoomId || (typeof roomName !== 'undefined' ? roomName : null);
+
                     socket.send(JSON.stringify({
                         message: messageHtml,
-                        from: username,
+                        from: currentUname,
                         command: 'new_message',
-                        chatid: currentRoomId
+                        chatid: currentRid
                     }));
                 }
             })

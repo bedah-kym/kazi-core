@@ -6,7 +6,7 @@ class ContextPanel {
         // Close button might be dynamically added or existing
         this.closeBtn = this.panel?.querySelector('.context-panel-close');
         this.isOpen = false;
-        this.roomId = roomName; // From Django template
+        this.roomId = window.currentRoomId || null; // Use the global variable
         this.isAddingNote = false; // State for form visibility
 
         this.init();
@@ -29,7 +29,9 @@ class ContextPanel {
             });
         }
 
-        this.loadContext();
+        if (this.roomId) {
+            this.loadContext();
+        }
 
         // Refresh context every 30 seconds
         setInterval(() => {
@@ -67,6 +69,11 @@ class ContextPanel {
     async loadContext() {
         const contentEl = document.getElementById('contextPanelContent');
         if (!contentEl) return;
+
+        if (!this.roomId) {
+            console.log("ContextPanel: No roomId yet, skipping load.");
+            return;
+        }
 
         try {
             // Fetch context from Django API endpoint
@@ -202,6 +209,8 @@ class ContextPanel {
         btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
 
         try {
+            if (!this.roomId) throw new Error('No room selected');
+
             const response = await fetch(`/chatbot/api/rooms/${this.roomId}/notes/`, {
                 method: 'POST',
                 headers: {
@@ -281,6 +290,7 @@ class ContextPanel {
 
     renderError() {
         const contentEl = document.getElementById('contextPanelContent');
+        if (!contentEl) return;
         contentEl.innerHTML = `
             <div class="notes-empty">
                 <i class="fas fa-exclamation-triangle"></i>
@@ -312,15 +322,11 @@ class ContextPanel {
         }
         return cookieValue;
     }
-    closeContextPanel() {
-        const panel = document.getElementById('contextPanel');
-        panel.classList.add('closed');
-    }
 
     updateRoom(newRoomId) {
         if (!newRoomId || this.roomId === newRoomId) return;
         this.roomId = newRoomId;
-        this.panel.dataset.loaded = 'false';
+        if (this.panel) this.panel.dataset.loaded = 'false';
         if (this.isOpen) {
             this.loadContext();
         }

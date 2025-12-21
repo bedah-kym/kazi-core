@@ -11,7 +11,10 @@
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <link href="{% static 'css/chatbase.css' %}" rel="stylesheet">
     <!-- AI Assistant Styles -->
-    <link href="{% static 'css/ai-assistant.css' %}" rel="stylesheet">
+    <link rel="stylesheet" href="{% static 'css/ai-assistant.css' %}">
+
+    <!-- Wavesurfer.js for Audio Waveforms -->
+    <script src="https://unpkg.com/wavesurfer.js@7/dist/wavesurfer.min.js"></script>
     <!-- Context Panel Styles (Inlined for reliability) -->
     <link href="{% static 'css/context-panel.css'%}" rel="stylesheet">
     <!-- Message Actions Styles -->
@@ -100,7 +103,7 @@
                         <li class="clearfix {% if chatroom.id == room_name %}active{% endif %}"
                             id="room-li-{{ chatroom.id }}">
                             <a href="{% url 'chatbot:bot-home' chatroom.id %}" class="text-decoration-none"
-                                onclick="switchRoom(event, {{ chatroom.id }}, '{{ chatroom.name|escapejs }}')">
+                                onclick="switchRoom(event, '{{ chatroom.id }}', '{{ chatroom.name|escapejs }}')">
                                 <div class="d-flex align-items-center">
                                     <img src="{{ chatroom.avatar }}" class="avatar-img me-2" alt="avatar">
                                     <div>
@@ -131,7 +134,7 @@
                             <i class="fas fa-calendar-days"></i>
                         </button>
                         <button id="openSettings" class="btn btn-link">
-                            <i class="fas fa-cog fa-spin"></i>
+                            <i class="fas fa-cog"></i>
                         </button>
                         <button id="startTour" class="btn btn-link text-primary" title="Guided Tour">
                             <i class="fas fa-wand-magic-sparkles"></i>
@@ -263,10 +266,28 @@
                 </div>
 
                 <div class="chat-message">
+                    <!-- Voice Recording Overlay -->
+                    <div id="voice-recording-overlay" class="recording-overlay" style="display: none;">
+                        <div class="d-flex align-items-center justify-content-between w-100 px-3">
+                            <div class="recording-pulse"></div>
+                            <div class="recording-timer">0:00</div>
+                            <div id="recording-waveform"></div>
+                            <button id="cancel-recording" class="btn text-danger">
+                                <i class="fas fa-times"></i>
+                            </button>
+                        </div>
+                    </div>
+
                     <div class="input-group">
                         <button id="emoji" class="btn">
                             <i class="far fa-smile fa-2x"></i>
                         </button>
+
+                        <!-- Voice Record Button -->
+                        <button id="voice-record-btn" class="btn">
+                            <i class="fas fa-microphone"></i>
+                        </button>
+
                         <input type="text" class="form-control" id="chat-message-input"
                             placeholder="Type your message...">
                         <button class="btn btn-primary" id="chat-message-submit">
@@ -496,9 +517,17 @@
     <script src="https://cdn.jsdelivr.net/npm/emoji-mart@latest/dist/browser.js"></script>
 
     <script>
-        var roomName = {{ room_name }};
-        var username = {{ username }};
-        var otherUser = '{{ room_member }}';
+        // Use window properties for global sync across all files
+        // NOTE: room_name and username are already JSON-encoded in views.py
+        window.roomName = {{ room_name }};
+        window.usernameGlobal = {{ username }};
+        window.currentRoomId = window.roomName || null;
+        window.otherUser = '{{ room_member|default:"" }}';
+
+        // Legacy support for older scripts
+        var roomName = window.roomName;
+        var username = window.usernameGlobal;
+        var otherUser = window.otherUser;
     </script>
 
     <script src="{% static 'js/main.js'%}"></script>
@@ -510,6 +539,7 @@
     <!-- Driver.js -->
     <script src="https://cdn.jsdelivr.net/npm/driver.js@1.0.1/dist/driver.js.iife.js"></script>
     <script src="{% static 'js/onboarding.js' %}"></script>
+    <script src="{% static 'js/voice-assistant.js' %}"></script>
 
     <!-- Inline styles for calendar button and dark mode support -->
     <style>

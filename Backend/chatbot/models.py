@@ -16,9 +16,15 @@ class Message(models.Model):
     member = models.ForeignKey(Member,null=True,on_delete=models.CASCADE)
     content = models.TextField()
     timestamp = models.DateTimeField(null=False)
+    
+    # Voice features
+    is_voice = models.BooleanField(default=False)
+    audio_url = models.CharField(max_length=500, blank=True, null=True)
+    voice_transcript = models.TextField(blank=True, null=True)
+    has_ai_voice = models.BooleanField(default=False) # For AI-synthesized responses
 
     def __str__(self):
-        return self.content
+        return f"{self.member}: {self.content[:30]}..."
     
 class Chatroom(models.Model):
     participants = models.ManyToManyField(Member)

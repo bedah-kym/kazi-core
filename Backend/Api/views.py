@@ -147,27 +147,94 @@ def calendly_events(request):
 
 @api_view(['POST'])
 def calendly_webhook(request):
-    # Handle invitee.created and invitee.canceled
-    payload = request.data
-    event = payload.get('event')
-    if not event:
+    """
+    Handle Calendly webhook events securely.
+    
+    Security features:
+    - Signature verification to prevent spoofed webhooks
+    - Event type validation
+    - Proper error handling and logging
+    """
+    from orchestration.webhook_validator import verify_calendly_signature, log_webhook_verification
+    import json
+    
+    try:
+        # Verify webhook signature for security
+        signature = request.headers.get('X-Calendly-Signature')
+        secret = getattr(settings, 'CALENDLY_CLIENT_SECRET', None)
+        
+        if not secret:
+            logger.error("CALENDLY_CLIENT_SECRET not configured")
+            return Response({'error': 'Webhook not configured'}, status=500)
+        
+        # Get raw request body for signature verification
+        raw_body = request.body if isinstance(request.body, bytes) else request.body.encode()
+        
+        # Verify signature
+        if not verify_calendly_signature(signature, secret, raw_body):
+            logger.warning(f"Invalid Calendly webhook signature from {request.META.get('REMOTE_ADDR')}")
+            log_webhook_verification('calendly', False)
+            return Response({'error': 'Invalid signature'}, status=401)
+        
+        log_webhook_verification('calendly', True)
+        
+        # Parse event
+        payload = request.data
+        if not isinstance(payload, dict):
+            return Response({'ok': True})
+        
+        event = payload.get('event')
+        if not event:
+            logger.debug("Calendly webhook received with no event data")
+            return Response({'ok': True})
+        
+        event_type = event.get('type')
+        
+        # Handle different event types
+        if event_type == 'invitee.created':
+            logger.info(f'Calendly invitee.created received: {event.get("resource", {}).get("uri")}')
+            # Process invitee.created event
+            # find which user this belongs to by payload['config']['webhook_subscription']['owner']
+            
+        elif event_type == 'invitee.canceled':
+            logger.info(f'Calendly invitee.canceled received: {event.get("resource", {}).get("uri")}')
+            # Process cancellation
+        
+        else:
+            logger.debug(f"Unhandled Calendly event type: {event_type}")
+        
         return Response({'ok': True})
-    event_type = event.get('type')
-    # Minimal handling - in prod validate signature
-    if event_type == 'invitee.created':
-        # find which user this belongs to by payload['config']['webhook_subscription']['owner'] or by resource['uri'] owner
-        logger.info('Calendly invitee.created received')
-    return Response({'ok': True})
+        
+    except json.JSONDecodeError:
+        logger.error("Invalid JSON in Calendly webhook")
+        return Response({'error': 'Invalid JSON'}, status=400)
+    except Exception as e:
+        logger.error(f"Error processing Calendly webhook: {str(e)}")
+        return Response({'error': 'Processing error'}, status=500)
+
 
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def calendly_user_booking_link(request, user_id):
+    """
+    Retrieve a user's Calendly booking link.
+    
+    Security: Only authenticated users can view their own booking link,
+    or staff members can view any user's link for management purposes.
+    """
     User = get_user_model()
     user = get_object_or_404(User, pk=user_id)
+    
+    # Authorization check: Only allow users to view their own link or staff
+    if request.user.id != user.id and not request.user.is_staff:
+        logger.warning(f"Unauthorized calendly booking link access: user={request.user.id}, target={user.id}")
+        return Response({'error': 'Forbidden'}, status=403)
+    
     profile = getattr(user, 'calendly', None)
     if not profile or not profile.is_connected:
         return Response({'bookingLink': None})
+
     return Response({'bookingLink': profile.booking_link})
 
 

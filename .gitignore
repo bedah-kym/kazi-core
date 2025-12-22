@@ -145,5 +145,5 @@ Backend/venv/
 Backend/staticfiles/
 Backend/mediafiles/
 mathia/
-
+e2e/
 Backend/celerybeat-schedule

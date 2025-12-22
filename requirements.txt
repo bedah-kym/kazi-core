@@ -39,6 +39,7 @@ typing_extensions>=4.10.0
 
 # Production Server
 gunicorn>=22.0.0
+
 uvicorn>=0.30.0
 websockets>=12.0
 whitenoise>=6.6.0
@@ -54,16 +55,44 @@ anthropic>=0.40.0
 openai>=1.50.0
 pydub>=0.25.1
 
-# Authentication & Security
+# Authentication & Security (Enhanced with security hardening packages)
 django-allauth>=65.0.0
-django-axes>=6.0.0
-django-ratelimit>=4.1.0
-django-csp>=3.8.0
-bleach>=6.1.0
-PyJWT>=2.8.0 # Required for allauth Google provider
-requests-oauthlib>=1.3.1
-intasend-python>=0.1.0 # For Kenya Payments
+django-axes>=6.0.0                     # Brute force protection
+django-ratelimit>=4.1.0               # Rate limiting
+django-csp>=3.8.0                     # Content Security Policy
+django-auditlog>=3.0.0                # Audit logging for security
+bleach>=6.1.0                         # HTML sanitization
+PyJWT>=2.8.0                          # Required for allauth Google provider
+requests-oauthlib>=1.3.1              # OAuth support
+intasend-python>=0.1.0                # For Kenya Payments
 pypdf>=5.0.0
-Pillow>=10.0.0 # For ImageField
-twilio>=9.0.0 # For WhatsApp
-twilio>=9.0.0 # For WhatsApp
+Pillow>=10.0.0                        # For ImageField
+twilio>=9.0.0                         # For WhatsApp
+
+# Security Scanning & Validation
+pycryptodome>=3.17.0                  # Enhanced cryptography
+safety>=2.3.0                         # Dependency vulnerability checking
+bandit>=1.7.4                         # Code security scanner
+python-json-logger>=2.0.0             # Structured logging for security events
+
+# === DEVELOPMENT ONLY (Install with: pip install -r requirements.txt[dev]) ===
+# Code Quality & Testing
+pytest>=7.4.0                         # Testing framework
+pytest-django>=4.5.0                  # Django testing
+pytest-cov>=4.1.0                     # Coverage reports
+factory-boy>=3.2.0                    # Test data generation
+
+# Code Quality Tools
+black>=23.0.0                         # Code formatting
+flake8>=6.0.0                         # Linting
+isort>=5.12.0                         # Import sorting
+mypy>=1.0.0                           # Type checking
+django-stubs>=1.14.0                  # Django type hints
+
+# Development Server Tools
+django-debug-toolbar>=3.8.0           # Debug info (ONLY in development!)
+django-extensions>=3.2.0              # Additional commands
+
+# Documentation
+Sphinx>=6.0.0                         # Documentation generator
+sphinx-rtd-theme>=1.2.0               # ReadTheDocs theme

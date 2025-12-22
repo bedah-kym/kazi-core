@@ -93,43 +93,78 @@ sequenceDiagram
     participant User
     participant WebSocket
     participant MCPRouter
-    participant AI
-    participant Stream
+   ```markdown
+   # MATHIA — System Design & Developer README
 
-    User->>WebSocket: "@mathia help me"
-    WebSocket->>MCPRouter: Parse Intent
-    MCPRouter->>AI: Generate Response
-    AI->>WebSocket: Stream Chunk 1
-    AI->>WebSocket: Stream Chunk 2
-    WebSocket->>User: Display Stream
-```
+   This repository implements an interactive chat platform (Mathia) with a Django ASGI backend, AI orchestration, and real-time messaging.
 
-### MATHIA — Developer Guide
+   Key features:
+   - Real-time chat (Django Channels + Redis)
+   - AI assistant with streaming responses and intent routing
+   - Connectors for external services (Calendly, Giphy, Weather, Payments)
+   - Background jobs and periodic tasks handled by Celery
 
-This section maps the codebase to the system architecture.
+   ## Quickstart (Docker / PowerShell)
 
-**High-level summary**
-- **Infrastructure**: Dockerized setup with Django, PostgreSQL, Redis, and Celery.
-- **Realtime**: Django Channels (ASGI) using `channels_redis`.
-- **Encryption**: Per-room AES-GCM encryption in `chatbot/consumers.py`.
-- **Moderation**: Redis-buffered message queues processed by Celery tasks (`chatbot/tasks.py`).
+   Recommended: use Docker Compose for a reproducible dev environment.
 
-**Important Files**
-- `Backend/Backend/settings.py`: Configuration for Channels, Celery, and DB.
-- `Backend/chatbot/consumers.py`: Core WebSocket logic, presence, and key rotation.
-- `Backend/chatbot/tasks.py`: Celery tasks for moderation, AI generation, and Reminders.
-- `Backend/chatbot/context_manager.py`: The AI Brain (Memory & Context).
-- `Backend/users/models.py`: `Wallet`, `GoalProfile`, `Workspace` models.
-- `Backend/orchestration/`: MCP Router and AI intent logic.
+   PowerShell example:
+   ```powershell
+   # build and start services
+   docker-compose up --build
 
-**Developer Contract**
-- **Inputs**: WebSocket JSON commands (`new_message`, `typing`, `file_message`).
-- **Outputs**: Real-time JSON events (`presence_update`, `ai_stream_chunk`).
-- **Data Shapes**: Messages are stored with `nonce` and `data` (encrypted).
+   # run migrations inside the web container
+   docker-compose exec web python Backend/manage.py migrate
 
-**Edge Cases**
-- **Redis Failures**: Disables real-time features; static HTTP views remain functional.
-- **Rate Limiting**: Enforced per-minute via `check_rate_limit`.
-- **Moderation**: High-volume rooms buffer messages; check `MODERATION_BATCH_SIZE`.
+   # run Django tests inside the web container
+   docker-compose exec web python Backend/manage.py test
+   ```
 
-Generated based on current codebase analysis: `users`, `chatbot`, and `orchestration` apps.
+   If you prefer running locally without Docker, ensure you have Redis and Postgres (or rely on the sqlite fallback in `settings.py`). Start the ASGI server with:
+   ```powershell
+   python Backend/manage.py runserver
+   # or use daphne/uvicorn for ASGI in prod-like runs
+   ```
+
+   ## Environment variables
+   - The project expects a `.env` file at the repository root (one level above `Backend/`). Important variables (examples):
+     - `DJANGO_SECRET_KEY`, `DJANGO_DEBUG`, `DJANGO_ALLOWED_HOSTS`
+     - `REDIS_URL` (required in production; supports `rediss://` for Upstash)
+     - `DATABASE_URL` (defaults to sqlite for quick dev)
+     - LLM keys: `ANTHROPIC_API_KEY`, `HF_API_TOKEN`
+     - Connector keys: `OPENWEATHER_API_KEY`, `GIPHY_API_KEY`, `EXCHANGE_RATE_API_KEY`, `CALENDLY_CLIENT_ID`, `CALENDLY_CLIENT_SECRET`
+
+   ## Architecture (high-level)
+   - Backend: Django  (ASGI) with Channels for WebSockets. See `Backend/Backend/settings.py` for Channels and Celery configuration.
+   - Orchestration: `Backend/orchestration/` contains the MCP Router (`mcp_router.py`) which validates intents, routes to connectors, and caches results in Redis.
+   - LLM client: `Backend/orchestration/llm_client.py` — unified client that prefers Anthropic (Claude) and falls back to Hugging Face Router. Use `get_llm_client()`.
+   - Connectors: write async connectors under `Backend/orchestration/connectors/`; they follow `BaseConnector` shape.
+   - Background tasks: `Backend/chatbot/tasks.py` contains Celery tasks for moderation, reminder processing and other heavy work.
+
+   ## Important files to inspect first
+   - `Backend/Backend/settings.py` — Redis/channel/celery settings and security toggles.
+   - `Backend/chatbot/consumers.py` — WebSocket handlers, encryption, and presence logic.
+   - `Backend/chatbot/tasks.py` — Celery tasks and moderation batching (`CELERY_BEAT_SCHEDULE` defined in settings).
+   - `Backend/orchestration/mcp_router.py` — Intent routing and connector examples (Calendly connector demonstrates token refresh).
+   - `Backend/orchestration/llm_client.py` — LLM call patterns, streaming helper, and `extract_json()` helper.
+
+   ## Conventions & patterns
+   - Connectors should implement: async `execute(parameters: Dict, context: Dict) -> Any` and return structured dicts (status/message/data). Register them in `MCPRouter.connectors`.
+   - Use `asgiref.sync.sync_to_async` when calling Django ORM from async code (see examples in `mcp_router.py`).
+   - Respect environment feature flags in `settings.py`; keys missing are handled gracefully by connectors returning a useful error message.
+
+   ## Running & debugging tips
+   - If Redis is unavailable, WebSocket features degrade — HTTP views still work. Inspect logs for Redis connection issues (startup prints REDIS_URL).
+   - To iterate on LLM behavior, modify `llm_client.py` but keep `generate_text` / `stream_text` semantics.
+   - To test a connector locally, add a small unit test under `Backend/orchestration/tests.py` using Django test client with a mocked external response.
+
+   ## Contributing
+   - Fork, create a branch, add tests for new behavior, run `python Backend/manage.py test`, and open a PR with a clear description.
+
+   ---
+   If you'd like, I can also:
+   - Add a connector skeleton file at `Backend/orchestration/connectors/example_connector.py` and a unit test template.
+   - Expand a troubleshooting section with exact PowerShell debugging commands for common errors (Redis, Celery, migrations).
+
+   Generated from the current codebase; open an issue or request to expand any section.
+   ```

@@ -95,6 +95,33 @@
     color: hsl(var(--accent-foreground));
 }
 
+/* Small screens: make context panel slide up from bottom as a sheet (only on chat page) */
+@media (max-width: 768px) {
+    .chat-page .context-panel {
+        right: 0;
+        left: 0;
+        width: 100%;
+        height: 60vh;
+        top: auto;
+        bottom: -100%;
+        border-left: none;
+        border-top: 1px solid hsl(var(--border));
+        box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.2);
+        transition: bottom 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .chat-page .context-panel.open {
+        bottom: 0;
+        right: 0;
+    }
+
+    .chat-page .context-panel-toggle {
+        right: 12px;
+        top: auto;
+        bottom: 80px;
+    }
+}
+
 /* Panel Header */
 .context-panel-header {
     padding: 1.5rem 1.25rem;

@@ -15,8 +15,10 @@ class VoiceAssistant {
         this.recordBtn = document.getElementById('voice-record-btn');
         this.cancelBtn = document.getElementById('cancel-recording');
         this.overlay = document.getElementById('voice-recording-overlay');
-        this.timerDisplay = this.overlay.querySelector('.recording-timer');
-        this.inputGroup = document.querySelector('.chat-message .input-group');
+        // Guard the timerDisplay and inputGroup in case the fixture or page
+        // doesn't include them (tests/headless envs may have a minimal DOM).
+        this.timerDisplay = this.overlay ? this.overlay.querySelector('.recording-timer') : null;
+        this.inputGroup = document.querySelector('.chat-message .input-group') || null;
 
         this.init();
     }
@@ -95,15 +97,28 @@ class VoiceAssistant {
     }
 
     showOverlay() {
-        this.overlay.style.display = 'flex';
-        this.inputGroup.style.opacity = '0.3';
-        this.inputGroup.style.pointerEvents = 'none';
+        if (this.overlay) {
+            this.overlay.style.display = 'flex';
+        }
+        // Only disable the text input while recording so the record/stop button
+        // remains clickable. Previously disabling the whole input group made
+        // the stop button unresponsive which broke the UX.
+        if (this.inputGroup) {
+            this.inputGroup.style.opacity = '0.8';
+        }
+        const textInput = document.getElementById('chat-message-input');
+        if (textInput) textInput.disabled = true;
     }
 
     hideOverlay() {
-        this.overlay.style.display = 'none';
-        this.inputGroup.style.opacity = '1';
-        this.inputGroup.style.pointerEvents = 'all';
+        if (this.overlay) {
+            this.overlay.style.display = 'none';
+        }
+        if (this.inputGroup) {
+            this.inputGroup.style.opacity = '1';
+        }
+        const textInput = document.getElementById('chat-message-input');
+        if (textInput) textInput.disabled = false;
     }
 
     startTimer() {
@@ -112,13 +127,15 @@ class VoiceAssistant {
             const elapsed = Math.floor((Date.now() - this.startTime) / 1000);
             const mins = Math.floor(elapsed / 60);
             const secs = elapsed % 60;
-            this.timerDisplay.textContent = `${mins}:${secs.toString().padStart(2, '0')}`;
+            if (this.timerDisplay) {
+                this.timerDisplay.textContent = `${mins}:${secs.toString().padStart(2, '0')}`;
+            }
         }, 1000);
     }
 
     stopTimer() {
         clearInterval(this.recordingTimer);
-        this.timerDisplay.textContent = '0:00';
+        if (this.timerDisplay) this.timerDisplay.textContent = '0:00';
     }
 
     async handleRecordingStop() {

@@ -41,16 +41,40 @@ except Exception:
 # See https://docs.djangoproject.com/en/4.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'set-DJANGO_SECRET_KEY-env-var')
+# CRITICAL: SECRET_KEY must be set via environment variable in production
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
+if not SECRET_KEY:
+    if os.environ.get('DJANGO_DEBUG', 'False').lower() in ('1', 'true', 'yes'):
+        # Development fallback - still unique per deployment
+        import secrets
+        SECRET_KEY = secrets.token_urlsafe(50)
+        print(f"⚠️  WARNING: Using auto-generated SECRET_KEY. Set DJANGO_SECRET_KEY in .env for consistency.")
+        print(f"Generated key: {SECRET_KEY}")
+    else:
+        raise ValueError(
+            "CRITICAL SECURITY ERROR: DJANGO_SECRET_KEY environment variable must be set in production. "
+            "Generate one with: python -c \"from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())\""
+        )
 
-# SECURITY WARNING: don't run with debug turned on in production!
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DJANGO_DEBUG', 'False').lower() in ('1', 'true', 'yes')
 
-ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+ALLOWED_HOSTS = [host.strip() for host in os.environ.get('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',') if host.strip()]
 
-# you can set a comma-separated list in .env, e.g. DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1
-CSRF_TRUSTED_ORIGINS = [url for url in os.environ.get('DJANGO_CSRF_TRUSTED_ORIGINS', 'http://localhost:8000').split(',') if url]
+# CSRF & CORS configuration - be explicit and restrictive
+# you can set a comma-separated list in .env, e.g. DJANGO_CSRF_TRUSTED_ORIGINS=https://example.com,https://app.example.com
+CSRF_TRUSTED_ORIGINS_STRING = os.environ.get('DJANGO_CSRF_TRUSTED_ORIGINS', '')
+if not CSRF_TRUSTED_ORIGINS_STRING and not DEBUG:
+    raise ValueError(
+        "SECURITY WARNING: DJANGO_CSRF_TRUSTED_ORIGINS must be explicitly set in production. "
+        "Set it in .env as a comma-separated list of allowed origins (e.g., https://example.com)"
+    )
+CSRF_TRUSTED_ORIGINS = [url.strip() for url in CSRF_TRUSTED_ORIGINS_STRING.split(',') if url.strip()] if CSRF_TRUSTED_ORIGINS_STRING else []
+
+# Additional CSRF security
+CSRF_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_HTTPONLY = True
+CSRF_COOKIE_SAMESITE = 'Strict'
 
 # Calendly app credentials (set in .env)
 CALENDLY_CLIENT_ID = os.environ.get('CALENDLY_CLIENT_ID')
@@ -286,9 +310,11 @@ EXCHANGE_RATE_API_KEY = os.environ.get('EXCHANGE_RATE_API_KEY', '')
 AUTH_PASSWORD_VALIDATORS = [
     {
         'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
+        'OPTIONS': {'user_attributes': ['email', 'username', 'first_name', 'last_name']}
     },
     {
         'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
+        'OPTIONS': {'min_length': 12}  # Increased from default 8 for better security
     },
     {
         'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
@@ -297,6 +323,13 @@ AUTH_PASSWORD_VALIDATORS = [
         'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
     },
 ]
+
+# Session security
+SESSION_COOKIE_AGE = 3600  # 1 hour - consider user preference for balance
+SESSION_EXPIRE_AT_BROWSER_CLOSE = True
+SESSION_COOKIE_SECURE = not DEBUG
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = 'Strict'
 
 MEDIA_URL = '/uploads/'  # Base URL for media files
 MEDIA_ROOT = os.path.join(BASE_DIR, 'uploads')  # Directory to store uploaded files
@@ -422,10 +455,16 @@ SOCIALACCOUNT_PROVIDERS = {
     }
 }
 
-# --- AXES (Brute Force Protection) ---
-AXES_FAILURE_LIMIT = 5
-AXES_COOLOFF_TIME = 1  # Hours (or check docs for timedelta)
-AXES_LOCK_OUT_BY_COMBINATION_USER_AND_IP = True
+# --- AXES (Brute Force Protection) - Enhanced Security ---
+from datetime import timedelta
+
+AXES_FAILURE_LIMIT = 5  # Lock after 5 failed attempts
+AXES_COOLOFF_TIME = timedelta(hours=2)  # Lockout duration - 2 hours
+AXES_LOCK_OUT_BY_COMBINATION_USER_AND_IP = True  # Lock by both user and IP
+AXES_USE_USER_AGENT = True  # Include user agent in tracking
+AXES_RESET_ON_SUCCESS = True  # Reset counter on successful login
+AXES_VERBOSE = True  # Log all authentication attempts
+AXES_ENABLE_ADMIN = True  # Enable admin interface for viewing lockouts
 
 # --- CSP (Content Security Policy) ---
 # --- CSP (Content Security Policy) ---

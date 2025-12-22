@@ -24,6 +24,43 @@ class MessageActions {
 
         // Fetch initial quota
         this.fetchQuota();
+
+        // Delegated click handling for message action buttons and menu items.
+        // Using delegation avoids attaching listeners per-message and prevents
+        // issues where only the first message's listeners worked.
+        document.addEventListener('click', (e) => {
+            const btn = e.target.closest('.message-actions-btn');
+            if (btn) {
+                e.stopPropagation();
+                const messageId = btn.dataset.messageId;
+                this.toggleDropdown(messageId);
+                return;
+            }
+
+            const item = e.target.closest('.message-actions-item');
+            if (item) {
+                e.stopPropagation();
+                const action = item.dataset.action;
+                // Prefer explicit data-message-id on the item, fall back to parent button
+                const msgId = item.dataset.messageId || item.closest('.message-actions-dropdown')?.querySelector('.message-actions-btn')?.dataset.messageId;
+
+                switch (action) {
+                    case 'pin':
+                        this.pinMessage(msgId, item.dataset.messageContent || null);
+                        break;
+                    case 'reply':
+                        this.replyToMessage(msgId, item.dataset.messageContent || null);
+                        break;
+                    case 'retry':
+                        this.retryMessage(msgId);
+                        break;
+                    case 'upload':
+                        this.openUploadModal();
+                        break;
+                }
+                return;
+            }
+        });
     }
 
     /**
@@ -38,7 +75,7 @@ class MessageActions {
         const dropdown = document.createElement('div');
         dropdown.className = 'message-actions-dropdown';
         dropdown.innerHTML = `
-            <button class="message-actions-btn" data-message-id="${messageId}">
+            <button class="message-actions-btn" aria-label="Message actions" data-message-id="${messageId}">
                 <i class="fas fa-ellipsis-v"></i>
             </button>
             <div class="message-actions-menu" id="actions-menu-${messageId}">
@@ -63,40 +100,21 @@ class MessageActions {
             </div>
         `;
 
-        messageElement.appendChild(dropdown);
-
-        // Add event listeners for this specific dropdown
-        const btn = dropdown.querySelector('.message-actions-btn');
+        // Attach the dropdown DOM to the message element. Event handling is
+        // done via delegation (document click listener in init()) so we don't
+        // add per-message listeners here.
+        // Add message content as a data attribute on menu items where needed
+        // to allow the delegated handler to access it.
+        // Ensure action items carry the message id/content where appropriate.
         const menu = dropdown.querySelector('.message-actions-menu');
-
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            this.toggleDropdown(messageId);
-        });
-
-        // Add click handlers for menu items
-        dropdown.querySelectorAll('.message-actions-item').forEach(item => {
-            item.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const action = item.dataset.action;
-                const msgId = item.dataset.messageId || messageId;
-
-                switch (action) {
-                    case 'pin':
-                        this.pinMessage(msgId, messageContent);
-                        break;
-                    case 'reply':
-                        this.replyToMessage(msgId, messageContent);
-                        break;
-                    case 'retry':
-                        this.retryMessage(msgId);
-                        break;
-                    case 'upload':
-                        this.openUploadModal();
-                        break;
-                }
+        if (menu) {
+            menu.querySelectorAll('.message-actions-item').forEach(item => {
+                if (!item.dataset.messageId) item.dataset.messageId = messageId;
+                if (!item.dataset.messageContent) item.dataset.messageContent = messageContent || '';
             });
-        });
+        }
+
+        messageElement.appendChild(dropdown);
     }
 
 

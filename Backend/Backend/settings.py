@@ -95,6 +95,7 @@ INSTALLED_APPS = [
     'users',
     'Api',
     'orchestration',
+    'travel',
     'rest_framework',
     'rest_framework.authtoken',
     'django_celery_beat',

@@ -147,3 +147,5 @@ Backend/mediafiles/
 mathia/
 e2e/
 Backend/celerybeat-schedule
+docs/
+Security/

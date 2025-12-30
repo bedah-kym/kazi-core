@@ -28,7 +28,16 @@ class MCPRouter:
     """
     
     def __init__(self):
+        # Import travel connectors
+        from .connectors.travel_buses_connector import TravelBusesConnector
+        from .connectors.travel_hotels_connector import TravelHotelsConnector
+        from .connectors.travel_flights_connector import TravelFlightsConnector
+        from .connectors.travel_transfers_connector import TravelTransfersConnector
+        from .connectors.travel_events_connector import TravelEventsConnector
+        from .connectors.itinerary_connector import ItineraryConnector
+        
         self.connectors = {
+            # Existing connectors
             "find_jobs": UpworkConnector(),
             "schedule_meeting": CalendarConnector(),
             "check_payments": StripeConnector(),
@@ -40,6 +49,14 @@ class MCPRouter:
             "payment_action": IntersendPayConnector(),
             "send_email": MailgunConnector(),
             "set_reminder": ReminderConnector(),
+            
+            # Travel planner connectors
+            "search_buses": TravelBusesConnector(),
+            "search_hotels": TravelHotelsConnector(),
+            "search_flights": TravelFlightsConnector(),
+            "search_transfers": TravelTransfersConnector(),
+            "search_events": TravelEventsConnector(),
+            "create_itinerary": ItineraryConnector(),
         }
     
     async def route(self, intent: Dict, user_context: Dict) -> Dict:

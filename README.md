@@ -1,3 +1,17 @@
+### 📚 TRAVEL PLANNER MODULE (NEW - Week 1 Complete ✅)
+
+The Mathia project now includes a comprehensive **AI Travel & Itinerary Planner** module. See [`docs/README.md`](./docs/README.md) for complete documentation organized by phase:
+
+- **[docs/01-planning/](./docs/01-planning/)** — Product vision, API research, quick start
+- **[docs/02-architecture/](./docs/02-architecture/)** — System design and technical architecture  
+- **[docs/03-implementation/](./docs/03-implementation/)** — Week 1 setup, 12-week roadmap
+- **[docs/04-testing/](./docs/04-testing/)** — Testing procedures and verification
+- **[docs/05-reference/](./docs/05-reference/)** — Quick reference cards and guides
+
+**Quick Start:** Read [`docs/03-implementation/IMPLEMENTATION_STARTED.md`](./docs/03-implementation/IMPLEMENTATION_STARTED.md) (5 min)
+
+---
+
 ### SYS DESIGN FOR MATHIA PROJECT
 This project is designed to create an interactive chatbot interface for users to communicate with each other and with an AI-powered assistant. The system is built using Django for the backend (ASGI) and HTML/CSS/JavaScript for the frontend. The chatbot supports real-time messaging, multi-room chats, AI response streaming, and a responsive design.
 

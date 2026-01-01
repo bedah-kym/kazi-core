@@ -367,22 +367,44 @@ class SearchConnector(BaseConnector):
         self.llm = get_llm_client()
     
     async def execute(self, parameters: Dict, context: Dict) -> Dict:
-        """Perform web search"""
+        """Perform web search with strict rate limiting"""
+        from django.core.cache import cache
+        from datetime import datetime
+        
+        user_id = context.get("user_id")
         query = parameters.get("query")
+        
         if not query:
             return {"error": "No search query provided"}
+
+        # RATE LIMIT CHECK
+        if user_id:
+            today = datetime.now().strftime("%Y-%m-%d")
+            limit_key = f"search_limit:{user_id}:{today}"
+            current_count = cache.get(limit_key, 0)
+            
+            if current_count >= 10:
+                return {
+                    "results": [],
+                    "summary": "Daily search limit reached (10/10). Please try again tomorrow.",
+                    "error": "rate_limit_exceeded"
+                }
             
         if not self.llm.anthropic_key:
             logger.warning("Search requested but Anthropic key missing.")
             return {"results": [], "summary": "I cannot browse the live web right now.", "source": "system_fallback"}
             
         try:
+            # Increment usage
+            if user_id:
+                cache.incr(limit_key) if cache.get(limit_key) else cache.set(limit_key, 1, 86400)
+
             system_prompt = "You are a helpful research assistant."
             response = await self.llm.generate_text(system_prompt=system_prompt, user_prompt=f"Search for: {query}", temperature=0.7)
             return {"results": [{"title": "Search Result", "snippet": response[:200] + "..."}], "summary": response, "source": "claude_search"}
         except Exception as e:
             logger.error(f"Search failed: {e}")
-            return {"results": [], "summary": "Search failed.", "error": str(e)}
+            return {"results": [{"title": "Error", "snippet": "Search functionality temporarily unavailable."}], "summary": "Search failed.", "error": str(e)}
 
 
 class WeatherConnector(BaseConnector):

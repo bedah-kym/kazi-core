@@ -73,78 +73,138 @@ class ItineraryBuilder:
             status='draft'
         )
         
+        # Integrate LLM Composer
+        from travel.llm_composer import LLMComposer
+        
         logger.info(f"Created itinerary {itinerary.id} for user {user_id}")
         
-        # Add items from search results
         items_added = 0
+        ai_success = False
         
-        # Add buses
-        for bus in search_results.get('buses', [])[:3]:  # Add top 3 buses
-            item = await sync_to_async(ItineraryItem.objects.create)(
-                itinerary=itinerary,
-                item_type='bus',
-                title=f"{bus.get('company', 'Bus')} - {bus.get('departure_time')} to {bus.get('arrival_time')}",
-                description=json.dumps(bus),
-                price_ksh=bus.get('price_ksh', 0),
-                status='suggested',
-                metadata={'provider': 'buupass', 'booking_url': bus.get('booking_url')}
-            )
-            items_added += 1
-        
-        # Add hotels
-        for hotel in search_results.get('hotels', [])[:2]:  # Add top 2 hotels
-            nights = (end - start).days or 1
-            total_price = hotel.get('price_ksh', 0) * nights
+        # Try AI Composition first
+        try:
+            composer = LLMComposer()
+            trip_details = {
+                'origin': origin,
+                'destination': destination,
+                'start_date': start_date,
+                'end_date': end_date
+            }
             
-            item = await sync_to_async(ItineraryItem.objects.create)(
-                itinerary=itinerary,
-                item_type='hotel',
-                title=f"{hotel.get('name', 'Hotel')} - {nights} nights",
-                description=json.dumps(hotel),
-                price_ksh=total_price,
-                status='suggested',
-                metadata={'provider': 'booking', 'booking_url': hotel.get('booking_url'), 'nights': nights}
-            )
-            items_added += 1
+            ai_selected_items = await composer.compose_itinerary(trip_details, search_results)
+            
+            if ai_selected_items:
+                for item_data in ai_selected_items:
+                    # Determine type (fallback to guessing if _category missing)
+                    cat = item_data.get('_category', 'other')
+                    
+                    # Map category to item_type
+                    if 'bus' in cat: item_type = 'bus'
+                    elif 'flight' in cat: item_type = 'flight'
+                    elif 'hotel' in cat: item_type = 'hotel'
+                    elif 'event' in cat: item_type = 'event'
+                    elif 'transfer' in cat: item_type = 'transfer'
+                    else: item_type = 'activity'
+
+                    # Create Item
+                    title = item_data.get('title') or item_data.get('name') or item_data.get('company') or f"{item_type.title()} Option"
+                    
+                    # Append reasoning to notes
+                    notes = item_data.get('ai_reasoning', '')
+                    
+                    await sync_to_async(ItineraryItem.objects.create)(
+                        itinerary=itinerary,
+                        item_type=item_type,
+                        title=title,
+                        description=json.dumps(item_data),
+                        price_ksh=item_data.get('price_ksh', 0),
+                        status='suggested',
+                        notes=f"AI Recommendation: {notes}",
+                        metadata={
+                            'provider': item_data.get('provider', 'unknown'), 
+                            'booking_url': item_data.get('booking_url'),
+                            'ai_selected': True
+                        }
+                    )
+                    items_added += 1
+                
+                ai_success = True
+                logger.info(f"AI Composer successfully added {items_added} items.")
+                
+        except Exception as e:
+            logger.error(f"AI Composition failed: {e}. Falling back to standard selection.")
         
-        # Add flights if available
-        for flight in search_results.get('flights', [])[:1]:  # Add top flight
-            item = await sync_to_async(ItineraryItem.objects.create)(
-                itinerary=itinerary,
-                item_type='flight',
-                title=f"{flight.get('airline', 'Flight')} {flight.get('flight_number', '')} - {flight.get('departure_time')}",
-                description=json.dumps(flight),
-                price_ksh=flight.get('price_ksh', 0),
-                status='suggested',
-                metadata={'provider': 'duffel', 'booking_url': flight.get('booking_url')}
-            )
-            items_added += 1
-        
-        # Add transfers
-        for transfer in search_results.get('transfers', [])[:1]:  # Add top transfer
-            item = await sync_to_async(ItineraryItem.objects.create)(
-                itinerary=itinerary,
-                item_type='transfer',
-                title=f"{transfer.get('provider', 'Transfer')} - {transfer.get('vehicle_type', 'Vehicle')}",
-                description=json.dumps(transfer),
-                price_ksh=transfer.get('price_ksh', 0),
-                status='suggested',
-                metadata={'provider': 'karibu', 'booking_url': transfer.get('booking_url')}
-            )
-            items_added += 1
-        
-        # Add events
-        for event in search_results.get('events', [])[:3]:  # Add top 3 events
-            item = await sync_to_async(ItineraryItem.objects.create)(
-                itinerary=itinerary,
-                item_type='event',
-                title=event.get('title', 'Event'),
-                description=json.dumps(event),
-                price_ksh=event.get('price_ksh', 0),
-                status='suggested',
-                metadata={'provider': 'eventbrite', 'booking_url': event.get('ticket_url')}
-            )
-            items_added += 1
+        # FALLBACK: Standard Top-N Logic if AI failed or returned nothing
+        if not ai_success or items_added == 0:
+            logger.info("Using standard Top-N selection fallback.")
+            
+            # Add buses
+            for bus in search_results.get('buses', [])[:3]:  # Add top 3 buses
+                item = await sync_to_async(ItineraryItem.objects.create)(
+                    itinerary=itinerary,
+                    item_type='bus',
+                    title=f"{bus.get('company', 'Bus')} - {bus.get('departure_time')} to {bus.get('arrival_time')}",
+                    description=json.dumps(bus),
+                    price_ksh=bus.get('price_ksh', 0),
+                    status='suggested',
+                    metadata={'provider': 'buupass', 'booking_url': bus.get('booking_url')}
+                )
+                items_added += 1
+            
+            # Add hotels
+            for hotel in search_results.get('hotels', [])[:2]:  # Add top 2 hotels
+                nights = (end - start).days or 1
+                total_price = hotel.get('price_ksh', 0) * nights
+                
+                item = await sync_to_async(ItineraryItem.objects.create)(
+                    itinerary=itinerary,
+                    item_type='hotel',
+                    title=f"{hotel.get('name', 'Hotel')} - {nights} nights",
+                    description=json.dumps(hotel),
+                    price_ksh=total_price,
+                    status='suggested',
+                    metadata={'provider': 'booking', 'booking_url': hotel.get('booking_url'), 'nights': nights}
+                )
+                items_added += 1
+            
+            # Add flights if available
+            for flight in search_results.get('flights', [])[:1]:  # Add top flight
+                item = await sync_to_async(ItineraryItem.objects.create)(
+                    itinerary=itinerary,
+                    item_type='flight',
+                    title=f"{flight.get('airline', 'Flight')} {flight.get('flight_number', '')} - {flight.get('departure_time')}",
+                    description=json.dumps(flight),
+                    price_ksh=flight.get('price_ksh', 0),
+                    status='suggested',
+                    metadata={'provider': 'duffel', 'booking_url': flight.get('booking_url')}
+                )
+                items_added += 1
+            
+            # Add transfers
+            for transfer in search_results.get('transfers', [])[:1]:  # Add top transfer
+                item = await sync_to_async(ItineraryItem.objects.create)(
+                    itinerary=itinerary,
+                    item_type='transfer',
+                    title=f"{transfer.get('provider', 'Transfer')} - {transfer.get('vehicle_type', 'Vehicle')}",
+                    description=json.dumps(transfer),
+                    price_ksh=transfer.get('price_ksh', 0),
+                    status='suggested',
+                    metadata={'provider': 'karibu', 'booking_url': transfer.get('booking_url')}
+                )
+                items_added += 1
+            
+            # Add events
+            for event in search_results.get('events', [])[:3]:  # Add top 3 events
+                item = await sync_to_async(ItineraryItem.objects.create)(
+                    itinerary=itinerary,
+                    item_type='event',
+                    title=event.get('title', 'Event'),
+                    description=json.dumps(event),
+                    price_ksh=event.get('price_ksh', 0),
+                    status='suggested',
+                    metadata={'provider': 'eventbrite', 'booking_url': event.get('ticket_url')}
+                )
+                items_added += 1
         
         logger.info(f"Added {items_added} items to itinerary {itinerary.id}")
         
@@ -183,30 +243,53 @@ class ItineraryBuilder:
     
     async def get_recommendations(self, itinerary_id: int, category: str) -> List[Dict]:
         """
-        Get LLM-powered recommendations for an itinerary
-        
-        Args:
-            itinerary_id: Itinerary ID
-            category: 'dining', 'activities', 'shopping', 'nightlife'
-        
-        Returns:
-            List of recommendations
+        Get LLM-powered recommendations for an itinerary using RecommendationService
         """
+        from travel.recommendation_service import RecommendationService
+        
+        itinerary = await sync_to_async(Itinerary.objects.get)(id=itinerary_id)
+        items = await sync_to_async(lambda: list(itinerary.items.values('title', 'item_type', 'date_of_event')))()
+        
+        service = RecommendationService()
+        
+        if category == 'dining':
+            return await service.recommend_dining(itinerary.destination or "Unknown")
+        elif category == 'hidden_gems':
+            return await service.get_hidden_gems(itinerary.destination or "Unknown")
+        else:
+            # Default to context-aware activity suggestions
+            return await service.recommend_activities(itinerary.destination or "Unknown", context_items)
+
+    async def add_practical_info(self, itinerary_id: int, user_passport_code: str = 'US'):
+        """
+        Enrich itinerary with Visa and Weather info.
+        """
+        from travel.practical_service import VisaService, WeatherService
+        
         itinerary = await sync_to_async(Itinerary.objects.get)(id=itinerary_id)
         
-        prompt = f"""
-        Suggest 5 {category} recommendations for a traveler visiting {itinerary.title}.
+        # 1. Visa Check
+        # Assume destination is always Kenya for this MVP, or parse from itinerary
+        destination_code = 'KE' 
+        visa_service = VisaService()
+        visa_status = visa_service.check_requirements(user_passport_code, destination_code)
         
-        Provide as JSON array with fields: name, description, estimated_price_ksh, location
-        """
+        # 2. Weather
+        weather_service = WeatherService()
+        weather = await weather_service.get_trip_forecast(itinerary.destination or "Nairobi")
         
-        try:
-            response = await sync_to_async(self.llm_client.generate_text)(prompt)
-            recommendations = extract_json(response)
-            return recommendations if isinstance(recommendations, list) else []
-        except Exception as e:
-            logger.error(f"Error getting recommendations: {str(e)}")
-            return []
+        # Update Metadata
+        meta = itinerary.metadata or {}
+        meta['practical_info'] = {
+            'visa_status': visa_status,
+            'passport_used': user_passport_code,
+            'weather_forecast': weather
+        }
+        
+        itinerary.metadata = meta
+        await sync_to_async(itinerary.save)()
+        
+        return meta
 
 
 class ExportService:

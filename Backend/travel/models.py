@@ -242,3 +242,38 @@ class BookingReference(models.Model):
     
     def __str__(self):
         return f"{self.provider} booking: {self.provider_booking_id}"
+
+
+class TripFeedback(models.Model):
+    """
+    User feedback for a completed itinerary.
+    Collects ratings and qualitative data for future model training/sharing.
+    """
+    RATING_CHOICES = [(i, str(i)) for i in range(1, 6)]
+    
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='trip_feedback')
+    itinerary = models.OneToOneField(Itinerary, on_delete=models.CASCADE, related_name='feedback')
+    
+    # Quantitative Ratings (1-5)
+    overall_rating = models.IntegerField(choices=RATING_CHOICES)
+    safety_rating = models.IntegerField(choices=RATING_CHOICES, help_text="1=Unsafe, 5=Very Safe")
+    cost_rating = models.IntegerField(choices=RATING_CHOICES, help_text="1=Expensive, 5=Great Value")
+    
+    # Qualitative Data
+    review_text = models.TextField(blank=True, help_text="General comments from conversation")
+    
+    # Structured Tags (Extracted by AI)
+    # e.g., ["solo-friendly", "good-nightlife", "sketchy-at-night"]
+    tags = models.JSONField(default=list, blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['safety_rating']),
+            models.Index(fields=['overall_rating']),
+        ]
+        
+    def __str__(self):
+        return f"Feedback for {self.itinerary.title} by {self.user.username}"

@@ -5,6 +5,10 @@ from . import views
 app_name = 'travel'
 
 urlpatterns = [
+    # HTML Views
+    path('plan/', views.plan_trip_wizard, name='plan_trip'),
+    path('view/<int:itinerary_id>/', views.view_itinerary, name='view_itinerary'),
+
     # API endpoints
     path('api/search/', views.search_travel, name='search'),
     path('api/itinerary/', views.itinerary_list, name='itinerary_list'),

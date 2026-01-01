@@ -167,3 +167,17 @@ def search_events(request):
             {'error': str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+# --- HTML Views ---
+from django.shortcuts import render
+
+@permission_classes([IsAuthenticated])
+def plan_trip_wizard(request):
+    """Render the Trip Planning Wizard"""
+    return render(request, 'travel/plan_trip.html')
+
+@permission_classes([IsAuthenticated])
+def view_itinerary(request, itinerary_id):
+    """Render the Itinerary Detail View"""
+    itinerary = get_object_or_404(Itinerary, id=itinerary_id, user=request.user)
+    return render(request, 'travel/itinerary_detail.html', {'itinerary': itinerary})

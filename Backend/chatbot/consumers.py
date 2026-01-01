@@ -360,6 +360,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 await self.new_message(data)
             elif command == "file_message":
                 await self.file_message(data)
+            elif command == "get_quotas":
+                await self.send_quotas()
+            elif command == "voice_message":
+                await self.voice_message(data)
             else:
                 await self.send_message({
                     'member': 'system',
@@ -373,6 +377,26 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 'content': "An error occurred processing your request",
                 'timestamp': str(timezone.now())
             })
+            
+    async def send_quotas(self):
+        """Fetch and send user quota stats"""
+        try:
+            from users.quota_service import QuotaService
+            
+            # Use sync_to_async for cache access/calculations if needed
+            # (QuotaService mainly uses cache which is often sync in Django, but django-redis can be sync)
+            service = QuotaService()
+            user_id = self.scope["user"].id
+            
+            # Simple wrapper to run it in threadpool if cache backend is blocking
+            quotas = await sync_to_async(service.get_user_quotas)(user_id)
+            
+            await self.send_message({
+                'command': 'user_quotas',
+                'quotas': quotas
+            })
+        except Exception as e:
+            logger.error(f"Error sending quotas: {e}")
 
     async def fetch_messages(self, data):
         try:
@@ -896,6 +920,97 @@ class ChatConsumer(AsyncWebsocketConsumer):
             await self.send_chat_message({
                 'member': 'security system',
                 'content': "Error processing file",
+                'timestamp': str(timezone.now())
+                })
+
+    async def voice_message(self, data):
+        """
+        Handle voice note uploads.
+        Expects:
+        - file_data: Base64 encoded audio
+        - file_name: filename (e.g., 'voice_123.webm')
+        """
+        try:
+            member_username = data['from']
+            get_user = sync_to_async(User.objects.filter(username=member_username).first)
+            member_user = await get_user()
+
+            if not member_user:
+                return
+
+            # Rate limit check (reuse file upload or chat limit)
+            if not await self.check_rate_limit(member_user.id):
+                await self.send_chat_message({
+                    'member': 'security system',
+                    'content': "Rate limit exceeded. Please wait.",
+                    'timestamp': str(timezone.now())
+                })
+                return
+
+            file_data = data.get('file_data', '')
+            file_name = data.get('file_name', '').lower()
+
+            if not file_data or not file_name:
+                return
+
+            # Validate Audio Extension
+            allowed_audio = {'.webm', '.mp3', '.wav', '.m4a', '.ogg'}
+            if not any(file_name.endswith(ext) for ext in allowed_audio):
+                await self.send_chat_message({
+                    'member': 'security system',
+                    'content': "Invalid audio format.",
+                    'timestamp': str(timezone.now())
+                })
+                return
+            
+            # Save File
+            file_content = ContentFile(file_data.split(';base64,')[1].encode('utf-8'))
+            file_path = default_storage.save(f"voice/{file_name}", file_content)
+            file_url = default_storage.url(file_path)
+
+            # Create Message with is_voice=True
+            encrypted_content = await self.encrypt_message({
+                'content': "[Voice Message]", # Fallback text
+                'timestamp': str(timezone.now())
+            })
+            
+            create_message = sync_to_async(Message.objects.create)
+            payload = json.dumps({
+                'data': encrypted_content['data'], 
+                'nonce': encrypted_content['nonce']
+            })
+            
+            message = await create_message(
+                member=member_user,
+                content=payload,
+                timestamp=timezone.now(),
+                is_voice=True,          # Flag as voice
+                audio_url=file_url      # Store URL directly
+            )
+
+            # Add to Room
+            current_chat = await self.get_current_chatroom(data['chatid'])
+            if current_chat:
+                await sync_to_async(current_chat.chats.add)(message)
+                await sync_to_async(current_chat.save)()
+
+                # Broadcast
+                message_json = await self.message_to_json(message)
+                # Inject audio_url explicitly into the JSON response for frontend
+                message_json['audio_url'] = file_url
+                message_json['is_voice'] = True
+
+                content = {
+                    "command": "new_message",
+                    "message": message_json
+                }
+                await self.send_chat_message(content)
+
+        except Exception as e:
+            logger.error(f"Error in voice_message: {str(e)}")
+            await self.send_chat_message({
+                'member': 'security system',
+                'content': "Error processing voice message",
                 'timestamp': str(timezone.now())
             })
 

@@ -24,7 +24,7 @@ services:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - DATABASE_URL=postgres://mathia_user:mathia_password@db:5432/mathia_db
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U mathia_user" ]
+      test: [ "CMD-SHELL", "pg_isready -h db -p 5432 -U mathia_user -d mathia_db" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -32,7 +32,7 @@ services:
   web:
     build: .
     image: mathia-web:latest
-    command: gunicorn Backend.asgi:application -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --workers 4
+    command: sh -c "python /app/wait_for_db.py && gunicorn Backend.asgi:application -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --workers 4"
     volumes:
       - .:/app
       - static_volume:/app/Backend/staticfiles
@@ -62,7 +62,7 @@ services:
 
   celery_worker:
     image: mathia-web:latest
-    command: celery -A Backend worker -l info --concurrency 4
+    command: sh -c "python /app/wait_for_db.py && celery -A Backend worker -l info --concurrency 4"
     volumes:
       - .:/app
     env_file:
@@ -80,7 +80,7 @@ services:
 
   celery_beat:
     image: mathia-web:latest
-    command: celery -A Backend beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    command: sh -c "python /app/wait_for_db.py && celery -A Backend beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler"
     volumes:
       - .:/app
     env_file:

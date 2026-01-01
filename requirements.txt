@@ -61,6 +61,8 @@ twilio>=9.0.0
 # Data handling
 Pillow>=10.0.0
 pypdf>=5.0.0
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
 
 # Security hardening
 django-axes>=6.0.0

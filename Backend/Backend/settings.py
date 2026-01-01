@@ -182,10 +182,7 @@ DATABASES = {
         conn_health_checks=True,
     )
 }
-# Redis configuration for Celery, Caching, and Channels
-# Replace your Redis configuration section with this:
 
-import ssl
 LANGUAGE_CODE = 'en-us'
 
 TIME_ZONE = 'Africa/Nairobi'
@@ -196,36 +193,9 @@ USE_TZ = True
 
 
 # Redis configuration for Celery, Caching, and Channels
-REDIS_URL = os.environ.get('REDIS_URL')
-if not REDIS_URL and not DEBUG:
-    raise ValueError("REDIS_URL environment variable is required in production.")
-elif not REDIS_URL:
-    REDIS_URL = 'redis://127.0.0.1:6379/0'
-
-# Parse Upstash URL to check if it's secure
-IS_UPSTASH = REDIS_URL.startswith('rediss://')
-
-# SSL context for Upstash (secure Redis)
-if IS_UPSTASH:
-    try:
-        redis_ssl_context = ssl.create_default_context()
-        redis_ssl_context.check_hostname = False
-        redis_ssl_context.verify_mode = ssl.CERT_NONE
-    except PermissionError:
-        print("WARNING: PermissionError in ssl.create_default_context, disabling SSL verification")
-        redis_ssl_context = None
-else:
-    redis_ssl_context = None
-
-# Celery Broker with SSL support
-CELERY_BROKER_URL = REDIS_URL
-if IS_UPSTASH:
-    CELERY_BROKER_USE_SSL = {
-        'ssl_cert_reqs': ssl.CERT_NONE,
-        'ssl_ca_certs': None,
-        'ssl_certfile': None,
-        'ssl_keyfile': None,
-    }
+# Read Redis URL from environment so containers use the Compose service hostname
+REDIS_URL = os.environ.get('REDIS_URL', 'redis://redis:6379/0')
+CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', REDIS_URL)
 
 # Celery Results
 CELERY_RESULT_BACKEND = 'django-db'  # Using Django DB for results
@@ -244,42 +214,26 @@ CELERY_TASK_SOFT_TIME_LIMIT = 25 * 60
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_WORKER_MAX_TASKS_PER_CHILD = 1000
 
-# Django Cache with SSL
+# Django Cache with local Redis
 CACHES = {
     "default": {
         "BACKEND": "django_redis.cache.RedisCache",
         "LOCATION": REDIS_URL,
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
-            "CONNECTION_POOL_KWARGS": {
-                "ssl_cert_reqs": None if IS_UPSTASH else None,
-            } if IS_UPSTASH else {},
         }
     }
 }
 
-# Channels Layer with SSL
-if IS_UPSTASH:
-    CHANNEL_LAYERS = {
-        "default": {
-            "BACKEND": "channels_redis.core.RedisChannelLayer",
-            "CONFIG": {
-                "hosts": [{
-                    "address": REDIS_URL,
-                    "ssl_cert_reqs": None,
-                }],
-            },
+# Channels Layer with local Redis
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [REDIS_URL],
         },
-    }
-else:
-    CHANNEL_LAYERS = {
-        "default": {
-            "BACKEND": "channels_redis.core.RedisChannelLayer",
-            "CONFIG": {
-                "hosts": [REDIS_URL],
-            },
-        },
-    }
+    },
+}
 
 # Celery Beat Schedule
 CELERY_BEAT_SCHEDULE = {
@@ -407,21 +361,11 @@ SOCIALACCOUNT_EMAIL_VERIFICATION = 'none'
 
 # New Allauth format
 ACCOUNT_LOGIN_METHODS = {'email'}  # Replaces ACCOUNT_AUTHENTICATION_METHOD
-ACCOUNT_EMAIL_REQUIRED = True      # Kept for compatibility or removed if new format covers it fully, but warning said use SIGNUP_FIELDS
-# However, usually just setting login methods is enough for the warning about auth method.
-# For input fields:
-# ACCOUNT_SIGNUP_FIELDS = ['email'] # This replaces USERNAME_REQUIRED etc in newer versions?
-# Let's keep it simple and just fix the specific warnings mentioned if possible, 
-# but allauth 65+ has changed a lot. 
-# Reverting to legacy mode or just ignoring for now might be safer, but let's try to be modern.
-ACCOUNT_EMAIL_REQUIRED = True 
-ACCOUNT_USERNAME_REQUIRED = False
-# Ignoring specific field warnings for now as they are just warnings, but fixing backend is crucial.
+ACCOUNT_SIGNUP_FIELDS = ['email', 'password']
+# ACCOUNT_EMAIL_REQUIRED = True 
+# ACCOUNT_USERNAME_REQUIRED = False
 
-# --- AXES (Brute Force Protection) ---
-AXES_FAILURE_LIMIT = 5
-AXES_COOLOFF_TIME = 1  # Hours
-# AXES_LOCK_OUT_BY_COMBINATION_USER_AND_IP = True # Deprecated, default behavior is usually sufficient or use AXES_LOCKOUT_PARAMETERS
+
 
 
 # Social Providers
@@ -461,8 +405,8 @@ from datetime import timedelta
 
 AXES_FAILURE_LIMIT = 5  # Lock after 5 failed attempts
 AXES_COOLOFF_TIME = timedelta(hours=2)  # Lockout duration - 2 hours
-AXES_LOCK_OUT_BY_COMBINATION_USER_AND_IP = True  # Lock by both user and IP
-AXES_USE_USER_AGENT = True  # Include user agent in tracking
+AXES_LOCKOUT_PARAMETERS = ["username", "ip_address"]
+# AXES_USE_USER_AGENT is deprecated, user agent is tracked by default or via handlers
 AXES_RESET_ON_SUCCESS = True  # Reset counter on successful login
 AXES_VERBOSE = True  # Log all authentication attempts
 AXES_ENABLE_ADMIN = True  # Enable admin interface for viewing lockouts

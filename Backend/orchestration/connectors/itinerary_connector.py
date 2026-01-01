@@ -1,6 +1,7 @@
 from typing import Dict, Any
 from asgiref.sync import sync_to_async
 from datetime import datetime, timedelta
+from django.utils import timezone
 import logging
 
 logger = logging.getLogger(__name__)
@@ -84,9 +85,15 @@ class ItineraryConnector:
             def create_itin():
                 data = {"user_id": user_id, "title": title, "region": region}
                 if start_date:
-                    data["start_date"] = start_date
+                    # Parse and make timezone-aware
+                    start = self._parse_date(start_date)
+                    start = timezone.make_aware(start) if timezone.is_naive(start) else start
+                    data["start_date"] = start
                 if end_date:
-                    data["end_date"] = end_date
+                    # Parse and make timezone-aware
+                    end = self._parse_date(end_date)
+                    end = timezone.make_aware(end) if timezone.is_naive(end) else end
+                    data["end_date"] = end
                 if budget_ksh:
                     data["budget_ksh"] = budget_ksh
 

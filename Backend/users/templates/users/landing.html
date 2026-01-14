@@ -1,0 +1,871 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description"
+        content="One workspace where work, plans, teams, and ideas talk to each other. Built for modern professionals who need intelligence, not fragmentation.">
+    <title>Mathia — Unified Workspace Intelligence</title>
+
+    <!-- Google Fonts - Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --color-primary: #0A0A0A;
+            --color-secondary: #F5F5F5;
+            --color-accent: #2563EB;
+            --color-muted: #737373;
+            --color-border: #E5E5E5;
+            --color-white: #FFFFFF;
+
+            --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+
+            --spacing-xs: 8px;
+            --spacing-sm: 16px;
+            --spacing-md: 24px;
+            --spacing-lg: 48px;
+            --spacing-xl: 80px;
+            --spacing-2xl: 120px;
+
+            --max-width: 1280px;
+            --border-radius: 12px;
+        }
+
+        body {
+            font-family: var(--font-sans);
+            color: var(--color-primary);
+            background: var(--color-white);
+            line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+
+        /* Typography */
+        h1,
+        h2,
+        h3,
+        h4,
+        h5,
+        h6 {
+            font-weight: 600;
+            line-height: 1.2;
+            letter-spacing: -0.02em;
+        }
+
+        h1 {
+            font-size: 64px;
+            font-weight: 700;
+        }
+
+        h2 {
+            font-size: 48px;
+        }
+
+        h3 {
+            font-size: 32px;
+        }
+
+        h4 {
+            font-size: 24px;
+        }
+
+        p {
+            font-size: 18px;
+            color: var(--color-muted);
+            line-height: 1.7;
+        }
+
+        .text-large {
+            font-size: 20px;
+            line-height: 1.6;
+        }
+
+        .text-small {
+            font-size: 14px;
+        }
+
+        /* Layout */
+        .container {
+            max-width: var(--max-width);
+            margin: 0 auto;
+            padding: 0 var(--spacing-md);
+        }
+
+        section {
+            padding: var(--spacing-2xl) 0;
+        }
+
+        /* Navigation */
+        nav {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--color-border);
+            z-index: 1000;
+        }
+
+        .nav-container {
+            max-width: var(--max-width);
+            margin: 0 auto;
+            padding: var(--spacing-sm) var(--spacing-md);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--color-primary);
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .logo-icon {
+            width: 32px;
+            height: 32px;
+            background: var(--color-primary);
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--color-white);
+            font-size: 18px;
+            font-weight: 700;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: var(--spacing-lg);
+            align-items: center;
+        }
+
+        .nav-link {
+            color: var(--color-muted);
+            text-decoration: none;
+            font-size: 15px;
+            font-weight: 500;
+            transition: color 0.2s ease;
+        }
+
+        .nav-link:hover {
+            color: var(--color-primary);
+        }
+
+        /* Buttons */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 12px 24px;
+            font-size: 15px;
+            font-weight: 600;
+            border-radius: 8px;
+            text-decoration: none;
+            transition: all 0.2s ease;
+            cursor: pointer;
+            border: none;
+            font-family: var(--font-sans);
+        }
+
+        .btn-primary {
+            background: var(--color-primary);
+            color: var(--color-white);
+        }
+
+        .btn-primary:hover {
+            background: #1A1A1A;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(10, 10, 10, 0.15);
+        }
+
+        .btn-secondary {
+            background: transparent;
+            color: var(--color-primary);
+            border: 1px solid var(--color-border);
+        }
+
+        .btn-secondary:hover {
+            border-color: var(--color-primary);
+        }
+
+        .btn-large {
+            padding: 16px 32px;
+            font-size: 16px;
+        }
+
+        /* Hero Section */
+        .hero {
+            padding-top: 180px;
+            padding-bottom: var(--spacing-2xl);
+            text-align: center;
+        }
+
+        .hero h1 {
+            margin-bottom: var(--spacing-md);
+            max-width: 800px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .hero p {
+            font-size: 20px;
+            max-width: 600px;
+            margin: 0 auto var(--spacing-lg);
+        }
+
+        .hero-cta {
+            display: flex;
+            gap: var(--spacing-sm);
+            justify-content: center;
+            margin-bottom: var(--spacing-xl);
+        }
+
+        .hero-image {
+            max-width: 1080px;
+            margin: 0 auto;
+            border-radius: var(--border-radius);
+            overflow: hidden;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.08);
+        }
+
+        .hero-image img {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+
+        /* Problem Section */
+        .problem {
+            background: var(--color-secondary);
+        }
+
+        .section-header {
+            text-align: center;
+            margin-bottom: var(--spacing-xl);
+        }
+
+        .section-header h2 {
+            margin-bottom: var(--spacing-sm);
+        }
+
+        .section-header p {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        .problem-visual {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        .problem-visual img {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+
+        .problem-points {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: var(--spacing-lg);
+            margin-top: var(--spacing-xl);
+        }
+
+        .problem-point {
+            text-align: center;
+        }
+
+        .problem-point h4 {
+            margin-bottom: var(--spacing-xs);
+        }
+
+        /* Solution Section */
+        .solution {
+            text-align: center;
+        }
+
+        .solution-visual {
+            max-width: 900px;
+            margin: var(--spacing-xl) auto;
+        }
+
+        .solution-visual img {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+
+        .solution-features {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: var(--spacing-md);
+            margin-top: var(--spacing-xl);
+            text-align: left;
+        }
+
+        .feature-card {
+            padding: var(--spacing-lg);
+            background: var(--color-white);
+            border: 1px solid var(--color-border);
+            border-radius: var(--border-radius);
+            transition: all 0.3s ease;
+        }
+
+        .feature-card:hover {
+            border-color: var(--color-accent);
+            box-shadow: 0 8px 24px rgba(37, 99, 235, 0.08);
+        }
+
+        .feature-card h4 {
+            margin-bottom: var(--spacing-sm);
+        }
+
+        .feature-card p {
+            font-size: 16px;
+        }
+
+        /* Context Modes Section */
+        .contexts {
+            background: var(--color-secondary);
+        }
+
+        .contexts-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: var(--spacing-md);
+            margin-top: var(--spacing-xl);
+        }
+
+        .context-card {
+            background: var(--color-white);
+            border-radius: var(--border-radius);
+            overflow: hidden;
+            border: 1px solid var(--color-border);
+            transition: all 0.3s ease;
+        }
+
+        .context-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.08);
+        }
+
+        .context-header {
+            padding: var(--spacing-md);
+            border-bottom: 1px solid var(--color-border);
+        }
+
+        .context-header h4 {
+            margin-bottom: var(--spacing-xs);
+        }
+
+        .context-header p {
+            font-size: 14px;
+        }
+
+        .context-preview {
+            aspect-ratio: 16 / 10;
+            background: var(--color-secondary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--color-muted);
+        }
+
+        /* Trust Section */
+        .trust {
+            text-align: center;
+        }
+
+        .trust-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: var(--spacing-xl);
+            margin-top: var(--spacing-xl);
+        }
+
+        .trust-item {
+            text-align: center;
+        }
+
+        .trust-icon {
+            width: 64px;
+            height: 64px;
+            background: var(--color-secondary);
+            border-radius: 12px;
+            margin: 0 auto var(--spacing-md);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 28px;
+        }
+
+        .trust-item h4 {
+            margin-bottom: var(--spacing-xs);
+        }
+
+        .trust-item p {
+            font-size: 16px;
+        }
+
+        /* CTA Section */
+        .cta {
+            background: var(--color-primary);
+            color: var(--color-white);
+            text-align: center;
+        }
+
+        .cta h2 {
+            color: var(--color-white);
+            margin-bottom: var(--spacing-md);
+        }
+
+        .cta p {
+            color: rgba(255, 255, 255, 0.7);
+            margin-bottom: var(--spacing-lg);
+        }
+
+        .btn-white {
+            background: var(--color-white);
+            color: var(--color-primary);
+        }
+
+        .btn-white:hover {
+            background: var(--color-secondary);
+        }
+
+        /* Footer */
+        footer {
+            background: var(--color-secondary);
+            padding: var(--spacing-xl) 0 var(--spacing-lg);
+        }
+
+        .footer-content {
+            display: grid;
+            grid-template-columns: 2fr 1fr 1fr 1fr;
+            gap: var(--spacing-xl);
+            margin-bottom: var(--spacing-lg);
+        }
+
+        .footer-brand p {
+            margin-top: var(--spacing-sm);
+            font-size: 15px;
+        }
+
+        .footer-links h4 {
+            font-size: 14px;
+            margin-bottom: var(--spacing-md);
+            font-weight: 600;
+        }
+
+        .footer-links ul {
+            list-style: none;
+        }
+
+        .footer-links li {
+            margin-bottom: var(--spacing-sm);
+        }
+
+        .footer-links a {
+            color: var(--color-muted);
+            text-decoration: none;
+            font-size: 14px;
+            transition: color 0.2s ease;
+        }
+
+        .footer-links a:hover {
+            color: var(--color-primary);
+        }
+
+        .footer-bottom {
+            padding-top: var(--spacing-md);
+            border-top: 1px solid var(--color-border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 14px;
+            color: var(--color-muted);
+        }
+
+        /* Animations */
+        .fade-in {
+            opacity: 0;
+            transform: translateY(20px);
+            animation: fadeInUp 0.8s ease forwards;
+        }
+
+        @keyframes fadeInUp {
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* Responsive */
+        @media (max-width: 1024px) {
+            h1 {
+                font-size: 48px;
+            }
+
+            h2 {
+                font-size: 36px;
+            }
+
+            h3 {
+                font-size: 28px;
+            }
+
+            .hero {
+                padding-top: 140px;
+            }
+
+            .solution-features {
+                grid-template-columns: 1fr;
+            }
+
+            .footer-content {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+
+        @media (max-width: 768px) {
+            h1 {
+                font-size: 36px;
+            }
+
+            h2 {
+                font-size: 28px;
+            }
+
+            h3 {
+                font-size: 24px;
+            }
+
+            p {
+                font-size: 16px;
+            }
+
+            section {
+                padding: var(--spacing-xl) 0;
+            }
+
+            .hero {
+                padding-top: 120px;
+            }
+
+            .hero-cta {
+                flex-direction: column;
+            }
+
+            .nav-links {
+                gap: var(--spacing-md);
+            }
+
+            .nav-link {
+                display: none;
+            }
+
+            .contexts-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .footer-content {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Navigation -->
+    <nav>
+        <div class="nav-container">
+            <a href="/" class="logo">
+                <div class="logo-icon">M</div>
+                Mathia
+            </a>
+            <div class="nav-links">
+                <a href="#solution" class="nav-link">Product</a>
+                <a href="#contexts" class="nav-link">Features</a>
+                <a href="{% url 'users:login' %}" class="btn btn-primary">Sign In</a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="container">
+            <h1 class="fade-in">One workspace.<br>Every context.</h1>
+            <p class="fade-in">Where work, plans, teams, and ideas talk to each other. Built for professionals who need
+                intelligence, not fragmentation.</p>
+
+            <div class="hero-cta fade-in">
+                <a href="{% url 'users:register' %}" class="btn btn-primary btn-large">Enter Workspace</a>
+                <a href="#solution" class="btn btn-secondary btn-large">Learn More</a>
+            </div>
+
+            <div class="hero-image fade-in">
+                <img src="{% static 'images/chatroom-screenshot.png' %}" alt="Mathia workspace interface">
+            </div>
+        </div>
+    </section>
+
+    <!-- Problem Section -->
+    <section class="problem" id="problem">
+        <div class="container">
+            <div class="section-header">
+                <h2>The cost of fragmentation</h2>
+                <p>Your work is scattered across tools. Every context switch costs time, breaks flow, and loses
+                    information.</p>
+            </div>
+
+            <div class="problem-visual">
+                <img src="{% static 'images/fragmentation-visual.png' %}" alt="Digital fragmentation visualization">
+            </div>
+
+            <div class="problem-points">
+                <div class="problem-point">
+                    <h4>Constant context switching</h4>
+                    <p>Jump between apps. Repeat yourself. Lose your train of thought.</p>
+                </div>
+                <div class="problem-point">
+                    <h4>Information silos</h4>
+                    <p>Every tool has its own memory. Nothing talks to anything else.</p>
+                </div>
+                <div class="problem-point">
+                    <h4>Coordination overhead</h4>
+                    <p>Share links. Schedule meetings. Copy and paste. Again and again.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Solution Section -->
+    <section class="solution" id="solution">
+        <div class="container">
+            <div class="section-header">
+                <h2>One conversation.<br>Many contexts.</h2>
+                <p>Everything lives in a single conversational space. Different intents, shared memory, zero friction.
+                </p>
+            </div>
+
+            <div class="solution-visual">
+                <img src="{% static 'images/unified-solution.png' %}" alt="Unified workspace solution">
+            </div>
+
+            <div class="solution-features">
+                <div class="feature-card">
+                    <h4>Contextual intelligence</h4>
+                    <p>AI that understands whether you're planning, executing, or collaborating — and adapts
+                        accordingly.</p>
+                </div>
+                <div class="feature-card">
+                    <h4>Shared memory</h4>
+                    <p>Important details remembered across every conversation. No more "can you send that link again?"
+                    </p>
+                </div>
+                <div class="feature-card">
+                    <h4>Seamless flow</h4>
+                    <p>Start a thought in one room, continue it in another. Same workspace, different intentions.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Context Modes Section -->
+    <section class="contexts" id="contexts">
+        <div class="container">
+            <div class="section-header">
+                <h2>Built for how you actually work</h2>
+                <p>Not a collection of tools. A unified environment that shifts with your intent.</p>
+            </div>
+
+            <div class="contexts-grid">
+                <div class="context-card">
+                    <div class="context-header">
+                        <h4>Planning</h4>
+                        <p>Travel, schedules, coordination</p>
+                    </div>
+                    <div class="context-preview">
+                        <span>🗺️</span>
+                    </div>
+                </div>
+
+                <div class="context-card">
+                    <div class="context-header">
+                        <h4>Execution</h4>
+                        <p>Tasks, research, deep work</p>
+                    </div>
+                    <div class="context-preview">
+                        <span>⚡</span>
+                    </div>
+                </div>
+
+                <div class="context-card">
+                    <div class="context-header">
+                        <h4>Collaboration</h4>
+                        <p>Teams, shared conversations</p>
+                    </div>
+                    <div class="context-preview">
+                        <span>👥</span>
+                    </div>
+                </div>
+
+                <div class="context-card">
+                    <div class="context-header">
+                        <h4>Memory</h4>
+                        <p>Context, notes, knowledge</p>
+                    </div>
+                    <div class="context-preview">
+                        <span>🧠</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Trust Section -->
+    <section class="trust">
+        <div class="container">
+            <div class="section-header">
+                <h2>Built for teams who ship</h2>
+                <p>Enterprise-grade infrastructure. Developer-friendly APIs. Always under your control.</p>
+            </div>
+
+            <div class="trust-grid">
+                <div class="trust-item">
+                    <div class="trust-icon">🔒</div>
+                    <h4>Enterprise security</h4>
+                    <p>End-to-end encryption, SOC 2 compliant, data residency options.</p>
+                </div>
+                <div class="trust-item">
+                    <div class="trust-icon">⚙️</div>
+                    <h4>Full control</h4>
+                    <p>Self-hosted options, API access, export everything at any time.</p>
+                </div>
+                <div class="trust-item">
+                    <div class="trust-icon">⚡</div>
+                    <h4>Built to scale</h4>
+                    <p>Real-time sync, sub-100ms latency, handles teams of any size.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- CTA Section -->
+    <section class="cta">
+        <div class="container">
+            <h2>Ready to unify your workspace?</h2>
+            <p>Join teams already working smarter with Mathia.</p>
+            <a href="{% url 'users:register' %}" class="btn btn-white btn-large">Get Started</a>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer>
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-brand">
+                    <div class="logo">
+                        <div class="logo-icon">M</div>
+                        Mathia
+                    </div>
+                    <p>One workspace. Every context.</p>
+                </div>
+
+                <div class="footer-links">
+                    <h4>Product</h4>
+                    <ul>
+                        <li><a href="#solution">Features</a></li>
+                        <li><a href="#contexts">Use Cases</a></li>
+                        <li><a href="{% url 'users:login' %}">Pricing</a></li>
+                    </ul>
+                </div>
+
+                <div class="footer-links">
+                    <h4>Company</h4>
+                    <ul>
+                        <li><a href="#">About</a></li>
+                        <li><a href="#">Blog</a></li>
+                        <li><a href="#">Careers</a></li>
+                    </ul>
+                </div>
+
+                <div class="footer-links">
+                    <h4>Resources</h4>
+                    <ul>
+                        <li><a href="#">Documentation</a></li>
+                        <li><a href="#">API</a></li>
+                        <li><a href="#">Support</a></li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="footer-bottom">
+                <p>&copy; 2026 Mathia. All rights reserved.</p>
+                <div>
+                    <a href="#" style="margin-left: 16px;">Privacy</a>
+                    <a href="#" style="margin-left: 16px;">Terms</a>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        // Smooth scroll for anchor links
+        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+            anchor.addEventListener('click', function (e) {
+                e.preventDefault();
+                const target = document.querySelector(this.getAttribute('href'));
+                if (target) {
+                    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+            });
+        });
+
+        // Intersection Observer for fade-in animations
+        const observerOptions = {
+            threshold: 0.1,
+            rootMargin: '0px 0px -50px 0px'
+        };
+
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    entry.target.style.opacity = '1';
+                    entry.target.style.transform = 'translateY(0)';
+                }
+            });
+        }, observerOptions);
+
+        // Observe all sections except hero (already visible)
+        document.querySelectorAll('section:not(.hero)').forEach(section => {
+            section.style.opacity = '0';
+            section.style.transform = 'translateY(20px)';
+            section.style.transition = 'opacity 0.8s ease, transform 0.8s ease';
+            observer.observe(section);
+        });
+    </script>
+</body>
+
+</html>

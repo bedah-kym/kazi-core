@@ -216,6 +216,12 @@ function connectToChat(roomId) {
             }
             return;
         }
+        if (data.command === 'user_quotas') {
+            if (typeof updateQuotaUI === 'function') {
+                updateQuotaUI(data.quotas);
+            }
+            return;
+        }
         if (data.command === 'error') {
             console.error('Error from server:', data.message);
             return;

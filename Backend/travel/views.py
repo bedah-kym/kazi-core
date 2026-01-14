@@ -71,7 +71,7 @@ async def search_travel(request):
 
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
-def itinerary_list(request):
+def itinerary_list_api(request):
     """
     GET: List user's itineraries
     POST: Create new itinerary
@@ -175,6 +175,12 @@ from django.shortcuts import render
 def plan_trip_wizard(request):
     """Render the Trip Planning Wizard"""
     return render(request, 'travel/plan_trip.html')
+
+@permission_classes([IsAuthenticated])
+def itinerary_list(request):
+    """Render the Itinerary List (user-friendly UI)"""
+    itineraries = Itinerary.objects.filter(user=request.user).order_by('-created_at')
+    return render(request, 'travel/itinerary_list.html', {'itineraries': itineraries})
 
 @permission_classes([IsAuthenticated])
 def view_itinerary(request, itinerary_id):

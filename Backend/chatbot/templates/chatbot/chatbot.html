@@ -485,6 +485,16 @@
             const message = inputInfo.value.trim();
 
             if (message) {
+                // Auto-detect quota commands
+                const quotaKeywords = ['show quota', 'my quota', 'show my quota', 'check quota', 'quota status', '@mathia show my quotas'];
+                const isQuotaCommand = quotaKeywords.some(keyword => message.toLowerCase().includes(keyword));
+
+                if (isQuotaCommand) {
+                    inputInfo.value = '';
+                    fetchQuotas();
+                    return; // Don't send to AI
+                }
+
                 socket.send(JSON.stringify({
                     'command': 'new_message',
                     'message': message,

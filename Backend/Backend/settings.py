@@ -42,6 +42,8 @@ except Exception:
 
 # SECURITY WARNING: keep the secret key used in production secret!
 # CRITICAL: SECRET_KEY must be set via environment variable in production
+# CRITICAL: SECRET_KEY must be set via environment variable in production
+# CRITICAL: SECRET_KEY must be set via environment variable in production
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
 if not SECRET_KEY:
     if os.environ.get('DJANGO_DEBUG', 'False').lower() in ('1', 'true', 'yes'):
@@ -126,6 +128,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'chatbot.middleware.EnsureMemberMiddleware',  # Auto-create Member objects
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     
@@ -343,30 +346,20 @@ CHAT_RATE_LIMIT = 30
 # ==========================================
 
 AUTHENTICATION_BACKENDS = [
-    # Django default
-    'django.contrib.auth.backends.ModelBackend',
-    # Allauth specific authentication methods
-    'allauth.account.auth_backends.AuthenticationBackend',
-    # Axes backend
     'axes.backends.AxesStandaloneBackend',
+    'django.contrib.auth.backends.ModelBackend',
+    'allauth.account.auth_backends.AuthenticationBackend',
 ]
 
 SITE_ID = 1
 
-# --- Allauth Settings ---
+# --- Allauth Settings (Latest Format) ---
+ACCOUNT_LOGIN_METHODS = {'email'}
+ACCOUNT_SIGNUP_FIELDS = ['email*', 'password1*', 'password2*']
 ACCOUNT_EMAIL_VERIFICATION = 'optional'
 ACCOUNT_SESSION_REMEMBER = True
 SOCIALACCOUNT_AUTO_SIGNUP = True
 SOCIALACCOUNT_EMAIL_VERIFICATION = 'none'
-
-# New Allauth format
-ACCOUNT_LOGIN_METHODS = {'email'}  # Replaces ACCOUNT_AUTHENTICATION_METHOD
-ACCOUNT_SIGNUP_FIELDS = ['email', 'password1']
-# ACCOUNT_EMAIL_REQUIRED = True 
-# ACCOUNT_USERNAME_REQUIRED = False
-
-
-
 
 # Social Providers
 SOCIALACCOUNT_PROVIDERS = {
@@ -400,16 +393,17 @@ SOCIALACCOUNT_PROVIDERS = {
     }
 }
 
+
 # --- AXES (Brute Force Protection) - Enhanced Security ---
 from datetime import timedelta
 
-AXES_FAILURE_LIMIT = 5  # Lock after 5 failed attempts
-AXES_COOLOFF_TIME = timedelta(hours=2)  # Lockout duration - 2 hours
+AXES_FAILURE_LIMIT = 5  
+AXES_COOLOFF_TIME = timedelta(hours=2)
 AXES_LOCKOUT_PARAMETERS = ["username", "ip_address"]
-# AXES_USE_USER_AGENT is deprecated, user agent is tracked by default or via handlers
-AXES_RESET_ON_SUCCESS = True  # Reset counter on successful login
-AXES_VERBOSE = True  # Log all authentication attempts
-AXES_ENABLE_ADMIN = True  # Enable admin interface for viewing lockouts
+AXES_RESET_ON_SUCCESS = True 
+AXES_VERBOSE = True 
+AXES_ENABLE_ADMIN = True 
+
 
 # --- CSP (Content Security Policy) ---
 # --- CSP (Content Security Policy) ---

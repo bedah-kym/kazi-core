@@ -71,6 +71,52 @@
         .message p:last-child {
             margin-bottom: 0;
         }
+
+        /* Quota UI Styles */
+        .quota-card {
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            border-left: 5px solid #ccc;
+            transition: all 0.2s ease;
+            text-align: left;
+        }
+
+        .quota-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+        }
+
+        .quota-card.good {
+            border-left-color: #2ecc71;
+        }
+
+        .quota-card.warning {
+            border-left-color: #f1c40f;
+        }
+
+        .quota-card.critical {
+            border-left-color: #e67e22;
+        }
+
+        .quota-card.exhausted {
+            border-left-color: #e74c3c;
+        }
+
+        .quota-progress {
+            height: 8px;
+            border-radius: 4px;
+            margin: 10px 0;
+            background-color: #e9ecef;
+            overflow: hidden;
+            display: flex;
+        }
+
+        .quota-progress-bar {
+            height: 100%;
+            transition: width 0.6s ease;
+        }
     </style>
 </head>
 
@@ -141,6 +187,10 @@
                         </button>
                         <button id="startTour" class="btn btn-link text-primary" title="Guided Tour">
                             <i class="fas fa-wand-magic-sparkles"></i>
+                        </button>
+                        <button type="button" class="btn btn-link text-warning" title="Usage Quotas"
+                            onclick="fetchQuotas()">
+                            <i class="fas fa-chart-pie"></i>
                         </button>
                     </div>
                 </div>
@@ -634,6 +684,91 @@
             }
         }
     </style>
+    <!-- Quota Modal -->
+    <div class="modal fade" id="quotaModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content border-0 shadow">
+                <div class="modal-header border-0 pb-0">
+                    <h5 class="modal-title fw-bold">
+                        <i class="fas fa-tachometer-alt me-2 text-primary"></i>Usage & Limits
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body pt-3" id="quota-modal-body">
+                    <div class="text-center py-4">
+                        <div class="spinner-border text-primary spinner-border-sm me-2" role="status"></div>
+                        <span class="text-muted">Fetching latest usage data...</span>
+                    </div>
+                </div>
+                <div class="modal-footer border-0 pt-0">
+                    <small class="text-muted w-100 text-center">Limits are based on your current workspace plan.</small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function fetchQuotas() {
+            const modalElement = document.getElementById('quotaModal');
+            let modal = bootstrap.Modal.getInstance(modalElement);
+            if (!modal) {
+                modal = new bootstrap.Modal(modalElement);
+            }
+            modal.show();
+
+            const socket = typeof getCurrentSocket === 'function' ? getCurrentSocket() : null;
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ 'command': 'get_quotas' }));
+            } else {
+                document.getElementById('quota-modal-body').innerHTML =
+                    '<div class="alert alert-warning py-2 mb-0">Chat disconnected. Reconnecting...</div>';
+            }
+        }
+
+        function updateQuotaUI(quotas) {
+            const container = document.getElementById('quota-modal-body');
+            if (!container) return;
+
+            container.innerHTML = '';
+
+            const keys = Object.keys(quotas);
+            keys.forEach(key => {
+                const q = quotas[key];
+                const pct = Math.min((q.used / q.limit) * 100, 100);
+
+                const colorMap = {
+                    'green': 'success',
+                    'yellow': 'warning',
+                    'orange': 'warning',
+                    'red': 'danger'
+                };
+                const bsColor = colorMap[q.color] || 'primary';
+
+                const card = document.createElement('div');
+                card.className = `quota-card ${q.status}`;
+                card.innerHTML = `
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                        <span class="fw-bold text-dark">${q.name}</span>
+                        <span class="badge bg-${bsColor}-subtle text-${bsColor} border border-${bsColor}-subtle">
+                            ${q.status.toUpperCase()}
+                        </span>
+                    </div>
+                    <div class="quota-progress">
+                        <div class="quota-progress-bar bg-${bsColor}" style="width: ${pct}%"></div>
+                    </div>
+                    <div class="d-flex justify-content-between x-small text-muted mt-1" style="font-size: 0.75rem;">
+                        <span>Used: <strong>${q.used}</strong> / ${q.limit} ${q.unit}</span>
+                        <span>Resets: ${q.reset}</span>
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+
+            if (keys.length === 0) {
+                container.innerHTML = '<div class="text-center py-4 text-muted">No quota information available.</div>';
+            }
+        }
+    </script>
 </body>
 
 </html>

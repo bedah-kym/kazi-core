@@ -84,6 +84,12 @@ class DataSynthesizer:
             
         elif action == "search_info":
             return data.get("summary", "Here is what I found.")
+
+        elif action == "check_quotas":
+            summary = "Your current usage limits:\n"
+            for key, q in data.items():
+                summary += f"- {q['name']}: {q['used']}/{q['limit']} {q['unit']} (Status: {q['status']})\n"
+            return summary
          
         # NEW: Handle GIF with message AND full URL
         elif action == "search_gif":

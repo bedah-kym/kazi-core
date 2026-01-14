@@ -35,6 +35,7 @@ class IntentParser:
         "view_itinerary",
         "add_to_itinerary",
         "book_travel_item",
+        "check_quotas",
     ]
     
     SYSTEM_PROMPT = """You are an intent classifier for Mathia, a personal assistant with travel planning.
@@ -51,6 +52,8 @@ Supported actions:
 - search_gif: User wants a GIF
 - convert_currency: User wants currency conversion
 - set_reminder: User wants to set a reminder (extract content, time, priority)
+- check_quotas: User asks about their usage limits, remaining searches, message count, or upload status.
+  Examples: "show my quotas", "how many searches left?", "what are my limits?", "usage status"
 - general_chat: Casual conversation, greetings, or unclear requests
 
 TRAVEL PLANNER ACTIONS:

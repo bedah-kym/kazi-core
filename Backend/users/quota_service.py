@@ -1,7 +1,9 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from django.core.cache import cache
 from django.conf import settings
+from django.utils import timezone
+from chatbot.models import DocumentUpload
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +16,8 @@ class QuotaService:
     LIMITS = {
         'search': 10,       # per day
         'actions': 100,     # per hour
-        'messages': 30      # per minute
+        'messages': 30,     # per minute
+        'uploads': 10       # per 10 hours (approx)
     }
 
     def get_user_quotas(self, user_id: int) -> dict:
@@ -30,10 +33,15 @@ class QuotaService:
         action_key = f"mcp_rate:{user_id}"
         action_used = cache.get(action_key, 0)
         
-        # 3. Chat Rate Limit (Minute)
-        current_minute = datetime.now().strftime('%Y-%m-%d-%H-%M')
         msg_key = f"rate_limit:{user_id}:{current_minute}"
         msg_used = cache.get(msg_key, 0)
+
+        # 4. Document Uploads (10-hour window)
+        ten_hours_ago = timezone.now() - timedelta(hours=10)
+        upload_used = DocumentUpload.objects.filter(
+            user_id=user_id,
+            uploaded_at__gte=ten_hours_ago
+        ).count()
 
         # Calculate Percentages & Status
         def get_status(used, limit):
@@ -46,6 +54,7 @@ class QuotaService:
         s_status, s_color = get_status(search_used, self.LIMITS['search'])
         a_status, a_color = get_status(action_used, self.LIMITS['actions'])
         m_status, m_color = get_status(msg_used, self.LIMITS['messages'])
+        u_status, u_color = get_status(upload_used, self.LIMITS['uploads'])
 
         return {
             "search": {
@@ -74,5 +83,14 @@ class QuotaService:
                 "status": m_status,
                 "color": m_color,
                 "reset": "Rolling 1 min"
+            },
+            "uploads": {
+                "name": "Document Uploads",
+                "used": upload_used,
+                "limit": self.LIMITS['uploads'],
+                "unit": "per 10 hours",
+                "status": u_status,
+                "color": u_color,
+                "reset": "10h from first"
             }
         }

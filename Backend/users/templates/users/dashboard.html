@@ -312,7 +312,7 @@
                 </div>
                 <div class="stat-value">KES {{ wallet_balance|default:0|floatformat:0|intcomma }}</div>
                 <div class="stat-change">
-                    <a href="{% url 'users:wallet' %}" class="text-decoration-none">
+                    <a href="{% url 'payments:wallet_dashboard' %}" class="text-decoration-none">
                         <small>View transactions →</small>
                     </a>
                 </div>
@@ -333,7 +333,7 @@
                 <i class="fas fa-plug quick-action-icon"></i>
                 <span>Connect Apps</span>
             </a>
-            <a href="{% url 'users:wallet' %}" class="quick-action-btn">
+            <a href="{% url 'payments:wallet_dashboard' %}" class="quick-action-btn">
                 <i class="fas fa-money-bill-wave quick-action-icon"></i>
                 <span>Add Funds</span>
             </a>

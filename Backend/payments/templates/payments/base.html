@@ -16,117 +16,236 @@
 
     <style>
         :root {
-            --primary-color: #4B49AC;
-            --secondary-color: #98BDFF;
-            --success-color: #2ecc71;
-            --warning-color: #f1c40f;
-            --danger-color: #e74c3c;
-            --dark-color: #282c34;
-            --light-bg: #f5f7ff;
+            /* ShadCN / Zinc-like Scale */
+            --background: #ffffff;
+            --foreground: #09090b;
+            --card: #ffffff;
+            --card-foreground: #09090b;
+            --popover: #ffffff;
+            --popover-foreground: #09090b;
+            --primary: #18181b;
+            /* Zinc 950 */
+            --primary-foreground: #fafafa;
+            --secondary: #f4f4f5;
+            /* Zinc 100 */
+            --secondary-foreground: #18181b;
+            --muted: #f4f4f5;
+            --muted-foreground: #71717a;
+            /* Zinc 500 */
+            --accent: #f4f4f5;
+            --accent-foreground: #18181b;
+            --destructive: #ef4444;
+            --destructive-foreground: #fafafa;
+            --border: #e4e4e7;
+            /* Zinc 200 */
+            --input: #e4e4e7;
+            --ring: #18181b;
+            --radius: 0.5rem;
+
+            /* Mathia Brand Overrides */
+            --brand-primary: #4f46e5;
+            /* Indigo 600 */
+            --brand-primary-foreground: #ffffff;
         }
 
         body {
-            font-family: 'Inter', sans-serif;
-            background-color: var(--light-bg);
-            color: #333;
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background-color: #fafafa;
+            /* Very light gray bg */
+            color: var(--foreground);
+            -webkit-font-smoothing: antialiased;
         }
 
         .navbar {
-            background-color: white;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
-            padding: 1rem 2rem;
+            background-color: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(8px);
+            border-bottom: 1px solid var(--border);
+            padding: 0.75rem 2rem;
         }
 
         .navbar-brand {
-            font-weight: 700;
-            color: var(--primary-color);
-            display: flex;
-            align-items: center;
-            gap: 10px;
+            font-weight: 600;
+            font-size: 1.1rem;
+            color: var(--foreground);
+            letter-spacing: -0.025em;
         }
 
         .sidebar {
             position: fixed;
-            top: 70px;
+            top: 73px;
+            /* Navbar height + offset */
             left: 0;
             bottom: 0;
             width: 250px;
-            background: white;
-            padding: 2rem 1rem;
-            box-shadow: 2px 0 10px rgba(0, 0, 0, 0.02);
-            z-index: 100;
+            background: var(--background);
+            border-right: 1px solid var(--border);
+            padding: 1.5rem 1rem;
+            z-index: 50;
         }
 
         .main-content {
             margin-left: 250px;
             padding: 2rem;
-            margin-top: 70px;
+            margin-top: 73px;
+            max-width: 1200px;
         }
 
         .nav-link {
-            padding: 0.8rem 1rem;
-            border-radius: 8px;
-            color: #666;
-            margin-bottom: 0.5rem;
+            padding: 0.5rem 0.75rem;
+            border-radius: var(--radius);
+            color: var(--muted-foreground);
+            font-weight: 500;
+            font-size: 0.875rem;
+            margin-bottom: 0.25rem;
             transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
         }
 
-        .nav-link:hover,
+        .nav-link:hover {
+            background-color: var(--secondary);
+            color: var(--foreground);
+        }
+
         .nav-link.active {
-            background-color: var(--primary-color);
-            color: white;
+            background-color: var(--secondary);
+            color: var(--foreground);
+            font-weight: 600;
         }
 
         .nav-link i {
-            width: 24px;
+            width: 16px;
+            text-align: center;
         }
 
+        /* ShadCN Card Style */
         .card {
-            border: none;
-            border-radius: 15px;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.03);
+            background-color: var(--card);
+            color: var(--card-foreground);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
             margin-bottom: 1.5rem;
         }
 
+        .card-header {
+            padding: 1.5rem 1.5rem 0 1.5rem;
+            background: transparent;
+            border-bottom: none;
+        }
+
+        .card-title {
+            font-weight: 600;
+            letter-spacing: -0.01em;
+            margin: 0;
+        }
+
+        .card-description {
+            font-size: 0.875rem;
+            color: var(--muted-foreground);
+            margin-top: 0.35rem;
+        }
+
+        .card-content {
+            padding: 1.5rem;
+        }
+
+        /* ShadCN Button Style */
         .btn-primary {
-            background-color: var(--primary-color);
+            background-color: var(--brand-primary);
+            color: var(--brand-primary-foreground);
             border: none;
-            padding: 0.6rem 1.5rem;
-            border-radius: 8px;
+            border-radius: calc(var(--radius) - 2px);
+            font-weight: 500;
+            font-size: 0.875rem;
+            padding: 0.5rem 1rem;
+            box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+            transition: all 0.2s;
         }
 
         .btn-primary:hover {
-            background-color: #3f3e91;
+            background-color: #4338ca;
+            /* Indigo 700 */
+            transform: translateY(-1px);
         }
 
-        .badge-status {
-            padding: 0.4em 0.8em;
-            border-radius: 20px;
-            font-size: 0.85em;
+        .btn-outline-secondary {
+            border: 1px solid var(--input);
+            background: var(--background);
+            color: var(--foreground);
+            border-radius: calc(var(--radius) - 2px);
             font-weight: 500;
+            font-size: 0.875rem;
+        }
+
+        .btn-outline-secondary:hover {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: var(--accent-foreground);
+        }
+
+        .dropdown-menu {
+            border: 1px solid var(--border);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            border-radius: var(--radius);
+            font-size: 0.875rem;
+        }
+
+        .table th {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--muted-foreground);
+            font-weight: 600;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .table td {
+            font-size: 0.875rem;
+            padding: 1rem 0;
+            border-bottom: 1px solid var(--border);
+            color: var(--foreground);
+        }
+
+        /* Badges */
+        .badge-status {
+            display: inline-flex;
+            align-items: center;
+            border-radius: 9999px;
+            padding: 0.25rem 0.75rem;
+            font-size: 0.75rem;
+            font-weight: 600;
+            line-height: 1;
         }
 
         .status-SUCCESS,
         .status-PAID {
-            background-color: rgba(46, 204, 113, 0.1);
-            color: var(--success-color);
+            background-color: #dcfce7;
+            color: #166534;
         }
 
+        /* Green 100/800 */
         .status-PENDING {
-            background-color: rgba(241, 196, 15, 0.1);
-            color: var(--warning-color);
+            background-color: #fef9c3;
+            color: #854d0e;
         }
 
+        /* Yellow 100/800 */
         .status-WARNING {
-            background-color: rgba(241, 196, 15, 0.1);
-            color: var(--warning-color);
+            background-color: #ffedd5;
+            color: #9a3412;
         }
 
+        /* Orange 100/800 */
         .status-ERROR,
         .status-EXPIRED {
-            background-color: rgba(231, 76, 60, 0.1);
-            color: var(--danger-color);
+            background-color: #fee2e2;
+            color: #991b1b;
         }
+
+        /* Red 100/800 */
 
         @media (max-width: 768px) {
             .sidebar {
@@ -147,18 +266,18 @@
     <nav class="navbar fixed-top">
         <div class="container-fluid">
             <a class="navbar-brand" href="/">
-                <i class="fas fa-wallet"></i> Mathia Pay
+                <i class="fas fa-wallet me-2"></i> Mathia Pay
             </a>
             <div class="d-flex align-items-center gap-3">
                 <div class="dropdown">
-                    <button class="btn btn-light rounded-circle" type="button" data-bs-toggle="dropdown">
-                        <i class="fas fa-bell"></i>
+                    <button class="btn btn-outline-secondary bg-white border-0" type="button" data-bs-toggle="dropdown">
+                        <i class="fas fa-bell text-muted"></i>
                     </button>
-                    <!-- Notifications Dropdown (Populated via JS preferably) -->
+                    <!-- Notifications Dropdown -->
                 </div>
                 <div class="dropdown">
-                    <button class="btn btn-light rounded-circle" type="button" data-bs-toggle="dropdown">
-                        <i class="fas fa-user-circle"></i>
+                    <button class="btn btn-outline-secondary bg-white border-0" type="button" data-bs-toggle="dropdown">
+                        <i class="fas fa-user-circle fa-lg text-muted"></i>
                     </button>
                     <ul class="dropdown-menu dropdown-menu-end">
                         <li><a class="dropdown-item" href="#">Profile</a></li>
@@ -174,20 +293,23 @@
 
     <!-- Sidebar -->
     <aside class="sidebar">
+        <div class="mb-4 px-3 text-xs font-semibold text-muted text-uppercase tracking-wider">
+            Menu
+        </div>
         <nav class="nav flex-column">
             <a class="nav-link {% if request.resolver_match.url_name == 'wallet_dashboard' %}active{% endif %}"
                 href="{% url 'payments:wallet_dashboard' %}">
-                <i class="fas fa-th-large"></i> Dashboard
+                <i class="fas fa-th-large"></i> <span>Dashboard</span>
             </a>
             <a class="nav-link {% if request.resolver_match.url_name == 'create_invoice' %}active{% endif %}"
                 href="{% url 'payments:create_invoice' %}">
-                <i class="fas fa-file-invoice-dollar"></i> Invoices
+                <i class="fas fa-file-invoice"></i> <span>Invoices</span>
             </a>
             <a class="nav-link" href="#">
-                <i class="fas fa-exchange-alt"></i> Transactions
+                <i class="fas fa-history"></i> <span>Transactions</span>
             </a>
             <a class="nav-link" href="/">
-                <i class="fas fa-arrow-left"></i> Back to Chat
+                <i class="fas fa-arrow-left"></i> <span>Back to Chat</span>
             </a>
         </nav>
     </aside>
@@ -195,7 +317,7 @@
     <!-- Main Content -->
     <main class="main-content">
         {% if messages %}
-        <div class="container mb-3">
+        <div class="container mb-4">
             {% for message in messages %}
             <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
                 {{ message }}

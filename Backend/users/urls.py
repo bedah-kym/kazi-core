@@ -17,8 +17,9 @@ urlpatterns = [
     
     # Frontend Pages (with workspace guards)
     path('dashboard/', dashboard_views.dashboard, name='dashboard'),
-    path('wallet/', feature_views.wallet, name='wallet'),
-    path('wallet/withdraw/', frontend_views.wallet_withdraw, name='wallet_withdraw'),
+    # Wallet moved to 'payments' app
+    # path('wallet/', feature_views.wallet, name='wallet'),
+    # path('wallet/withdraw/', frontend_views.wallet_withdraw, name='wallet_withdraw'),
     path('reminders/', feature_views.reminders, name='reminders'),
     path('reminders/create/', frontend_views.create_reminder, name='create_reminder'),
     path('settings/', feature_views.settings, name='settings'),

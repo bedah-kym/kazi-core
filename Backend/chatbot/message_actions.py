@@ -27,7 +27,7 @@ def pin_message_to_notes(request, room_id, message_id):
         chatroom = get_object_or_404(Chatroom, id=room_id)
         
         # Verify user has access to this room
-        if not chatroom.participants.filter(User=request.user).exists():
+        if not Chatroom.objects.filter(id=room_id, participants__User=request.user).exists():
             return Response(
                 {"error": "You don't have access to this room"},
                 status=status.HTTP_403_FORBIDDEN
@@ -98,7 +98,7 @@ def reply_to_message(request, room_id, message_id):
         chatroom = get_object_or_404(Chatroom, id=room_id)
         
         # Verify user has access
-        if not chatroom.participants.filter(User=request.user).exists():
+        if not Chatroom.objects.filter(id=room_id, participants__User=request.user).exists():
             return Response(
                 {"error": "You don't have access to this room"},
                 status=status.HTTP_403_FORBIDDEN
@@ -143,7 +143,7 @@ def retry_ai_message(request, room_id, message_id):
         chatroom = get_object_or_404(Chatroom, id=room_id)
         
         # Verify user has access
-        if not chatroom.participants.filter(User=request.user).exists():
+        if not Chatroom.objects.filter(id=room_id, participants__User=request.user).exists():
             return Response(
                 {"error": "You don't have access to this room"},
                 status=status.HTTP_403_FORBIDDEN
@@ -179,7 +179,7 @@ def upload_document_to_ai(request, room_id):
         chatroom = get_object_or_404(Chatroom, id=room_id)
         
         # Verify user has access
-        if not chatroom.participants.filter(User=request.user).exists():
+        if not Chatroom.objects.filter(id=room_id, participants__User=request.user).exists():
             return Response(
                 {"error": "You don't have access to this room"},
                 status=status.HTTP_403_FORBIDDEN

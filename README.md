@@ -1,184 +1,134 @@
-### 📚 TRAVEL PLANNER MODULE (NEW - Week 1 Complete ✅)
+# 🤖 Mathia: AI-Powered Enterprise Assistant Platform
 
-The Mathia project now includes a comprehensive **AI Travel & Itinerary Planner** module. See [`docs/README.md`](./docs/README.md) for complete documentation organized by phase:
+**The Intelligent Workspace for Modern Business Operations**
 
-- **[docs/01-planning/](./docs/01-planning/)** — Product vision, API research, quick start
-- **[docs/02-architecture/](./docs/02-architecture/)** — System design and technical architecture  
-- **[docs/03-implementation/](./docs/03-implementation/)** — Week 1 setup, 12-week roadmap
-- **[docs/04-testing/](./docs/04-testing/)** — Testing procedures and verification
-- **[docs/05-reference/](./docs/05-reference/)** — Quick reference cards and guides
-
-**Quick Start:** Read [`docs/03-implementation/IMPLEMENTATION_STARTED.md`](./docs/03-implementation/IMPLEMENTATION_STARTED.md) (5 min)
+Mathia is a next-generation enterprise platform that combines real-time communication, AI-driven automation, and financial management into a single, unified workspace. It empowers users to manage travel, payments, and daily tasks through a conversational interface.
 
 ---
 
-### SYS DESIGN FOR MATHIA PROJECT
-This project is designed to create an interactive chatbot interface for users to communicate with each other and with an AI-powered assistant. The system is built using Django for the backend (ASGI) and HTML/CSS/JavaScript for the frontend. The chatbot supports real-time messaging, multi-room chats, AI response streaming, and a responsive design.
+## 💼 Business Overview (For Investors)
 
-The main components of the system include:
-1. **Frontend (HTML/CSS/JavaScript)**:
-   - **Multi-room Support**: Users can join and switch between multiple chatrooms instantly.
-   - **AI Response Streaming**: Real-time character-by-character streaming of AI responses.
-   - **Context Panel**: Dynamic right-side panel for context-aware actions.
-   - **Calendly Integration Panel**: UI for connecting Calendly accounts and viewing status.
+Mathia solves the fragmentation problem in modern tooling by integrating three critical business pillars:
 
-2. **Backend (Django & Channels)**:
-   - **Authentication**: Custom user model with robust onboarding flow.
-   - **WebSocket Handling**: Django Channels with Redis for real-time state.
-   - **Background Tasks (Celery)**: Handles heavier async tasks like AI moderation and notifications.
-   - **Periodic Tasks (Celery Beat)**: Manages scheduled jobs.
-   - **MCP Router (Orchestration)**: Routing engine for user intents to connectors (Calendly, etc.).
+### 1. **Intelligent Assistance**
+Instead of just a chatbot, Mathia is an **agent**. It connects to your calendar, email, and external tools to perform actions like "Schedule a meeting with John" or "Find a flight to Nairobi".
+*   **Key Value**: Reduces context switching and automates routine administrative tasks.
 
-3. **Database & Storage**:
-   - **PostgreSQL**: Primary relational database for users, chats, and wallets (Dockerized).
-   - **Redis**: Used as the Channel Layer for WebSockets and specialized caching/buffering.
+### 2. **Enterprise Fintech & Payments**
+A robust, ledger-based financial system built directly into the chat.
+*   **Transactions**: Seamlessly send money, generate invoices, and handle subscriptions without leaving the app.
+*   **Compliance**: Built on a Double-Entry Ledger system (ACID compliant) ensuring financial data integrity.
+*   **Monetization**: Integrated Platform Fees and subscription models ready for scale.
+*   **Gateway**: Native integration with **IntaSend** (M-Pesa, Card) for African markets.
 
-4. **Key Features**:
-   - **User Onboarding**: Multi-step wizard collecting Profile, Professional Goals, and Workspace details.
-   - **Wallet System**: Internal `Wallet` model supporting atomic Credits/Debits for workspace billing.
-   - **AI Personalization**: `GoalProfile` stores user goals to contextually adapt AI responses.
-   - **AI Moderation**: Messages are buffered in Redis and processed in batches by Celery. Users can be "Muted" automatically.
-   - **Calendly Integration**: Connect account, check availability, and schedule meetings via chat.
-   - **AI Memory (Context Brain)**: AI remembers important details ("Room Notes") and shares high-priority context across rooms (via `ContextManager`).
-   - **Smart Reminders**: Set reminders naturally (e.g., "Remind me to call John in 10 mins"). Executed via Celery background tasks.
+### 3. **AI Travel Planning**
+A dedicated module for end-to-end trip management.
+*   **Itineraries**: AI generates detailed day-by-day travel plans based on user preferences.
+*   **Booking**: Integrated budget tracking and status updates.
 
-### SETUP INSTRUCTIONS
-1. Clone the repository to your local machine.
-2. Ensure you have **Docker** and **Docker Compose** installed.
-3. Configure environment variables in `.env` (see `.env.example`).
-4. Build and start the services:
-   ```bash
-   docker-compose up --build
-   ```
-   This starts:
-   - `web`: Django ASGI application (Daphne/Gunicorn)
-   - `db`: PostgreSQL database
-   - `redis`: Redis server
-   - `celery_worker`: Background task worker
-   - `celery_beat`: Periodic task scheduler
+---
 
-5. Run migrations (if not auto-run by entrypoint):
-   ```bash
-   docker-compose exec web python manage.py migrate
-   ```
-6. Access the application at `http://localhost:8000`.
+## 🛠️ Technical Overview (For Developers)
 
-### USAGE
-1. **Register/Login**: Complete the multi-step onboarding to set up your profile and workspace.
-2. **Chat**: 
-   - Join existing rooms or create new ones (Invite system available).
-   - Use `@mathia` to trigger the AI assistant.
-3. **Calendly**:
-   - Connect via Settings or `/calendly connect`.
-   - Commands: "Check my calendar", "Schedule a meeting".
-4. **Wallet**:
-   - View balance in Settings -> Wallet.
-   - Simulate transactions via admin or implemented flows.
-5. **Memory & Reminders**:
-   - Open the **Brain Icon** (top right) to see/add notes manually.
-   - Ask AI to set reminders: "Remind me at 5pm to check emails".
+Mathia is built on a modern, scalable stack designed for high concurrency and real-time interaction.
 
-### CONTRIBUTING
-1. Fork the repository and create a new branch.
-2. Follow PEP8 (Python) and project coding standards.
-3. Testing: Ensure new features have unit tests or manual verification steps.
-4. Submit a Pull Request with a clear description.
+### Tech Stack
+*   **Backend**: Python 3.11, Django 5.0 (ASGI)
+*   **Real-time**: Django Channels, Redis (WebSockets)
+*   **Database**: PostgreSQL 16
+*   **Task Queue**: Celery & Celery Beat (Redis Broker)
+*   **AI Engine**: Anthropic Claude 3.5 Sonnet / Hugging Face Fallback
+*   **Frontend**: HTML5, Bootstrap 5.3, Vanilla JS (No heavy framework bloat)
+*   **Infrastructure**: Docker & Docker Compose
 
-### SYSTEMS OVERVIEW
+### Key Modules
 
-#### Component Graph
-```mermaid
-graph LR
-   Browser[User Browser]
-   Browser -->|HTTP| DjangoHTTP[Django Backend]
-   Browser -->|WebSocket| Daphne[Daphne ASGI]
-   Daphne --> Channels[Channels Layer]
-   Channels -->|Redis| Redis[Redis]
-   Channels -->|Async| Celery[Celery Worker]
-   Celery -->|Batch| AI[AI Service/Moderation]
-   DjangoHTTP -->|SQL| Postgres[PostgreSQL DB]
-   DjangoHTTP -->|Orchestratrate| MCP[MCP Router]
-   MCP -->|API| Calendly[Calendly API]
+#### 1. **Orchestration Layer (`/orchestration`)**
+The brain of the system. It parses natural language intents and routes them to specific "Connectors".
+*   `MCPRouter`: Central hub for intent routing.
+*   `Connectors`: Modular plugins (e.g., `PaymentConnector`, `CalendlyConnector`) that execute safe actions.
+
+#### 2. **Enterprise Payments (`/payments`)**
+A fully ACID-compliant financial system.
+*   **Double-Entry Ledger**: Every transaction has equal Debits and Credits.
+*   **Models**: `LedgerAccount`, `JournalEntry`, `PaymentRequest` (Invoice).
+*   **Security**: AI has strictly **Read-Only** access to financial data.
+
+#### 3. **Unified Quota System (`/users`)**
+Fair usage enforcement across all system resources.
+*   Limits tracked for: AI Actions, Messages, Searches, and Uploads.
+*   Visualized via real-time WebSocket updates to the frontend.
+
+#### 4. **Chat & Context (`/chatbot`)**
+*   **Streaming**: Character-by-character AI responses.
+*   **Memory**: Vector-like context retention for personalized interactions.
+
+---
+
+## 🚀 Quick Start Guide
+
+We use **Docker** to make setup effortless. You don't need to install Python or Postgres locally.
+
+### Prerequisites
+*   Docker Desktop installed and running.
+*   Git.
+
+### Installation
+
+1.  **Clone the Repository**
+    ```bash
+    git clone https://github.com/your-org/mathia.git
+    cd mathia
+    ```
+
+2.  **Environment Setup**
+    Copy the example env file:
+    ```bash
+    cp .env.example .env
+    ```
+    *Update `.env` with your API keys (Anthropic, IntaSend, etc.) if you have them.*
+
+3.  **Launch via Docker**
+    ```bash
+    docker-compose up --build
+    ```
+    *This starts the Web, Database, Redis, and Celery services.*
+
+4.  **Initialize Database**
+    Open a new terminal and run:
+    ```bash
+    docker-compose exec web python Backend/manage.py migrate
+    ```
+
+5.  **Access the App**
+    *   **App**: [http://localhost:8000](http://localhost:8000)
+    *   **Admin**: [http://localhost:8000/admin](http://localhost:8000/admin) (Create a superuser first: `docker-compose exec web python Backend/manage.py createsuperuser`)
+
+---
+
+## 🧪 Running Tests
+
+We prioritize reliability. Run the full test suite (including payment ledger verification) with:
+
+```bash
+# Run Django Tests
+docker-compose exec web python Backend/manage.py test
+
+# Verify Payment Ledger Logic (Double-Entry check)
+docker-compose exec web python Backend/verify_ledger.py
 ```
 
-#### User to AI Communication
-```mermaid
-sequenceDiagram
-    participant User
-    participant WebSocket
-    participant MCPRouter
-   ```markdown
-   # MATHIA — System Design & Developer README
+---
 
-   This repository implements an interactive chat platform (Mathia) with a Django ASGI backend, AI orchestration, and real-time messaging.
+## 🤝 Contributing
 
-   Key features:
-   - Real-time chat (Django Channels + Redis)
-   - AI assistant with streaming responses and intent routing
-   - Connectors for external services (Calendly, Giphy, Weather, Payments)
-   - Background jobs and periodic tasks handled by Celery
+We welcome contributions! Please follow these steps:
+1.  Fork the repo.
+2.  Create a feature branch (`git checkout -b feature/amazing-feature`).
+3.  Commit your changes.
+4.  Push to the branch.
+5.  Open a Pull Request.
 
-   ## Quickstart (Docker / PowerShell)
+---
 
-   Recommended: use Docker Compose for a reproducible dev environment.
-
-   PowerShell example:
-   ```powershell
-   # build and start services
-   docker-compose up --build
-
-   # run migrations inside the web container
-   docker-compose exec web python Backend/manage.py migrate
-
-   # run Django tests inside the web container
-   docker-compose exec web python Backend/manage.py test
-   ```
-
-   If you prefer running locally without Docker, ensure you have Redis and Postgres (or rely on the sqlite fallback in `settings.py`). Start the ASGI server with:
-   ```powershell
-   python Backend/manage.py runserver
-   # or use daphne/uvicorn for ASGI in prod-like runs
-   ```
-
-   ## Environment variables
-   - The project expects a `.env` file at the repository root (one level above `Backend/`). Important variables (examples):
-     - `DJANGO_SECRET_KEY`, `DJANGO_DEBUG`, `DJANGO_ALLOWED_HOSTS`
-     - `REDIS_URL` (required in production; supports `rediss://` for Upstash)
-     - `DATABASE_URL` (defaults to sqlite for quick dev)
-     - LLM keys: `ANTHROPIC_API_KEY`, `HF_API_TOKEN`
-     - Connector keys: `OPENWEATHER_API_KEY`, `GIPHY_API_KEY`, `EXCHANGE_RATE_API_KEY`, `CALENDLY_CLIENT_ID`, `CALENDLY_CLIENT_SECRET`
-
-   ## Architecture (high-level)
-   - Backend: Django  (ASGI) with Channels for WebSockets. See `Backend/Backend/settings.py` for Channels and Celery configuration.
-   - Orchestration: `Backend/orchestration/` contains the MCP Router (`mcp_router.py`) which validates intents, routes to connectors, and caches results in Redis.
-   - LLM client: `Backend/orchestration/llm_client.py` — unified client that prefers Anthropic (Claude) and falls back to Hugging Face Router. Use `get_llm_client()`.
-   - Connectors: write async connectors under `Backend/orchestration/connectors/`; they follow `BaseConnector` shape.
-   - Background tasks: `Backend/chatbot/tasks.py` contains Celery tasks for moderation, reminder processing and other heavy work.
-
-   ## Important files to inspect first
-   - `Backend/Backend/settings.py` — Redis/channel/celery settings and security toggles.
-   - `Backend/chatbot/consumers.py` — WebSocket handlers, encryption, and presence logic.
-   - `Backend/chatbot/tasks.py` — Celery tasks and moderation batching (`CELERY_BEAT_SCHEDULE` defined in settings).
-   - `Backend/orchestration/mcp_router.py` — Intent routing and connector examples (Calendly connector demonstrates token refresh).
-   - `Backend/orchestration/llm_client.py` — LLM call patterns, streaming helper, and `extract_json()` helper.
-
-   ## Conventions & patterns
-   - Connectors should implement: async `execute(parameters: Dict, context: Dict) -> Any` and return structured dicts (status/message/data). Register them in `MCPRouter.connectors`.
-   - Use `asgiref.sync.sync_to_async` when calling Django ORM from async code (see examples in `mcp_router.py`).
-   - Respect environment feature flags in `settings.py`; keys missing are handled gracefully by connectors returning a useful error message.
-
-   ## Running & debugging tips
-   - If Redis is unavailable, WebSocket features degrade — HTTP views still work. Inspect logs for Redis connection issues (startup prints REDIS_URL).
-   - To iterate on LLM behavior, modify `llm_client.py` but keep `generate_text` / `stream_text` semantics.
-   - To test a connector locally, add a small unit test under `Backend/orchestration/tests.py` using Django test client with a mocked external response.
-
-   ## Contributing
-   - Fork, create a branch, add tests for new behavior, run `python Backend/manage.py test`, and open a PR with a clear description.
-
-   ---
-   If you'd like, I can also:
-   - Add a connector skeleton file at `Backend/orchestration/connectors/example_connector.py` and a unit test template.
-   - Expand a troubleshooting section with exact PowerShell debugging commands for common errors (Redis, Celery, migrations).
-
-   Generated from the current codebase; open an issue or request to expand any section.
-   ```
+**© 2026 Mathia Project. All Rights Reserved.**

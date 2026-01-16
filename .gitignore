@@ -148,4 +148,5 @@ mathia/
 e2e/
 Backend/celerybeat-schedule
 docs/
-Security/
+tests/
+Security-docs/

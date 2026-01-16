@@ -31,6 +31,7 @@ urlpatterns = [
     path('accounts/', include('allauth.urls')),  # Social Auth URLs
     path('api/',include('Api.urls')),
     path('travel/', include('travel.urls')),  # Travel Planning UI
+    path('payments/', include('payments.urls')),  # Payment System
     path('auth/', obtain_auth_token),
     path('api-auth/', include('rest_framework.urls')),
     path('uploads/', upload_file, name='upload_file'),

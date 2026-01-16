@@ -33,6 +33,8 @@ class QuotaService:
         action_key = f"mcp_rate:{user_id}"
         action_used = cache.get(action_key, 0)
         
+        # 3. Message Rate Limit (Minute)
+        current_minute = datetime.now().strftime("%Y-%m-%d-%H-%M")
         msg_key = f"rate_limit:{user_id}:{current_minute}"
         msg_used = cache.get(msg_key, 0)
 

@@ -1,0 +1,62 @@
+{% extends 'payments/base.html' %}
+
+{% block title %}Create Invoice | Mathia{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8 col-lg-6">
+        <div class="d-flex align-items-center mb-4">
+            <a href="{% url 'payments:wallet_dashboard' %}" class="btn btn-light rounded-circle me-3">
+                <i class="fas fa-arrow-left"></i>
+            </a>
+            <h2 class="fw-bold mb-0">Create Invoice</h2>
+        </div>
+
+        <div class="card">
+            <div class="card-body p-5">
+                <form method="POST">
+                    {% csrf_token %}
+
+                    <div class="mb-4">
+                        <label class="form-label fw-bold">Amount (KES)</label>
+                        <div class="input-group input-group-lg">
+                            <span class="input-group-text bg-light border-end-0">KES</span>
+                            <input type="number" name="amount" class="form-control border-start-0 ps-0"
+                                placeholder="0.00" min="10" required>
+                        </div>
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="form-label fw-bold">Description</label>
+                        <textarea name="description" class="form-control" rows="3"
+                            placeholder="What is this payment for?" required></textarea>
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="form-label fw-bold">Payer Email (Optional)</label>
+                        <input type="email" name="recipient_email" class="form-control"
+                            placeholder="client@example.com">
+                        <div class="form-text">We'll send the invoice link to this email if provided.</div>
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="form-label fw-bold">Recurrence</label>
+                        <select name="recurrence" class="form-select">
+                            <option value="NONE">One-time Payment</option>
+                            <option value="MONTHLY">Monthly Subscription</option>
+                            <option value="QUARTERLY">Quarterly Subscription</option>
+                            <option value="YEARLY">Yearly Subscription</option>
+                        </select>
+                    </div>
+
+                    <div class="d-grid mt-5">
+                        <button type="submit" class="btn btn-primary btn-lg">
+                            Generate Invoice <i class="fas fa-arrow-right ms-2"></i>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -24,7 +24,13 @@ class EnsureMemberMiddleware:
             # Check session flag first to avoid unnecessary DB queries
             if not request.session.get('_member_created', False):
                 # Ensure the user has a Member object
-                Member.objects.get_or_create(User=request.user)
+                # Handle case where duplicates exist
+                try:
+                    member, created = Member.objects.get_or_create(User=request.user)
+                except Member.MultipleObjectsReturned:
+                    # Duplicates exist - just use the first one
+                    member = Member.objects.filter(User=request.user).first()
+                
                 # Mark in session to skip this check for future requests
                 request.session['_member_created'] = True
         

@@ -1,0 +1,231 @@
+{% extends 'payments/base.html' %}
+{% load humanize %}
+
+{% block title %}My Wallet | Mathia{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-md-12">
+        <h2 class="fw-bold text-dark">My Wallet</h2>
+        <p class="text-muted">Manage your funds and transactions</p>
+    </div>
+</div>
+
+<div class="row g-4">
+    <!-- Balance Card -->
+    <div class="col-md-4">
+        <div class="card bg-primary text-white h-100">
+            <div class="card-body p-4">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div>
+                        <h6 class="text-white-50 mb-2">Total Balance</h6>
+                        <h2 class="fw-bold mb-0">KES {{ balance|intcomma }}</h2>
+                    </div>
+                    <div class="bg-white bg-opacity-25 p-2 rounded-circle">
+                        <i class="fas fa-wallet fa-2x"></i>
+                    </div>
+                </div>
+                <div class="mt-4 d-grid gap-2">
+                    <button class="btn btn-light fw-bold text-primary" data-bs-toggle="modal"
+                        data-bs-target="#depositModal">
+                        <i class="fas fa-plus-circle me-1"></i> Deposit Funds
+                    </button>
+                    <!-- Withdraw Button (Optional, maybe disabled for now) -->
+                    <button class="btn btn-outline-light" disabled title="Coming Soon">
+                        <i class="fas fa-arrow-circle-down me-1"></i> Withdraw
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Spending Chart (Placeholder for now) -->
+    <div class="col-md-8">
+        <div class="card h-100">
+            <div class="card-body p-4">
+                <h5 class="card-title fw-bold mb-4">Transaction History</h5>
+                <canvas id="transactionChart" height="120"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Transactions List -->
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-body p-4">
+                <div class="d-flex justify-content-between align-items-center mb-4">
+                    <h5 class="fw-bold mb-0">Recent Transactions</h5>
+                    <a href="#" class="btn btn-sm btn-outline-primary">View All</a>
+                </div>
+                <div class="table-responsive">
+                    <table class="table align-middle">
+                        <thead class="bg-light">
+                            <tr>
+                                <th class="border-0 rounded-start">Date</th>
+                                <th class="border-0">Description</th>
+                                <th class="border-0">Reference</th>
+                                <th class="border-0">Amount</th>
+                                <th class="border-0 rounded-end">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for tx in transactions %}
+                            <tr>
+                                <td class="text-muted">{{ tx.date|date:"M d, Y H:i" }}</td>
+                                <td>
+                                    <div class="d-flex align-items-center">
+                                        <div
+                                            class="rounded-circle p-2 me-3 
+                                            {% if tx.amount > 0 %}bg-success-subtle text-success{% else %}bg-danger-subtle text-danger{% endif %}">
+                                            <i
+                                                class="fas {% if tx.amount > 0 %}fa-arrow-down{% else %}fa-arrow-up{% endif %}"></i>
+                                        </div>
+                                        <div>
+                                            <div class="fw-bold">{{ tx.type }}</div>
+                                            <div class="small text-muted">{{ tx.description|truncatechars:30 }}</div>
+                                        </div>
+                                    </div>
+                                </td>
+                                <td class="small font-monospace">{{ tx.reference|slice:":8" }}...</td>
+                                <td class="fw-bold {% if tx.amount > 0 %}text-success{% else %}text-danger{% endif %}">
+                                    {% if tx.amount > 0 %}+{% endif %}{{ tx.amount|intcomma }} KES
+                                </td>
+                                <td><span class="badge-status status-SUCCESS">Completed</span></td>
+                            </tr>
+                            {% empty %}
+                            <tr>
+                                <td colspan="5" class="text-center py-5 text-muted">
+                                    <i class="fas fa-receipt fa-3x mb-3 text-secondary opacity-50"></i>
+                                    <p>No transactions yet</p>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Deposit Modal -->
+<div class="modal fade" id="depositModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title fw-bold">Deposit Funds (M-Pesa)</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body p-4">
+                <form id="depositForm">
+                    <div class="mb-3">
+                        <label class="form-label">Phone Number (M-Pesa)</label>
+                        <input type="tel" name="phone" class="form-control" placeholder="2547..." required>
+                        <div class="form-text">Enter in format 2547XXXXXXXX</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Amount (KES)</label>
+                        <input type="number" name="amount" class="form-control" min="10" value="1000" required>
+                    </div>
+
+                    <div class="alert alert-info small">
+                        <i class="fas fa-info-circle me-1"></i>
+                        A platform fee of <strong>50 KES</strong> applies to deposits.
+                        Net credit will be calculated automatically.
+                    </div>
+
+                    <div class="d-grid">
+                        <button type="submit" class="btn btn-primary" id="btnDeposit">
+                            Inititate Payment
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Deposit Form Handler
+    document.getElementById('depositForm').addEventListener('submit', async function (e) {
+        e.preventDefault();
+        const btn = document.getElementById('btnDeposit');
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i> Processing...';
+
+        const formData = new FormData(this);
+
+        try {
+            const response = await fetch("{% url 'payments:initiate_deposit' %}", {
+                method: 'POST',
+                headers: {
+                    'X-CSRFToken': '{{ csrf_token }}'
+                },
+                body: formData
+            });
+
+            const data = await response.json();
+
+            if (response.ok) {
+                alert('Success! Check your phone for M-Pesa prompt.');
+                location.reload();
+            } else {
+                alert('Error: ' + (data.error || 'Failed to initiate payment'));
+            }
+        } catch (err) {
+            console.error(err);
+            alert('Connection error');
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = 'Initiate Payment';
+        }
+    });
+
+    // Chart.js Setup
+    const ctx = document.getElementById('transactionChart').getContext('2d');
+
+    // Prepare data from transactions (simple visualization)
+    // In a real app, you'd aggregate this data in the view
+    const txData = [
+        {% for tx in transactions reversed %}
+    { { tx.amount } },
+    {% endfor %}
+    ];
+
+    const labels = [
+        {% for tx in transactions reversed %}
+    "{{ tx.date|date:'M d' }}",
+        {% endfor %}
+    ];
+
+    new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'Balance Change (KES)',
+                data: txData,
+                borderColor: '#4B49AC',
+                tension: 0.4,
+                fill: true,
+                backgroundColor: 'rgba(75, 73, 172, 0.1)'
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: { display: false }
+            },
+            scales: {
+                x: { display: false },
+                y: { display: true }
+            }
+        }
+    });
+</script>
+{% endblock %}

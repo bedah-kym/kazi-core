@@ -98,6 +98,7 @@ INSTALLED_APPS = [
     'Api',
     'orchestration',
     'travel',
+    'payments',
     'rest_framework',
     'rest_framework.authtoken',
     'django_celery_beat',
@@ -246,6 +247,14 @@ CELERY_BEAT_SCHEDULE = {
     },
     'cleanup-old-batches': {
         'task': 'chatbot.tasks.cleanup_old_moderation_batches',
+        'schedule': 86400.0,  # Daily
+    },
+    'reconcile-ledger': {
+        'task': 'payments.tasks.reconcile_ledger',
+        'schedule': 7200.0,  # Every 2 hours
+    },
+    'process-recurring-invoices': {
+        'task': 'payments.tasks.process_recurring_invoices',
         'schedule': 86400.0,  # Daily
     },
 }

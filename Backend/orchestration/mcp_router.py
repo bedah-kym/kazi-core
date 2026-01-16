@@ -15,6 +15,7 @@ from .connectors.whatsapp_connector import WhatsAppConnector
 from .connectors.intersend_connector import IntersendPayConnector
 from .connectors.mailgun_connector import MailgunConnector
 from .connectors.quota_connector import QuotaConnector
+from .connectors.payment_connector import ReadOnlyPaymentConnector
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,9 @@ class MCPRouter:
             "send_email": MailgunConnector(),
             "set_reminder": ReminderConnector(),
             "check_quotas": QuotaConnector(),
+            "check_balance": ReadOnlyPaymentConnector(),
+            "list_transactions": ReadOnlyPaymentConnector(),
+            "check_invoice_status": ReadOnlyPaymentConnector(),
             
             # Travel planner connectors
             "search_buses": TravelBusesConnector(),

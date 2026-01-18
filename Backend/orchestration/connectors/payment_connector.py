@@ -14,7 +14,7 @@ class ReadOnlyPaymentConnector(BaseConnector):
     AI-safe payment connector with read-only permissions
     """
     
-    async def execute(self, intent: dict, user) -> dict:
+    async def execute(self, parameters: dict, context: dict) -> dict:
         """
         Execute read-only payment queries
         
@@ -28,7 +28,7 @@ class ReadOnlyPaymentConnector(BaseConnector):
         - withdraw
         - transfer
         """
-        action = intent.get("action")
+        action = parameters.get("action")
         
         # Whitelist of allowed actions
         ALLOWED_ACTIONS = ['check_balance', 'list_transactions', 'check_invoice_status']
@@ -39,13 +39,23 @@ class ReadOnlyPaymentConnector(BaseConnector):
                 "message": "Payment operations are restricted to read-only access for AI"
             }
         
+        from django.contrib.auth import get_user_model
+        from asgiref.sync import sync_to_async
+        User = get_user_model()
+        user_id = context.get("user_id")
+        
+        try:
+            user = await sync_to_async(User.objects.get)(id=user_id)
+        except Exception:
+            return {"status": "error", "message": "User not found"}
+
         # Route to appropriate handler
         if action == "check_balance":
             return await self.check_balance(user)
         elif action == "list_transactions":
-            return await self.list_transactions(user, intent.get("limit", 10))
+            return await self.list_transactions(user, parameters.get("limit", 10))
         elif action == "check_invoice_status":
-            return await self.check_invoice_status(intent.get("invoice_id"))
+            return await self.check_invoice_status(parameters.get("invoice_id"))
         
         return {"error": "Unknown action"}
     

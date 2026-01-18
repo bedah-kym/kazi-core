@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     netcat-openbsd \
     ffmpeg \
+    tzdata \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 

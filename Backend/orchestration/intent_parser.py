@@ -149,6 +149,10 @@ Rules:
         from django.utils import timezone
         
         prompt = f'Current Time: {timezone.now().isoformat()}\n'
+        
+        if context and context.get('history'):
+            prompt += f"CONVERSATION HISTORY (Most recent last):\n{context['history']}\n\n"
+            
         prompt += f'User message: "{message}"'
         
         if context:

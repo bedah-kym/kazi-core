@@ -1,6 +1,8 @@
 services:
   redis:
     image: redis:7-alpine
+    environment:
+      - TZ=${TZ:-Africa/Nairobi}
     ports:
       - "6379:6379"
     healthcheck:
@@ -11,12 +13,14 @@ services:
 
   db:
     image: postgres:15-alpine
+    command: postgres -c log_timezone=Africa/Nairobi
     volumes:
       - postgres_data:/var/lib/postgresql/data
     env_file:
       - .env
     environment:
-      - TZ=UTC
+      - TZ=${TZ:-Africa/Nairobi}
+      - PGTZ=${TZ:-Africa/Nairobi}
       - POSTGRES_USER=${POSTGRES_USER:-mathia_user}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-mathia_password}
       - POSTGRES_DB=${POSTGRES_DB:-mathia_db}
@@ -42,7 +46,7 @@ services:
     env_file:
       - .env
     environment:
-      - TZ=UTC
+      - TZ=${TZ:-Africa/Nairobi}
       - DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,[::1],web
       - CELERY_BROKER_URL=${REDIS_URL:-redis://redis:6379/0}
       - CELERY_RESULT_BACKEND=${REDIS_URL:-redis://redis:6379/0}
@@ -70,7 +74,7 @@ services:
     env_file:
       - .env
     environment:
-      - TZ=UTC
+      - TZ=${TZ:-Africa/Nairobi}
       - CELERY_BROKER_URL=${REDIS_URL:-redis://redis:6379/0}
       - CELERY_RESULT_BACKEND=${REDIS_URL:-redis://redis:6379/0}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
@@ -89,7 +93,7 @@ services:
     env_file:
       - .env
     environment:
-      - TZ=UTC
+      - TZ=${TZ:-Africa/Nairobi}
       - CELERY_BROKER_URL=${REDIS_URL:-redis://redis:6379/0}
       - CELERY_RESULT_BACKEND=${REDIS_URL:-redis://redis:6379/0}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}

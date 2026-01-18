@@ -33,29 +33,39 @@ class IntersendPayConnector(BaseConnector):
             logger.warning("intasend-python not installed. Using mock mode.")
             self.intasend = None
 
-    async def execute(self, intent: dict, user) -> dict:
+    async def execute(self, parameters: dict, context: dict) -> dict:
         """
         Execute Payment actions.
         """
-        action = intent.get("action")
+        from django.contrib.auth import get_user_model
+        from asgiref.sync import sync_to_async
+        User = get_user_model()
+        user_id = context.get("user_id")
+        
+        try:
+            user = await sync_to_async(User.objects.get)(id=user_id)
+        except Exception:
+            return {"status": "error", "message": "User not found"}
+            
+        action = parameters.get("action")
         
         if action == "create_payment_link":
             return self.create_payment_link(
-                amount=intent.get("amount"),
-                currency=intent.get("currency", "KES"),
-                description=intent.get("description"),
-                phone_number=intent.get("phone_number"),
-                email=intent.get("email"),
+                amount=parameters.get("amount"),
+                currency=parameters.get("currency", "KES"),
+                description=parameters.get("description"),
+                phone_number=parameters.get("phone_number"),
+                email=parameters.get("email"),
                 user=user
             )
         elif action == "withdraw":
             return self.withdraw_to_mpesa(
                 user=user,
-                amount=intent.get("amount"),
-                phone_number=intent.get("phone_number")
+                amount=parameters.get("amount"),
+                phone_number=parameters.get("phone_number")
             )
         elif action == "check_status":
-            return self.check_status(intent.get("invoice_id"))
+            return self.check_status(parameters.get("invoice_id"))
             
         return {"error": f"Unknown Intersend action: {action}"}
 

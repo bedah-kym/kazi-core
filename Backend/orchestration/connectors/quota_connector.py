@@ -15,24 +15,21 @@ class QuotaConnector(BaseConnector):
     def __init__(self):
         self.service = QuotaService()
         
-    async def execute(self, intent: dict, user) -> dict:
+    async def execute(self, parameters: dict, context: dict) -> dict:
         """
         Execute Quota actions.
         """
-        action = intent.get("action")
-        
-        if action == "check_quotas":
-            return await self.check_quotas(user)
-            
-        return {"error": f"Unknown Quota action: {action}"}
+        # Always return quotas since it's routed here for check_quotas
+        return await self.check_quotas(context)
 
-    async def check_quotas(self, user):
+    async def check_quotas(self, context):
         try:
-            if not user or not hasattr(user, 'id'):
-                return {"status": "error", "message": "User not authenticated or invalid"}
+            user_id = context.get("user_id")
+            if not user_id:
+                return {"status": "error", "message": "User ID not found in context"}
                 
             from asgiref.sync import sync_to_async
-            quotas = await sync_to_async(self.service.get_user_quotas)(user.id)
+            quotas = await sync_to_async(self.service.get_user_quotas)(user_id)
             
             return {
                 "status": "success",

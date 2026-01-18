@@ -646,11 +646,15 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     ai_query = message_content[7:].strip()
                     
                     if ai_query:
+                        # Fetch history for conversation context
+                        history_text = await self.get_history_as_text(room_id)
+                        
                         # Step 1: Parse intent
                         intent = await parse_intent(ai_query, {
                             "user_id": member_user.id,
                             "username": member_username,
-                            "room_id": room_id
+                            "room_id": room_id,
+                            "history": history_text
                         })
                         
                         logger.info(f"Intent: {intent}")
@@ -722,9 +726,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             from orchestration.llm_client import get_llm_client
                             llm_client = get_llm_client()
                             
+                            # Prepend history to query if available
+                            full_query = ai_query
+                            if history_text:
+                                full_query = f"CONVERSATION HISTORY:\n{history_text}\n\nUSER message: {ai_query}"
+                            
                             async for chunk in llm_client.stream_text(
                                 system_prompt="You are Mathia, a helpful AI assistant. Be concise and friendly.",
-                                user_prompt=ai_query,
+                                user_prompt=full_query,
                                 temperature=0.7,
                                 max_tokens=500
                             ):
@@ -1204,3 +1213,28 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 'content': 'Error processing message',
                 'timestamp': str(timezone.now())
             }
+    async def get_history_as_text(self, room_id, limit=5):
+        "Fetches last N messages and formats them as plain text history."
+        try:
+            from .models import Chatroom
+            get_room = sync_to_async(Chatroom.objects.get)
+            room = await get_room(id=room_id)
+            
+            def _get_msgs():
+                return list(room.chats.all().order_by('-timestamp')[:limit])
+                
+            messages = await sync_to_async(_get_msgs)()
+            messages.reverse()
+            
+            history_lines = []
+            for msg in messages:
+                msg_json = await self.message_to_json(msg)
+                content = msg_json.get('content', '')
+                member = msg_json.get('member', 'Unknown')
+                if content and not content.startswith('Error:'):
+                    history_lines.append(f'{member}: {content}')
+            
+            return '\n'.join(history_lines)
+        except Exception as e:
+            logger.error(f'Error getting history: {e}')
+            return ''

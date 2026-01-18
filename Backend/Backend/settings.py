@@ -75,8 +75,8 @@ CSRF_TRUSTED_ORIGINS = [url.strip() for url in CSRF_TRUSTED_ORIGINS_STRING.split
 
 # Additional CSRF security
 CSRF_COOKIE_SECURE = not DEBUG
-CSRF_COOKIE_HTTPONLY = True
-CSRF_COOKIE_SAMESITE = 'Strict'
+CSRF_COOKIE_HTTPONLY = False
+CSRF_COOKIE_SAMESITE = 'Lax'
 
 # Calendly app credentials (set in .env)
 CALENDLY_CLIENT_ID = os.environ.get('CALENDLY_CLIENT_ID')

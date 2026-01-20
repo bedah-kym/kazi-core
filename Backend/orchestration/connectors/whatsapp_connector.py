@@ -55,17 +55,17 @@ class WhatsAppConnector(BaseConnector):
         except Exception as e:
              return {"error": str(e)}
 
-    async def execute(self, intent: dict, user) -> dict:
+    async def execute(self, parameters: dict, context: dict) -> dict:
         """
         Execute a WhatsApp action.
         """
-        action = intent.get("action")
+        action = parameters.get("action")
         
         if action == "send_message":
             return self.send_message(
-                to=intent.get("phone_number"),
-                body=intent.get("message"),
-                media_url=intent.get("media_url")
+                to=parameters.get("phone_number"),
+                body=parameters.get("message"),
+                media_url=parameters.get("media_url")
             )
         elif action == "send_invoice":
             # Just a wrapper for sending a message with payment link

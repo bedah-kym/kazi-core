@@ -1,0 +1,98 @@
+{% extends 'payments/base.html' %}
+{% load humanize %}
+{% load static %}
+
+{% block title %}Invoice #{{ invoice.reference_id|slice:":8" }} | Mathia{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <a href="{% url 'payments:wallet_dashboard' %}" class="text-decoration-none text-muted">
+                <i class="fas fa-arrow-left me-2"></i> Back to Wallet
+            </a>
+            <span class="badge-status status-{{ invoice.status }} fs-6">
+                {{ invoice.get_status_display }}
+            </span>
+        </div>
+
+        <div class="card border-0 shadow-sm">
+            <div class="card-body p-0">
+                <!-- Header -->
+                <div class="bg-light p-4 rounded-top d-flex justify-content-between align-items-start border-bottom">
+                    <div>
+                        <h6 class="text-uppercase text-muted small fw-bold ls-1">Invoice Amount</h6>
+                        <h1 class="display-4 fw-bold mb-0 text-primary">
+                            <small class="fs-4">KES</small> {{ invoice.amount|intcomma }}
+                        </h1>
+                    </div>
+                    <div class="text-end">
+                        <div class="text-muted small">Due Date</div>
+                        <div class="fw-bold">{{ invoice.expires_at|date:"M d, Y" }}</div>
+                    </div>
+                </div>
+
+                <!-- Details -->
+                <div class="p-5">
+                    <div class="row mb-4">
+                        <div class="col-md-6">
+                            <h6 class="text-muted small text-uppercase">Billed To</h6>
+                            <p class="fw-bold mb-0">
+                                {% if invoice.payer %}{{ invoice.payer.username }}
+                                {% else %}{{ invoice.payer_email|default:"Unspecified" }}
+                                {% endif %}
+                            </p>
+                        </div>
+                        <div class="col-md-6 text-end">
+                            <h6 class="text-muted small text-uppercase">Reference</h6>
+                            <p class="font-monospace user-select-all mb-0">{{ invoice.reference_id }}</p>
+                        </div>
+                    </div>
+
+                    <div class="mb-5">
+                        <h6 class="text-muted small text-uppercase">Description</h6>
+                        <p class="lead">{{ invoice.description }}</p>
+                    </div>
+
+                    {% if invoice.status == 'PENDING' %}
+                    <div class="bg-light p-4 rounded-3 border border-2 border-primary border-opacity-10">
+                        <label class="form-label fw-bold d-block mb-3">Payment Link</label>
+                        <div class="input-group mb-3">
+                            <input type="text" class="form-control" value="{{ invoice.intasend_payment_link }}"
+                                id="paymentLink" readonly>
+                            <button class="btn btn-outline-primary" type="button" onclick="copyLink()">
+                                <i class="fas fa-copy"></i> Copy
+                            </button>
+                        </div>
+
+                        <div class="d-grid">
+                            <a href="{{ invoice.intasend_payment_link }}" target="_blank"
+                                class="btn btn-primary btn-lg">
+                                <i class="fas fa-external-link-alt me-2"></i> Pay Now with IntaSend
+                            </a>
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    {% if invoice.status == 'PAID' %}
+                    <div class="text-center py-4 text-success">
+                        <i class="fas fa-check-circle fa-4x mb-3"></i>
+                        <h4>Payment Received</h4>
+                        <p class="text-muted">Paid on {{ invoice.paid_at|date:"M d, Y H:i" }}</p>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    function copyLink() {
+        var copyText = document.getElementById("paymentLink");
+        copyText.select();
+        document.execCommand("copy");
+        alert("Link copied to clipboard!");
+    }
+</script>
+{% endblock %}

@@ -1,6 +1,7 @@
 from django.db import models
 from django.contrib.auth import get_user_model
 from django.utils import timezone
+from .encryption import TokenEncryption
 
 User = get_user_model()
 
@@ -18,18 +19,22 @@ class CalendlyProfile(models.Model):
 	connected_at = models.DateTimeField(blank=True, null=True)
 
 	def connect(self, access_token, refresh_token, calendly_user_uri, event_type_uri=None, event_type_name=None, booking_link=None, subscription_id=None):
-		from django.conf import settings
-		from cryptography.fernet import Fernet
-		import base64, hashlib
-		# Derive a deterministic Fernet key from SECRET_KEY (for demo only). In production use KMS.
-		secret = (settings.SECRET_KEY or 'changeme').encode('utf-8')
-		hash = hashlib.sha256(secret).digest()
-		fernet_key = base64.urlsafe_b64encode(hash)
-		f = Fernet(fernet_key)
-		# store tokens encrypted
-		self.encrypted_access_token = f.encrypt(access_token.encode('utf-8')).decode('utf-8')
+		"""
+		Store Calendly credentials securely.
+		
+		Args:
+			access_token: OAuth access token
+			refresh_token: OAuth refresh token
+			calendly_user_uri: User's Calendly URI
+			event_type_uri: Event type URI (optional)
+			event_type_name: Event type name (optional)
+			booking_link: Public booking link (optional)
+			subscription_id: Webhook subscription ID (optional)
+		"""
+		# Use secure encryption from TokenEncryption utility
+		self.encrypted_access_token = TokenEncryption.encrypt(access_token)
 		if refresh_token:
-			self.encrypted_refresh_token = f.encrypt(refresh_token.encode('utf-8')).decode('utf-8')
+			self.encrypted_refresh_token = TokenEncryption.encrypt(refresh_token)
 		self.calendly_user_uri = calendly_user_uri
 		self.event_type_uri = event_type_uri
 		self.event_type_name = event_type_name
@@ -40,6 +45,7 @@ class CalendlyProfile(models.Model):
 		self.save()
 
 	def disconnect(self):
+		"""Securely clear all Calendly credentials."""
 		self.encrypted_access_token = None
 		self.encrypted_refresh_token = None
 		self.calendly_user_uri = None
@@ -54,32 +60,17 @@ class CalendlyProfile(models.Model):
 	def __str__(self):
 		return f"CalendlyProfile({self.user.username})"
 
-	def _fernet(self):
-		from django.conf import settings
-		from cryptography.fernet import Fernet
-		import base64, hashlib
-		secret = (settings.SECRET_KEY or 'changeme').encode('utf-8')
-		hash = hashlib.sha256(secret).digest()
-		fernet_key = base64.urlsafe_b64encode(hash)
-		return Fernet(fernet_key)
-
 	def get_access_token(self):
+		"""Securely retrieve and decrypt access token."""
 		if not self.encrypted_access_token:
 			return None
-		f = self._fernet()
-		try:
-			return f.decrypt(self.encrypted_access_token.encode('utf-8')).decode('utf-8')
-		except Exception:
-			return None
+		return TokenEncryption.safe_decrypt(self.encrypted_access_token, default=None)
 
 	def get_refresh_token(self):
+		"""Securely retrieve and decrypt refresh token."""
 		if not self.encrypted_refresh_token:
 			return None
-		f = self._fernet()
-		try:
-			return f.decrypt(self.encrypted_refresh_token.encode('utf-8')).decode('utf-8')
-		except Exception:
-			return None
+		return TokenEncryption.safe_decrypt(self.encrypted_refresh_token, default=None)
 
 
 class UserProfile(models.Model):

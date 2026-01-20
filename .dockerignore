@@ -1,22 +1,88 @@
 
-__pycache__
+# Version control
+.git
+.gitignore
+.github
+
+# Python cache
+__pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.egg-info/
 .Python
-env
-venv
+*.so
+.venv/
+venv/
+ENV/
+env/
+
+# Python test/coverage
 pip-log.txt
 pip-delete-this-directory.txt
-.tox
+.tox/
 .coverage
 .coverage.*
 .cache
 nosetests.xml
 coverage.xml
 *.cover
+.hypothesis/
+.pytest_cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+htmlcov/
+
+# Django
 *.log
-.git
-.gitignore
-.env
+*.pot
 db.sqlite3
+db.sqlite3-journal
+/media
+/staticfiles
+/mediafiles
+/Backend/uploads
+/Backend/staticfiles
+/Backend/mediafiles
+celerybeat-schedule
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+
+# Docker
+docker-compose.override.yml
+.docker
+
+# Documentation
+docs/
+.sphinx/
+site/
+
+# Test & CI
+.travis.yml
+.gitlab-ci.yml
+Jenkinsfile
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Misc
+.editorconfig
+.pre-commit-config.yaml
+Makefile
+*.md
+LICENSE
+node_modules/
+e2e/
+docs/
+Security/

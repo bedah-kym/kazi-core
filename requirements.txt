@@ -43,27 +43,51 @@ uvicorn>=0.30.0
 websockets>=12.0
 whitenoise>=6.6.0
 
-# Dev/Other (kept from original list but updated)
-pyngrok>=7.1.0
-PyYAML>=6.0.1
-six>=1.16.0
-
 # AI/ML Integration
 huggingface-hub>=0.26.0
 anthropic>=0.40.0
 openai>=1.50.0
-pydub>=0.25.1
 
-# Authentication & Security
+# Authentication & Social
 django-allauth>=65.0.0
+PyJWT>=2.8.0
+requests-oauthlib>=1.3.1
+
+# Third-party Integrations
+intasend-python>=0.1.0
+pydub>=0.25.1
+twilio>=9.0.0
+
+# Data handling
+Pillow>=10.0.0
+pypdf>=5.0.0
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+
+# Security hardening
 django-axes>=6.0.0
 django-ratelimit>=4.1.0
 django-csp>=3.8.0
+django-auditlog>=3.0.0
 bleach>=6.1.0
-PyJWT>=2.8.0 # Required for allauth Google provider
-requests-oauthlib>=1.3.1
-intasend-python>=0.1.0 # For Kenya Payments
-pypdf>=5.0.0
-Pillow>=10.0.0 # For ImageField
-twilio>=9.0.0 # For WhatsApp
-twilio>=9.0.0 # For WhatsApp
+pycryptodome>=3.17.0
+python-json-logger>=2.0.0
+
+# Development & Testing (Optional)
+# Install with: pip install -r requirements.txt[dev]
+# Uncomment the following lines locally only:
+# pytest>=7.4.0
+# pytest-django>=4.5.0
+# pytest-cov>=4.1.0
+# factory-boy>=3.2.0
+# black>=23.0.0
+# flake8>=6.0.0
+# isort>=5.12.0
+# mypy>=1.0.0
+# django-stubs>=1.14.0
+# django-debug-toolbar>=3.8.0
+# django-extensions>=3.2.0
+# Sphinx>=6.0.0
+# sphinx-rtd-theme>=1.2.0
+# safety>=2.3.0
+# bandit>=1.7.4

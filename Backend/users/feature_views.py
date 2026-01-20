@@ -8,26 +8,10 @@ from users.models import Wallet
 from chatbot.models import Reminder
 
 
-@workspace_required
-def wallet(request):
-    """
-    Wallet management page
-    """
-    workspace = request.user.workspace
-    
-    # Get or create wallet
-    wallet, created = Wallet.objects.get_or_create(
-        workspace=workspace,
-        currency='KES',
-        defaults={'balance': 0}
-    )
-    
-    context = {
-        'wallet': wallet,
-        'workspace': workspace,
-    }
-    
-    return render(request, 'users/wallet.html', context)
+# Wallet view moved to payments app
+# @workspace_required
+# def wallet(request):
+#     ...
 
 
 @workspace_required

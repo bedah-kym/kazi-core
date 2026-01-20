@@ -125,6 +125,84 @@ body {
 
     100% {
         transform: scale(1);
+
+        /* Mobile / small-screen tweaks scoped to chat page to avoid site-wide regressions */
+        @media (max-width: 768px) {
+            .chat-page .chat-message {
+                padding: 10px;
+            }
+
+            .chat-page .input-group {
+                display: flex;
+                gap: 8px;
+                align-items: center;
+            }
+
+            .chat-page #emoji,
+            .chat-page #voice-record-btn {
+                width: 40px;
+                height: 40px;
+                border-radius: 50%;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                padding: 6px;
+            }
+
+            .chat-page #chat-message-input {
+                flex: 1 1 auto;
+                margin-right: 6px;
+                padding: 8px 12px;
+                border-radius: 18px;
+            }
+
+            .chat-page #chat-message-submit {
+                width: 40px;
+                height: 40px;
+                border-radius: 50%;
+                padding: 0;
+            }
+
+            .chat-page .message {
+                max-width: calc(100% - 90px);
+                padding: 10px 14px;
+                border-radius: 14px;
+            }
+
+            .chat-page .time-label {
+                display: block;
+                margin-top: 6px;
+                font-size: 0.72em;
+                opacity: 0.75;
+            }
+
+            /* Show the header hamburger (menuToggle) on small screens */
+            .chat-page .toggle-btn {
+                display: inline-block;
+            }
+
+            /* Ensure the recording overlay floats above the input and messages */
+            .chat-page .recording-overlay {
+                position: fixed;
+                left: 12px;
+                right: 12px;
+                bottom: 16px;
+                z-index: 2500;
+            }
+
+            /* Slightly lift the people-list when open so it doesn't underlap status bars */
+            .chat-page .people-list.open {
+                position: fixed;
+                top: 56px;
+                bottom: 0;
+                left: 0;
+                width: 280px;
+                z-index: 2400;
+                box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15);
+                background: var(--chat-bg);
+            }
+        }
+
         opacity: 1;
     }
 }
@@ -1653,4 +1731,90 @@ em-emoji-picker {
 body[data-message-density="compact"] .message {
     padding: 8px 12px;
     border-radius: 12px;
+}
+
+/* Responsive mobile behavior: hide people-list off-canvas by default on small screens */
+@media (max-width: 768px) {
+    .chat-page .people-list {
+        position: fixed;
+        left: -100%;
+        top: 0;
+        bottom: 0;
+        width: 85%;
+        max-width: 360px;
+        z-index: 1600;
+        height: 100vh;
+        box-shadow: 4px 0 24px rgba(0, 0, 0, 0.2);
+        transition: left 220ms ease;
+        background: var(--chat-bg);
+    }
+
+    .chat-page .people-list.open {
+        left: 0;
+    }
+
+    /* Backdrop that appears when people list is open */
+    .chat-page .people-backdrop {
+        display: none;
+        position: fixed;
+        left: 0;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.45);
+        z-index: 1550;
+    }
+
+    .chat-page .people-backdrop.show {
+        display: block;
+    }
+
+    /* Show a small hamburger in the top-left to toggle people list */
+    .chat-page .people-toggle {
+        position: fixed;
+        left: 12px;
+        top: 12px;
+        z-index: 1700;
+        width: 40px;
+        height: 40px;
+        border-radius: 8px;
+        background: var(--primary-color);
+        color: #fff;
+        border: none;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    }
+
+    /* Adjust main chat column to full width when people list closed */
+    .chat-page .chat-container {
+        margin-left: 0;
+        width: 100%;
+    }
+}
+
+/* Small screens: make search panel act as a full-screen modal */
+@media (max-width: 768px) {
+    .chat-page .search-panel {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 100vh;
+        padding: 18px;
+        overflow-y: auto;
+        border-radius: 0;
+        z-index: 2000;
+        transform: translateY(-100%);
+    }
+
+    .chat-page .search-panel.active {
+        transform: translateY(0);
+    }
+
+    .chat-page .search-panel .search-panel-content {
+        max-width: 100%;
+        margin: 0;
+    }
 }

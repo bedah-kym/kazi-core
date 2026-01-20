@@ -18,19 +18,19 @@ class MailgunConnector(BaseConnector):
         self.domain = os.environ.get('MAILGUN_DOMAIN')
         self.base_url = f"https://api.mailgun.net/v3/{self.domain}" if self.domain else None
         
-    async def execute(self, intent: dict, user) -> dict:
+    async def execute(self, parameters: dict, context: dict) -> dict:
         """
         Execute Email actions.
         """
-        action = intent.get("action")
+        action = parameters.get("action")
         
         if action == "send_email":
             return await self.send_email(
-                to=intent.get("to"),
-                subject=intent.get("subject"),
-                text=intent.get("text"),
-                html=intent.get("html"),
-                from_email=intent.get("from")
+                to=parameters.get("to"),
+                subject=parameters.get("subject"),
+                text=parameters.get("text"),
+                html=parameters.get("html"),
+                from_email=parameters.get("from")
             )
             
         return {"error": f"Unknown Mailgun action: {action}"}

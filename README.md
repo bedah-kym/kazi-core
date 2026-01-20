@@ -1,135 +1,88 @@
-### SYS DESIGN FOR MATHIA PROJECT
-This project is designed to create an interactive chatbot interface for users to communicate with each other and with an AI-powered assistant. The system is built using Django for the backend (ASGI) and HTML/CSS/JavaScript for the frontend. The chatbot supports real-time messaging, multi-room chats, AI response streaming, and a responsive design.
+# 🤖 Mathia.OS: The AI Operating System for One-Person Empires
 
-The main components of the system include:
-1. **Frontend (HTML/CSS/JavaScript)**:
-   - **Multi-room Support**: Users can join and switch between multiple chatrooms instantly.
-   - **AI Response Streaming**: Real-time character-by-character streaming of AI responses.
-   - **Context Panel**: Dynamic right-side panel for context-aware actions.
-   - **Calendly Integration Panel**: UI for connecting Calendly accounts and viewing status.
+**Manage Socials, Finance, Travel, and Documents in one unified intelligence.**
 
-2. **Backend (Django & Channels)**:
-   - **Authentication**: Custom user model with robust onboarding flow.
-   - **WebSocket Handling**: Django Channels with Redis for real-time state.
-   - **Background Tasks (Celery)**: Handles heavier async tasks like AI moderation and notifications.
-   - **Periodic Tasks (Celery Beat)**: Manages scheduled jobs.
-   - **MCP Router (Orchestration)**: Routing engine for user intents to connectors (Calendly, etc.).
+Mathia is not just a workspace—it's an **AI-powered Operating System** designed for **Lone Founders, Social Media Managers, and SMEs**. It gives you the leverage of a 10-person team through a single chat interface.
 
-3. **Database & Storage**:
-   - **PostgreSQL**: Primary relational database for users, chats, and wallets (Dockerized).
-   - **Redis**: Used as the Channel Layer for WebSockets and specialized caching/buffering.
+---
 
-4. **Key Features**:
-   - **User Onboarding**: Multi-step wizard collecting Profile, Professional Goals, and Workspace details.
-   - **Wallet System**: Internal `Wallet` model supporting atomic Credits/Debits for workspace billing.
-   - **AI Personalization**: `GoalProfile` stores user goals to contextually adapt AI responses.
-   - **AI Moderation**: Messages are buffered in Redis and processed in batches by Celery. Users can be "Muted" automatically.
-   - **Calendly Integration**: Connect account, check availability, and schedule meetings via chat.
-   - **AI Memory (Context Brain)**: AI remembers important details ("Room Notes") and shares high-priority context across rooms (via `ContextManager`).
-   - **Smart Reminders**: Set reminders naturally (e.g., "Remind me to call John in 10 mins"). Executed via Celery background tasks.
+## 🚀 Core Pillars (The "OS" Modules)
 
-### SETUP INSTRUCTIONS
-1. Clone the repository to your local machine.
-2. Ensure you have **Docker** and **Docker Compose** installed.
-3. Configure environment variables in `.env` (see `.env.example`).
-4. Build and start the services:
-   ```bash
-   docker-compose up --build
-   ```
-   This starts:
-   - `web`: Django ASGI application (Daphne/Gunicorn)
-   - `db`: PostgreSQL database
-   - `redis`: Redis server
-   - `celery_worker`: Background task worker
-   - `celery_beat`: Periodic task scheduler
+### 1. 📢 Social Media Growth Engine (New)
+*Target: Social Media Managers & Growth Hackers*
+*   **Zero to Viral**: AI agent that plans, posts, and monitors growth across X (Twitter), LinkedIn, and Instagram.
+*   **Analytics**: Real-time feedback loops to optimize engagement.
 
-5. Run migrations (if not auto-run by entrypoint):
-   ```bash
-   docker-compose exec web python manage.py migrate
-   ```
-6. Access the application at `http://localhost:8000`.
+### 2. 💰 Enterprise Finance & Quickbooks
+*Target: SMEs & Freelancers*
+*   **Double-Entry Ledger**: ACID-compliant financial core for handling wallet balances (Debits/Credits).
+*   **Quickbooks Integration**: Automatically sync invoices and transaction data to Quickbooks.
+*   **Payments**: Native IntaSend support for M-Pesa STK Pushes and Card payments.
 
-### USAGE
-1. **Register/Login**: Complete the multi-step onboarding to set up your profile and workspace.
-2. **Chat**: 
-   - Join existing rooms or create new ones (Invite system available).
-   - Use `@mathia` to trigger the AI assistant.
-3. **Calendly**:
-   - Connect via Settings or `/calendly connect`.
-   - Commands: "Check my calendar", "Schedule a meeting".
-4. **Wallet**:
-   - View balance in Settings -> Wallet.
-   - Simulate transactions via admin or implemented flows.
-5. **Memory & Reminders**:
-   - Open the **Brain Icon** (top right) to see/add notes manually.
-   - Ask AI to set reminders: "Remind me at 5pm to check emails".
+### 3. 🧠 Productivity & Deep Notion
+*Target: Lone Founders*
+*   **Deep Integration**: Mathia lives inside your knowledge base. It can read/write to **Notion** pages and databases.
+*   **Task Orchestration**: "Organize my week" creates tasks in Notion and schedules reminders.
 
-### CONTRIBUTING
-1. Fork the repository and create a new branch.
-2. Follow PEP8 (Python) and project coding standards.
-3. Testing: Ensure new features have unit tests or manual verification steps.
-4. Submit a Pull Request with a clear description.
+### 4. ✈️ B2B Travel Planner
+*Target: Travel Agents & Trip Managers*
+*   **Agentic Planning**: Create detailed, day-by-day itineraries for clients.
+*   **Logistics**: Manage bookings and budgets for third parties.
 
-### SYSTEMS OVERVIEW
+---
 
-#### Component Graph
-```mermaid
-graph LR
-   Browser[User Browser]
-   Browser -->|HTTP| DjangoHTTP[Django Backend]
-   Browser -->|WebSocket| Daphne[Daphne ASGI]
-   Daphne --> Channels[Channels Layer]
-   Channels -->|Redis| Redis[Redis]
-   Channels -->|Async| Celery[Celery Worker]
-   Celery -->|Batch| AI[AI Service/Moderation]
-   DjangoHTTP -->|SQL| Postgres[PostgreSQL DB]
-   DjangoHTTP -->|Orchestratrate| MCP[MCP Router]
-   MCP -->|API| Calendly[Calendly API]
+## 🛠️ Technical Stack
+
+Mathia.OS is built for scale and real-time agentic behavior.
+
+*   **Core**: Python 3.11, Django 5.0 (ASGI)
+*   **Real-time**: Django Channels, Redis (WebSockets)
+*   **AI Orchestration**: MCP Router (Model Context Protocol)
+*   **Database**: PostgreSQL 16
+*   **Async Tasks**: Celery & Celery Beat
+*   **Frontend**: HTML5/Bootstrap (served via Django)
+
+---
+
+## ⚡ Quick Start (Docker)
+
+Get your OS running in minutes.
+
+1.  **Clone**
+    ```bash
+    git clone https://github.com/your-org/mathia.git
+    cd mathia
+    ```
+
+2.  **Env Setup**
+    ```bash
+    cp .env.example .env
+    # Add your API Keys (Anthropic, IntaSend, OpenWeather, etc.)
+    ```
+
+3.  **Launch**
+    ```bash
+    docker-compose up --build
+    ```
+
+4.  **Initialize**
+    ```bash
+    docker-compose exec web python Backend/manage.py migrate
+    ```
+
+Access the OS at: [http://localhost:8000](http://localhost:8000)
+
+---
+
+## 🧪 Testing the OS
+
+Run the diagnostic suite to verify all pillars:
+
+```bash
+docker-compose exec web python Backend/manage.py test
+docker-compose exec web python Backend/verify_ledger.py
 ```
 
-#### User to AI Communication
-```mermaid
-sequenceDiagram
-    participant User
-    participant WebSocket
-    participant MCPRouter
-    participant AI
-    participant Stream
+---
 
-    User->>WebSocket: "@mathia help me"
-    WebSocket->>MCPRouter: Parse Intent
-    MCPRouter->>AI: Generate Response
-    AI->>WebSocket: Stream Chunk 1
-    AI->>WebSocket: Stream Chunk 2
-    WebSocket->>User: Display Stream
-```
-
-### MATHIA — Developer Guide
-
-This section maps the codebase to the system architecture.
-
-**High-level summary**
-- **Infrastructure**: Dockerized setup with Django, PostgreSQL, Redis, and Celery.
-- **Realtime**: Django Channels (ASGI) using `channels_redis`.
-- **Encryption**: Per-room AES-GCM encryption in `chatbot/consumers.py`.
-- **Moderation**: Redis-buffered message queues processed by Celery tasks (`chatbot/tasks.py`).
-
-**Important Files**
-- `Backend/Backend/settings.py`: Configuration for Channels, Celery, and DB.
-- `Backend/chatbot/consumers.py`: Core WebSocket logic, presence, and key rotation.
-- `Backend/chatbot/tasks.py`: Celery tasks for moderation, AI generation, and Reminders.
-- `Backend/chatbot/context_manager.py`: The AI Brain (Memory & Context).
-- `Backend/users/models.py`: `Wallet`, `GoalProfile`, `Workspace` models.
-- `Backend/orchestration/`: MCP Router and AI intent logic.
-
-**Developer Contract**
-- **Inputs**: WebSocket JSON commands (`new_message`, `typing`, `file_message`).
-- **Outputs**: Real-time JSON events (`presence_update`, `ai_stream_chunk`).
-- **Data Shapes**: Messages are stored with `nonce` and `data` (encrypted).
-
-**Edge Cases**
-- **Redis Failures**: Disables real-time features; static HTTP views remain functional.
-- **Rate Limiting**: Enforced per-minute via `check_rate_limit`.
-- **Moderation**: High-volume rooms buffer messages; check `MODERATION_BATCH_SIZE`.
-
-Generated based on current codebase analysis: `users`, `chatbot`, and `orchestration` apps.
+**© 2026 Mathia Project.**

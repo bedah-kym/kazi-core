@@ -216,6 +216,12 @@ function connectToChat(roomId) {
             }
             return;
         }
+        if (data.command === 'user_quotas') {
+            if (typeof updateQuotaUI === 'function') {
+                updateQuotaUI(data.quotas);
+            }
+            return;
+        }
         if (data.command === 'error') {
             console.error('Error from server:', data.message);
             return;
@@ -267,6 +273,13 @@ window.addEventListener('popstate', function (event) {
                 e.stopPropagation();
                 menuOpen = !menuOpen;
                 document.body.classList.toggle('people-open', menuOpen);
+
+                // Also toggle the people list panel and backdrop to keep UI in sync
+                const peopleList = document.querySelector('.people-list');
+                const peopleBackdrop = document.getElementById('peopleBackdrop');
+                if (peopleList) peopleList.classList.toggle('open', menuOpen);
+                if (peopleBackdrop) peopleBackdrop.classList.toggle('show', menuOpen);
+
                 return false;
             };
         }
@@ -275,12 +288,16 @@ window.addEventListener('popstate', function (event) {
             if (menuOpen) {
                 const peopleList = document.querySelector('.people-list');
                 const menuToggle = document.getElementById('menuToggle');
+                const peopleBackdrop = document.getElementById('peopleBackdrop');
                 if (peopleList && menuToggle) {
                     const clickedInsideMenu = peopleList.contains(e.target);
                     const clickedToggle = menuToggle.contains(e.target);
                     if (!clickedInsideMenu && !clickedToggle) {
                         menuOpen = false;
                         document.body.classList.remove('people-open');
+                        // Ensure visual panels are closed
+                        peopleList.classList.remove('open');
+                        if (peopleBackdrop) peopleBackdrop.classList.remove('show');
                     }
                 }
             }
@@ -319,7 +336,14 @@ function createMessage(data, roomId) {
     const currentUsername = window.usernameGlobal || (typeof username !== 'undefined' ? username : null);
     msgListTag.classList.add(data.member === currentUsername ? 'my' : 'other');
     msgListTag.className = 'clearfix';
-    msgListTag.id = 'tracker';
+    // Give each message LI a unique id to avoid duplicate IDs in the DOM
+    // (previously every li used 'tracker' which can cause query/getElementById
+    // ambiguity and unexpected behavior).
+    if (data.id) {
+        msgListTag.id = `message-${data.id}`;
+    } else {
+        msgListTag.id = `message-temp-${Date.now()}`;
+    }
 
     const msgDivTag = document.createElement('div');
     const msgdivtag = document.createElement('p');
@@ -394,20 +418,16 @@ function createMessage(data, roomId) {
                 if (window.getComputedStyle(pre).position === 'static') {
                     pre.style.position = 'relative';
                 }
-
                 const btn = document.createElement('button');
                 btn.className = 'copy-btn';
                 btn.innerHTML = '<i class="fas fa-copy"></i> Copy';
                 btn.style.cssText = 'position: absolute; top: 5px; right: 5px; padding: 4px 8px; font-size: 12px; border: none; border-radius: 4px; cursor: pointer; background: rgba(255,255,255,0.1); color: #fff; z-index: 10;';
 
-                btn.onclick = (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    navigator.clipboard.writeText(block.textContent).then(() => {
-                        btn.innerHTML = '<i class="fas fa-check"></i> Copied!';
-                        setTimeout(() => btn.innerHTML = '<i class="fas fa-copy"></i> Copy', 2000);
-                    }).catch(err => console.error('Copy failed:', err));
-                };
+                // Ensure the <pre> has an id so the delegated handler can find it
+                if (!pre.id) {
+                    pre.id = `codeblock-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+                }
+                btn.dataset.copyTarget = pre.id;
                 pre.appendChild(btn);
             }
         });
@@ -568,6 +588,26 @@ if (chatInput) {
         }
     });
 }
+
+// Delegated handler for copy buttons (created dynamically in createMessage)
+document.addEventListener('click', function (e) {
+    const cb = e.target.closest('.copy-btn');
+    if (!cb) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const targetId = cb.dataset.copyTarget;
+    if (!targetId) return;
+    const src = document.getElementById(targetId);
+    if (!src) return;
+    const text = src.textContent || src.innerText || '';
+    navigator.clipboard.writeText(text).then(() => {
+        const old = cb.innerHTML;
+        cb.innerHTML = '<i class="fas fa-check"></i> Copied!';
+        setTimeout(() => cb.innerHTML = old, 2000);
+    }).catch(err => {
+        console.error('Copy failed:', err);
+    });
+});
 
 // FIX: Submit button now uses current socket
 const chatSubmit = document.querySelector('#chat-message-submit');
@@ -971,4 +1011,38 @@ document.addEventListener('DOMContentLoaded', function () {
     initEmojiPicker();
     initFileHandlers();
     initPeopleSearch();
+});
+
+// Small accessibility improvements: ensure key interactive buttons have aria-labels
+document.addEventListener('DOMContentLoaded', () => {
+    const ensureAria = (selector, label) => {
+        const el = document.querySelector(selector);
+        if (el && !el.getAttribute('aria-label')) el.setAttribute('aria-label', label);
+    };
+
+    ensureAria('#voice-record-btn', 'Record or stop voice message');
+    ensureAria('#chat-message-submit', 'Send message');
+    ensureAria('#upload', 'Upload file');
+    ensureAria('#emoji', 'Emoji picker');
+    ensureAria('#search', 'Search people');
+    // Mobile people list toggle wiring (only for chat page)
+    if (document.body && document.body.classList && document.body.classList.contains('chat-page')) {
+        const peopleToggle = document.getElementById('peopleToggle');
+        const peopleList = document.querySelector('.people-list');
+        const peopleBackdrop = document.getElementById('peopleBackdrop');
+
+        if (peopleToggle && peopleList) {
+            peopleToggle.addEventListener('click', () => {
+                const open = peopleList.classList.toggle('open');
+                if (peopleBackdrop) peopleBackdrop.classList.toggle('show', open);
+            });
+        }
+
+        if (peopleBackdrop && peopleList) {
+            peopleBackdrop.addEventListener('click', () => {
+                peopleList.classList.remove('open');
+                peopleBackdrop.classList.remove('show');
+            });
+        }
+    }
 });

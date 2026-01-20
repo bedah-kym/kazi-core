@@ -41,7 +41,8 @@ class DataSynthesizer:
             return basic_response
             
         except Exception as e:
-            logger.error(f"Synthesis error: {e}")
+            import traceback
+            logger.error(f"Synthesis error: {e}\n{traceback.format_exc()}")
             return "I found the information but had trouble formatting it."
 
     async def synthesize_stream(self, intent: Dict, result: Dict, use_llm: bool = True):
@@ -62,7 +63,8 @@ class DataSynthesizer:
             yield basic_response
             
         except Exception as e:
-            logger.error(f"Synthesis stream error: {e}")
+            import traceback
+            logger.error(f"Synthesis stream error: {e}\n{traceback.format_exc()}")
             yield "I found the information but had trouble formatting it."
 
     def _format_basic(self, intent: Dict, result: Dict) -> str:
@@ -84,6 +86,23 @@ class DataSynthesizer:
             
         elif action == "search_info":
             return data.get("summary", "Here is what I found.")
+
+        elif action == "check_quotas":
+            summary = "Your current usage limits:\n"
+            if not isinstance(data, dict):
+                return f"Error: Quota data not correctly formatted. Received: {type(data)}"
+                
+            for key, q in data.items():
+                if isinstance(q, dict):
+                    name = q.get('name', key.capitalize())
+                    used = q.get('used', 0)
+                    limit = q.get('limit', 0)
+                    unit = q.get('unit', '')
+                    status = q.get('status', 'unknown')
+                    summary += f"- {name}: {used}/{limit} {unit} (Status: {status})\n"
+                else:
+                    summary += f"- {key}: {str(q)}\n"
+            return summary
          
         # NEW: Handle GIF with message AND full URL
         elif action == "search_gif":

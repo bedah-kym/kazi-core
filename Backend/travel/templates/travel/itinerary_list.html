@@ -1,0 +1,198 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>My Itineraries | Mathia</title>
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <style>
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: 'Inter', sans-serif;
+            min-height: 100vh;
+            padding: 40px 0;
+        }
+
+        .page-header {
+            color: white;
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        .itinerary-card {
+            background: white;
+            border-radius: 16px;
+            padding: 24px;
+            margin-bottom: 20px;
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .itinerary-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 12px 28px rgba(0, 0, 0, 0.15);
+        }
+
+        .itinerary-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 16px;
+        }
+
+        .itinerary-title {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: #2d3748;
+            margin: 0;
+        }
+
+        .itinerary-status {
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            text-transform: uppercase;
+        }
+
+        .status-draft {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .status-confirmed {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .status-completed {
+            background: #e0e7ff;
+            color: #3730a3;
+        }
+
+        .itinerary-meta {
+            display: flex;
+            gap: 24px;
+            margin-bottom: 12px;
+        }
+
+        .meta-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #64748b;
+            font-size: 0.95rem;
+        }
+
+        .meta-item i {
+            color: #6366f1;
+        }
+
+        .btn-view {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 10px 24px;
+            font-weight: 500;
+        }
+
+        .btn-view:hover {
+            opacity: 0.9;
+            color: white;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: white;
+        }
+
+        .empty-state i {
+            font-size: 4rem;
+            opacity: 0.7;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="container" style="max-width: 900px;">
+        <!-- Header -->
+        <div class="page-header">
+            <h1 class="display-4 fw-bold mb-2">
+                <i class="fas fa-suitcase-rolling me-2"></i>
+                My Travel Plans
+            </h1>
+            <p class="lead">All your adventures in one place</p>
+            <a href="/travel/plan/" class="btn btn-light btn-lg mt-3">
+                <i class="fas fa-plus me-2"></i>Plan New Trip
+            </a>
+        </div>
+
+        <!-- Itinerary List -->
+        {% if itineraries %}
+        {% for itinerary in itineraries %}
+        <div class="itinerary-card">
+            <div class="itinerary-header">
+                <h3 class="itinerary-title">{{ itinerary.title }}</h3>
+                <span class="itinerary-status status-{{ itinerary.status }}">{{ itinerary.status }}</span>
+            </div>
+
+            <div class="itinerary-meta">
+                <div class="meta-item">
+                    <i class="fas fa-map-marker-alt"></i>
+                    <span>{{ itinerary.destination }}</span>
+                </div>
+                <div class="meta-item">
+                    <i class="fas fa-calendar-alt"></i>
+                    <span>{{ itinerary.start_date|date:"M d, Y" }} - {{ itinerary.end_date|date:"M d, Y" }}</span>
+                </div>
+                {% if itinerary.budget_ksh %}
+                <div class="meta-item">
+                    <i class="fas fa-wallet"></i>
+                    <span>{{ itinerary.budget_ksh|floatformat:0 }} KES</span>
+                </div>
+                {% endif %}
+            </div>
+
+            {% if itinerary.description %}
+            <p class="text-muted mb-3">{{ itinerary.description|truncatewords:20 }}</p>
+            {% endif %}
+
+            <div class="d-flex justify-content-between align-items-center">
+                <div class="text-muted small">
+                    <i class="fas fa-clock me-1"></i>
+                    Created {{ itinerary.created_at|timesince }} ago
+                </div>
+                <a href="/travel/view/{{ itinerary.id }}/" class="btn btn-view">
+                    View Details
+                    <i class="fas fa-arrow-right ms-1"></i>
+                </a>
+            </div>
+        </div>
+        {% endfor %}
+        {% else %}
+        <!-- Empty State -->
+        <div class="empty-state">
+            <i class="fas fa-plane-departure"></i>
+            <h3>No trips planned yet!</h3>
+            <p class="mb-4">Start planning your next adventure with Mathia</p>
+            <a href="/travel/plan/" class="btn btn-light btn-lg">
+                <i class="fas fa-plus me-2"></i>Plan Your First Trip
+            </a>
+        </div>
+        {% endif %}
+    </div>
+
+</body>
+
+</html>

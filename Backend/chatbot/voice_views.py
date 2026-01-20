@@ -25,7 +25,7 @@ def upload_voice_note(request, room_id):
         chatroom = get_object_or_404(Chatroom, id=room_id)
         
         # Security: check if user is in room
-        if not chatroom.participants.filter(User=request.user).exists():
+        if not Chatroom.objects.filter(id=room_id, participants__User=request.user).exists():
             return Response({"error": "Access denied"}, status=status.HTTP_403_FORBIDDEN)
         
         if 'audio' not in request.FILES:

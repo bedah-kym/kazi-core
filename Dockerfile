@@ -2,37 +2,39 @@
 FROM python:3.11-slim
 
 # Set environment variables
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # Set work directory
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies (includes ffmpeg for voice features)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
-    libjpeg-dev \
-    zlib1g-dev \
     netcat-openbsd \
     ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
+    tzdata \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
 # Create a non-root user
 RUN addgroup --system django && adduser --system --group django
 
-# Install Python dependencies
+# Install Python dependencies first (for better layer caching)
 COPY requirements.txt /app/
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+RUN pip install --upgrade pip && \
+    pip install -r requirements.txt
 
-# Copy project
+# Copy project files
 COPY . /app/
 
 # Own the app directory
 RUN chown -R django:django /app
 
-# Copy entrypoint script
+# Copy and make entrypoint executable
 COPY entrypoint.sh /app/
 RUN chmod +x /app/entrypoint.sh
 

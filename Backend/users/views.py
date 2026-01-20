@@ -1,6 +1,7 @@
 from django.contrib.auth.views import LoginView
 from django.contrib import messages
 from django.core.cache import cache
+from django.shortcuts import render
 from .forms import CustomAuthenticationForm
 
 class CustomLoginView(LoginView):
@@ -33,3 +34,8 @@ class CustomLoginView(LoginView):
             attempts = cache.get(key, 0)
             cache.set(key, attempts + 1, 300)  # 5 minutes timeout
         return super().form_invalid(form)
+
+
+def landing_page(request):
+    """Render the enterprise landing page"""
+    return render(request, 'users/landing.html')

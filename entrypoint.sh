@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # Wait for database
-python wait_for_db.py
+python /app/wait_for_db.py
 
 cd Backend
 

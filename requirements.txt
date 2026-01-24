@@ -43,6 +43,11 @@ uvicorn>=0.30.0
 websockets>=12.0
 whitenoise>=6.6.0
 
+
+# Object storage (Cloudflare R2 / S3)
+django-storages[boto3]>=1.14.0
+boto3>=1.34.0
+
 # AI/ML Integration
 huggingface-hub>=0.26.0
 anthropic>=0.40.0

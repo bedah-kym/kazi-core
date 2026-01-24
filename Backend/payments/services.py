@@ -3,6 +3,7 @@ Enterprise Payment Services
 Implements ACID-compliant ledger operations and payment workflows
 """
 from django.db import transaction, models
+from django.db.models import F
 from django.utils import timezone
 from django.contrib.auth import get_user_model
 from decimal import Decimal
@@ -10,6 +11,7 @@ from datetime import timedelta
 import uuid
 import logging
 
+from users.models import Wallet, WalletTransaction, Workspace
 from .models import (
     LedgerAccount, JournalEntry, LedgerEntry, PaymentRequest,
     FeeSchedule, PaymentNotification, ReconciliationDiscrepancy
@@ -200,119 +202,118 @@ class LedgerService:
 
 class WalletService:
     """
-    User wallet operations
+    User wallet operations (users.Wallet is the source of truth)
     """
-    
+
     @staticmethod
-    def get_or_create_user_wallet(user: User) -> LedgerAccount:
-        """Get or create a user's wallet (Liability account)"""
-        wallet, created = LedgerAccount.objects.get_or_create(
-            user=user,
-            account_type='LIABILITY',
+    def get_or_create_user_wallet(user: User) -> Wallet:
+        """Get or create a user's wallet (users.Wallet)."""
+        workspace = getattr(user, 'workspace', None)
+        if not workspace:
+            workspace = Workspace.objects.create(user=user, owner=user, name=f"{user.username} Workspace")
+
+        wallet, _ = Wallet.objects.get_or_create(
+            workspace=workspace,
             defaults={
-                'name': f"User Wallet - {user.username}",
                 'currency': 'KES'
             }
         )
         return wallet
-    
+
     @staticmethod
     def get_balance(user: User) -> Decimal:
         """Get user's wallet balance"""
         wallet = WalletService.get_or_create_user_wallet(user)
         return wallet.balance
-    
+
     @staticmethod
     @transaction.atomic
-    def process_deposit(user: User, gross_amount: Decimal, intasend_fee: Decimal, provider_ref: str) -> JournalEntry:
+    def process_deposit(user: User, gross_amount: Decimal, intasend_fee: Decimal, provider_ref: str) -> WalletTransaction:
         """
-        Process a deposit with fee handling (Option C)
-        
-        Example: User deposits 1000 KES
-        - IntaSend fee: 45 KES
-        - Platform fee: 50 KES
-        - User gets: 950 KES
+        Process a deposit with fee handling.
         """
         # Get fee schedule
         try:
             fee_config = FeeSchedule.objects.get(transaction_type='DEPOSIT', is_active=True)
             platform_fee = fee_config.platform_fee
         except FeeSchedule.DoesNotExist:
-            platform_fee = Decimal('50.00')  # Default
-        
-        # Calculate amounts
-        net_received = gross_amount - intasend_fee
+            platform_fee = Decimal('50.00')
+
+        gross_amount = Decimal(str(gross_amount))
+        intasend_fee = Decimal(str(intasend_fee))
+
         user_credit = gross_amount - intasend_fee - platform_fee
-        
-        # Gross Method: We recognize total fees acting as revenue, then expense the gateway fee
-        # Total Revenue = Platform Fee + IntaSend Fee (since user 'paid' both)
-        total_revenue = platform_fee + intasend_fee
-        
-        # Get accounts
-        system_accounts = LedgerService.get_system_accounts()
-        user_wallet = WalletService.get_or_create_user_wallet(user)
-        
-        # Create journal entry
-        # Debits: 955 (Asset) + 45 (Expense) = 1000
-        # Credits: 905 (Liability) + 95 (Revenue) = 1000
-        entries = [
-            {'account_id': system_accounts['system_asset'].id, 'amount': net_received, 'dr_cr': 'DEBIT'},
-            {'account_id': system_accounts['fee_expense'].id, 'amount': intasend_fee, 'dr_cr': 'DEBIT'},
-            {'account_id': user_wallet.id, 'amount': user_credit, 'dr_cr': 'CREDIT'},
-            {'account_id': system_accounts['fee_revenue'].id, 'amount': total_revenue, 'dr_cr': 'CREDIT'},
-        ]
-        
-        journal = LedgerService.post_transaction(
-            transaction_type='DEPOSIT',
-            description=f"Deposit by {user.username}: {gross_amount} KES",
-            entries=entries,
-            provider_ref=provider_ref
+        if user_credit < Decimal('0.00'):
+            raise ValueError('Deposit amount is too small after fees.')
+
+        wallet = WalletService.get_or_create_user_wallet(user)
+        wallet = Wallet.objects.select_for_update().get(pk=wallet.pk)
+
+        reference = provider_ref or str(uuid.uuid4())
+        existing = WalletTransaction.objects.filter(reference=reference).first()
+        if existing:
+            return existing
+
+        Wallet.objects.filter(pk=wallet.pk).update(balance=F('balance') + user_credit)
+        wallet.refresh_from_db()
+
+        tx = WalletTransaction.objects.create(
+            wallet=wallet,
+            type='CREDIT',
+            amount=user_credit,
+            currency=wallet.currency,
+            reference=reference,
+            description=f"Deposit by {user.username}",
+            status='COMPLETED'
         )
-        
-        # Create notification
+
         PaymentNotification.objects.create(
             user=user,
             message=f"Deposit successful! {user_credit} KES credited to your wallet (Platform fee: {platform_fee} KES)",
-            notification_type='SUCCESS',
-            related_journal=journal
+            notification_type='SUCCESS'
         )
-        
+
         logger.info(f"Processed deposit for {user.username}: {user_credit} KES credited")
-        return journal
-    
+        return tx
+
     @staticmethod
     @transaction.atomic
-    def process_withdrawal(user: User, amount: Decimal, provider_ref: str) -> JournalEntry:
+    def process_withdrawal(user: User, amount: Decimal, provider_ref: str) -> WalletTransaction:
         """
         Process a withdrawal
         """
-        user_wallet = WalletService.get_or_create_user_wallet(user)
-        
-        if user_wallet.balance < amount:
+        amount = Decimal(str(amount))
+        wallet = WalletService.get_or_create_user_wallet(user)
+        wallet = Wallet.objects.select_for_update().get(pk=wallet.pk)
+
+        if wallet.balance < amount:
             raise ValueError("Insufficient balance")
-        
-        system_accounts = LedgerService.get_system_accounts()
-        
-        entries = [
-            {'account_id': user_wallet.id, 'amount': amount, 'dr_cr': 'DEBIT'},
-            {'account_id': system_accounts['system_asset'].id, 'amount': amount, 'dr_cr': 'CREDIT'},
-        ]
-        
-        journal = LedgerService.post_transaction(
-            transaction_type='WITHDRAWAL',
-            description=f"Withdrawal by {user.username}: {amount} KES",
-            entries=entries,
-            provider_ref=provider_ref
+
+        reference = provider_ref or str(uuid.uuid4())
+        existing = WalletTransaction.objects.filter(reference=reference).first()
+        if existing:
+            return existing
+
+        Wallet.objects.filter(pk=wallet.pk).update(balance=F('balance') - amount)
+        wallet.refresh_from_db()
+
+        tx = WalletTransaction.objects.create(
+            wallet=wallet,
+            type='DEBIT',
+            amount=amount,
+            currency=wallet.currency,
+            reference=reference,
+            description=f"Withdrawal by {user.username}",
+            status='COMPLETED'
         )
-        
+
         PaymentNotification.objects.create(
             user=user,
             message=f"Withdrawal of {amount} KES processed",
-            notification_type='INFO',
-            related_journal=journal
+            notification_type='INFO'
         )
-        
-        return journal
+
+        return tx
 
 
 class InvoiceService:
@@ -369,37 +370,42 @@ class InvoiceService:
     
     @staticmethod
     @transaction.atomic
-    def process_invoice_payment(invoice_id: int, provider_ref: str) -> JournalEntry:
+    def process_invoice_payment(invoice_id: int, provider_ref: str) -> WalletTransaction:
         """
         Process payment of an invoice
         """
         invoice = PaymentRequest.objects.select_for_update().get(id=invoice_id)
-        
+
         if invoice.status != 'PENDING':
             raise ValueError(f"Invoice already {invoice.status}")
-        
-        # Create ledger entries
-        issuer_wallet = WalletService.get_or_create_user_wallet(invoice.issuer)
-        system_accounts = LedgerService.get_system_accounts()
-        
-        entries = [
-            {'account_id': system_accounts['system_asset'].id, 'amount': invoice.amount, 'dr_cr': 'DEBIT'},
-            {'account_id': issuer_wallet.id, 'amount': invoice.amount, 'dr_cr': 'CREDIT'},
-        ]
-        
-        journal = LedgerService.post_transaction(
-            transaction_type='INVOICE_PAYMENT',
-            description=f"Payment of invoice {invoice.reference_id}",
-            entries=entries,
-            provider_ref=provider_ref
+
+        wallet = WalletService.get_or_create_user_wallet(invoice.issuer)
+        wallet = Wallet.objects.select_for_update().get(pk=wallet.pk)
+
+        reference = provider_ref or str(invoice.reference_id)
+        existing = WalletTransaction.objects.filter(reference=reference).first()
+        if existing:
+            return existing
+
+        Wallet.objects.filter(pk=wallet.pk).update(balance=F('balance') + invoice.amount)
+        wallet.refresh_from_db()
+
+        tx = WalletTransaction.objects.create(
+            wallet=wallet,
+            type='CREDIT',
+            amount=invoice.amount,
+            currency=wallet.currency,
+            reference=reference,
+            description=f"Invoice payment {invoice.reference_id}",
+            status='COMPLETED'
         )
-        
+
         # Update invoice
         invoice.status = 'PAID'
         invoice.paid_at = timezone.now()
-        invoice.journal_entry = journal
+        invoice.journal_entry = None
         invoice.save()
-        
+
         # Notify issuer
         PaymentNotification.objects.create(
             user=invoice.issuer,
@@ -407,5 +413,5 @@ class InvoiceService:
             notification_type='SUCCESS',
             related_invoice=invoice
         )
-        
-        return journal
+
+        return tx

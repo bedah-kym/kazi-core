@@ -11,8 +11,9 @@ from decimal import Decimal
 import json
 import logging
 
-from .models import PaymentRequest, JournalEntry, PaymentNotification, LedgerAccount
-from .services import WalletService, InvoiceService, LedgerService
+from .models import PaymentRequest, PaymentNotification
+from .services import WalletService, InvoiceService
+from users.models import WalletTransaction
 from users.decorators import workspace_required
 
 logger = logging.getLogger(__name__)
@@ -25,41 +26,36 @@ def wallet_dashboard(request):
     """
     user = request.user
     balance = WalletService.get_balance(user)
-    
-    # Get user's wallet account
-    try:
-        wallet = LedgerAccount.objects.get(user=user, account_type='LIABILITY')
-        
-        # Get recent transactions
-        recent_entries = wallet.entries.select_related(
-            'journal_entry'
-        ).order_by('-journal_entry__timestamp')[:20]
-        
-        transactions = []
-        for entry in recent_entries:
-            transactions.append({
-                'date': entry.journal_entry.timestamp,
-                'description': entry.journal_entry.description,
-                'amount': entry.amount if entry.dr_cr == 'CREDIT' else -entry.amount,
-                'type': entry.journal_entry.get_transaction_type_display(),
-                'reference': entry.journal_entry.reference_id
-            })
-    except LedgerAccount.DoesNotExist:
-        transactions = []
-    
+
+    wallet = WalletService.get_or_create_user_wallet(user)
+    recent_entries = WalletTransaction.objects.filter(
+        wallet=wallet
+    ).order_by('-created_at')[:20]
+
+    transactions = []
+    for entry in recent_entries:
+        amount = entry.amount if entry.type == 'CREDIT' else -entry.amount
+        transactions.append({
+            'date': entry.created_at,
+            'description': entry.description,
+            'amount': amount,
+            'type': entry.get_type_display(),
+            'reference': entry.reference
+        })
+
     # Get unread notifications
     notifications = PaymentNotification.objects.filter(
         user=user,
         is_read=False
     ).order_by('-created_at')[:5]
-    
+
     context = {
         'balance': balance,
         'transactions': transactions,
         'notifications': notifications,
         'workspace': request.user.workspace,
     }
-    
+
     return render(request, 'payments/wallet_dashboard.html', context)
 
 
@@ -159,14 +155,14 @@ def payment_callback(request):
         
         if state == 'COMPLETE':
             # Process deposit
-            journal = WalletService.process_deposit(
+            tx = WalletService.process_deposit(
                 user=user,
                 gross_amount=gross_amount,
                 intasend_fee=fee,
                 provider_ref=invoice_id
             )
             
-            logger.info(f"Deposit processed: {journal.reference_id}")
+            logger.info(f"Deposit processed: {tx.reference}")
             return JsonResponse({'status': 'success'})
         
         return JsonResponse({'status': 'ignored', 'state': state})
@@ -247,21 +243,19 @@ def list_transactions_api(request):
     """
     List recent transactions (READ-ONLY)
     """
-    try:
-        wallet = LedgerAccount.objects.get(user=request.user, account_type='LIABILITY')
-        recent_entries = wallet.entries.select_related(
-            'journal_entry'
-        ).order_by('-journal_entry__timestamp')[:10]
-        
-        transactions = []
-        for entry in recent_entries:
-            transactions.append({
-                'date': entry.journal_entry.timestamp.isoformat(),
-                'description': entry.journal_entry.description,
-                'amount': float(entry.amount if entry.dr_cr == 'CREDIT' else -entry.amount),
-                'type': entry.journal_entry.transaction_type,
-            })
-        
-        return JsonResponse({'transactions': transactions})
-    except LedgerAccount.DoesNotExist:
-        return JsonResponse({'transactions': []})
+    wallet = WalletService.get_or_create_user_wallet(request.user)
+    recent_entries = WalletTransaction.objects.filter(
+        wallet=wallet
+    ).order_by('-created_at')[:10]
+
+    transactions = []
+    for entry in recent_entries:
+        amount = entry.amount if entry.type == 'CREDIT' else -entry.amount
+        transactions.append({
+            'date': entry.created_at.isoformat(),
+            'description': entry.description,
+            'amount': float(amount),
+            'type': entry.type,
+        })
+
+    return JsonResponse({'transactions': transactions})

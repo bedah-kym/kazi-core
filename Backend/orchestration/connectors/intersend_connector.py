@@ -4,7 +4,8 @@ import os
 from django.conf import settings
 from ..base_connector import BaseConnector
 from decimal import Decimal
-from users.models import Wallet, WalletTransaction
+from users.models import WalletTransaction
+from payments.services import WalletService
 import uuid
 
 logger = logging.getLogger(__name__)
@@ -98,33 +99,38 @@ class IntersendPayConnector(BaseConnector):
 
     def withdraw_to_mpesa(self, user, amount, phone_number):
         try:
-            workspace = user.workspace
-            wallet = Wallet.objects.get(workspace=workspace, currency='KES')
+            wallet = WalletService.get_or_create_user_wallet(user)
         except Exception as e:
             return {"error": f"User has no wallet configured: {str(e)}"}
 
-        # Check balance
-        if wallet.balance < Decimal(str(amount)):
+        amount = Decimal(str(amount))
+        if amount <= Decimal('0'):
+            return {"error": "Invalid amount"}
+
+        if wallet.balance < amount:
             return {"error": "Insufficient balance"}
-        
-        # Deduct from wallet
-        wallet.balance -= Decimal(str(amount))
-        wallet.save()
-        
-        # Log transaction
-        WalletTransaction.objects.create(
-            wallet=wallet,
-            type='withdrawal',
-            amount=Decimal(str(amount)),
-            description=f"Withdrawal to M-Pesa {phone_number}",
-            metadata={'phone': phone_number}
+
+        reference = str(uuid.uuid4())
+        success, message = wallet.withdraw(
+            amount,
+            reference,
+            description=f"Withdrawal to M-Pesa {phone_number}"
         )
-        
+        if not success:
+            return {"error": message}
+
+        tx = WalletTransaction.objects.filter(reference=reference).first()
+        if tx:
+            tx.status = 'PENDING'
+            tx.save(update_fields=['status'])
+
         if not self.intasend:
-            # Mock success
+            if tx:
+                tx.status = 'COMPLETED'
+                tx.save(update_fields=['status'])
             print(f"[Intersend-Mock] Payout {amount} to {phone_number}")
-            return {"status": "success", "message": "Funds sent to M-Pesa (Mock)"}
-             
+            return {"status": "success", "message": "Funds sent to M-Pesa (Mock)", "reference": reference}
+
         try:
             service = self.intasend.transfer
             response = service.mpesa(
@@ -133,21 +139,21 @@ class IntersendPayConnector(BaseConnector):
                     {'name': f'Withdrawal for {user.username}', 'account': phone_number, 'amount': str(amount)}
                 ]
             )
+            if tx:
+                tx.status = 'COMPLETED'
+                tx.save(update_fields=['status'])
             return response
-            
+
         except Exception as e:
-            # REFUND WALLET
             logger.error(f"Refund due to error: {e}")
-            wallet.balance += Decimal(str(amount))
-            wallet.save()
-            
-            WalletTransaction.objects.create(
-                wallet=wallet,
-                type='refund',
-                amount=Decimal(str(amount)),
-                description=f"Refund - API Error",
-                metadata={'error': str(e)}
+            wallet.deposit(
+                amount,
+                f"refund-{reference}",
+                description="Refund - API Error"
             )
+            if tx:
+                tx.status = 'FAILED'
+                tx.save(update_fields=['status'])
             return {"error": f"Payout failed: {str(e)}"}
 
     def check_status(self, invoice_id):

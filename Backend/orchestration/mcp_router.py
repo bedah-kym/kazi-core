@@ -10,6 +10,7 @@ from django.core.cache import cache
 from django_redis import get_redis_connection
 from asgiref.sync import sync_to_async
 import httpx
+from users.encryption import TokenEncryption
 from .base_connector import BaseConnector
 from .connectors.whatsapp_connector import WhatsAppConnector
 from .connectors.intersend_connector import IntersendPayConnector
@@ -327,17 +328,9 @@ class CalendarConnector(BaseConnector):
                 new_refresh = data.get('refresh_token')
                 
                 def update_profile():
-                    from cryptography.fernet import Fernet
-                    import base64, hashlib
-                    
-                    secret = (settings.SECRET_KEY or 'changeme').encode('utf-8')
-                    hash = hashlib.sha256(secret).digest()
-                    fernet_key = base64.urlsafe_b64encode(hash)
-                    f = Fernet(fernet_key)
-                    
-                    profile.encrypted_access_token = f.encrypt(new_access.encode('utf-8')).decode('utf-8')
+                    profile.encrypted_access_token = TokenEncryption.encrypt(new_access)
                     if new_refresh:
-                        profile.encrypted_refresh_token = f.encrypt(new_refresh.encode('utf-8')).decode('utf-8')
+                        profile.encrypted_refresh_token = TokenEncryption.encrypt(new_refresh)
                     profile.save()
                     return new_access
                 

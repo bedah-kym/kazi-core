@@ -1,5 +1,22 @@
 # Mathia Project - Task & Context Log
 
+## Current Session: Jan 24, 2026 - GPT-5
+**Objective:** Harden chat access and uploads, align wallet source of truth, add R2 storage, and tighten encryption.
+
+### Completed
+1. WebSocket room membership gating and sender validation; fixed Member usage for file/voice uploads.
+2. File/voice upload handling: base64 decode, size checks, safe filenames, and unique storage paths.
+3. Encrypted chatroom keys and integration credentials using TokenEncryption with legacy decryption fallback.
+4. Wallet reads/writes now use users.Wallet + WalletTransaction across services, views, and connectors.
+5. Cloudflare R2 storage configuration and dependencies added (django-storages/boto3).
+
+### Notes
+- R2 storage is enabled via `R2_ENABLED` and requires the `R2_*` environment variables.
+- Ledger models remain for future accounting, but v1 wallet operations use `users.Wallet`.
+
+---
+
+
 ## 🟢 Current Session: Jan 24, 2026 - Claude Haiku
 **Objective:** Deep scan codebase, document all features, prepare for testing phase.
 

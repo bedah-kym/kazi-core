@@ -91,29 +91,28 @@ class ReadOnlyPaymentConnector(BaseConnector):
     
     async def list_transactions(self, user, limit: int = 10) -> dict:
         """List recent transactions"""
-        from payments.models import LedgerAccount
         from asgiref.sync import sync_to_async
+        from users.models import WalletTransaction
+        from payments.services import WalletService
         
         try:
             def _get_transactions():
-                try:
-                    wallet = LedgerAccount.objects.get(user=user, account_type='LIABILITY')
-                    recent_entries = wallet.entries.select_related(
-                        'journal_entry'
-                    ).order_by('-journal_entry__timestamp')[:limit]
-                    
-                    transactions = []
-                    for entry in recent_entries:
-                        transactions.append({
-                            'date': entry.journal_entry.timestamp.strftime('%Y-%m-%d %H:%M'),
-                            'description': entry.journal_entry.description,
-                            'amount': float(entry.amount if entry.dr_cr == 'CREDIT' else -entry.amount),
-                            'type': entry.journal_entry.get_transaction_type_display(),
-                        })
-                    
-                    return transactions
-                except LedgerAccount.DoesNotExist:
-                    return []
+                wallet = WalletService.get_or_create_user_wallet(user)
+                recent_entries = WalletTransaction.objects.filter(
+                    wallet=wallet
+                ).order_by('-created_at')[:limit]
+                
+                transactions = []
+                for entry in recent_entries:
+                    amount = entry.amount if entry.type == 'CREDIT' else -entry.amount
+                    transactions.append({
+                        'date': entry.created_at.strftime('%Y-%m-%d %H:%M'),
+                        'description': entry.description,
+                        'amount': float(amount),
+                        'type': entry.get_type_display(),
+                    })
+                
+                return transactions
             
             transactions = await sync_to_async(_get_transactions)()
             

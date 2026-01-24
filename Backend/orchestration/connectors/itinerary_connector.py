@@ -83,17 +83,50 @@ class ItineraryConnector:
                 return {"status": "error", "message": f"End date error: {end_msg}"}
 
             def create_itin():
-                data = {"user_id": user_id, "title": title, "region": region}
+                # IMPROVEMENT: Reuse active itinerary if exists to prevent duplicates
+                active_itin = Itinerary.objects.filter(user_id=user_id, status='active').first()
+                if active_itin:
+                    logger.info(f"Reusing active itinerary {active_itin.id} for user {user_id}")
+                    # Update fields if provided
+                    if title and title != "New Itinerary":
+                         active_itin.title = title
+                    if budget_ksh:
+                         active_itin.budget_ksh = budget_ksh
+                    active_itin.save()
+                    return active_itin.id
+
+                # Create new if none exists
+                # FIX: Ensure start_date and end_date are never NULL to satisfy DB constraints
+                now = timezone.now()
+                default_start = now + timedelta(days=1)
+                default_end = default_start + timedelta(days=7)
+
+                data = {
+                    "user_id": user_id, 
+                    "title": title, 
+                    "region": region, 
+                    "status": 'active',
+                    "start_date": default_start,
+                    "end_date": default_end
+                }
+
                 if start_date:
-                    # Parse and make timezone-aware
-                    start = self._parse_date(start_date)
-                    start = timezone.make_aware(start) if timezone.is_naive(start) else start
-                    data["start_date"] = start
+                    try:
+                        start = self._parse_date(start_date)
+                        start = timezone.make_aware(start) if timezone.is_naive(start) else start
+                        data["start_date"] = start
+                    except Exception: pass
+                
                 if end_date:
-                    # Parse and make timezone-aware
-                    end = self._parse_date(end_date)
-                    end = timezone.make_aware(end) if timezone.is_naive(end) else end
-                    data["end_date"] = end
+                    try:
+                        end = self._parse_date(end_date)
+                        end = timezone.make_aware(end) if timezone.is_naive(end) else end
+                        data["end_date"] = end
+                    except Exception: 
+                        # If start_date was provided but end_date failed/missing, 
+                        # ensure end is at least start + duration or start + 7
+                        data["end_date"] = data["start_date"] + timedelta(days=7)
+
                 if budget_ksh:
                     data["budget_ksh"] = budget_ksh
 

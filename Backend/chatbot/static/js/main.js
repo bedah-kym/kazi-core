@@ -1,6 +1,6 @@
 // Global variables
 // MULTI-ROOM ARCHITECTURE
-const activeRooms = {}; // { roomId: { socket: WebSocket, initialized: bool } }
+const activeRooms = {}; // { roomId: { socket, initialized, oldestMsgId, hasMore, isLoadingHistory } }
 window.currentRoomId = typeof roomName !== 'undefined' ? roomName : null;
 window.usernameGlobal = typeof username !== 'undefined' ? username : null;
 const userPresenceMap = new Map();
@@ -107,9 +107,29 @@ function getOrCreateRoomUI(roomId) {
         typingDiv.style.display = 'none';
         typingDiv.innerHTML = '<em class="user-name"></em><span></span><span></span><span></span>';
 
+        // Create history loader (shown when loading older messages)
+        const historyLoader = document.createElement('div');
+        historyLoader.id = `history-loader-${roomId}`;
+        historyLoader.className = 'history-loader';
+        historyLoader.style.display = 'none';
+        historyLoader.innerHTML = '<div class="history-loader-dot"></div><div class="history-loader-dot"></div><div class="history-loader-dot"></div>';
+
+        // Create sentinel for infinite scroll detection
+        const sentinel = document.createElement('div');
+        sentinel.id = `history-sentinel-${roomId}`;
+        sentinel.className = 'history-sentinel';
+
+        // Append to UL so they are part of scroll flow
+        // Order: Sentinel -> Loader -> Messages
+        ul.appendChild(sentinel);
+        ul.appendChild(historyLoader);
+
         roomDiv.appendChild(ul);
         roomDiv.appendChild(typingDiv);
         container.appendChild(roomDiv);
+
+        // Setup infinite scroll observer after DOM is ready
+        setTimeout(() => setupHistoryObserver(roomId), 100);
     }
     return roomDiv;
 }
@@ -153,7 +173,13 @@ function connectToChat(roomId) {
         'ws://' + window.location.host + '/ws/chat/' + roomId + '/'
     );
 
-    activeRooms[roomId] = { socket: socket, initialized: false };
+    activeRooms[roomId] = {
+        socket: socket,
+        initialized: false,
+        oldestMsgId: null,
+        hasMore: true,
+        isLoadingHistory: false
+    };
 
     // Initialize chat connection
     socket.onopen = function (e) {
@@ -185,12 +211,46 @@ function connectToChat(roomId) {
             return;
         }
         if (data.command === 'messages') {
-            for (let i = data.messages.length - 1; i >= 0; i--) {
-                createMessage(data.messages[i], rId);
+            const room = activeRooms[rId];
+            const isHistoryLoad = room && room.isLoadingHistory;
+            const messagesList = document.getElementById(`messages-room-${rId}`);
+
+            // Record scroll position before prepending (for history loads)
+            const prevScrollHeight = messagesList ? messagesList.scrollHeight : 0;
+
+            // For history loads, prepend messages at the TOP
+            if (isHistoryLoad && messagesList) {
+                // Create messages in correct order (oldest first for prepending)
+                for (let i = 0; i < data.messages.length; i++) {
+                    createMessage(data.messages[i], rId, true); // true = prepend
+                }
+
+                // Restore scroll position so view doesn't jump
+                if (messagesList && room.scrollRestoreData) {
+                    const newScrollHeight = messagesList.scrollHeight;
+                    messagesList.scrollTop = newScrollHeight - room.scrollRestoreData.prevScrollHeight;
+                }
+            } else {
+                // Initial load - append normally (newest at bottom)
+                for (let i = data.messages.length - 1; i >= 0; i--) {
+                    createMessage(data.messages[i], rId);
+                }
+                scrollToLastMessage(rId);
             }
-            scrollToLastMessage(rId);
-            // Hide Loader after messages loaded
+
+            // Update pagination state from response
+            if (room) {
+                room.hasMore = data.has_more !== false;
+                if (data.oldest_id) room.oldestMsgId = data.oldest_id;
+                room.isLoadingHistory = false;
+                room.scrollRestoreData = null;
+            }
+
+            // Hide loaders
             hideRoomLoader(rId);
+            const historyLoader = document.getElementById(`history-loader-${rId}`);
+            if (historyLoader) historyLoader.style.display = 'none';
+
             return;
         }
         if (data.command === 'new_message') {
@@ -313,8 +373,8 @@ if (typeof marked !== 'undefined') {
     });
 }
 
-// FIX: createMessage now accepts roomId parameter
-function createMessage(data, roomId) {
+// FIX: createMessage now accepts roomId parameter and prepend flag
+function createMessage(data, roomId, prepend = false) {
     if (!data || !data.member || !data.content || !data.timestamp) {
         console.error('Invalid message data:', data);
         return;
@@ -433,7 +493,195 @@ function createMessage(data, roomId) {
         });
     }
 
-    messagesList.appendChild(msgListTag);
+    // DATE SEPARATOR LOGIC
+    const msgDate = getMessageDate(data.timestamp);
+
+    if (prepend && messagesList.firstChild) {
+        // Prepending: Check if the *next* message (current firstChild) has a different date
+        // If so, it means the current firstChild is the start of a new day relative to us
+        // So we need to put a separator *above* the current firstChild
+
+        let refNode = messagesList.firstChild;
+        // Skip existing separators or loaders to find actual message
+        while (refNode && (refNode.classList.contains('date-separator') || refNode.classList.contains('history-loader'))) {
+            refNode = refNode.nextSibling;
+        }
+
+        if (refNode && refNode.dataset && refNode.dataset.timestamp) {
+            const nextMsgDate = getMessageDate(parseInt(refNode.dataset.timestamp)); // timestamp stored on li?
+            // Actually, createMessage doesn't store timestamp on li yet. Let's fix that below.
+
+            // Wait, we can't easily get timestamp from DOM unless we store it.
+            // Strategy: We rely on the fact that refNode implies a date.
+            // Better: Store timestamp on the li element always.
+        }
+    }
+
+    // Let's modify the li creation to store timestamp for this logic
+    msgListTag.dataset.timestamp = new Date(data.timestamp).getTime();
+
+    if (prepend) {
+        // PREPEND LOGIC
+        if (messagesList.firstChild) {
+            // Check the node that is currently at the top
+            let nextNode = messagesList.firstChild;
+            // If the top node is a loader or sentinel, skip it
+            while (nextNode && (nextNode.classList.contains('history-loader') || nextNode.classList.contains('history-sentinel'))) {
+                nextNode = nextNode.nextSibling;
+            }
+
+            // If the top node is a date separator, that separator belongs to the group below it.
+            // We are inserting *above* that separator.
+            // So we just insert our message.
+            // BUT: If the top node is a MESSAGE, we compare dates.
+
+            if (nextNode && nextNode.tagName === 'LI' && nextNode.dataset.timestamp) {
+                const nextDate = getMessageDate(parseInt(nextNode.dataset.timestamp));
+                if (msgDate.getTime() !== nextDate.getTime()) {
+                    // Different days. The message BELOW us needs a separator above it.
+                    // Insert Separator BEFORE nextNode
+                    const sep = createDateSeparator(nextDate);
+                    messagesList.insertBefore(sep, nextNode);
+                }
+            }
+        }
+        // Always insert the message at top (before whatever is first now)
+        // If we just inserted a sep, it is now first. We insert before it. 
+        // Logic: [Msg_A] -> Prepend Msg_B (diff date)
+        // 1. Insert Sep_A before Msg_A. List: [Sep_A, Msg_A]
+        // 2. Insert Msg_B before Sep_A. List: [Msg_B, Sep_A, Msg_A] -> Correct.
+
+        // Wait, insertBefore(newNode, referenceNode).
+        // If we insert Sep, reference matches NextNode.
+        // Then we insert Msg, reference matches (Sep? No, we want Msg to be above Sep? No.)
+        // Visual:
+        // [Jan 2 Msg]
+        // Prepend Jan 1 Msg.
+        // Result: [Jan 1 Msg] [Sep Jan 2] [Jan 2 Msg].
+
+        let targetNode = messagesList.firstChild;
+        // Ensure we insert after the loader if it exists/visible?
+        // Actually loader is usually hidden or removed.
+        // But if we have one, we want to insert AFTER it (visually below).
+        // But prepend adds to TOP.
+
+        // Simplified Prepend:
+        // 1. If date(next_msg) != date(us), inject Sep(date(next_msg)) above next_msg.
+        // 2. Inject us at very top (below loader if exists).
+
+        // Find the effective "top" message
+        let topNode = messagesList.firstChild;
+        while (topNode && (topNode.classList.contains('history-loader') || topNode.classList.contains('history-sentinel'))) {
+            topNode = topNode.nextSibling;
+        }
+
+        if (topNode && topNode.tagName === 'LI' && topNode.dataset.timestamp) {
+            const topDate = getMessageDate(parseInt(topNode.dataset.timestamp));
+            if (msgDate.getTime() !== topDate.getTime()) {
+                const sep = createDateSeparator(topDate);
+                messagesList.insertBefore(sep, topNode);
+            }
+        }
+
+        // Now find insertion point again (might have changed if we added sep)
+        // actually we want to insert 'msgListTag' BEFORE 'topNode' (which might be the sep we just added? No).
+        // If we added Sep, 'topNode' is still the message. Sep is prevSibling of topNode.
+        // We want Msg to be before Sep. 
+        // So we insert before (Sep if existed, else topNode).
+
+        // Let's restart logic cleanly:
+        // We want: [Msg] [Sep?] [OldTop]
+
+        let insertionPoint = messagesList.firstChild;
+        // Skip loader and sentinel logic for date separator insertion point
+        while (insertionPoint && (insertionPoint.classList.contains('history-loader') || insertionPoint.classList.contains('history-sentinel'))) {
+            insertionPoint = insertionPoint.nextSibling;
+        }
+
+        if (insertionPoint && insertionPoint.tagName === 'LI' && insertionPoint.dataset.timestamp) {
+            const topDate = getMessageDate(parseInt(insertionPoint.dataset.timestamp));
+            // If dates different, we need a separator for the OLD top message
+            if (msgDate.getTime() !== topDate.getTime()) {
+                const sep = createDateSeparator(topDate);
+                messagesList.insertBefore(sep, insertionPoint);
+                // Now insertionPoint is still the old message.
+                // The Sep is at insertionPoint.previousSibling
+                // We want our new message to be BEFORE the Sep? 
+                // [Msg] [Sep] [OldMsg]
+                // So we insert before Sep.
+                insertionPoint = sep;
+            }
+        } else if (insertionPoint && insertionPoint.classList.contains('date-separator')) {
+            // If top is already a separator (e.g. from previous batch), it belongs to the message below it.
+            // We are adding a message ABOVE it.
+            // Does that separator date match our new message?
+            const sepDateLabel = insertionPoint.textContent; // "Today", etc.
+            // Hard to compare text.
+            // But valid logic: If a separator is there, we assume it separates the day below from the day above.
+            // Since we are adding above, we are in "day above".
+            // So we just insert before it. 
+            // IF dates match, we might have a double separator?
+            // e.g. [Sep Jan 1] [Msg Jan 1 A].
+            // We add [Msg Jan 1 B].
+            // We insert before Sep? -> [Msg B] [Sep] [Msg A]. -> Wrong visually.
+
+            // Issue: Prepend logic relies on the assumption that we are traversing BACKWARDS in time.
+            // If we have [Sep Jan 2] [Msg Jan 2].
+            // We add [Msg Jan 1]. Different day.
+            // Reference is [Sep Jan 2].
+            // We insert [Msg Jan 1] before [Sep Jan 2].
+            // Result: [Msg Jan 1] [Sep Jan 2] [Msg Jan 2]. -> Correct!
+
+            // Case: [Sep Jan 1] [Msg Jan 1 A].
+            // We add [Msg Jan 1 B]. Same day.
+            // We insert before [Sep Jan 1].
+            // Result: [Msg Jan 1 B] [Sep Jan 1] [Msg Jan 1 A]. -> WRONG.
+            // Separator should be above the GROUP.
+            // Correct: [Sep Jan 1] [Msg B] [Msg A].
+
+            // So, if top is a separator:
+            // Check if `date(Msg)` matches `date(Separator)`.
+            // IF MATCH: We should insert AFTER separator?
+            //    Only if we want the separator to stay at top.
+            //    If we insert after separtor: [Sep] [Msg B] [Msg A]. -> Correct.
+
+            // Strategy: Store timestamp on Separator too.
+            if (insertionPoint.dataset.timestamp) {
+                const sepDate = getMessageDate(parseInt(insertionPoint.dataset.timestamp));
+                if (msgDate.getTime() === sepDate.getTime()) {
+                    // Same day! The separator is already here.
+                    // We put our message BELOW the separator (so separator stays top).
+                    if (insertionPoint.nextSibling) {
+                        messagesList.insertBefore(msgListTag, insertionPoint.nextSibling);
+                    } else {
+                        messagesList.appendChild(msgListTag);
+                    }
+                    return; // Done
+                }
+            }
+        }
+
+        messagesList.insertBefore(msgListTag, insertionPoint);
+
+    } else {
+        // APPEND LOGIC (Normal)
+        // Check last child
+        const lastNode = messagesList.lastChild;
+        if (lastNode && lastNode.tagName === 'LI' && lastNode.dataset.timestamp) {
+            const lastDate = getMessageDate(parseInt(lastNode.dataset.timestamp));
+            if (msgDate.getTime() !== lastDate.getTime()) {
+                const sep = createDateSeparator(msgDate);
+                messagesList.appendChild(sep);
+            }
+        } else if (!lastNode) {
+            // First message ever? Show separator?
+            // Usually yes for "Today".
+            const sep = createDateSeparator(msgDate);
+            messagesList.appendChild(sep);
+        }
+
+        messagesList.appendChild(msgListTag);
+    }
 
     // Add dropdown menu to AI messages
     if (window.messageActions && data.id) {
@@ -454,10 +702,12 @@ function createMessage(data, roomId) {
         }
     }
 
-    // Auto-scroll if we're viewing this room
-    const currentRid = window.currentRoomId || (typeof roomName !== 'undefined' ? roomName : null);
-    if (targetRoomId === currentRid) {
-        messagesList.scrollTop = messagesList.scrollHeight;
+    // Auto-scroll only if strictly necessary (not prepending)
+    if (!prepend) {
+        const currentRid = window.currentRoomId || (typeof roomName !== 'undefined' ? roomName : null);
+        if (targetRoomId === currentRid) {
+            messagesList.scrollTop = messagesList.scrollHeight;
+        }
     }
 }
 
@@ -521,6 +771,53 @@ function renderVoiceBubble(container, data) {
             durationSpan.textContent = `${mins}:${secs.toString().padStart(2, '0')}`;
         });
     }, 50);
+}
+
+/**
+ * Infinite Scroll: Setup IntersectionObserver to trigger loading older messages
+ */
+function setupHistoryObserver(roomId) {
+    const sentinel = document.getElementById(`history-sentinel-${roomId}`);
+    if (!sentinel) return;
+
+    const observer = new IntersectionObserver((entries) => {
+        if (entries[0].isIntersecting) {
+            loadOlderMessages(roomId);
+        }
+    }, { threshold: 0.1 });
+
+    observer.observe(sentinel);
+    console.log(`📜 History observer setup for room ${roomId}`);
+}
+
+/**
+ * Infinite Scroll: Load older messages with scroll position lock
+ */
+function loadOlderMessages(roomId) {
+    const room = activeRooms[roomId];
+    if (!room || !room.hasMore || room.isLoadingHistory) return;
+
+    room.isLoadingHistory = true;
+
+    // Show history loader
+    const loader = document.getElementById(`history-loader-${roomId}`);
+    if (loader) loader.style.display = 'flex';
+
+    // Record scroll position before loading
+    const messagesList = document.getElementById(`messages-room-${roomId}`);
+    const prevScrollHeight = messagesList ? messagesList.scrollHeight : 0;
+
+    console.log(`📜 Loading older messages for room ${roomId}, before_id: ${room.oldestMsgId}`);
+
+    // Request older messages via WebSocket
+    room.socket.send(JSON.stringify({
+        command: 'fetch_messages',
+        chatid: roomId,
+        before_id: room.oldestMsgId
+    }));
+
+    // Store scroll restoration data for message handler
+    room.scrollRestoreData = { prevScrollHeight, messagesList };
 }
 
 // FIX: FetchMessages now uses room-specific socket
@@ -589,6 +886,35 @@ if (chatInput) {
     });
 }
 
+// Date Separator Helpers
+function getMessageDate(timestamp) {
+    if (!timestamp) return null;
+    const d = new Date(timestamp);
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+function formatDateLabel(dateObj) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+
+    if (dateObj.getTime() === today.getTime()) return 'Today';
+    if (dateObj.getTime() === yesterday.getTime()) return 'Yesterday';
+
+    return dateObj.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+}
+
+function createDateSeparator(dateObj) {
+    const div = document.createElement('div');
+    div.className = 'date-separator';
+    // Store timestamp for potential comparisons
+    div.dataset.timestamp = dateObj.getTime();
+    div.innerHTML = `<span class="separator-text">${formatDateLabel(dateObj)}</span>`;
+    return div;
+}
+
 // Delegated handler for copy buttons (created dynamically in createMessage)
 document.addEventListener('click', function (e) {
     const cb = e.target.closest('.copy-btn');
@@ -619,10 +945,10 @@ if (chatSubmit) {
         if (message) {
             const socket = getCurrentSocket();
             if (socket && socket.readyState === WebSocket.OPEN) {
-                // INSTANT THINKING: If it's an AI trigger, show thinking immediately
-                if (message.toLowerCase().includes('@mathia') && window.mathiaAssistant) {
-                    window.mathiaAssistant.showAIThinking();
-                }
+                // INSTANT THINKING: Disabled to prevent ordering race condition (Bubble appearing before User Msg)
+                // if (message.toLowerCase().includes('@mathia') && window.mathiaAssistant) {
+                //     window.mathiaAssistant.showAIThinking();
+                // }
 
                 socket.send(JSON.stringify({
                     'message': message,

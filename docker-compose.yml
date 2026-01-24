@@ -47,7 +47,7 @@ services:
       - .env
     environment:
       - TZ=${TZ:-Africa/Nairobi}
-      - DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,[::1],web
+      - DJANGO_ALLOWED_HOSTS=*
       - CELERY_BROKER_URL=${REDIS_URL:-redis://redis:6379/0}
       - CELERY_RESULT_BACKEND=${REDIS_URL:-redis://redis:6379/0}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}

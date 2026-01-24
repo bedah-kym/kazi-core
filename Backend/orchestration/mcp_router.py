@@ -42,7 +42,7 @@ class MCPRouter:
             # Existing connectors
             "find_jobs": UpworkConnector(),
             "schedule_meeting": CalendarConnector(),
-            "check_payments": StripeConnector(),
+            "check_payments": ReadOnlyPaymentConnector(),
             "search_info": SearchConnector(),
             "get_weather": WeatherConnector(),
             "search_gif": GiphyConnector(),
@@ -63,6 +63,9 @@ class MCPRouter:
             "search_transfers": TravelTransfersConnector(),
             "search_events": TravelEventsConnector(),
             "create_itinerary": ItineraryConnector(),
+            "view_itinerary": ItineraryConnector(),
+            "add_to_itinerary": ItineraryConnector(),
+            "book_travel_item": ItineraryConnector(),
         }
     
     async def route(self, intent: Dict, user_context: Dict) -> Dict:
@@ -348,21 +351,7 @@ class CalendarConnector(BaseConnector):
             return None
 
 
-class StripeConnector(BaseConnector):
-    """Mock Stripe connector - returns fake payment data"""
-    
-    async def execute(self, parameters: Dict, context: Dict) -> Dict:
-        """Get recent payments and balance"""
-        logger.info(f"StripeConnector called with: {parameters}")
-        
-        return {
-            "balance": 1250.50,
-            "currency": "USD",
-            "recent_payments": [
-                {"id": "pay_001", "amount": 500.00, "status": "completed", "date": "2025-01-08", "description": "Python Development Project"},
-                {"id": "pay_002", "amount": 750.50, "status": "pending", "date": "2025-01-10", "description": "API Integration Work"}
-            ]
-        }
+
 
 
 class SearchConnector(BaseConnector):

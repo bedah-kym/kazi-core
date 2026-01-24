@@ -257,6 +257,10 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'payments.tasks.process_recurring_invoices',
         'schedule': 86400.0,  # Daily
     },
+    'check-due-reminders': {
+        'task': 'chatbot.tasks.check_due_reminders',
+        'schedule': 60.0,  # Every minute
+    },
 }
 
 # AI Moderation Settings

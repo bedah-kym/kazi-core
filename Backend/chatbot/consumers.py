@@ -400,12 +400,17 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     async def fetch_messages(self, data):
         try:
-            messages = await self.get_last_10_messages(data['chatid'])
+            chatid = data['chatid']
+            before_id = data.get('before_id')  # None for initial load
+            result = await self.get_paginated_messages(chatid, before_id=before_id)
+            messages = result['messages']
             # Let message_to_json handle decryption & formatting
             messages_json = [await self.message_to_json(m) for m in messages]
             await self.send_message({
                 'command': 'messages',
-                'messages': messages_json
+                'messages': messages_json,
+                'has_more': result['has_more'],
+                'oldest_id': result['oldest_id']
             })
         except Exception as e:
             logger.error(f"Error in fetch_messages: {str(e)}")
@@ -1143,9 +1148,42 @@ class ChatConsumer(AsyncWebsocketConsumer):
         }))
         
     @classmethod
+    async def get_paginated_messages(cls, chatid, before_id=None, limit=20):
+        """Fetch messages with cursor-based pagination.
+        
+        Args:
+            chatid: The chatroom ID
+            before_id: If provided, fetch messages with id < before_id (for loading older)
+            limit: Number of messages to fetch (default 20)
+            
+        Returns:
+            Dict with 'messages', 'has_more', 'oldest_id'
+        """
+        def _fetch():
+            qs = Message.objects.filter(chatroom__id=chatid)
+            if before_id:
+                qs = qs.filter(id__lt=before_id)
+            # Optimize: select_related to avoid N+1 queries on member.User
+            qs = qs.select_related('member__User').order_by('-timestamp')[:limit + 1]
+            msgs = list(qs)
+            # Check if there are more messages beyond this page
+            has_more = len(msgs) > limit
+            return msgs[:limit], has_more
+        
+        messages, has_more = await sync_to_async(_fetch)()
+        oldest_id = messages[-1].id if messages else None
+        return {
+            'messages': messages,
+            'has_more': has_more,
+            'oldest_id': oldest_id
+        }
+    
+    # Legacy method for backwards compatibility
+    @classmethod
     async def get_last_10_messages(cls, chatid):
-        messages = Message.objects.filter(chatroom__id=chatid).order_by('-timestamp')[:10]
-        return await sync_to_async(list)(messages)
+        """Legacy method - use get_paginated_messages instead."""
+        result = await cls.get_paginated_messages(chatid, before_id=None, limit=10)
+        return result['messages']
 
     @classmethod
     async def get_current_chatroom(cls, chatid):

@@ -31,7 +31,7 @@ class ReadOnlyPaymentConnector(BaseConnector):
         action = parameters.get("action")
         
         # Whitelist of allowed actions
-        ALLOWED_ACTIONS = ['check_balance', 'list_transactions', 'check_invoice_status']
+        ALLOWED_ACTIONS = ['check_balance', 'list_transactions', 'check_invoice_status', 'check_payments']
         
         if action not in ALLOWED_ACTIONS:
             return {
@@ -56,6 +56,18 @@ class ReadOnlyPaymentConnector(BaseConnector):
             return await self.list_transactions(user, parameters.get("limit", 10))
         elif action == "check_invoice_status":
             return await self.check_invoice_status(parameters.get("invoice_id"))
+        elif action == "check_payments":
+             # Summary view: Balance + Last 3 transactions
+            balance_data = await self.check_balance(user)
+            tx_data = await self.list_transactions(user, limit=3)
+            
+            return {
+                "status": "success",
+                "balance": balance_data.get("balance", 0),
+                "currency": balance_data.get("currency", "KES"),
+                "recent_transactions": tx_data.get("transactions", []),
+                "message": f"Your balance is {balance_data.get('balance', 0)} {balance_data.get('currency', 'KES')}. Here are your last 3 transactions."
+            }
         
         return {"error": "Unknown action"}
     

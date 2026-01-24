@@ -4,193 +4,180 @@
 
 <head>
     <meta charset="UTF-8">
-    <title>My Itineraries | Mathia</title>
-    <!-- Bootstrap CSS -->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My Trips | Mathia</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <!-- Google Fonts -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-
     <style>
         body {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             font-family: 'Inter', sans-serif;
-            min-height: 100vh;
-            padding: 40px 0;
-        }
-
-        .page-header {
-            color: white;
-            text-align: center;
-            margin-bottom: 40px;
-        }
-
-        .itinerary-card {
-            background: white;
-            border-radius: 16px;
-            padding: 24px;
-            margin-bottom: 20px;
-            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
-            transition: transform 0.2s, box-shadow 0.2s;
-        }
-
-        .itinerary-card:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 12px 28px rgba(0, 0, 0, 0.15);
-        }
-
-        .itinerary-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: start;
-            margin-bottom: 16px;
-        }
-
-        .itinerary-title {
-            font-size: 1.5rem;
-            font-weight: 600;
-            color: #2d3748;
-            margin: 0;
-        }
-
-        .itinerary-status {
-            padding: 6px 12px;
-            border-radius: 20px;
-            font-size: 0.85rem;
-            font-weight: 500;
-            text-transform: uppercase;
-        }
-
-        .status-draft {
-            background: #fef3c7;
-            color: #92400e;
-        }
-
-        .status-confirmed {
-            background: #d1fae5;
-            color: #065f46;
-        }
-
-        .status-completed {
-            background: #e0e7ff;
-            color: #3730a3;
-        }
-
-        .itinerary-meta {
-            display: flex;
-            gap: 24px;
-            margin-bottom: 12px;
-        }
-
-        .meta-item {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            color: #64748b;
-            font-size: 0.95rem;
-        }
-
-        .meta-item i {
-            color: #6366f1;
-        }
-
-        .btn-view {
-            background: linear-gradient(135deg, #667eea, #764ba2);
-            color: white;
-            border: none;
-            border-radius: 8px;
-            padding: 10px 24px;
-            font-weight: 500;
-        }
-
-        .btn-view:hover {
-            opacity: 0.9;
-            color: white;
-        }
-
-        .empty-state {
-            text-align: center;
-            padding: 60px 20px;
-            color: white;
-        }
-
-        .empty-state i {
-            font-size: 4rem;
-            opacity: 0.7;
-            margin-bottom: 20px;
         }
     </style>
 </head>
 
-<body>
+<body class="bg-gray-50 min-h-screen">
 
-    <div class="container" style="max-width: 900px;">
+    <div class="max-w-5xl mx-auto px-4 py-12">
         <!-- Header -->
-        <div class="page-header">
-            <h1 class="display-4 fw-bold mb-2">
-                <i class="fas fa-suitcase-rolling me-2"></i>
-                My Travel Plans
-            </h1>
-            <p class="lead">All your adventures in one place</p>
-            <a href="/travel/plan/" class="btn btn-light btn-lg mt-3">
-                <i class="fas fa-plus me-2"></i>Plan New Trip
+        <div class="flex justify-between items-center mb-8">
+            <div>
+                <h1 class="text-3xl font-bold tracking-tight text-gray-900">My Trips</h1>
+                <p class="text-gray-500 mt-1">Manage your travel itineraries and plans.</p>
+            </div>
+            <a href="/travel/plan/"
+                class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none ring-offset-background bg-slate-900 text-white hover:bg-slate-900/90 h-10 py-2 px-4 shadow">
+                <i class="fas fa-plus mr-2"></i> New Trip
             </a>
         </div>
 
-        <!-- Itinerary List -->
-        {% if itineraries %}
-        {% for itinerary in itineraries %}
-        <div class="itinerary-card">
-            <div class="itinerary-header">
-                <h3 class="itinerary-title">{{ itinerary.title }}</h3>
-                <span class="itinerary-status status-{{ itinerary.status }}">{{ itinerary.status }}</span>
+        <!-- Metric Cards (Optional) -->
+        <div class="grid gap-4 md:grid-cols-3 mb-8">
+            <div class="rounded-xl border bg-card text-card-foreground shadow-sm bg-white p-6">
+                <div class="flex flex-row items-center justify-between space-y-0 pb-2">
+                    <h3 class="tracking-tight text-sm font-medium text-gray-500">Total Trips</h3>
+                    <i class="fas fa-globe text-gray-400"></i>
+                </div>
+                <div class="text-2xl font-bold text-gray-900">{{ itineraries.count }}</div>
             </div>
-
-            <div class="itinerary-meta">
-                <div class="meta-item">
-                    <i class="fas fa-map-marker-alt"></i>
-                    <span>{{ itinerary.destination }}</span>
+            <div class="rounded-xl border bg-card text-card-foreground shadow-sm bg-white p-6">
+                <div class="flex flex-row items-center justify-between space-y-0 pb-2">
+                    <h3 class="tracking-tight text-sm font-medium text-gray-500">Upcoming</h3>
+                    <i class="fas fa-calendar text-gray-400"></i>
                 </div>
-                <div class="meta-item">
-                    <i class="fas fa-calendar-alt"></i>
-                    <span>{{ itinerary.start_date|date:"M d, Y" }} - {{ itinerary.end_date|date:"M d, Y" }}</span>
+                <div class="text-2xl font-bold text-gray-900">
+                    {{ upcoming_count|default:"-" }}
                 </div>
-                {% if itinerary.budget_ksh %}
-                <div class="meta-item">
-                    <i class="fas fa-wallet"></i>
-                    <span>{{ itinerary.budget_ksh|floatformat:0 }} KES</span>
-                </div>
-                {% endif %}
             </div>
+            <div class="rounded-xl border bg-card text-card-foreground shadow-sm bg-white p-6">
+                <div class="flex flex-row items-center justify-between space-y-0 pb-2">
+                    <h3 class="tracking-tight text-sm font-medium text-gray-500">Completed</h3>
+                    <i class="fas fa-check-circle text-gray-400"></i>
+                </div>
+                <div class="text-2xl font-bold text-gray-900">
+                    {{ completed_count|default:"-" }}
+                </div>
+            </div>
+        </div>
 
-            {% if itinerary.description %}
-            <p class="text-muted mb-3">{{ itinerary.description|truncatewords:20 }}</p>
+        <!-- Itineraries Grid -->
+        <div class="grid gap-6">
+            {% for itinerary in itineraries %}
+            {% if itinerary.status != 'archived' %}
+            <div
+                class="rounded-xl border bg-card text-card-foreground shadow-sm bg-white hover:shadow-md transition-all duration-200">
+                <div class="p-6">
+                    <div class="flex justify-between items-start mb-4">
+                        <div class="space-y-1">
+                            <h3 class="text-xl font-semibold leading-none tracking-tight text-gray-900">
+                                <a href="{% url 'travel:view_itinerary' itinerary.id %}"
+                                    class="hover:underline decoration-slate-400 underline-offset-4">
+                                    {{ itinerary.title }}
+                                </a>
+                            </h3>
+                            <div class="flex items-center text-sm text-gray-500 pt-1">
+                                <i class="fas fa-map-marker-alt w-4 mr-1 text-center"></i>
+                                {{ itinerary.destination|default:itinerary.region|title }}
+                            </div>
+                        </div>
+                        <div class="flex items-center space-x-2">
+                            <span class="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold
+                                {% if itinerary.status == 'draft' %} bg-yellow-50 text-yellow-700 border-yellow-200
+                                {% elif itinerary.status == 'completed' %} bg-blue-50 text-blue-700 border-blue-200
+                                {% else %} bg-green-50 text-green-700 border-green-200 {% endif %}">
+                                {{ itinerary.status|title }}
+                            </span>
+
+                            <!-- Dropdown Menu / Actions -->
+                            <div class="flex items-center gap-1 ml-2">
+                                <form method="POST" action="{% url 'travel:archive_itinerary' itinerary.id %}"
+                                    onsubmit="return confirm('Archive this trip?');">
+                                    {% csrf_token %}
+                                    <button type="submit"
+                                        class="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-md transition-colors"
+                                        title="Archive">
+                                        <i class="fas fa-archive"></i>
+                                    </button>
+                                </form>
+                                <form method="POST" action="{% url 'travel:delete_itinerary' itinerary.id %}"
+                                    onsubmit="return confirm('Are you sure you want to permanently delete this trip?');">
+                                    {% csrf_token %}
+                                    <button type="submit"
+                                        class="p-2 text-red-300 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors"
+                                        title="Delete">
+                                        <i class="fas fa-trash-alt"></i>
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 py-4 border-t border-b border-gray-100 mb-4">
+                        <div class="space-y-1">
+                            <p class="text-xs font-medium text-gray-500 uppercase tracking-wider">Dates</p>
+                            <p class="text-sm font-medium text-gray-900">
+                                {% if itinerary.start_date %}
+                                {{ itinerary.start_date|date:"M d" }} - {{ itinerary.end_date|date:"M d, Y" }}
+                                {% else %}
+                                Dates not set
+                                {% endif %}
+                            </p>
+                        </div>
+                        <div class="space-y-1">
+                            <p class="text-xs font-medium text-gray-500 uppercase tracking-wider">Duration</p>
+                            <p class="text-sm font-medium text-gray-900">{{ itinerary.duration_days }} Days</p>
+                        </div>
+                        <div class="space-y-1">
+                            <p class="text-xs font-medium text-gray-500 uppercase tracking-wider">Budget</p>
+                            <p class="text-sm font-medium text-gray-900">
+                                {% if itinerary.budget_ksh %}
+                                KES {{ itinerary.budget_ksh|floatformat:0 }}
+                                {% else %}
+                                -
+                                {% endif %}
+                            </p>
+                        </div>
+                        <div class="space-y-1">
+                            <p class="text-xs font-medium text-gray-500 uppercase tracking-wider">Items</p>
+                            <p class="text-sm font-medium text-gray-900">{{ itinerary.items.count }} Activities</p>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center justify-between">
+                        <div class="text-xs text-gray-400">
+                            Last updated {{ itinerary.updated_at|timesince }} ago
+                        </div>
+                        <a href="{% url 'travel:view_itinerary' itinerary.id %}"
+                            class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background border border-slate-200 bg-white hover:bg-slate-100 hover:text-slate-900 h-9 px-4 py-2">
+                            View Details
+                        </a>
+                    </div>
+                </div>
+            </div>
             {% endif %}
-
-            <div class="d-flex justify-content-between align-items-center">
-                <div class="text-muted small">
-                    <i class="fas fa-clock me-1"></i>
-                    Created {{ itinerary.created_at|timesince }} ago
+            {% empty %}
+            <div class="text-center py-20 bg-white rounded-xl border border-dashed border-gray-300">
+                <div class="mx-auto h-12 w-12 text-gray-300 mb-4">
+                    <i class="fas fa-suitcase fa-3x"></i>
                 </div>
-                <a href="/travel/view/{{ itinerary.id }}/" class="btn btn-view">
-                    View Details
-                    <i class="fas fa-arrow-right ms-1"></i>
-                </a>
+                <h3 class="mt-2 text-sm font-semibold text-gray-900">No trips planned</h3>
+                <p class="mt-1 text-sm text-gray-500">Get started by creating a new travel itinerary.</p>
+                <div class="mt-6 flex flex-col sm:flex-row gap-3 justify-center">
+                    <a href="/travel/plan/"
+                        class="inline-flex items-center rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-900/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600">
+                        <i class="fas fa-plus -ml-0.5 mr-1.5 h-4 w-4"></i>
+                        New Trip
+                    </a>
+                    <a href="{% url 'chatbot:redirect_to_home' %}"
+                        class="inline-flex items-center rounded-md bg-white border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-600">
+                        <i class="fas fa-robot -ml-0.5 mr-1.5 h-4 w-4"></i>
+                        Go to Chat
+                    </a>
+                </div>
             </div>
+            {% endfor %}
         </div>
-        {% endfor %}
-        {% else %}
-        <!-- Empty State -->
-        <div class="empty-state">
-            <i class="fas fa-plane-departure"></i>
-            <h3>No trips planned yet!</h3>
-            <p class="mb-4">Start planning your next adventure with Mathia</p>
-            <a href="/travel/plan/" class="btn btn-light btn-lg">
-                <i class="fas fa-plus me-2"></i>Plan Your First Trip
-            </a>
-        </div>
-        {% endif %}
     </div>
 
 </body>

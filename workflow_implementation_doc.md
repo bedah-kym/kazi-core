@@ -1,5 +1,21 @@
 # AI-Powered Dynamic Workflow Builder - Complete Implementation Guide
 
+> **⚠️ STATUS UPDATE (January 24, 2026 by Claude Haiku)**
+> 
+> This document is a **specification & implementation guide** for the advanced workflow automation feature.
+> 
+> **Current Status:**
+> - ❌ Workflow builder: **NOT YET IMPLEMENTED** (feature spec only)
+> - ✅ Core infrastructure supporting features: **FULLY IMPLEMENTED** 
+>   - Intent parsing, routing, connectors, LLM integration, webhooks
+>   - See [CURRENT_FEATURES.md](CURRENT_FEATURES.md) for all implemented features
+> 
+> **Use this document to:** Implement the workflow builder as the next major feature after testing phase.
+> 
+> **For current capabilities,** see [docs/CURRENT_FEATURES.md](docs/CURRENT_FEATURES.md) - comprehensive feature audit.
+
+---
+
 ## Executive Summary
 
 This document contains a complete implementation plan for adding AI-powered workflow automation to an existing Django application. Users can create custom multi-step workflows through natural language conversation with Claude AI, and Temporal handles reliable execution.

@@ -1,0 +1,117 @@
+version: "3.9"
+
+# OCI deployment (ARM/AMD). Push mathia-web image to OCIR, then set WEB_IMAGE below.
+# Environment comes from .env (copy a production-safe variant to the server).
+
+services:
+  db:
+    image: postgres:15-alpine
+    command: postgres -c log_timezone=Africa/Nairobi
+    env_file: [.env]
+    environment:
+      - TZ=${TZ:-Africa/Nairobi}
+      - PGTZ=${TZ:-Africa/Nairobi}
+      - POSTGRES_USER=${POSTGRES_USER:-mathia_user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-mathia_password}
+      - POSTGRES_DB=${POSTGRES_DB:-mathia_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h db -p 5432 -U ${POSTGRES_USER:-mathia_user} -d ${POSTGRES_DB:-mathia_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    environment:
+      - TZ=${TZ:-Africa/Nairobi}
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  web:
+    image: ${WEB_IMAGE}
+    command: sh -c "python /app/wait_for_db.py && gunicorn Backend.asgi:application -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --workers 4"
+    env_file: [.env]
+    environment:
+      - TZ=${TZ:-Africa/Nairobi}
+      - DJANGO_ALLOWED_HOSTS=${DJANGO_ALLOWED_HOSTS:-*}
+      - CELERY_BROKER_URL=${REDIS_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${REDIS_URL:-redis://redis:6379/0}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - DATABASE_URL=${DATABASE_URL:-postgres://mathia_user:mathia_password@db:5432/mathia_db}
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    volumes:
+      - .:/app  # remove if you prefer running from image only
+
+  celery_worker:
+    image: ${WEB_IMAGE}
+    command: sh -c "python /app/wait_for_db.py && celery -A Backend worker -l info --concurrency 4"
+    env_file: [.env]
+    environment:
+      - TZ=${TZ:-Africa/Nairobi}
+      - CELERY_BROKER_URL=${REDIS_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${REDIS_URL:-redis://redis:6379/0}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - DATABASE_URL=${DATABASE_URL:-postgres://mathia_user:mathia_password@db:5432/mathia_db}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    volumes:
+      - .:/app
+
+  celery_beat:
+    image: ${WEB_IMAGE}
+    command: sh -c "python /app/wait_for_db.py && celery -A Backend beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler"
+    env_file: [.env]
+    environment:
+      - TZ=${TZ:-Africa/Nairobi}
+      - CELERY_BROKER_URL=${REDIS_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${REDIS_URL:-redis://redis:6379/0}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - DATABASE_URL=${DATABASE_URL:-postgres://mathia_user:mathia_password@db:5432/mathia_db}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    volumes:
+      - .:/app
+
+  temporal_worker:
+    image: ${WEB_IMAGE}
+    command: sh -c "python /app/wait_for_db.py && python /app/Backend/manage.py start_temporal_worker"
+    env_file: [.env]
+    environment:
+      - TZ=${TZ:-Africa/Nairobi}
+      - CELERY_BROKER_URL=${REDIS_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${REDIS_URL:-redis://redis:6379/0}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - DATABASE_URL=${DATABASE_URL:-postgres://mathia_user:mathia_password@db:5432/mathia_db}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    volumes:
+      - .:/app
+
+volumes:
+  postgres_data:

@@ -30,16 +30,15 @@ services:
       - DATABASE_URL=postgres://mathia_user:mathia_password@db:5432/mathia_db
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -h db -p 5432 -U mathia_user -d mathia_db" ]
-      interval: 10s
+      interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 30
 
   web:
     build: .
     image: mathia-web:latest
     command: sh -c "python /app/wait_for_db.py && gunicorn Backend.asgi:application -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --workers 4"
     volumes:
-      - .:/app
       - .:/app
     ports:
       - "8000:8000"
@@ -103,6 +102,26 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+
+  temporal_worker:
+    image: mathia-web:latest
+    command: sh -c "python /app/wait_for_db.py && python /app/Backend/manage.py start_temporal_worker"
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    environment:
+      - TZ=${TZ:-Africa/Nairobi}
+      - CELERY_BROKER_URL=${REDIS_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${REDIS_URL:-redis://redis:6379/0}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - DATABASE_URL=postgres://mathia_user:mathia_password@db:5432/mathia_db
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   postgres_data:

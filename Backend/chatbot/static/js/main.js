@@ -3,6 +3,7 @@
 const activeRooms = {}; // { roomId: { socket, initialized, oldestMsgId, hasMore, isLoadingHistory } }
 window.currentRoomId = typeof roomName !== 'undefined' ? roomName : null;
 window.usernameGlobal = typeof username !== 'undefined' ? username : null;
+window.replyToMessageId = null;
 const userPresenceMap = new Map();
 
 // Helper function to get current socket
@@ -954,9 +955,11 @@ if (chatSubmit) {
                     'message': message,
                     'from': window.usernameGlobal,
                     'command': 'new_message',
-                    "chatid": window.currentRoomId
+                    "chatid": window.currentRoomId,
+                    "reply_to": window.replyToMessageId || null
                 }));
                 if (messageInputDom) messageInputDom.value = '';
+                window.replyToMessageId = null;
             } else {
                 console.error('Socket not ready for room:', window.currentRoomId);
             }
@@ -1031,8 +1034,10 @@ function initFileHandlers() {
                         message: messageHtml,
                         from: currentUname,
                         command: 'new_message',
-                        chatid: currentRid
+                        chatid: currentRid,
+                        reply_to: window.replyToMessageId || null
                     }));
+                    window.replyToMessageId = null;
                 }
             })
             .catch(error => console.error('Error uploading file:', error));

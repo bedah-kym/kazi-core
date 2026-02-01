@@ -1,13 +1,12 @@
 """
 Travel Buses Connector
 Searches for bus tickets using Buupass website scraper
-Uses BeautifulSoup to scrape available routes and pricing
 """
 import logging
 import aiohttp
 from typing import Dict, Any, List
-from datetime import datetime
 from bs4 import BeautifulSoup
+from django.conf import settings
 from orchestration.connectors.base_travel_connector import BaseTravelConnector
 
 logger = logging.getLogger(__name__)
@@ -16,31 +15,20 @@ logger = logging.getLogger(__name__)
 class TravelBusesConnector(BaseTravelConnector):
     """
     Search for intercity buses in East Africa
-    Primary: Buupass API + web scraper
-    Fallback: Direct operator calls + phone numbers
+    Primary: Buupass web scraping
+    Fallback: Static data (disabled unless TRAVEL_ALLOW_FALLBACK)
     """
-    
+
     PROVIDER_NAME = 'buupass'
     CACHE_TTL_SECONDS = 3600  # 1 hour
-    
+
     async def _fetch(self, parameters: Dict, context: Dict) -> Dict:
-        """
-        Fetch bus routes from Buupass website using web scraper
-        
-        Parameters:
-            origin: Nairobi
-            destination: Mombasa
-            travel_date: 2025-12-25
-            return_date: 2025-12-30 (optional)
-            passengers: 2
-            budget_ksh: 5000 (optional)
-        """
         origin = parameters.get('origin', '').strip()
         destination = parameters.get('destination', '').strip()
         travel_date = parameters.get('travel_date')
         passengers = parameters.get('passengers', 1)
         budget_ksh = parameters.get('budget_ksh')
-        
+
         if not all([origin, destination, travel_date]):
             return {
                 'results': [],
@@ -48,17 +36,24 @@ class TravelBusesConnector(BaseTravelConnector):
                     'error': 'Missing required parameters: origin, destination, travel_date'
                 }
             }
-        
+
         try:
-            # Scrape Buupass website
             results = await self._scrape_buupass(origin, destination, travel_date, passengers)
-            
-            # Filter by budget if provided
+
+            if not results:
+                if settings.TRAVEL_ALLOW_FALLBACK:
+                    results = self._get_fallback_buses(origin, destination, travel_date, passengers)
+                else:
+                    return {
+                        'results': [],
+                        'metadata': {
+                            'error': 'No bus results returned from Buupass.'
+                        }
+                    }
+
             if budget_ksh:
                 results = [r for r in results if r['price_ksh'] <= float(budget_ksh)]
-            
-            logger.info(f"Buupass: Found {len(results)} routes from {origin} to {destination}")
-            
+
             return {
                 'results': results,
                 'metadata': {
@@ -72,25 +67,24 @@ class TravelBusesConnector(BaseTravelConnector):
             }
         except Exception as e:
             logger.error(f"Buupass scraper error: {str(e)}")
-            # Fallback: Return empty results (could add fallback providers here)
+            if settings.TRAVEL_ALLOW_FALLBACK:
+                results = self._get_fallback_buses(origin, destination, travel_date, passengers)
+                return {
+                    'results': results,
+                    'metadata': {
+                        'error': f'Failed to fetch from Buupass: {str(e)}',
+                        'fallback': True
+                    }
+                }
             return {
                 'results': [],
                 'metadata': {
-                    'error': f'Failed to fetch from Buupass: {str(e)}',
-                    'origin': origin,
-                    'destination': destination
+                    'error': f'Failed to fetch from Buupass: {str(e)}'
                 }
             }
-    
+
     async def _scrape_buupass(self, origin: str, destination: str, travel_date: str, passengers: int) -> List[Dict]:
-        """
-        Scrape bus routes from Buupass.com
-        
-        Buupass is a real Kenyan booking platform with a searchable interface
-        We'll construct the search URL and parse the results
-        """
         try:
-            # Normalize location names to Buupass format
             location_map = {
                 'nairobi': 'Nairobi',
                 'mombasa': 'Mombasa',
@@ -105,61 +99,44 @@ class TravelBusesConnector(BaseTravelConnector):
                 'kampala': 'Kampala',
                 'dar es salaam': 'Dar es Salaam',
             }
-            
+
             origin_normalized = location_map.get(origin.lower(), origin)
             dest_normalized = location_map.get(destination.lower(), destination)
-            
-            # Construct Buupass search URL
-            # Format: https://buupass.com/search?from=Nairobi&to=Mombasa&date=2025-12-25
+
             search_url = f"https://buupass.com/search?from={origin_normalized.replace(' ', '+')}&to={dest_normalized.replace(' ', '+')}&date={travel_date}"
-            
-            logger.info(f"Scraping: {search_url}")
-            
-            # Fetch the page with a realistic user agent
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
             }
-            
+
             async with aiohttp.ClientSession() as session:
                 async with session.get(search_url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as response:
                     if response.status != 200:
                         logger.warning(f"Buupass returned status {response.status}")
-                        return self._get_fallback_buses(origin, destination, travel_date, passengers)
-                    
+                        return []
                     html_content = await response.text()
-            
-            # Parse HTML using BeautifulSoup
+
             soup = BeautifulSoup(html_content, 'lxml')
-            
-            # Extract bus listings (CSS selectors may vary, using common patterns)
             results = []
-            
-            # Look for bus listings - common selectors for booking platforms
             bus_cards = soup.select('[data-testid*="bus"], .bus-card, .trip-card, [class*="bus-result"]')
-            
             if not bus_cards:
-                # Fallback selectors
                 bus_cards = soup.select('.result, .offer, [class*="route"]')
-            
-            for i, card in enumerate(bus_cards[:20]):  # Limit to 20 results
+
+            for i, card in enumerate(bus_cards[:20]):
                 try:
-                    # Try to extract common fields
                     company = self._extract_text(card, '[class*="company"], [class*="operator"], .name')
                     departure_time = self._extract_text(card, '[class*="departure"], [class*="time"], .time')
                     arrival_time = self._extract_text(card, '[class*="arrival"], .arrival')
                     price_text = self._extract_text(card, '[class*="price"], .price, [class*="cost"]')
                     seats = self._extract_text(card, '[class*="seats"], [class*="available"]')
                     booking_link = self._extract_link(card)
-                    
-                    # Parse price (extract numbers)
+
                     price_ksh = self._parse_price(price_text)
                     if not price_ksh or price_ksh < 500:
                         continue
-                    
-                    # Parse seats (extract numbers)
+
                     seats_available = self._parse_number(seats, 5)
-                    
-                    result = {
+
+                    results.append({
                         'id': f'bus_{i+1:03d}',
                         'provider': 'Buupass',
                         'company': company or f'Operator {i+1}',
@@ -172,39 +149,26 @@ class TravelBusesConnector(BaseTravelConnector):
                         'booking_url': booking_link or f'https://buupass.com/booking/{i+1}',
                         'rating': 4.0 + (i % 5) * 0.1,
                         'reviews': 50 + (i * 10)
-                    }
-                    results.append(result)
+                    })
                 except Exception as e:
                     logger.warning(f"Error parsing bus card {i}: {str(e)}")
                     continue
-            
-            # If we got results from scraping, return them
-            if results:
-                return results
-            
-            # If scraping yielded no results, use intelligent fallback
-            logger.warning("No buses found via scraping, using fallback data")
-            return self._get_fallback_buses(origin, destination, travel_date, passengers)
-            
-        except asyncio.TimeoutError:
-            logger.warning("Buupass scraper timeout, using fallback")
-            return self._get_fallback_buses(origin, destination, travel_date, passengers)
+
+            return results
         except Exception as e:
             logger.error(f"Scraper error: {str(e)}")
-            return self._get_fallback_buses(origin, destination, travel_date, passengers)
-    
+            return []
+
     def _extract_text(self, element, selector: str) -> str:
-        """Extract text from element using CSS selector"""
         try:
             found = element.select_one(selector)
             if found:
                 return found.get_text(strip=True)
-        except:
+        except Exception:
             pass
         return ''
-    
+
     def _extract_link(self, element) -> str:
-        """Extract booking link from element"""
         try:
             link = element.select_one('a[href*="book"], a[href*="booking"], a')
             if link and link.get('href'):
@@ -213,47 +177,41 @@ class TravelBusesConnector(BaseTravelConnector):
                     return href
                 if href.startswith('/'):
                     return f'https://buupass.com{href}'
-        except:
+        except Exception:
             pass
         return ''
-    
+
     def _parse_price(self, price_text: str) -> float:
-        """Extract price from text like 'KES 2,500' or '2500'"""
         if not price_text:
             return 0
-        # Remove common currency prefixes
         clean = price_text.replace('KES', '').replace('Ksh', '').replace('K Sh', '').replace(',', '').strip()
         try:
             return float(clean)
-        except:
+        except Exception:
             return 0
-    
+
     def _parse_number(self, text: str, default: int = 5) -> int:
-        """Extract first number from text"""
         if not text:
             return default
         for char in text:
             if char.isdigit():
                 return int(''.join(c for c in text if c.isdigit())[:2]) or default
         return default
-    
+
     def _guess_amenities(self, company_name: str) -> List[str]:
-        """Guess amenities based on company name"""
         amenities = ['AC']
-        if any(word in company_name.lower() for word in ['express', 'luxury', 'premium']):
+        if not company_name:
+            return amenities
+        lower = company_name.lower()
+        if any(word in lower for word in ['express', 'luxury', 'premium']):
             amenities.extend(['WiFi', 'Charging'])
-        if any(word in company_name.lower() for word in ['vip', 'first', 'business']):
+        if any(word in lower for word in ['vip', 'first', 'business']):
             amenities.extend(['Meal', 'Entertainment'])
         return amenities
-    
+
     def _get_fallback_buses(self, origin: str, destination: str, travel_date: str, passengers: int) -> List[Dict]:
-        """
-        Fallback bus data for common East African routes
-        Used when scraper fails or returns no results
-        """
-        # Common route mappings
         route_key = f"{origin.lower()}-{destination.lower()}"
-        
+
         fallback_data = {
             'nairobi-mombasa': [
                 {'company': 'Skyways Express', 'departure': '08:00', 'arrival': '15:00', 'price': 2500, 'seats': 8},
@@ -271,9 +229,9 @@ class TravelBusesConnector(BaseTravelConnector):
                 {'company': 'Jatco', 'departure': '10:00', 'arrival': '12:30', 'price': 500, 'seats': 8},
             ],
         }
-        
+
         buses = fallback_data.get(route_key, [])
-        
+
         results = []
         for i, bus in enumerate(buses):
             results.append({
@@ -290,5 +248,5 @@ class TravelBusesConnector(BaseTravelConnector):
                 'rating': 4.0 + (i * 0.2),
                 'reviews': 50 + (i * 20)
             })
-        
+
         return results

@@ -629,7 +629,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
             message = await create_message(
                 member=member,
                 content=payload,
-                timestamp=timezone.now()
+                timestamp=timezone.now(),
+                parent_id=data.get('reply_to')
             )
 
             logger.info(f"Step 11: Getting chatroom...")
@@ -732,7 +733,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                     stream_state['buffer'] = []
                                     stream_state['last_send'] = current_time
                         
-                        if intent["confidence"] > 0.7 and intent["action"] != "general_chat":
+                        if intent["action"] == "create_workflow" and intent["confidence"] > 0.6:
+                            from workflows.workflow_agent import handle_workflow_message
+                            response_text = await handle_workflow_message(member_user.id, room_id, ai_query, history_text)
+                            await broadcast_chunk(response_text)
+                        elif intent["confidence"] > 0.7 and intent["action"] != "general_chat":
                             # Route through MCP
                             result = await route_intent(intent, {
                                 "user_id": member_user.id,
@@ -982,7 +987,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
             message = await create_message(
                 member=member,
                 content=payload,
-                timestamp=timezone.now()
+                timestamp=timezone.now(),
+                parent_id=data.get('reply_to')
             )
 
             await sync_to_async(current_chat.chats.add)(message)
@@ -1126,6 +1132,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 member=member,
                 content=payload,
                 timestamp=timezone.now(),
+                parent_id=data.get('reply_to'),
                 is_voice=True,
                 audio_url=file_url
             )
@@ -1370,7 +1377,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 'id': message.id,
                 'member': username,
                 'content': final_content,
-                'timestamp': str(message.timestamp)
+                'timestamp': str(message.timestamp),
+                'parent_id': message.parent_id
             }
         except Exception as e:
             logger.error(f"Error in message_to_json: {e}")

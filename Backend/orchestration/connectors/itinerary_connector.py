@@ -2,142 +2,259 @@ from typing import Dict, Any
 from asgiref.sync import sync_to_async
 from datetime import datetime, timedelta
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 import logging
 
 logger = logging.getLogger(__name__)
 
 
 class ItineraryConnector:
-    """Simple connector to create and view itineraries using the travel app models.
+    """Connector to create, view, and update itineraries in the travel app."""
 
-    This connector is intentionally lightweight: it creates an Itinerary record
-    from parameters and returns the created object's id and summary.
-    """
-
-    def _validate_date(self, date_obj: Any) -> tuple[bool, str]:
-        """Validate that a date is a valid calendar date.
-        
-        Returns: (is_valid, error_message)
-        """
-        if date_obj is None:
-            return True, ""
-        
-        # Try to parse if it's a string
-        if isinstance(date_obj, str):
+    def _parse_datetime(self, value: Any, fallback_days: int = 1) -> datetime:
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            parsed = parse_datetime(value)
+            if parsed:
+                return parsed
             try:
-                datetime.fromisoformat(date_obj)
-                return True, ""
-            except (ValueError, TypeError):
-                return False, f"Invalid date format: {date_obj}"
-        
-        # Check if it's already a datetime/date object
-        if isinstance(date_obj, (datetime,)):
-            try:
-                # Validate by accessing month and day
-                _ = date_obj.strftime("%Y-%m-%d")
-                return True, ""
-            except (AttributeError, ValueError):
-                return False, f"Invalid date object: {date_obj}"
-        
-        return False, f"Date must be a string (ISO format) or datetime object, got {type(date_obj).__name__}"
-
-    def _parse_date(self, date_obj: Any) -> datetime:
-        """Parse date string or object to datetime."""
-        if isinstance(date_obj, str):
-            return datetime.fromisoformat(date_obj)
-        if isinstance(date_obj, datetime):
-            return date_obj
-        raise ValueError(f"Cannot parse date: {date_obj}")
+                return datetime.fromisoformat(value)
+            except Exception:
+                pass
+        return timezone.now() + timedelta(days=fallback_days)
 
     async def execute(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
-        try:
-            user_id = context.get("user_id")
-            if not user_id:
-                return {"status": "error", "message": "User context missing"}
+        action = parameters.get("action")
 
-            # Lazy import to avoid circular imports at module load
-            from travel.models import Itinerary
+        if action == "create_itinerary":
+            return await self.create_itinerary(parameters, context)
+        if action == "view_itinerary":
+            return await self.view_itinerary(parameters, context)
+        if action == "add_to_itinerary":
+            return await self.add_to_itinerary(parameters, context)
+        if action == "book_travel_item":
+            return await self.book_travel_item(parameters, context)
 
-            title = parameters.get("title") or parameters.get("destination") or "New Itinerary"
-            region = parameters.get("region") or parameters.get("destination") or "unknown"
-            start_date = parameters.get("start_date")
-            end_date = parameters.get("end_date")
-            duration_days = parameters.get("duration_days")
-            budget_ksh = parameters.get("budget_ksh")
+        return {"status": "error", "message": f"Unknown itinerary action: {action}"}
 
-            # Auto-calculate end_date from duration if not provided
-            if not end_date and start_date and duration_days:
-                try:
-                    start = self._parse_date(start_date)
-                    end_date = start + timedelta(days=int(duration_days))
-                except (ValueError, TypeError) as e:
-                    return {"status": "error", "message": f"Could not calculate end date from duration: {e}"}
+    async def create_itinerary(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        user_id = context.get("user_id")
+        if not user_id:
+            return {"status": "error", "message": "User context missing"}
 
-            # Validate dates
-            start_valid, start_msg = self._validate_date(start_date)
-            if not start_valid:
-                return {"status": "error", "message": f"Start date error: {start_msg}"}
-            
-            end_valid, end_msg = self._validate_date(end_date)
-            if not end_valid:
-                return {"status": "error", "message": f"End date error: {end_msg}"}
+        from travel.models import Itinerary
 
-            def create_itin():
-                # IMPROVEMENT: Reuse active itinerary if exists to prevent duplicates
-                active_itin = Itinerary.objects.filter(user_id=user_id, status='active').first()
-                if active_itin:
-                    logger.info(f"Reusing active itinerary {active_itin.id} for user {user_id}")
-                    # Update fields if provided
-                    if title and title != "New Itinerary":
-                         active_itin.title = title
-                    if budget_ksh:
-                         active_itin.budget_ksh = budget_ksh
-                    active_itin.save()
-                    return active_itin.id
+        title = parameters.get("title") or parameters.get("destination") or "New Itinerary"
+        region = parameters.get("region") or parameters.get("destination") or "kenya"
+        start_date = parameters.get("start_date")
+        end_date = parameters.get("end_date")
+        duration_days = parameters.get("duration_days")
+        budget_ksh = parameters.get("budget_ksh")
 
-                # Create new if none exists
-                # FIX: Ensure start_date and end_date are never NULL to satisfy DB constraints
-                now = timezone.now()
-                default_start = now + timedelta(days=1)
-                default_end = default_start + timedelta(days=7)
+        if not end_date and start_date and duration_days:
+            try:
+                start_dt = self._parse_datetime(start_date)
+                end_date = start_dt + timedelta(days=int(duration_days))
+            except Exception as e:
+                return {"status": "error", "message": f"Could not calculate end date: {e}"}
 
-                data = {
-                    "user_id": user_id, 
-                    "title": title, 
-                    "region": region, 
-                    "status": 'active',
-                    "start_date": default_start,
-                    "end_date": default_end
-                }
-
-                if start_date:
-                    try:
-                        start = self._parse_date(start_date)
-                        start = timezone.make_aware(start) if timezone.is_naive(start) else start
-                        data["start_date"] = start
-                    except Exception: pass
-                
-                if end_date:
-                    try:
-                        end = self._parse_date(end_date)
-                        end = timezone.make_aware(end) if timezone.is_naive(end) else end
-                        data["end_date"] = end
-                    except Exception: 
-                        # If start_date was provided but end_date failed/missing, 
-                        # ensure end is at least start + duration or start + 7
-                        data["end_date"] = data["start_date"] + timedelta(days=7)
-
+        def _create_itin():
+            active_itin = Itinerary.objects.filter(user_id=user_id, status='active').first()
+            if active_itin:
+                if title and title != "New Itinerary":
+                    active_itin.title = title
                 if budget_ksh:
-                    data["budget_ksh"] = budget_ksh
+                    active_itin.budget_ksh = budget_ksh
+                active_itin.save()
+                return active_itin
 
-                # Use Django ORM's create (user must exist)
-                itin = Itinerary.objects.create(**data)
-                return itin.id
+            now = timezone.now()
+            default_start = now + timedelta(days=1)
+            default_end = default_start + timedelta(days=7)
 
-            itin_id = await sync_to_async(create_itin)()
+            data = {
+                "user_id": user_id,
+                "title": title,
+                "region": region,
+                "status": 'active',
+                "start_date": default_start,
+                "end_date": default_end
+            }
 
-            return {"status": "success", "itinerary_id": itin_id, "message": "Itinerary created"}
+            if start_date:
+                start_dt = self._parse_datetime(start_date)
+                data["start_date"] = timezone.make_aware(start_dt) if timezone.is_naive(start_dt) else start_dt
+            if end_date:
+                end_dt = self._parse_datetime(end_date)
+                data["end_date"] = timezone.make_aware(end_dt) if timezone.is_naive(end_dt) else end_dt
 
-        except Exception as e:
-            logger.exception("ItineraryConnector error")
-            return {"status": "error", "message": str(e)}
+            if budget_ksh:
+                data["budget_ksh"] = budget_ksh
+
+            return Itinerary.objects.create(**data)
+
+        itin = await sync_to_async(_create_itin)()
+
+        return {
+            "status": "success",
+            "itinerary_id": itin.id,
+            "message": "Itinerary created",
+            "title": itin.title
+        }
+
+    async def view_itinerary(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        user_id = context.get("user_id")
+        if not user_id:
+            return {"status": "error", "message": "User context missing"}
+
+        from travel.models import Itinerary
+
+        itinerary_id = parameters.get("itinerary_id")
+
+        def _get_itin():
+            qs = Itinerary.objects.filter(user_id=user_id)
+            if itinerary_id:
+                return qs.filter(id=itinerary_id).first()
+            return qs.filter(status='active').first() or qs.order_by('-created_at').first()
+
+        itin = await sync_to_async(_get_itin)()
+        if not itin:
+            return {"status": "error", "message": "No itinerary found"}
+
+        items = await sync_to_async(lambda: list(itin.items.order_by('start_datetime')[:20]))()
+
+        return {
+            "status": "success",
+            "itinerary": {
+                "id": itin.id,
+                "title": itin.title,
+                "status": itin.status,
+                "start_date": itin.start_date.isoformat() if itin.start_date else None,
+                "end_date": itin.end_date.isoformat() if itin.end_date else None,
+                "budget_ksh": float(itin.budget_ksh) if itin.budget_ksh else None,
+                "items": [
+                    {
+                        "id": item.id,
+                        "type": item.item_type,
+                        "title": item.title,
+                        "start_datetime": item.start_datetime.isoformat() if item.start_datetime else None,
+                        "location": item.location_name,
+                        "price_ksh": float(item.price_ksh) if item.price_ksh else None,
+                        "status": item.status,
+                        "booking_url": item.booking_url
+                    }
+                    for item in items
+                ]
+            }
+        }
+
+    async def add_to_itinerary(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        user_id = context.get("user_id")
+        if not user_id:
+            return {"status": "error", "message": "User context missing"}
+
+        from travel.models import Itinerary, ItineraryItem
+
+        itinerary_id = parameters.get("itinerary_id")
+        item_type = parameters.get("item_type")
+        item_data = parameters.get("item", {}) or {}
+
+        if not item_type:
+            return {"status": "error", "message": "item_type is required"}
+
+        def _get_itin():
+            qs = Itinerary.objects.filter(user_id=user_id)
+            if itinerary_id:
+                return qs.filter(id=itinerary_id).first()
+            return qs.filter(status='active').first() or qs.order_by('-created_at').first()
+
+        itin = await sync_to_async(_get_itin)()
+        if not itin:
+            return {"status": "error", "message": "No itinerary found"}
+
+        title = parameters.get("title") or item_data.get("title") or item_data.get("name") or f"{item_type.title()} Item"
+        start_dt = self._parse_datetime(parameters.get("start_datetime") or item_data.get("start_datetime"))
+        end_dt_value = parameters.get("end_datetime") or item_data.get("end_datetime")
+        end_dt = self._parse_datetime(end_dt_value) if end_dt_value else None
+
+        def _create_item():
+            return ItineraryItem.objects.create(
+                itinerary=itin,
+                item_type=item_type,
+                title=title,
+                description=parameters.get("description") or item_data.get("description"),
+                start_datetime=timezone.make_aware(start_dt) if timezone.is_naive(start_dt) else start_dt,
+                end_datetime=timezone.make_aware(end_dt) if end_dt and timezone.is_naive(end_dt) else end_dt,
+                location_name=parameters.get("location") or item_data.get("location"),
+                provider=parameters.get("provider") or item_data.get("provider"),
+                provider_id=parameters.get("item_id") or item_data.get("id"),
+                price_ksh=parameters.get("price_ksh") or item_data.get("price_ksh"),
+                booking_url=parameters.get("booking_url") or item_data.get("booking_url"),
+                metadata=parameters.get("metadata") or item_data,
+                status='planned'
+            )
+
+        item = await sync_to_async(_create_item)()
+
+        return {
+            "status": "success",
+            "message": "Item added to itinerary",
+            "item_id": item.id,
+            "itinerary_id": itin.id
+        }
+
+    async def book_travel_item(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        user_id = context.get("user_id")
+        if not user_id:
+            return {"status": "error", "message": "User context missing"}
+
+        from travel.models import ItineraryItem, BookingReference
+        import re
+
+        raw_item_id = parameters.get("item_id")
+        item_id = None
+        if isinstance(raw_item_id, int):
+            item_id = raw_item_id
+        elif isinstance(raw_item_id, str):
+            match = re.search(r"\d+", raw_item_id)
+            if match:
+                try:
+                    item_id = int(match.group())
+                except Exception:
+                    item_id = None
+
+        if not item_id:
+            return {
+                "status": "error",
+                "message": "item_id is required and must be a numeric option from the list (e.g., 1, 2, 3)."
+            }
+
+        def _create_booking():
+            item = ItineraryItem.objects.filter(id=item_id, itinerary__user_id=user_id).first()
+            if not item:
+                return None, "Item not found"
+
+            booking = BookingReference.objects.create(
+                itinerary_item=item,
+                provider=item.provider or parameters.get("provider") or "Unknown",
+                provider_booking_id=str(parameters.get("provider_booking_id") or item.provider_id or item.id),
+                status='pending',
+                booking_url=parameters.get("booking_url") or item.booking_url or "",
+                confirmation_email=parameters.get("confirmation_email")
+            )
+
+            item.status = 'booked'
+            item.save(update_fields=['status'])
+            return booking, None
+
+        booking, error = await sync_to_async(_create_booking)()
+        if error:
+            return {"status": "error", "message": error}
+
+        return {
+            "status": "success",
+            "message": "Booking initiated",
+            "booking_id": booking.id,
+            "booking_url": booking.booking_url
+        }

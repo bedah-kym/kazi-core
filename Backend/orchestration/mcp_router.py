@@ -17,6 +17,7 @@ from .connectors.intersend_connector import IntersendPayConnector
 from .connectors.mailgun_connector import MailgunConnector
 from .connectors.quota_connector import QuotaConnector
 from .connectors.payment_connector import ReadOnlyPaymentConnector
+from .connectors.invoice_connector import InvoiceConnector
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,16 @@ class MCPRouter:
     3. Manages context and auth
     4. Returns structured data
     """
+
+    # Dialog state helps fill missing parameters when users send follow-ups like
+    # "same dates" or provide only the destination after a previous travel query.
+    DIALOG_STATE_TTL_SECONDS = 60 * 60 * 6  # 6 hours
+    TRAVEL_ACTIONS = {
+        "search_buses", "search_hotels", "search_flights",
+        "search_transfers", "search_events",
+        "create_itinerary", "add_to_itinerary", "view_itinerary",
+        "book_travel_item",
+    }
     
     def __init__(self):
         # Import travel connectors
@@ -56,6 +67,7 @@ class MCPRouter:
             "check_balance": ReadOnlyPaymentConnector(),
             "list_transactions": ReadOnlyPaymentConnector(),
             "check_invoice_status": ReadOnlyPaymentConnector(),
+            "create_invoice": InvoiceConnector(),
             
             # Travel planner connectors
             "search_buses": TravelBusesConnector(),
@@ -104,10 +116,21 @@ class MCPRouter:
             
             # Execute with timeout
             logger.info(f"Routing to connector: {action}")
-            result = await connector.execute(intent["parameters"], user_context)
+            parameters = dict(intent.get("parameters") or {})
+            if "action" not in parameters:
+                parameters["action"] = action
+
+            # Merge missing fields from recent dialog state for continuity
+            dialog_state = await self._get_dialog_state(user_context)
+            parameters = self._merge_with_dialog_state(parameters, dialog_state)
+
+            result = await connector.execute(parameters, user_context)
             
             # Cache result
             await self._cache_result(intent, user_context, result)
+
+            # Persist dialog state for the next turn
+            await self._store_dialog_state(user_context, action, parameters, status="success")
             
             return {
                 "status": "success",
@@ -122,11 +145,86 @@ class MCPRouter:
             
         except Exception as e:
             logger.error(f"MCP routing error: {e}")
+            try:
+                await self._store_dialog_state(user_context, action, intent.get("parameters", {}), status="error")
+            except Exception:
+                pass
             return {
                 "status": "error",
                 "message": str(e),
                 "data": None
             }
+
+    # ----------------------------
+    # Dialog state helpers
+    # ----------------------------
+    def _is_dialog_compatible(self, new_action: Optional[str], previous_action: Optional[str]) -> bool:
+        """
+        Decide if we should reuse parameters from the previous intent.
+        - Same action => yes
+        - Travel actions share common fields => yes
+        """
+        if not previous_action or not new_action:
+            return False
+        if new_action == previous_action:
+            return True
+        if new_action in self.TRAVEL_ACTIONS and previous_action in self.TRAVEL_ACTIONS:
+            return True
+        return False
+
+    def _dialog_cache_key(self, context: Dict) -> str:
+        user_id = context.get("user_id") or "anon"
+        room_id = context.get("room_id") or "room"
+        return f"dialog_state:{user_id}:{room_id}"
+
+    async def _get_dialog_state(self, context: Dict) -> Optional[Dict]:
+        key = self._dialog_cache_key(context)
+        try:
+            return await sync_to_async(cache.get)(key)
+        except Exception as e:
+            logger.warning(f"Dialog state read failed: {e}")
+            return None
+
+    async def _store_dialog_state(self, context: Dict, action: Optional[str], parameters: Dict, status: str = "success"):
+        key = self._dialog_cache_key(context)
+        state = {
+            "action": action,
+            "parameters": dict(parameters or {}),
+            "status": status,
+            "updated_at": datetime.now().isoformat()
+        }
+        try:
+            await sync_to_async(cache.set)(key, state, self.DIALOG_STATE_TTL_SECONDS)
+        except Exception as e:
+            logger.warning(f"Dialog state write failed: {e}")
+
+    def _merge_with_dialog_state(self, current_params: Dict, dialog_state: Optional[Dict]) -> Dict:
+        """
+        Merge missing parameters from the last compatible intent.
+        Only fills empty/None values to avoid overwriting explicit user input.
+        """
+        if not dialog_state:
+            return current_params
+
+        previous_params = dialog_state.get("parameters") or {}
+        previous_action = dialog_state.get("action")
+        current_action = current_params.get("action")
+
+        if not self._is_dialog_compatible(current_action, previous_action):
+            return current_params
+
+        merged = dict(current_params)
+        filled = []
+        for key, value in previous_params.items():
+            if merged.get(key) in (None, "", [], {}):
+                merged[key] = value
+                filled.append(key)
+
+        if filled:
+            merged["_filled_from_dialog_state"] = filled
+            merged["_dialog_origin"] = previous_action
+
+        return merged
     
     async def _validate_request(self, intent: Dict, context: Dict) -> Dict:
         """Validate request against rate limits, auth, etc."""

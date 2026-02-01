@@ -1,5 +1,25 @@
 # Mathia Project - Task & Context Log
 
+## Current Session: Jan 25, 2026 - GPT-5
+**Objective:** Implement workflow builder (Temporal-first), wire chat entrypoint, enable service-specific webhooks, and swap travel to Amadeus.
+
+### Completed
+1. Added new workflows app with models, admin, and Temporal worker command.
+2. Implemented workflow chat builder with validation, approvals, and trigger registration.
+3. Wired Temporal execution with activity routing and schedule triggers.
+4. Connected service-specific webhooks (Calendly, IntaSend) to workflow triggers.
+5. Swapped travel flights/hotels/transfers to Amadeus; gated mock fallbacks behind TRAVEL_ALLOW_FALLBACK.
+6. Implemented itinerary actions: view, add, book.
+7. Added workflow safety policy for withdrawals and system limits.
+8. Added workflow API routes and configuration settings.
+
+### Notes
+- New dependencies: temporalio, amadeus.
+- Temporal dev stack: docker-compose.temporal.yml.
+- Workflow creation is chat-only via @mathia.
+
+---
+
 ## Current Session: Jan 24, 2026 - GPT-5
 **Objective:** Harden chat access and uploads, align wallet source of truth, add R2 storage, and tighten encryption.
 

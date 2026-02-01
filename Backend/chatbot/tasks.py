@@ -476,13 +476,77 @@ def check_due_reminders():
     count = 0
     for reminder in due_reminders:
         try:
-            # 1. Send Notification (Email/WhatsApp)
             logger.info(f"Sending reminder {reminder.id}: {reminder.content}")
-            
-            # For MVP, we mark as sent. 
-            count += 1
-            reminder.status = 'sent'
-            reminder.save()
+
+            # Rate limit: max 10 sends per user per 12h
+            rl_key = f"reminder_send_count:{reminder.user_id}"
+            sends = cache.get(rl_key, 0)
+            if sends >= 10:
+                reminder.status = 'failed'
+                reminder.error_log = "Rate limit exceeded (10/12h)"
+                reminder.save(update_fields=['status', 'error_log'])
+                logger.warning(f"Reminder {reminder.id} blocked by rate limit for user {reminder.user_id}")
+                continue
+
+            # Choose channels based on flags; try primary then fallback
+            channels = []
+            if reminder.via_whatsapp:
+                channels.append('whatsapp')
+            if reminder.via_email:
+                channels.append('email')
+            if not channels:
+                channels = ['email']  # default fallback
+
+            sent = False
+            errors = []
+
+            for ch in channels:
+                if ch == 'whatsapp':
+                    try:
+                        from orchestration.connectors.whatsapp_connector import WhatsAppConnector
+                        wa = WhatsAppConnector()
+                        resp = wa.send_message(
+                            to=getattr(reminder.user, 'phone_number', None) or "",
+                            body=f"Reminder: {reminder.content}"
+                        )
+                        if resp.get("status") == "sent":
+                            sent = True
+                            break
+                        errors.append(str(resp))
+                    except Exception as e:
+                        errors.append(str(e))
+                elif ch == 'email':
+                    try:
+                        from orchestration.connectors.mailgun_connector import MailgunConnector
+                        mg = MailgunConnector()
+                        resp = mg.execute({
+                            "action": "send_email",
+                            "to": getattr(reminder.user, 'email', None),
+                            "subject": "Reminder",
+                            "body": reminder.content
+                        }, {"user_id": reminder.user_id})
+                        if resp.get("status") == "sent":
+                            sent = True
+                            break
+                        errors.append(str(resp))
+                    except Exception as e:
+                        errors.append(str(e))
+
+            if sent:
+                count += 1
+                reminder.status = 'sent'
+                reminder.error_log = ''
+                reminder.save(update_fields=['status', 'error_log'])
+                if sends == 0:
+                    cache.set(rl_key, 1, 60 * 60 * 12)
+                else:
+                    cache.incr(rl_key)
+                    cache.expire(rl_key, 60 * 60 * 12)
+            else:
+                reminder.status = 'failed'
+                reminder.error_log = "; ".join(errors)[:500]
+                reminder.save(update_fields=['status', 'error_log'])
+                logger.error(f"Reminder {reminder.id} failed: {reminder.error_log}")
             
         except Exception as e:
             logger.error(f"Error sending reminder {reminder.id}: {e}")

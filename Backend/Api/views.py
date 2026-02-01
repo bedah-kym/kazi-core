@@ -161,11 +161,13 @@ def calendly_webhook(request):
     try:
         # Verify webhook signature for security
         signature = request.headers.get('X-Calendly-Signature')
-        secret = getattr(settings, 'CALENDLY_CLIENT_SECRET', None)
+        secret = getattr(settings, 'CALENDLY_WEBHOOK_SIGNING_KEY', None) or getattr(settings, 'CALENDLY_CLIENT_SECRET', None)
         
         if not secret:
-            logger.error("CALENDLY_CLIENT_SECRET not configured")
+            logger.error("Calendly webhook signing key not configured")
             return Response({'error': 'Webhook not configured'}, status=500)
+        if not getattr(settings, 'CALENDLY_WEBHOOK_SIGNING_KEY', None):
+            logger.warning("CALENDLY_WEBHOOK_SIGNING_KEY not set; falling back to CALENDLY_CLIENT_SECRET for webhook verification")
         
         # Get raw request body for signature verification
         raw_body = request.body if isinstance(request.body, bytes) else request.body.encode()
@@ -189,6 +191,9 @@ def calendly_webhook(request):
             return Response({'ok': True})
         
         event_type = event.get('type')
+
+        from workflows.webhook_handlers import handle_calendly_webhook_event
+        handle_calendly_webhook_event(payload)
         
         # Handle different event types
         if event_type == 'invitee.created':

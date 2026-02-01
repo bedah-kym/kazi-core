@@ -38,7 +38,7 @@ def wait_for_db():
             print(f"Database unavailable, waiting 1 second... Error: {e}")
             time.sleep(1)
             
-        if time.time() - start_time > 60:
+        if time.time() - start_time > 180:
             print("Timeout waiting for database.")
             sys.exit(1)
 

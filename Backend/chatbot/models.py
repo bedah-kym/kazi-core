@@ -17,6 +17,7 @@ class Message(models.Model):
     member = models.ForeignKey(Member,null=True,on_delete=models.CASCADE)
     content = models.TextField()
     timestamp = models.DateTimeField(null=False)
+    parent = models.ForeignKey('self', null=True, blank=True, on_delete=models.SET_NULL, related_name='replies')
     
     # Voice features
     is_voice = models.BooleanField(default=False)

@@ -7,6 +7,7 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.utils import timezone
 from django.contrib import messages
+from django.conf import settings
 from decimal import Decimal
 import json
 import logging
@@ -129,13 +130,24 @@ def payment_callback(request):
         return JsonResponse({'error': 'Method not allowed'}, status=405)
     
     try:
+        # Verify webhook signature
+        from orchestration.webhook_validator import verify_intasend_signature, log_webhook_verification
+        signature = request.headers.get('X-IntaSend-Signature') or request.headers.get('X-IntaSend-Secret') or request.headers.get('X-IntaSend-Challenge')
+        secret = getattr(settings, 'INTASEND_WEBHOOK_SECRET', None)
+        if not secret:
+            logger.error("INTASEND_WEBHOOK_SECRET not configured")
+            return JsonResponse({'error': 'Webhook not configured'}, status=500)
+
+        raw_body = request.body if isinstance(request.body, bytes) else request.body.encode()
+        if not verify_intasend_signature(signature, secret, raw_body):
+            logger.warning(f"Invalid IntaSend webhook signature from {request.META.get('REMOTE_ADDR')}")
+            log_webhook_verification('intasend', False)
+            return JsonResponse({'error': 'Invalid signature'}, status=401)
+
+        log_webhook_verification('intasend', True)
+
         # Parse webhook data
-        data = json.loads(request.body)
-        
-        # Verify webhook signature (implement based on IntaSend docs)
-        # signature = request.headers.get('X-IntaSend-Signature')
-        # if not verify_signature(data, signature):
-        #     return JsonResponse({'error': 'Invalid signature'}, status=403)
+        data = json.loads(raw_body)
         
         invoice_id = data.get('invoice_id')
         state = data.get('state')
@@ -153,6 +165,9 @@ def payment_callback(request):
             logger.error(f"User not found for email: {email}")
             return JsonResponse({'error': 'User not found'}, status=404)
         
+        from workflows.webhook_handlers import handle_intasend_webhook_event
+        handle_intasend_webhook_event(user.id, data)
+
         if state == 'COMPLETE':
             # Process deposit
             tx = WalletService.process_deposit(

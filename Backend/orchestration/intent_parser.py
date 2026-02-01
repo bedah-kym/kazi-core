@@ -25,6 +25,9 @@ class IntentParser:
         "search_gif",
         "convert_currency",
         "set_reminder",
+        "send_email",
+        "create_invoice",
+        "create_workflow",
         # Travel planner actions
         "search_buses",
         "search_hotels",
@@ -52,7 +55,9 @@ Supported actions:
 - search_gif: User wants a GIF
 - convert_currency: User wants currency conversion
 - set_reminder: User wants to set a reminder (extract content, time, priority)
-- check_quotas: User asks about their usage limits, remaining searches, message count, or upload status.
+- send_email: User wants to send an email via system Mailgun account
+  Examples: "email alex@example.com saying hi", "send an email to ops with subject X", "mail me the report"
+- create_workflow: User wants to create or edit an automated workflow\n  Examples: "create a workflow to email me when a payment completes", "automate reminders every Friday"\n- check_quotas: User asks about their usage limits, remaining searches, message count, or upload status.
   Examples: "show my quotas", "how many searches left?", "what are my limits?", "usage status"
 - general_chat: Casual conversation, greetings, or unclear requests
 

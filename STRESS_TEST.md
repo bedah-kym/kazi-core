@@ -1,6 +1,6 @@
 # Mathia AI - System Stress Test & Manual Verification Plan
 
-This document provides a set of prompts and scenarios to verify all implemented features of the Mathia AI system. Use these to ensure the orchestration, connectors, and conversational context are working as expected.
+This document provides prompts and test commands to validate the current Mathia stack (chat + orchestration + workflows + webhooks/Temporal). Run them in order when possible; keep eye on logs for errors.
 
 ## 1. Core Conversational Flow & Context
 **Objective:** Verify that Mathia maintains memory of the last 5 messages and follows context.
@@ -32,12 +32,12 @@ This document provides a set of prompts and scenarios to verify all implemented 
 *   **Prompt:** "@mathia show me my last 5 transactions."
 *   **Prompt:** "@mathia check the status of invoice #INV-12345."
 
-## 5. Travel Planning (East Africa Focus)
-**Objective:** Verify the specialized travel connectors and scrapers.
+## 5. Travel Planning (East Africa Focus, Amadeus-first)
+**Objective:** Verify real data paths now that Duffel is removed and Amadeus is primary (TRAVEL_ALLOW_FALLBACK=False). Expect real results or explicit errors, not mock data.
 
-*   **Bus Search:** "@mathia find me a bus from Nairobi to Mombasa for tomorrow."
+*   **Flight Search (real):** "@mathia check flights from Nairobi to London on Dec 20."
+*   **Flight Fallback Guard:** "@mathia search flights from Atlantis to Wakanda tomorrow." (Should return a graceful error, not mock data.)
 *   **Hotel Search:** "@mathia I need a hotel in Diani for 3 nights next week."
-*   **Flight Search:** "@mathia check flights from Nairobi to London on Dec 20."
 *   **Itinerary:** "@mathia plan a 3-day trip to Kisumu for me."
 
 ## 6. Calendly & Scheduling
@@ -74,5 +74,49 @@ This document provides a set of prompts and scenarios to verify all implemented 
 *   **Empty Query:** "@mathia "
 *   **Mixed Intent:** "@mathia what's the weather in Nairobi and also remind me to buy milk."
 
+
+## 11. Workflows (chat-first, Temporal-backed)
+**Objective:** Validate workflow drafting, validation, policy enforcement, and execution.
+
+*   **Create simple workflow:** "@mathia create a workflow called 'Quota ping' that runs manually and checks my quotas." (Expect summary + approve prompt, then 'approve'.)
+*   **Schedule trigger (cron):** "@mathia make a workflow 'Daily balance check' that runs every day at 09:30 Africa/Nairobi and emails - bedankimani860@gmail.com my last 5 transactions." (Should register schedule; verify in Temporal UI schedules tab.)
+*   **Webhook trigger (payments):** "@mathia create a workflow 'Receipt pusher' that triggers on payment.completed and sends a mailgun email to me with the invoice_id and amount."
+*   **Withdraw policy enforcement:** "@mathia create a workflow that withdraws 15000 KES to +254700000000 when payment.completed fires." (Should fail validation > WORKFLOW_WITHDRAW_MAX=10000 or missing policy.)
+*   **Withdraw with policy:** "@mathia create a workflow 'Safe withdraw' with policy allowed_phone_numbers [+254700000000] max_withdraw_amount 5000, trigger payment.completed, step withdraw 3000 to +254700000000." (Should succeed.)
+*   **Condition skip:** "@mathia build a workflow that runs manually, first search_flights NBO-LON Dec 20, then send_email only if price_ksh < 80000." (Ensures condition parsing.)
+
+## 12. Webhook Endpoints (manual curl)
+**Objective:** Prove signature verification and trigger wiring.
+
+*   **Calendly webhook (signature required):**
+```
+curl -X POST http://localhost:8000/api/calendly/webhook/ \
+  -H "X-Calendly-Signature: $(python - <<'PY'\nimport hmac,hashlib,os,json\nsecret=os.environ['CALENDLY_WEBHOOK_SIGNING_KEY'];body=json.dumps({'event':{'type':'invitee.created'},'config':{'webhook_subscription':{'owner':'https://api.calendly.com/users/ABC','uuid':'sub-123'}}});\nprint(hmac.new(secret.encode(), body.encode(), hashlib.sha256).hexdigest())\nPY)" \
+  -H "Content-Type: application/json" \
+  -d '{\"event\":{\"type\":\"invitee.created\"},\"config\":{\"webhook_subscription\":{\"owner\":\"https://api.calendly.com/users/ABC\",\"uuid\":\"sub-123\"}}}'
+```
+*   **IntaSend webhook (signature required):**
+```
+SIG=$(python - <<'PY'\nimport hmac,hashlib,os,json\nsecret=os.environ['INTASEND_WEBHOOK_SECRET'];body=json.dumps({'state':'COMPLETE','invoice_id':'INV-123','email':'admin@example.com','value':100,'fee':2});\nprint('sha256='+hmac.new(secret.encode(), body.encode(), hashlib.sha256).hexdigest())\nPY)
+curl -X POST http://localhost:8000/payments/callback/ \
+  -H "X-IntaSend-Signature: $SIG" \
+  -H "Content-Type: application/json" \
+  -d '{\"state\":\"COMPLETE\",\"invoice_id\":\"INV-123\",\"email\":\"admin@example.com\",\"value\":100,\"fee\":2}'
+```
+Expected: 401 if signature missing/invalid; triggers workflows for payment.completed when valid.
+
+## 13. Temporal Worker & Schedules Quick Checks
+**Objective:** Ensure worker + schedules are alive.
+
+*   **Worker process:** `docker ps | grep temporal_worker` (or `docker exec mathia-project-web-1 pgrep -f temporal` if ps available).
+*   **Schedule list:** Visit Temporal UI → default namespace → Schedules; confirm 'Daily balance check' appears after creation.
+
+## 14. Regression pings (chat)
+**Objective:** Confirm nothing regressed after workflow changes.
+
+*   "@mathia send me a WhatsApp saying 'System ok' to +254712345678."
+*   "@mathia check balance."
+*   "@mathia search gif dancing cat."
+
 ---
-*Updated: Jan 18, 2026*
+*Updated: Jan 27, 2026*

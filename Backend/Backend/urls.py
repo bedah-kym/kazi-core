@@ -29,7 +29,8 @@ urlpatterns = [
     path('chatbot/',include('chatbot.urls')),
     path('accounts/',include('users.urls')),
     path('accounts/', include('allauth.urls')),  # Social Auth URLs
-    path('api/',include('Api.urls')),
+    path('api/', include('Api.urls')),
+    path('api/workflows/', include('workflows.urls')),
     path('travel/', include('travel.urls')),  # Travel Planning UI
     path('payments/', include('payments.urls')),  # Payment System
     path('auth/', obtain_auth_token),

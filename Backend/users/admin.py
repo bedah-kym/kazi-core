@@ -1,7 +1,10 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
-from .models import UserProfile, Workspace, Wallet, WalletTransaction, GoalProfile
+from .models import (
+    UserProfile, Workspace, Wallet, WalletTransaction, GoalProfile,
+    TrialApplication, TrialInvite
+)
 
 class UserProfileInline(admin.StackedInline):
     model = UserProfile
@@ -43,13 +46,14 @@ class GoalProfileAdmin(admin.ModelAdmin):
 
 @admin.register(Workspace)
 class WorkspaceAdmin(admin.ModelAdmin):
-    list_display = ['name', 'owner', 'plan', 'account_type', 'onboarding_completed']
-    list_filter = ['plan', 'account_type', 'onboarding_completed']
+    list_display = ['name', 'owner', 'plan', 'account_type', 'onboarding_completed', 'trial_active', 'trial_ends_at']
+    list_filter = ['plan', 'account_type', 'onboarding_completed', 'trial_active']
     search_fields = ['name', 'owner__username', 'owner__email']
     fieldsets = (
         ('Info', {'fields': ('name', 'owner')}),
         ('Plan & Type', {'fields': ('plan', 'account_type')}),
         ('Status', {'fields': ('onboarding_completed',)}),
+        ('Trial', {'fields': ('trial_active', 'trial_started_at', 'trial_ends_at')}),
     )
 
 @admin.register(Wallet)
@@ -60,3 +64,23 @@ class WalletAdmin(admin.ModelAdmin):
 class WalletTransactionAdmin(admin.ModelAdmin):
     list_display = ['wallet', 'type', 'amount', 'currency', 'status', 'created_at']
     list_filter = ['type', 'status', 'currency']
+
+
+@admin.action(description="Mark selected applications as approved (no invite sent)")
+def approve_apps(modeladmin, request, queryset):
+    queryset.update(status='approved')
+
+
+@admin.register(TrialApplication)
+class TrialApplicationAdmin(admin.ModelAdmin):
+    list_display = ['name', 'email', 'company', 'team_size', 'status', 'created_at']
+    list_filter = ['status', 'industry', 'team_size']
+    search_fields = ['name', 'email', 'company', 'primary_use_case']
+    actions = [approve_apps]
+
+
+@admin.register(TrialInvite)
+class TrialInviteAdmin(admin.ModelAdmin):
+    list_display = ['email', 'status', 'sent_at', 'activated_at', 'trial_ends_at', 'sent_by']
+    list_filter = ['status']
+    search_fields = ['email', 'token']

@@ -13,6 +13,7 @@ from decimal import Decimal
 import os    
 from pathlib import Path
 import dj_database_url
+from celery.schedules import crontab
 # load environment variables from project .env
 try:
     from dotenv import load_dotenv
@@ -138,6 +139,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'users.middleware.TrialExpiryMiddleware',
     'chatbot.middleware.EnsureMemberMiddleware',  # Auto-create Member objects
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
@@ -280,6 +282,10 @@ CELERY_BEAT_SCHEDULE = {
     'check-due-reminders': {
         'task': 'chatbot.tasks.check_due_reminders',
         'schedule': 60.0,  # Every minute
+    },
+    'send-trial-summary': {
+        'task': 'users.tasks.send_trial_summary_task',
+        'schedule': crontab(hour=7, minute=0),  # every day at 07:00
     },
 }
 

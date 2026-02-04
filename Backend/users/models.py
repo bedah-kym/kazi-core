@@ -249,6 +249,7 @@ class GoalProfile(models.Model):
 class Workspace(models.Model):
     PLAN_CHOICES = (
         ('free', 'Free'),
+        ('trial', 'Trial'),
         ('pro', 'Pro'),
         ('agency', 'Agency'),
     )
@@ -264,6 +265,9 @@ class Workspace(models.Model):
     plan = models.CharField(max_length=20, choices=PLAN_CHOICES, default='free')
     account_type = models.CharField(max_length=20, choices=ACCOUNT_TYPE_CHOICES, default='personal')
     onboarding_completed = models.BooleanField(default=False)
+    trial_started_at = models.DateTimeField(null=True, blank=True)
+    trial_ends_at = models.DateTimeField(null=True, blank=True)
+    trial_active = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -368,4 +372,64 @@ class UserIntegration(models.Model):
 
     def __str__(self):
         return f"{self.integration_type} - {self.user.username}"
+
+
+def generate_trial_token():
+    import secrets
+    return secrets.token_urlsafe(24)
+
+
+class TrialApplication(models.Model):
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
+    name = models.CharField(max_length=120)
+    email = models.EmailField()
+    role = models.CharField(max_length=120, blank=True)
+    company = models.CharField(max_length=180, blank=True)
+    industry = models.CharField(max_length=120, blank=True)
+    team_size = models.CharField(max_length=50, blank=True)
+    current_stack = models.CharField(max_length=255, blank=True, help_text="Tools they use today")
+    primary_use_case = models.TextField(blank=True)
+    pain_points = models.TextField(blank=True)
+    success_metric = models.CharField(max_length=255, blank=True)
+    budget_readiness = models.CharField(max_length=120, blank=True)
+    go_live_timeframe = models.CharField(max_length=120, blank=True)
+    heard_from = models.CharField(max_length=120, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"TrialApplication({self.email}, {self.status})"
+
+
+class TrialInvite(models.Model):
+    STATUS_CHOICES = [
+        ('sent', 'Sent'),
+        ('activated', 'Activated'),
+        ('expired', 'Expired'),
+    ]
+    application = models.ForeignKey(TrialApplication, on_delete=models.SET_NULL, null=True, blank=True, related_name='invites')
+    email = models.EmailField()
+    token = models.CharField(max_length=64, unique=True, default=generate_trial_token)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='sent')
+    sent_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='sent_trial_invites')
+    sent_at = models.DateTimeField(null=True, blank=True)
+    activated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='activated_trial_invites')
+    activated_at = models.DateTimeField(null=True, blank=True)
+    trial_ends_at = models.DateTimeField(null=True, blank=True)
+    used = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"TrialInvite({self.email}, {self.status})"
 

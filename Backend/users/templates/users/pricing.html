@@ -1,0 +1,110 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pricing</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --text:#1d1c1a;
+            --muted:#5c5a57;
+            --bg:#fff;
+            --border:#e9e9e7;
+            --accent:#000;
+            --radius:12px;
+            --max:1080px;
+        }
+        body { margin:0; font-family:'Inter',sans-serif; background:var(--bg); color:var(--text); line-height:1.6; }
+        nav { position:sticky; top:0; background:rgba(255,255,255,0.95); backdrop-filter:blur(8px); border-bottom:1px solid var(--border); padding:14px 18px; }
+        nav .row { max-width:var(--max); margin:0 auto; display:flex; justify-content:space-between; align-items:center; gap:12px; }
+        .logo { text-decoration:none; color:var(--text); font-weight:700; display:flex; gap:8px; align-items:center; }
+        .btn { padding:10px 16px; border-radius:10px; text-decoration:none; font-weight:600; border:1px solid transparent; display:inline-flex; align-items:center; justify-content:center; gap:8px; min-height:44px; }
+        .btn-primary { background:var(--accent); color:#fff; }
+        .btn-ghost { border:1px solid var(--border); color:var(--text); }
+        .container { max-width:var(--max); margin:0 auto; padding:40px 22px 80px; }
+        h1 { font-size:clamp(30px,5vw,46px); margin:12px 0; }
+        h2 { font-size:clamp(22px,4vw,30px); margin:22px 0 10px; }
+        .muted { color:var(--muted); }
+        .grid { display:grid; gap:18px; }
+        .plans { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+        .card { background:#fff; border:1px solid var(--border); border-radius:var(--radius); padding:20px; box-shadow:0 8px 24px rgba(0,0,0,0.05); display:flex; flex-direction:column; gap:12px; }
+        ul { padding-left:18px; margin:0; }
+        li { margin-bottom:6px; }
+        .badge { display:inline-flex; align-items:center; gap:6px; padding:6px 10px; border-radius:999px; background:#dcfce7; color:#166534; font-weight:600; font-size:13px; }
+        .plan-price { font-size:26px; font-weight:700; }
+        .meta { font-size:13px; color:var(--muted); }
+    </style>
+</head>
+<body>
+    <nav>
+        <div class="row">
+            <a class="logo" href="/"><i class="fas fa-robot"></i> Mathia.OS</a>
+            <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                <a class="btn btn-ghost" href="{% url 'users:why_mathia' %}">Why Mathia</a>
+                <a class="btn btn-primary" href="{% url 'users:trial_apply' %}">Request Invite</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <span class="badge"><i class="fas fa-ticket"></i> 30-day free trial by invite</span>
+        <h1>Pricing that grows with you</h1>
+        <p class="muted" style="max-width:760px;">Start on an invite-only trial. Unlock Pro when workflows stick. Move to Team when you need shared rooms, approvals, and deeper controls.</p>
+
+        <div class="grid plans">
+            <div class="card">
+                <h2>Free</h2>
+                <div class="plan-price">$0</div>
+                <p class="muted">Try the basics and a handful of nudges.</p>
+                <ul>
+                    <li>Chat + quick answers</li>
+                    <li>Starter workflows (limited runs)</li>
+                    <li>Social + calendar connect</li>
+                    <li>Community support</li>
+                </ul>
+                <a class="btn btn-ghost" href="{% url 'users:trial_apply' %}">Request invite</a>
+            </div>
+            <div class="card" style="border:1px solid #111;">
+                <h2>Pro</h2>
+                <div class="plan-price">$39 / month</div>
+                <p class="muted">For solo builders who want Mathia to remember context and push the next step.</p>
+                <ul>
+                    <li>All Free features</li>
+                    <li>Proactive nudges and follow-ups</li>
+                    <li>Room memory for clients/projects</li>
+                    <li>Workflow library with schedules</li>
+                    <li>Invite-only 30-day trial, then billed monthly</li>
+                </ul>
+                <a class="btn btn-primary" href="{% url 'users:trial_apply' %}">Start trial (invite)</a>
+            </div>
+            <div class="card">
+                <h2>Team</h2>
+                <div class="plan-price">Custom</div>
+                <p class="muted">For small teams needing shared context, approvals, and reporting.</p>
+                <ul>
+                    <li>Shared rooms and workspace controls</li>
+                    <li>Audit-friendly logs and approvals</li>
+                    <li>Priority workflow capacity</li>
+                    <li>Guided onboarding for your stack</li>
+                    <li>Quarterly business reviews</li>
+                </ul>
+                <a class="btn btn-ghost" href="{% url 'users:trial_apply' %}">Talk to us</a>
+            </div>
+        </div>
+
+        <h2 style="margin-top:32px;">What is included in the trial?</h2>
+        <div class="card">
+            <ul>
+                <li>Full Pro features for 30 days once your invite is approved.</li>
+                <li>Onboarding call to pick 2–3 workflows to automate first.</li>
+                <li>Success check-in at day 21 to keep the wins rolling.</li>
+            </ul>
+        </div>
+    </div>
+</body>
+</html>

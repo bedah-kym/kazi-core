@@ -2,7 +2,7 @@ from django import forms
 from django.contrib.auth.forms import AuthenticationForm
 from django.core.exceptions import ValidationError
 from django.contrib.auth import get_user_model
-from .models import UserProfile, GoalProfile
+from .models import UserProfile, GoalProfile, TrialApplication
 
 User = get_user_model()
 
@@ -72,4 +72,23 @@ class GoalProfileForm(forms.ModelForm):
             'roadmap': forms.Textarea(attrs={'rows': 5, 'class': 'form-input font-mono'}),
             'custom_goals': forms.Textarea(attrs={'rows': 2, 'class': 'form-input'}),
             'custom_needs': forms.Textarea(attrs={'rows': 2, 'class': 'form-input'}),
+        }
+
+
+class TrialApplicationForm(forms.ModelForm):
+    class Meta:
+        model = TrialApplication
+        fields = [
+            'name', 'email', 'role', 'company', 'industry', 'team_size',
+            'current_stack', 'primary_use_case', 'pain_points',
+            'success_metric', 'budget_readiness', 'go_live_timeframe', 'heard_from'
+        ]
+        widgets = {
+            'primary_use_case': forms.Textarea(attrs={'rows': 3, 'placeholder': 'What do you want Mathia to handle first?'}),
+            'pain_points': forms.Textarea(attrs={'rows': 3, 'placeholder': 'Where are you stuck today?'}),
+            'success_metric': forms.TextInput(attrs={'placeholder': 'E.g., ship 3 workflows/week, reduce follow-ups missed'}),
+            'budget_readiness': forms.TextInput(attrs={'placeholder': 'Ready now / this quarter / exploring'}),
+            'go_live_timeframe': forms.TextInput(attrs={'placeholder': 'E.g., this week, 30 days, later'}),
+            'current_stack': forms.TextInput(attrs={'placeholder': 'Notion, Calendly, QuickBooks, X, Slack...'}),
+            'heard_from': forms.TextInput(attrs={'placeholder': 'Referral, X, community, demo, etc.'}),
         }

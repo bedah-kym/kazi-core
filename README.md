@@ -74,6 +74,39 @@ Access the OS at: [http://localhost:8000](http://localhost:8000)
 
 ---
 
+## Railway Deployment
+
+This repo already includes a `Dockerfile` and an entrypoint that runs migrations and `collectstatic` for the web service.
+
+1. Create a Railway project and connect this repo.
+2. Add PostgreSQL and Redis plugins (Railway will inject `DATABASE_URL` and `REDIS_URL`).
+3. Set required environment variables:
+   - `DJANGO_SECRET_KEY`
+   - `DJANGO_DEBUG=false`
+   - `DJANGO_ALLOWED_HOSTS=yourapp.up.railway.app`
+   - `DJANGO_CSRF_TRUSTED_ORIGINS=https://yourapp.up.railway.app`
+4. (Optional) If you need uploads in production, enable R2:
+   - `R2_ENABLED=true` and all `R2_*` variables (see `Backend/Backend/settings.py`).
+
+Service start commands (use these in Railway service settings):
+```bash
+# web
+sh /app/scripts/railway/web.sh
+
+# celery worker
+sh /app/scripts/railway/celery_worker.sh
+
+# celery beat
+sh /app/scripts/railway/celery_beat.sh
+
+# temporal worker (only if you use Temporal)
+sh /app/scripts/railway/temporal_worker.sh
+```
+
+For worker/beat/temporal services, set `SKIP_MIGRATIONS=1` to avoid repeated migrations.
+
+---
+
 ## 🧪 Testing the OS
 
 Run the diagnostic suite to verify all pillars:

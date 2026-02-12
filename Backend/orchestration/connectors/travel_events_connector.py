@@ -6,6 +6,7 @@ import logging
 import os
 import aiohttp
 from typing import Dict, Any, List
+from datetime import datetime
 from django.conf import settings
 from orchestration.connectors.base_travel_connector import BaseTravelConnector
 
@@ -28,6 +29,22 @@ class TravelEventsConnector(BaseTravelConnector):
         end_date = parameters.get('end_date')
         category = parameters.get('category', 'all').lower()
 
+        # Normalize dates to YYYY-MM-DD
+        def _norm_date(val):
+            if not val:
+                return None
+            try:
+                return datetime.fromisoformat(str(val)[:10]).date().isoformat()
+            except Exception:
+                try:
+                    return datetime.strptime(str(val), "%Y-%m-%d").date().isoformat()
+                except Exception:
+                    return None
+
+        event_date = _norm_date(event_date)
+        start_date = _norm_date(start_date or event_date)
+        end_date = _norm_date(end_date or event_date)
+
         if not location:
             return {
                 'results': [],
@@ -36,18 +53,19 @@ class TravelEventsConnector(BaseTravelConnector):
                 }
             }
 
-        results = await self._search_eventbrite_api(location, start_date or event_date, end_date or event_date, category)
+        results, api_error = await self._search_eventbrite_api(location, start_date, end_date, category)
+
+        if (not results) and settings.TRAVEL_ALLOW_FALLBACK:
+            results = self._get_fallback_events(location, category)
+            api_error = api_error or 'No events returned from Eventbrite; using fallback.'
 
         if not results:
-            if settings.TRAVEL_ALLOW_FALLBACK:
-                results = self._get_fallback_events(location, category)
-            else:
-                return {
-                    'results': [],
-                    'metadata': {
-                        'error': 'No events returned from Eventbrite.'
-                    }
+            return {
+                'results': [],
+                'metadata': {
+                    'error': api_error or 'No events returned from Eventbrite.'
                 }
+            }
 
         return {
             'results': results,
@@ -58,15 +76,17 @@ class TravelEventsConnector(BaseTravelConnector):
                 'end_date': end_date,
                 'category': category,
                 'provider': self.PROVIDER_NAME,
-                'total_found': len(results)
+                'total_found': len(results),
+                'warning': api_error if api_error else None
             }
         }
 
-    async def _search_eventbrite_api(self, location: str, start_date: str, end_date: str, category: str) -> List[Dict]:
+    async def _search_eventbrite_api(self, location: str, start_date: str, end_date: str, category: str) -> (List[Dict], str):
         eventbrite_key = os.getenv('EVENTBRITE_API_KEY')
         if not eventbrite_key:
-            logger.debug("EVENTBRITE_API_KEY not set")
-            return []
+            msg = "EVENTBRITE_API_KEY not set"
+            logger.debug(msg)
+            return [], msg
 
         api_url = "https://www.eventbriteapi.com/v3/events/search"
         params = {
@@ -80,7 +100,7 @@ class TravelEventsConnector(BaseTravelConnector):
         if end_date:
             params['start_date.range_end'] = f'{end_date}T23:59:59Z'
 
-        headers = {
+            headers = {
             'User-Agent': 'Travel-Planner/1.0'
         }
 
@@ -88,12 +108,15 @@ class TravelEventsConnector(BaseTravelConnector):
             async with aiohttp.ClientSession() as session:
                 async with session.get(api_url, params=params, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
                     if response.status != 200:
-                        logger.warning(f"Eventbrite API returned status {response.status}")
-                        return []
+                        text = await response.text()
+                        msg = f"Eventbrite API status {response.status}: {text[:200]}"
+                        logger.warning(msg)
+                        return [], msg
                     data = await response.json()
         except Exception as e:
-            logger.error(f"Eventbrite API error: {str(e)}")
-            return []
+            msg = f"Eventbrite API error: {str(e)}"
+            logger.error(msg)
+            return [], msg
 
         results = []
         events = data.get('events', [])
@@ -101,20 +124,23 @@ class TravelEventsConnector(BaseTravelConnector):
         for i, event in enumerate(events[:20]):
             try:
                 result = self._parse_eventbrite_event(event, i)
-                if result and (category == 'all' or category in result.get('category', '').lower()):
+                cat_val = result.get('category', '').lower()
+                if result and (category == 'all' or category in cat_val):
                     results.append(result)
             except Exception as e:
                 logger.warning(f"Error parsing event {i}: {str(e)}")
                 continue
 
-        return results
+        return results, None
 
     def _parse_eventbrite_event(self, event: Dict, index: int) -> Dict:
+        # Accept either text or id for category
+        category_id = event.get('category_id', 'other')
         return {
             'id': f"event_{event.get('id', index+1)[:10]}",
             'provider': 'Eventbrite',
             'title': event.get('name', {}).get('text', f'Event {index+1}'),
-            'category': event.get('category_id', 'other'),
+            'category': category_id,
             'start_datetime': event.get('start', {}).get('utc', ''),
             'end_datetime': event.get('end', {}).get('utc', ''),
             'location': event.get('venue', {}).get('name', 'Online'),

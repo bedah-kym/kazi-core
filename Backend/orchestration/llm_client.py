@@ -34,12 +34,16 @@ class LLMClient:
         system_prompt: str, 
         user_prompt: str, 
         temperature: float = 0.7,
-        max_tokens: int = 1000,
+        max_tokens: int = 600,
         json_mode: bool = False
     ) -> str:
         """
         Generate text using available LLM provider.
         """
+        max_tokens = min(max_tokens, getattr(settings, 'LLM_MAX_TOKENS', 700))
+        user_prompt = self._truncate(user_prompt)
+        system_prompt = self._truncate(system_prompt, is_system=True)
+
         # Try Claude first
         if self.anthropic_key:
             try:
@@ -62,18 +66,21 @@ class LLMClient:
         system_prompt: str, 
         user_prompt: str, 
         temperature: float = 0.7,
-        max_tokens: int = 1000
+        max_tokens: int = 600
     ):
         """
         Stream text generation. Yields chunks of text.
         """
-        # Try Claude first (skipping streaming for now as it requires different handling)
+        max_tokens = min(max_tokens, getattr(settings, 'LLM_MAX_TOKENS', 700))
+        user_prompt = self._truncate(user_prompt)
+        system_prompt = self._truncate(system_prompt, is_system=True)
+
+        # Try Claude first (now with streaming)
         if self.anthropic_key:
-             # For now, just return full response as a single chunk if using Claude
-             # (Future TODO: Implement Claude streaming)
             try:
-                full_text = await self._call_claude(system_prompt, user_prompt, temperature, max_tokens)
-                yield full_text
+                async for chunk in self._call_claude_stream(system_prompt, user_prompt, temperature, max_tokens):
+                    if chunk:
+                        yield chunk
                 return
             except Exception as e:
                 logger.warning(f"Claude API failed: {e}. Falling back to Hugging Face.")
@@ -113,9 +120,55 @@ class LLMClient:
             
             if response.status_code != 200:
                 raise Exception(f"Anthropic Error {response.status_code}: {response.text}")
-                
+            
             data = response.json()
             return data["content"][0]["text"]
+
+    async def _call_claude_stream(self, system_prompt: str, user_prompt: str, temperature: float, max_tokens: int):
+        """
+        Stream from Anthropic Messages API.
+        Yields small text deltas to reduce perceived latency and token waste.
+        """
+        async with httpx.AsyncClient(timeout=40.0) as client:
+            async with client.stream(
+                "POST",
+                self.anthropic_url,
+                headers={
+                    "x-api-key": self.anthropic_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json"
+                },
+                json={
+                    "model": self.claude_model,
+                    "max_tokens": max_tokens,
+                    "temperature": temperature,
+                    "system": system_prompt,
+                    "messages": [
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    "stream": True
+                }
+            ) as response:
+                if response.status_code != 200:
+                    body = await response.aread()
+                    raise Exception(f"Anthropic Stream Error {response.status_code}: {body}")
+
+                async for line in response.aiter_lines():
+                    if not line or not line.startswith("data: "):
+                        continue
+                    payload = line[6:]
+                    if payload.strip() == "[DONE]":
+                        break
+                    try:
+                        event = json.loads(payload)
+                        # content_block_delta carries the text diff
+                        if event.get("type") == "content_block_delta":
+                            delta = event.get("delta", {})
+                            text = delta.get("text")
+                            if text:
+                                yield text
+                    except Exception:
+                        continue
 
     async def _call_huggingface(self, system_prompt: str, user_prompt: str, temperature: float, max_tokens: int, json_mode: bool) -> str:
         """Call Hugging Face Router (OpenAI-compatible /v1/chat/completions API)"""
@@ -265,6 +318,23 @@ class LLMClient:
             
         logger.error(f"Failed to extract JSON from: {text[:100]}...")
         return {}
+
+    def _truncate(self, prompt: str, is_system: bool = False) -> str:
+        """
+        Clamp prompt length to avoid runaway token costs.
+        """
+        if not prompt:
+            return ""
+        limit = getattr(settings, 'LLM_PROMPT_CHAR_LIMIT', 4000)
+        if len(prompt) <= limit:
+            return prompt
+        suffix = "\n\n[truncated for cost control]"
+        if is_system:
+            return prompt[:limit] + suffix
+        # For user prompts keep the tail (often the question) intact
+        head = prompt[: int(limit * 0.6)]
+        tail = prompt[-int(limit * 0.3):]
+        return head + "\n...\n" + tail + suffix
 
 def extract_json(text: str) -> Dict:
     """

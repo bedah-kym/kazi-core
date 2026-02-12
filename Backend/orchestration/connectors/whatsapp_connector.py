@@ -61,7 +61,7 @@ class WhatsAppConnector(BaseConnector):
         """
         action = parameters.get("action")
         
-        if action == "send_message":
+        if action in ("send_message", "send_whatsapp"):
             return self.send_message(
                 to=parameters.get("phone_number"),
                 body=parameters.get("message"),
@@ -79,6 +79,10 @@ class WhatsAppConnector(BaseConnector):
         return {"error": f"Unknown WhatsApp action: {action}"}
 
     def send_message(self, to, body, media_url=None):
+        # Basic validation
+        if not to or not body:
+            return {"error": "phone_number and message are required"}
+
         if settings.DEBUG and not self.client:
              # Mock mode for dev
              print(f"[WhatsApp-Mock] Sending to {to}: {body}")
@@ -87,7 +91,7 @@ class WhatsAppConnector(BaseConnector):
         if self.provider == 'twilio' and self.client:
             try:
                 # Ensure 'to' number is in whatsapp format
-                to_number = to if to.startswith('whatsapp:') else f"whatsapp:{to}"
+                to_number = to if isinstance(to, str) and to.startswith('whatsapp:') else f"whatsapp:{to}"
                 
                 msg_args = {
                     'from_': self.from_number,

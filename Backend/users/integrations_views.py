@@ -4,28 +4,40 @@ from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django.views.decorators.http import require_http_methods
 from .models import UserIntegration
-from cryptography.fernet import Fernet
 from django.conf import settings
-import base64
-import hashlib
+from users.encryption import TokenEncryption
 import json
 
-def get_fernet():
+def get_legacy_fernet():
+    from cryptography.fernet import Fernet
+    import base64
+    import hashlib
+
     secret = (settings.SECRET_KEY or 'changeme').encode('utf-8')
-    hash = hashlib.sha256(secret).digest()
-    fernet_key = base64.urlsafe_b64encode(hash)
+    digest = hashlib.sha256(secret).digest()
+    fernet_key = base64.urlsafe_b64encode(digest)
     return Fernet(fernet_key)
 
+
 def encrypt_data(data_dict):
-    f = get_fernet()
     json_str = json.dumps(data_dict)
-    return f.encrypt(json_str.encode('utf-8')).decode('utf-8')
+    return TokenEncryption.encrypt(json_str)
+
 
 def decrypt_data(encrypted_str):
     if not encrypted_str:
         return {}
+
+    # Preferred: ENCRYPTION_KEY-backed decryption
     try:
-        f = get_fernet()
+        json_str = TokenEncryption.decrypt(encrypted_str)
+        return json.loads(json_str)
+    except Exception:
+        pass
+
+    # Legacy fallback for existing records
+    try:
+        f = get_legacy_fernet()
         json_str = f.decrypt(encrypted_str.encode('utf-8')).decode('utf-8')
         return json.loads(json_str)
     except Exception:

@@ -31,7 +31,7 @@ class ReadOnlyPaymentConnector(BaseConnector):
         action = parameters.get("action")
         
         # Whitelist of allowed actions
-        ALLOWED_ACTIONS = ['check_balance', 'list_transactions', 'check_invoice_status']
+        ALLOWED_ACTIONS = ['check_balance', 'list_transactions', 'check_invoice_status', 'check_payments']
         
         if action not in ALLOWED_ACTIONS:
             return {
@@ -56,6 +56,18 @@ class ReadOnlyPaymentConnector(BaseConnector):
             return await self.list_transactions(user, parameters.get("limit", 10))
         elif action == "check_invoice_status":
             return await self.check_invoice_status(parameters.get("invoice_id"))
+        elif action == "check_payments":
+             # Summary view: Balance + Last 3 transactions
+            balance_data = await self.check_balance(user)
+            tx_data = await self.list_transactions(user, limit=3)
+            
+            return {
+                "status": "success",
+                "balance": balance_data.get("balance", 0),
+                "currency": balance_data.get("currency", "KES"),
+                "recent_transactions": tx_data.get("transactions", []),
+                "message": f"Your balance is {balance_data.get('balance', 0)} {balance_data.get('currency', 'KES')}. Here are your last 3 transactions."
+            }
         
         return {"error": "Unknown action"}
     
@@ -79,29 +91,28 @@ class ReadOnlyPaymentConnector(BaseConnector):
     
     async def list_transactions(self, user, limit: int = 10) -> dict:
         """List recent transactions"""
-        from payments.models import LedgerAccount
         from asgiref.sync import sync_to_async
+        from users.models import WalletTransaction
+        from payments.services import WalletService
         
         try:
             def _get_transactions():
-                try:
-                    wallet = LedgerAccount.objects.get(user=user, account_type='LIABILITY')
-                    recent_entries = wallet.entries.select_related(
-                        'journal_entry'
-                    ).order_by('-journal_entry__timestamp')[:limit]
-                    
-                    transactions = []
-                    for entry in recent_entries:
-                        transactions.append({
-                            'date': entry.journal_entry.timestamp.strftime('%Y-%m-%d %H:%M'),
-                            'description': entry.journal_entry.description,
-                            'amount': float(entry.amount if entry.dr_cr == 'CREDIT' else -entry.amount),
-                            'type': entry.journal_entry.get_transaction_type_display(),
-                        })
-                    
-                    return transactions
-                except LedgerAccount.DoesNotExist:
-                    return []
+                wallet = WalletService.get_or_create_user_wallet(user)
+                recent_entries = WalletTransaction.objects.filter(
+                    wallet=wallet
+                ).order_by('-created_at')[:limit]
+                
+                transactions = []
+                for entry in recent_entries:
+                    amount = entry.amount if entry.type == 'CREDIT' else -entry.amount
+                    transactions.append({
+                        'date': entry.created_at.strftime('%Y-%m-%d %H:%M'),
+                        'description': entry.description,
+                        'amount': float(amount),
+                        'type': entry.get_type_display(),
+                    })
+                
+                return transactions
             
             transactions = await sync_to_async(_get_transactions)()
             

@@ -69,31 +69,34 @@ class MessageActions {
     addDropdownToMessage(messageElement, messageId, messageContent, isAIMessage, isFailed) {
         if (!isAIMessage) return; // Only add to AI messages
 
+        const roomId = window.currentRoomId || 'room';
+        const menuId = `${roomId}-${messageId}`;
+
         // Ensure parent has position relative for proper dropdown positioning
         messageElement.style.position = 'relative';
 
         const dropdown = document.createElement('div');
         dropdown.className = 'message-actions-dropdown';
         dropdown.innerHTML = `
-            <button class="message-actions-btn" aria-label="Message actions" data-message-id="${messageId}">
+            <button class="message-actions-btn" aria-label="Message actions" data-message-id="${messageId}" data-room-id="${roomId}">
                 <i class="fas fa-ellipsis-v"></i>
             </button>
-            <div class="message-actions-menu" id="actions-menu-${messageId}">
-                <button class="message-actions-item" data-action="pin" data-message-id="${messageId}">
+            <div class="message-actions-menu" id="actions-menu-${menuId}" data-menu-id="${menuId}">
+                <button class="message-actions-item" data-action="pin" data-message-id="${messageId}" data-room-id="${roomId}">
                     <i class="fas fa-thumbtack"></i>
                     Pin to Notes
                 </button>
-                <button class="message-actions-item" data-action="reply" data-message-id="${messageId}">
+                <button class="message-actions-item" data-action="reply" data-message-id="${messageId}" data-room-id="${roomId}">
                     <i class="fas fa-reply"></i>
                     Reply
                 </button>
                 ${isFailed ? `
-                <button class="message-actions-item danger" data-action="retry" data-message-id="${messageId}">
+                <button class="message-actions-item danger" data-action="retry" data-message-id="${messageId}" data-room-id="${roomId}">
                     <i class="fas fa-redo"></i>
                     Retry
                 </button>
                 ` : ''}
-                <button class="message-actions-item" data-action="upload">
+                <button class="message-actions-item" data-action="upload" data-room-id="${roomId}">
                     <i class="fas fa-upload"></i>
                     Upload Document
                 </button>
@@ -111,6 +114,7 @@ class MessageActions {
             menu.querySelectorAll('.message-actions-item').forEach(item => {
                 if (!item.dataset.messageId) item.dataset.messageId = messageId;
                 if (!item.dataset.messageContent) item.dataset.messageContent = messageContent || '';
+                if (!item.dataset.roomId) item.dataset.roomId = roomId;
             });
         }
 
@@ -119,7 +123,8 @@ class MessageActions {
 
 
     toggleDropdown(messageId) {
-        const menu = document.getElementById(`actions-menu-${messageId}`);
+        const roomId = window.currentRoomId || 'room';
+        const menu = document.querySelector(`.message-actions-menu[data-menu-id="${roomId}-${messageId}"]`);
         if (!menu) return;
 
         if (this.activeDropdown && this.activeDropdown !== menu) {
@@ -202,6 +207,7 @@ class MessageActions {
                     input.value = data.reply_prefix;
                     input.focus();
                 }
+                window.replyToMessageId = messageId;
             } else {
                 this.showToast(data.error || 'Failed to create reply', 'error');
             }

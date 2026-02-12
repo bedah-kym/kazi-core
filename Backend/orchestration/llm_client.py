@@ -243,7 +243,23 @@ class LLMClient:
             end = clean_text.rfind("}")
             if start != -1 and end != -1:
                 json_str = clean_text[start:end+1]
-                return json.loads(json_str)
+                # Primary attempt
+                try:
+                    return json.loads(json_str)
+                except json.JSONDecodeError:
+                    # Fallback: tolerate trailing commas/ellipsis using literal_eval
+                    import ast
+                    try:
+                        py_obj = ast.literal_eval(
+                            json_str.replace("null", "None")
+                                    .replace("true", "True")
+                                    .replace("false", "False")
+                                    .replace("...", "")
+                        )
+                        if isinstance(py_obj, dict):
+                            return py_obj
+                    except Exception:
+                        pass
         except Exception:
             pass
             

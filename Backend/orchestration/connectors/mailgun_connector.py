@@ -14,9 +14,21 @@ class MailgunConnector(BaseConnector):
     """
     
     def __init__(self):
-        self.api_key = os.environ.get('MAILGUN_API_KEY')
-        self.domain = os.environ.get('MAILGUN_DOMAIN')
+        use_sandbox = os.environ.get('MAILGUN_USE_SANDBOX', '').lower() in ('1', 'true', 'yes')
+        sandbox_domain = os.environ.get('MAILGUN_DOMAIN_SANDBOX')
+        sandbox_key = os.environ.get('MAILGUN_API_KEY_SANDBOX')
+
+        if use_sandbox:
+            self.api_key = sandbox_key
+            self.domain = sandbox_domain
+            if not self.api_key or not self.domain:
+                logger.warning("[Mailgun] Sandbox enabled but missing key/domain. Using mock send.")
+        else:
+            self.api_key = os.environ.get('MAILGUN_API_KEY')
+            self.domain = os.environ.get('MAILGUN_DOMAIN')
+
         self.base_url = f"https://api.mailgun.net/v3/{self.domain}" if self.domain else None
+        self.use_sandbox = use_sandbox
         
     async def execute(self, parameters: dict, context: dict) -> dict:
         """
@@ -36,6 +48,13 @@ class MailgunConnector(BaseConnector):
         return {"error": f"Unknown Mailgun action: {action}"}
 
     async def send_email(self, to, subject, text, html=None, from_email=None):
+        if not to:
+            return {"error": "Recipient 'to' is required for send_email"}
+        if not subject:
+            return {"error": "Subject is required for send_email"}
+        if not text and not html:
+            return {"error": "Email text or html content is required for send_email"}
+
         if not self.api_key or not self.domain:
             logger.warning("[Mailgun] Missing credentials. Mocking email send.")
             return {
@@ -67,11 +86,16 @@ class MailgunConnector(BaseConnector):
                     return {
                         "status": "success", 
                         "id": response.json().get("id"),
-                        "message": "Email sent successfully"
+                        "message": "Email sent successfully",
+                        "sandbox": self.use_sandbox
                     }
                 else:
                     logger.error(f"Mailgun Error: {response.text}")
-                    return {"error": f"Failed to send email: {response.status_code}", "details": response.text}
+                    return {
+                        "error": f"Failed to send email: {response.status_code}",
+                        "details": response.text,
+                        "sandbox": self.use_sandbox
+                    }
                     
         except Exception as e:
             logger.error(f"Mailgun Connector Error: {str(e)}")

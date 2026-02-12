@@ -8,17 +8,20 @@ from django.core.files.base import ContentFile
 from .models import Message, Member, Chatroom
 from django.contrib.auth import get_user_model
 import os
+import uuid
 from django_redis import get_redis_connection
 from django.core.cache import cache
 from base64 import b64encode, b64decode
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.exceptions import InvalidKey
+from users.encryption import TokenEncryption
 import logging
 import asyncio
 from .models import Message, Member, Chatroom, UserModerationStatus, ModerationBatch
 from .tasks import moderate_message_batch, generate_ai_response, generate_voice_response
 from orchestration.intent_parser import parse_intent
-from django.conf import settings 
+from django.conf import settings
+from django.utils.text import get_valid_filename
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
@@ -44,16 +47,16 @@ class ChatConsumer(AsyncWebsocketConsumer):
         self.room_name = self.scope["url_route"]["kwargs"]["room_name"]
         self.room_group_name = f"chat_{self.room_name}"
 
-        # 3. Secure session init
+        # 3. Check room membership
+        current_chat = await self.get_chatroom_for_user(self.room_name, self.scope["user"])
+        if not current_chat:
+            await self.close(code=4003)
+            return
+
+        # 4. Secure session init
         initialized = await self.initialize_secure_session(self.room_name)
         if not initialized:
             await self.close(code=4002)
-            return
-
-        # 4. Check if the room exists
-        current_chat = await self.get_current_chatroom(self.room_name)
-        if not current_chat:
-            await self.close(code=4003)
             return
 
         # 5. Join group FIRST
@@ -169,7 +172,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
         """Fetches the Chatroom and its encryption key from the database."""
         try:
             chatroom = Chatroom.objects.get(id=room_id)
-            return chatroom.encryption_key
+            key = chatroom.encryption_key
+            if key and key.startswith("enc:"):
+                key = TokenEncryption.safe_decrypt(key[4:], default=None)
+            return key
         except Chatroom.DoesNotExist:
             logger.error(f"Chatroom with id {room_id} not found.")
             return None
@@ -264,6 +270,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
         except Exception as e:
             logger.error(f"General decryption error: {str(e)}")
             return None
+
+    def _decode_base64_payload(self, payload):
+        if not isinstance(payload, str):
+            raise ValueError("Invalid payload")
+        if ';base64,' in payload:
+            payload = payload.split(';base64,', 1)[1]
+        payload = payload.strip().replace(' ', '+')
+        return b64decode(payload)
 
     async def disconnect(self, close_code):
         if not hasattr(self, 'room_group_name'):
@@ -400,12 +414,17 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     async def fetch_messages(self, data):
         try:
-            messages = await self.get_last_10_messages(data['chatid'])
+            chatid = data['chatid']
+            before_id = data.get('before_id')  # None for initial load
+            result = await self.get_paginated_messages(chatid, before_id=before_id)
+            messages = result['messages']
             # Let message_to_json handle decryption & formatting
             messages_json = [await self.message_to_json(m) for m in messages]
             await self.send_message({
                 'command': 'messages',
-                'messages': messages_json
+                'messages': messages_json,
+                'has_more': result['has_more'],
+                'oldest_id': result['oldest_id']
             })
         except Exception as e:
             logger.error(f"Error in fetch_messages: {str(e)}")
@@ -501,6 +520,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
             logger.info(f"=== NEW MESSAGE START === Data: {data}")
             
             member_username = data['from']
+            if member_username != self.scope["user"].username:
+                await self.send_chat_message({
+                    'member': 'security system',
+                    'content': "Invalid sender.",
+                    'timestamp': str(timezone.now())
+                })
+                return
+
             get_user = sync_to_async(User.objects.filter(username=member_username).first)
             member_user = await get_user()
             logger.info(f"Step 1: Got user: {member_user}")
@@ -515,6 +542,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
             # === NEW: Check if user is muted ===
             room_id = data.get('chatid')
+            if str(room_id) != str(self.room_name):
+                await self.send_chat_message({
+                    'member': 'security system',
+                    'content': "Invalid room.",
+                    'timestamp': str(timezone.now())
+                })
+                return
             logger.info(f"Step 2: room_id={room_id}, checking mute status...")
             
             try:
@@ -595,7 +629,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
             message = await create_message(
                 member=member,
                 content=payload,
-                timestamp=timezone.now()
+                timestamp=timezone.now(),
+                parent_id=data.get('reply_to')
             )
 
             logger.info(f"Step 11: Getting chatroom...")
@@ -698,7 +733,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                     stream_state['buffer'] = []
                                     stream_state['last_send'] = current_time
                         
-                        if intent["confidence"] > 0.7 and intent["action"] != "general_chat":
+                        if intent["action"] == "create_workflow" and intent["confidence"] > 0.6:
+                            from workflows.workflow_agent import handle_workflow_message
+                            response_text = await handle_workflow_message(member_user.id, room_id, ai_query, history_text)
+                            await broadcast_chunk(response_text)
+                        elif intent["confidence"] > 0.7 and intent["action"] != "general_chat":
                             # Route through MCP
                             result = await route_intent(intent, {
                                 "user_id": member_user.id,
@@ -822,6 +861,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
     async def file_message(self, data):
         try:
             member_username = data['from']
+            if member_username != self.scope["user"].username:
+                await self.send_chat_message({
+                    'member': 'security system',
+                    'content': "Invalid sender.",
+                    'timestamp': str(timezone.now())
+                })
+                return
+
             get_user = sync_to_async(User.objects.filter(username=member_username).first)
             member_user = await get_user()
 
@@ -829,6 +876,15 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 await self.send_chat_message({
                     'member': 'security system',
                     'content': "User not found.",
+                    'timestamp': str(timezone.now())
+                })
+                return
+
+            room_id = data.get('chatid')
+            if str(room_id) != str(self.room_name):
+                await self.send_chat_message({
+                    'member': 'security system',
+                    'content': "Invalid room.",
                     'timestamp': str(timezone.now())
                 })
                 return
@@ -844,9 +900,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
             # Validate file size and type
             file_data = data.get('file_data', '')
-            file_name = data.get('file_name', '').lower()
-            
-            # Basic file validation
+            file_name = data.get('file_name', '')
+
             if not file_data or not file_name:
                 await self.send_chat_message({
                     'member': 'security system',
@@ -855,9 +910,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 })
                 return
 
-            # Check file extension
+            safe_name = get_valid_filename(file_name)
+            _, ext = os.path.splitext(safe_name)
+            ext = ext.lower()
+
             allowed_extensions = {'.txt', '.pdf', '.doc', '.docx', '.jpg', '.jpeg', '.png'}
-            if not any(file_name.endswith(ext) for ext in allowed_extensions):
+            if ext not in allowed_extensions:
                 await self.send_chat_message({
                     'member': 'security system',
                     'content': "Unsupported file type.",
@@ -865,10 +923,17 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 })
                 return
 
-            # Check file size (limit to 5MB)
-            file_size = len(file_data) * 3/4  # Approximate size for base64
-            if file_size > 5 * 1024 * 1024:  # 5MB
-            
+            try:
+                file_bytes = self._decode_base64_payload(file_data)
+            except Exception:
+                await self.send_chat_message({
+                    'member': 'security system',
+                    'content': "Invalid file encoding.",
+                    'timestamp': str(timezone.now())
+                })
+                return
+
+            if len(file_bytes) > 5 * 1024 * 1024:
                 await self.send_chat_message({
                     'member': 'security system',
                     'content': "File too large. Maximum size is 5MB.",
@@ -876,54 +941,65 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 })
                 return
 
-            file_path = default_storage.save(file_name, ContentFile(file_data.split(';base64,')[1].encode('utf-8')))
-            file_url = default_storage.url(file_path)
+            get_member = sync_to_async(Member.objects.filter(User=member_user).first)
+            member = await get_member()
 
-            # Encrypt the file message content
-            encrypted_message = await self.encrypt_message({
-                'content': f"<a href='{file_url}' target='_blank'>{file_name}</a>",
-                'timestamp': str(timezone.now())
-            })
-
-            create_message = sync_to_async(Message.objects.create)
-            # Store payload for file messages as well
-            payload = json.dumps({
-                'data':     encrypted_message['data'],
-                'nonce':    encrypted_message['nonce'],
-            })
-            message = await create_message(
-                member=member_user,
-                content=payload,
-                timestamp=timezone.now()
-            )
-
-            current_chat = await self.get_current_chatroom(data['chatid'])
-            if not current_chat:
+            if not member:
                 await self.send_chat_message({
                     'member': 'security system',
-                    'content': "Chatroom not found.",
+                    'content': "Not a member of any group.",
                     'timestamp': str(timezone.now())
                 })
                 return
 
-            room_members = await self.get_chatroom_participants(current_chat)
-
-            if member_user in room_members:
-                await sync_to_async(current_chat.chats.add)(message)
-                await sync_to_async(current_chat.save)()
-
-                message_json = await self.message_to_json(message)
-                content = {
-                    "command": "new_message",
-                    "message": message_json
-                }
-                await self.send_chat_message(content)
-            else:
+            current_chat = await self.get_chatroom_for_user(room_id, member_user)
+            if not current_chat:
                 await self.send_chat_message({
                     'member': 'security system',
                     'content': "Not authorized for this chat.",
                     'timestamp': str(timezone.now())
                 })
+                return
+
+            upload_name = f"chat_uploads/{uuid.uuid4().hex}{ext}"
+            file_path = default_storage.save(upload_name, ContentFile(file_bytes))
+            file_url = default_storage.url(file_path)
+
+            # Encrypt the file message content
+            encrypted_message = await self.encrypt_message({
+                'content': f"<a href='{file_url}' target='_blank'>{safe_name}</a>",
+                'timestamp': str(timezone.now())
+            })
+
+            if not encrypted_message:
+                await self.send_chat_message({
+                    'member': 'security system',
+                    'content': "Message encryption failed.",
+                    'timestamp': str(timezone.now())
+                })
+                return
+
+            create_message = sync_to_async(Message.objects.create)
+            payload = json.dumps({
+                'data': encrypted_message['data'],
+                'nonce': encrypted_message['nonce'],
+            })
+            message = await create_message(
+                member=member,
+                content=payload,
+                timestamp=timezone.now(),
+                parent_id=data.get('reply_to')
+            )
+
+            await sync_to_async(current_chat.chats.add)(message)
+            await sync_to_async(current_chat.save)()
+
+            message_json = await self.message_to_json(message)
+            content = {
+                "command": "new_message",
+                "message": message_json
+            }
+            await self.send_chat_message(content)
         except Exception as e:
             logger.error(f"Error in file_message: {str(e)}")
             await self.send_chat_message({
@@ -941,13 +1017,30 @@ class ChatConsumer(AsyncWebsocketConsumer):
         """
         try:
             member_username = data['from']
+            if member_username != self.scope["user"].username:
+                await self.send_chat_message({
+                    'member': 'security system',
+                    'content': "Invalid sender.",
+                    'timestamp': str(timezone.now())
+                })
+                return
+
             get_user = sync_to_async(User.objects.filter(username=member_username).first)
             member_user = await get_user()
 
             if not member_user:
                 return
 
-            # Rate limit check (reuse file upload or chat limit)
+            room_id = data.get('chatid')
+            if str(room_id) != str(self.room_name):
+                await self.send_chat_message({
+                    'member': 'security system',
+                    'content': "Invalid room.",
+                    'timestamp': str(timezone.now())
+                })
+                return
+
+            # Rate limit check
             if not await self.check_rate_limit(member_user.id):
                 await self.send_chat_message({
                     'member': 'security system',
@@ -957,63 +1050,106 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 return
 
             file_data = data.get('file_data', '')
-            file_name = data.get('file_name', '').lower()
+            file_name = data.get('file_name', '')
 
             if not file_data or not file_name:
                 return
 
+            safe_name = get_valid_filename(file_name)
+            _, ext = os.path.splitext(safe_name)
+            ext = ext.lower()
+
             # Validate Audio Extension
             allowed_audio = {'.webm', '.mp3', '.wav', '.m4a', '.ogg'}
-            if not any(file_name.endswith(ext) for ext in allowed_audio):
+            if ext not in allowed_audio:
                 await self.send_chat_message({
                     'member': 'security system',
                     'content': "Invalid audio format.",
                     'timestamp': str(timezone.now())
                 })
                 return
-            
-            # Save File
-            file_content = ContentFile(file_data.split(';base64,')[1].encode('utf-8'))
-            file_path = default_storage.save(f"voice/{file_name}", file_content)
+
+            try:
+                file_bytes = self._decode_base64_payload(file_data)
+            except Exception:
+                await self.send_chat_message({
+                    'member': 'security system',
+                    'content': "Invalid audio encoding.",
+                    'timestamp': str(timezone.now())
+                })
+                return
+
+            if len(file_bytes) > 10 * 1024 * 1024:
+                await self.send_chat_message({
+                    'member': 'security system',
+                    'content': "Audio too large. Maximum size is 10MB.",
+                    'timestamp': str(timezone.now())
+                })
+                return
+
+            get_member = sync_to_async(Member.objects.filter(User=member_user).first)
+            member = await get_member()
+
+            if not member:
+                return
+
+            current_chat = await self.get_chatroom_for_user(room_id, member_user)
+            if not current_chat:
+                await self.send_chat_message({
+                    'member': 'security system',
+                    'content': "Not authorized for this chat.",
+                    'timestamp': str(timezone.now())
+                })
+                return
+
+            file_path = default_storage.save(
+                f"voice/{uuid.uuid4().hex}{ext}",
+                ContentFile(file_bytes)
+            )
             file_url = default_storage.url(file_path)
 
             # Create Message with is_voice=True
             encrypted_content = await self.encrypt_message({
-                'content': "[Voice Message]", # Fallback text
+                'content': "[Voice Message]",
                 'timestamp': str(timezone.now())
             })
-            
+
+            if not encrypted_content:
+                await self.send_chat_message({
+                    'member': 'security system',
+                    'content': "Message encryption failed.",
+                    'timestamp': str(timezone.now())
+                })
+                return
+
             create_message = sync_to_async(Message.objects.create)
             payload = json.dumps({
-                'data': encrypted_content['data'], 
+                'data': encrypted_content['data'],
                 'nonce': encrypted_content['nonce']
             })
-            
+
             message = await create_message(
-                member=member_user,
+                member=member,
                 content=payload,
                 timestamp=timezone.now(),
-                is_voice=True,          # Flag as voice
-                audio_url=file_url      # Store URL directly
+                parent_id=data.get('reply_to'),
+                is_voice=True,
+                audio_url=file_url
             )
 
-            # Add to Room
-            current_chat = await self.get_current_chatroom(data['chatid'])
-            if current_chat:
-                await sync_to_async(current_chat.chats.add)(message)
-                await sync_to_async(current_chat.save)()
+            await sync_to_async(current_chat.chats.add)(message)
+            await sync_to_async(current_chat.save)()
 
-                # Broadcast
-                message_json = await self.message_to_json(message)
-                # Inject audio_url explicitly into the JSON response for frontend
-                message_json['audio_url'] = file_url
-                message_json['is_voice'] = True
+            # Broadcast
+            message_json = await self.message_to_json(message)
+            message_json['audio_url'] = file_url
+            message_json['is_voice'] = True
 
-                content = {
-                    "command": "new_message",
-                    "message": message_json
-                }
-                await self.send_chat_message(content)
+            content = {
+                "command": "new_message",
+                "message": message_json
+            }
+            await self.send_chat_message(content)
 
         except Exception as e:
             logger.error(f"Error in voice_message: {str(e)}")
@@ -1143,9 +1279,46 @@ class ChatConsumer(AsyncWebsocketConsumer):
         }))
         
     @classmethod
+    async def get_paginated_messages(cls, chatid, before_id=None, limit=20):
+        """Fetch messages with cursor-based pagination.
+        
+        Args:
+            chatid: The chatroom ID
+            before_id: If provided, fetch messages with id < before_id (for loading older)
+            limit: Number of messages to fetch (default 20)
+            
+        Returns:
+            Dict with 'messages', 'has_more', 'oldest_id'
+        """
+        def _fetch():
+            qs = Message.objects.filter(chatroom__id=chatid)
+            if before_id:
+                qs = qs.filter(id__lt=before_id)
+            # Optimize: select_related to avoid N+1 queries on member.User
+            qs = qs.select_related('member__User').order_by('-timestamp')[:limit + 1]
+            msgs = list(qs)
+            # Check if there are more messages beyond this page
+            has_more = len(msgs) > limit
+            return msgs[:limit], has_more
+        
+        messages, has_more = await sync_to_async(_fetch)()
+        oldest_id = messages[-1].id if messages else None
+        return {
+            'messages': messages,
+            'has_more': has_more,
+            'oldest_id': oldest_id
+        }
+    
+    # Legacy method for backwards compatibility
+    @classmethod
     async def get_last_10_messages(cls, chatid):
-        messages = Message.objects.filter(chatroom__id=chatid).order_by('-timestamp')[:10]
-        return await sync_to_async(list)(messages)
+        """Legacy method - use get_paginated_messages instead."""
+        result = await cls.get_paginated_messages(chatid, before_id=None, limit=10)
+        return result['messages']
+
+    @sync_to_async
+    def get_chatroom_for_user(self, chatid, user):
+        return Chatroom.objects.filter(id=chatid, participants__User=user).first()
 
     @classmethod
     async def get_current_chatroom(cls, chatid):
@@ -1170,7 +1343,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         current_time = timezone.now()
         self.messages_since_rotation += 1
         
-        if ((current_time - self.last_key_rotation).seconds >= self.KEY_ROTATION_INTERVAL or 
+        if ((current_time - self.last_key_rotation).total_seconds() >= self.KEY_ROTATION_INTERVAL or 
             self.messages_since_rotation >= self.MESSAGES_BEFORE_ROTATION):
             # Pass the current room_name to re-initialize the secure session
             await self.initialize_secure_session(self.room_name)
@@ -1204,7 +1377,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 'id': message.id,
                 'member': username,
                 'content': final_content,
-                'timestamp': str(message.timestamp)
+                'timestamp': str(message.timestamp),
+                'parent_id': message.parent_id
             }
         except Exception as e:
             logger.error(f"Error in message_to_json: {e}")

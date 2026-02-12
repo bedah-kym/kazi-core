@@ -169,21 +169,58 @@ def search_events(request):
         )
 
 # --- HTML Views ---
-from django.shortcuts import render
+from django.shortcuts import render, redirect
+from django.contrib.auth.decorators import login_required
 
-@permission_classes([IsAuthenticated])
+@login_required
 def plan_trip_wizard(request):
     """Render the Trip Planning Wizard"""
     return render(request, 'travel/plan_trip.html')
 
-@permission_classes([IsAuthenticated])
+@login_required
 def itinerary_list(request):
     """Render the Itinerary List (user-friendly UI)"""
     itineraries = Itinerary.objects.filter(user=request.user).order_by('-created_at')
     return render(request, 'travel/itinerary_list.html', {'itineraries': itineraries})
 
-@permission_classes([IsAuthenticated])
+@login_required
 def view_itinerary(request, itinerary_id):
     """Render the Itinerary Detail View"""
     itinerary = get_object_or_404(Itinerary, id=itinerary_id, user=request.user)
     return render(request, 'travel/itinerary_detail.html', {'itinerary': itinerary})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def archive_itinerary(request, itinerary_id):
+    """Archive an itinerary"""
+    itinerary = get_object_or_404(Itinerary, id=itinerary_id, user=request.user)
+    itinerary.status = 'archived'
+    itinerary.save()
+    # Redirect if HTML request, else JSON
+    if request.accepted_renderer.format == 'html':
+        return redirect('travel:itinerary_list')
+    return Response({'status': 'success', 'message': 'Itinerary archived'})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def delete_itinerary_view(request, itinerary_id):
+    """Delete an itinerary (Hard Delete)"""
+    itinerary = get_object_or_404(Itinerary, id=itinerary_id, user=request.user)
+    itinerary.delete()
+    if request.accepted_renderer.format == 'html':
+        return redirect('travel:itinerary_list')
+    return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def delete_itinerary_item_view(request, item_id):
+    """Delete an itinerary item"""
+    item = get_object_or_404(ItineraryItem, id=item_id, itinerary__user=request.user)
+    itinerary_id = item.itinerary.id
+    item.delete()
+    if request.accepted_renderer.format == 'html':
+        return redirect('travel:view_itinerary', itinerary_id=itinerary_id)
+    return Response(status=status.HTTP_204_NO_CONTENT)

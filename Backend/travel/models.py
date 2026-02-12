@@ -179,6 +179,7 @@ class SearchCache(models.Model):
     PROVIDER_CHOICES = [
         ('buupass', 'Buupass'),
         ('booking', 'Booking.com'),
+        ('amadeus', 'Amadeus'),
         ('duffel', 'Duffel'),
         ('karibu', 'Karibu Taxi'),
         ('eventbrite', 'Eventbrite'),

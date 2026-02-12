@@ -7,12 +7,14 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.utils import timezone
 from django.contrib import messages
+from django.conf import settings
 from decimal import Decimal
 import json
 import logging
 
-from .models import PaymentRequest, JournalEntry, PaymentNotification, LedgerAccount
-from .services import WalletService, InvoiceService, LedgerService
+from .models import PaymentRequest, PaymentNotification
+from .services import WalletService, InvoiceService
+from users.models import WalletTransaction
 from users.decorators import workspace_required
 
 logger = logging.getLogger(__name__)
@@ -25,41 +27,36 @@ def wallet_dashboard(request):
     """
     user = request.user
     balance = WalletService.get_balance(user)
-    
-    # Get user's wallet account
-    try:
-        wallet = LedgerAccount.objects.get(user=user, account_type='LIABILITY')
-        
-        # Get recent transactions
-        recent_entries = wallet.entries.select_related(
-            'journal_entry'
-        ).order_by('-journal_entry__timestamp')[:20]
-        
-        transactions = []
-        for entry in recent_entries:
-            transactions.append({
-                'date': entry.journal_entry.timestamp,
-                'description': entry.journal_entry.description,
-                'amount': entry.amount if entry.dr_cr == 'CREDIT' else -entry.amount,
-                'type': entry.journal_entry.get_transaction_type_display(),
-                'reference': entry.journal_entry.reference_id
-            })
-    except LedgerAccount.DoesNotExist:
-        transactions = []
-    
+
+    wallet = WalletService.get_or_create_user_wallet(user)
+    recent_entries = WalletTransaction.objects.filter(
+        wallet=wallet
+    ).order_by('-created_at')[:20]
+
+    transactions = []
+    for entry in recent_entries:
+        amount = entry.amount if entry.type == 'CREDIT' else -entry.amount
+        transactions.append({
+            'date': entry.created_at,
+            'description': entry.description,
+            'amount': amount,
+            'type': entry.get_type_display(),
+            'reference': entry.reference
+        })
+
     # Get unread notifications
     notifications = PaymentNotification.objects.filter(
         user=user,
         is_read=False
     ).order_by('-created_at')[:5]
-    
+
     context = {
         'balance': balance,
         'transactions': transactions,
         'notifications': notifications,
         'workspace': request.user.workspace,
     }
-    
+
     return render(request, 'payments/wallet_dashboard.html', context)
 
 
@@ -133,13 +130,24 @@ def payment_callback(request):
         return JsonResponse({'error': 'Method not allowed'}, status=405)
     
     try:
+        # Verify webhook signature
+        from orchestration.webhook_validator import verify_intasend_signature, log_webhook_verification
+        signature = request.headers.get('X-IntaSend-Signature') or request.headers.get('X-IntaSend-Secret') or request.headers.get('X-IntaSend-Challenge')
+        secret = getattr(settings, 'INTASEND_WEBHOOK_SECRET', None)
+        if not secret:
+            logger.error("INTASEND_WEBHOOK_SECRET not configured")
+            return JsonResponse({'error': 'Webhook not configured'}, status=500)
+
+        raw_body = request.body if isinstance(request.body, bytes) else request.body.encode()
+        if not verify_intasend_signature(signature, secret, raw_body):
+            logger.warning(f"Invalid IntaSend webhook signature from {request.META.get('REMOTE_ADDR')}")
+            log_webhook_verification('intasend', False)
+            return JsonResponse({'error': 'Invalid signature'}, status=401)
+
+        log_webhook_verification('intasend', True)
+
         # Parse webhook data
-        data = json.loads(request.body)
-        
-        # Verify webhook signature (implement based on IntaSend docs)
-        # signature = request.headers.get('X-IntaSend-Signature')
-        # if not verify_signature(data, signature):
-        #     return JsonResponse({'error': 'Invalid signature'}, status=403)
+        data = json.loads(raw_body)
         
         invoice_id = data.get('invoice_id')
         state = data.get('state')
@@ -157,16 +165,19 @@ def payment_callback(request):
             logger.error(f"User not found for email: {email}")
             return JsonResponse({'error': 'User not found'}, status=404)
         
+        from workflows.webhook_handlers import handle_intasend_webhook_event
+        handle_intasend_webhook_event(user.id, data)
+
         if state == 'COMPLETE':
             # Process deposit
-            journal = WalletService.process_deposit(
+            tx = WalletService.process_deposit(
                 user=user,
                 gross_amount=gross_amount,
                 intasend_fee=fee,
                 provider_ref=invoice_id
             )
             
-            logger.info(f"Deposit processed: {journal.reference_id}")
+            logger.info(f"Deposit processed: {tx.reference}")
             return JsonResponse({'status': 'success'})
         
         return JsonResponse({'status': 'ignored', 'state': state})
@@ -247,21 +258,19 @@ def list_transactions_api(request):
     """
     List recent transactions (READ-ONLY)
     """
-    try:
-        wallet = LedgerAccount.objects.get(user=request.user, account_type='LIABILITY')
-        recent_entries = wallet.entries.select_related(
-            'journal_entry'
-        ).order_by('-journal_entry__timestamp')[:10]
-        
-        transactions = []
-        for entry in recent_entries:
-            transactions.append({
-                'date': entry.journal_entry.timestamp.isoformat(),
-                'description': entry.journal_entry.description,
-                'amount': float(entry.amount if entry.dr_cr == 'CREDIT' else -entry.amount),
-                'type': entry.journal_entry.transaction_type,
-            })
-        
-        return JsonResponse({'transactions': transactions})
-    except LedgerAccount.DoesNotExist:
-        return JsonResponse({'transactions': []})
+    wallet = WalletService.get_or_create_user_wallet(request.user)
+    recent_entries = WalletTransaction.objects.filter(
+        wallet=wallet
+    ).order_by('-created_at')[:10]
+
+    transactions = []
+    for entry in recent_entries:
+        amount = entry.amount if entry.type == 'CREDIT' else -entry.amount
+        transactions.append({
+            'date': entry.created_at.isoformat(),
+            'description': entry.description,
+            'amount': float(amount),
+            'type': entry.type,
+        })
+
+    return JsonResponse({'transactions': transactions})

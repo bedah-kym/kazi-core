@@ -9,6 +9,7 @@ https://docs.djangoproject.com/en/4.1/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/4.1/ref/settings/
 """
+from decimal import Decimal
 import os    
 from pathlib import Path
 import dj_database_url
@@ -81,6 +82,13 @@ CSRF_COOKIE_SAMESITE = 'Lax'
 # Calendly app credentials (set in .env)
 CALENDLY_CLIENT_ID = os.environ.get('CALENDLY_CLIENT_ID')
 CALENDLY_CLIENT_SECRET = os.environ.get('CALENDLY_CLIENT_SECRET')
+CALENDLY_WEBHOOK_SIGNING_KEY = (
+    os.environ.get('CALENDLY_WEBHOOK_SIGNING_KEY')
+    or os.environ.get('Webhook_signing_key')
+)
+
+# IntaSend webhook secret for signature verification
+INTASEND_WEBHOOK_SECRET = os.environ.get('INTASEND_WEBHOOK_SECRET')
 
 # Application definition
 
@@ -99,6 +107,7 @@ INSTALLED_APPS = [
     'orchestration',
     'travel',
     'payments',
+    'workflows',
     'rest_framework',
     'rest_framework.authtoken',
     'django_celery_beat',
@@ -201,6 +210,17 @@ USE_TZ = True
 REDIS_URL = os.environ.get('REDIS_URL', 'redis://redis:6379/0')
 CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', REDIS_URL)
 
+# Temporal configuration for workflow execution
+TEMPORAL_HOST = os.environ.get('TEMPORAL_HOST', 'localhost:7233')
+TEMPORAL_NAMESPACE = os.environ.get('TEMPORAL_NAMESPACE', 'default')
+TEMPORAL_TASK_QUEUE = os.environ.get('TEMPORAL_TASK_QUEUE', 'user-workflows')
+
+# Workflow safety limits
+WORKFLOW_WITHDRAW_MAX = Decimal(os.environ.get('WORKFLOW_WITHDRAW_MAX', '10000'))
+
+# Travel connectors: allow mock fallbacks in dev only
+TRAVEL_ALLOW_FALLBACK = os.environ.get('TRAVEL_ALLOW_FALLBACK', str(DEBUG)).lower() in ('1', 'true', 'yes')
+
 # Celery Results
 CELERY_RESULT_BACKEND = 'django-db'  # Using Django DB for results
 CELERY_CACHE_BACKEND = 'django-cache'
@@ -257,6 +277,10 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'payments.tasks.process_recurring_invoices',
         'schedule': 86400.0,  # Daily
     },
+    'check-due-reminders': {
+        'task': 'chatbot.tasks.check_due_reminders',
+        'schedule': 60.0,  # Every minute
+    },
 }
 
 # AI Moderation Settings
@@ -292,14 +316,48 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 # Session security
-SESSION_COOKIE_AGE = 3600  # 1 hour - consider user preference for balance
+SESSION_COOKIE_AGE = 3600  # 1 hour
 SESSION_EXPIRE_AT_BROWSER_CLOSE = True
 SESSION_COOKIE_SECURE = not DEBUG
 SESSION_COOKIE_HTTPONLY = True
-SESSION_COOKIE_SAMESITE = 'Strict'
+# Lax to allow WS/session cookies after redirects in dev; keep secure via HTTPS in prod
+SESSION_COOKIE_SAMESITE = 'Lax'
 
 MEDIA_URL = '/uploads/'  # Base URL for media files
 MEDIA_ROOT = os.path.join(BASE_DIR, 'uploads')  # Directory to store uploaded files
+
+R2_ENABLED = os.environ.get('R2_ENABLED', 'False').lower() in ('1', 'true', 'yes')
+if R2_ENABLED:
+    AWS_ACCESS_KEY_ID = os.environ.get('R2_ACCESS_KEY_ID')
+    AWS_SECRET_ACCESS_KEY = os.environ.get('R2_SECRET_ACCESS_KEY')
+    AWS_STORAGE_BUCKET_NAME = os.environ.get('R2_BUCKET_NAME')
+    AWS_S3_ENDPOINT_URL = os.environ.get('R2_ENDPOINT_URL')
+    AWS_S3_REGION_NAME = os.environ.get('R2_REGION', 'auto')
+    AWS_S3_ADDRESSING_STYLE = 'path'
+    AWS_S3_SIGNATURE_VERSION = 's3v4'
+    AWS_S3_FILE_OVERWRITE = False
+    AWS_DEFAULT_ACL = None
+    AWS_QUERYSTRING_AUTH = False
+    AWS_S3_OBJECT_PARAMETERS = {'CacheControl': 'max-age=86400'}
+
+    if not AWS_ACCESS_KEY_ID or not AWS_SECRET_ACCESS_KEY or not AWS_STORAGE_BUCKET_NAME or not AWS_S3_ENDPOINT_URL:
+        raise ValueError('R2 is enabled but required R2_* settings are missing.')
+
+    AWS_S3_CUSTOM_DOMAIN = os.environ.get('R2_PUBLIC_BASE_URL', '')
+    if AWS_S3_CUSTOM_DOMAIN:
+        AWS_S3_CUSTOM_DOMAIN = AWS_S3_CUSTOM_DOMAIN.replace('https://', '').replace('http://', '')
+        MEDIA_URL = f"https://{AWS_S3_CUSTOM_DOMAIN}/"
+    else:
+        MEDIA_URL = f"{AWS_S3_ENDPOINT_URL.rstrip('/')}/{AWS_STORAGE_BUCKET_NAME}/"
+
+    STORAGES = {
+        'default': {
+            'BACKEND': 'storages.backends.s3boto3.S3Boto3Storage',
+        },
+        'staticfiles': {
+            'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',
+        },
+    }
 
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'

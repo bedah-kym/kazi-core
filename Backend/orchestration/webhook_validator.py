@@ -95,6 +95,46 @@ def verify_whatsapp_signature(signature: str, token: str, body: str) -> bool:
         return False
 
 
+def verify_intasend_signature(signature: str, secret: str, body: bytes) -> bool:
+    """
+    Verify IntaSend webhook authenticity.
+
+    According to IntaSend docs, the "challenge" you register is echoed back
+    with webhook requests. Many implementations simply compare the received
+    signature/challenge with the configured secret. We also support optional
+    HMAC formats if IntaSend adds them later.
+    """
+    if not secret:
+        logger.warning("Missing IntaSend webhook secret/challenge")
+        return False
+
+    # Fast-path: direct challenge match
+    if signature and signature.strip() == secret:
+        return True
+
+    # Optional HMAC support (sha256=... or raw hex)
+    if not signature:
+        return False
+
+    try:
+        algo = "sha256"
+        provided = signature
+        if "=" in signature:
+            prefix, provided = signature.split("=", 1)
+            algo = prefix.lower().strip()
+
+        if algo not in ("sha256", "sha1"):
+            logger.warning("Unsupported IntaSend signature algorithm: %s", algo)
+            return False
+
+        digest = hashlib.sha256 if algo == "sha256" else hashlib.sha1
+        expected = hmac.new(secret.encode(), body, digest).hexdigest()
+        return hmac.compare_digest(provided, expected)
+    except Exception as e:
+        logger.error(f"Error verifying IntaSend signature: {e}")
+        return False
+
+
 def verify_generic_hmac_sha256(signature: str, secret: str, body: bytes) -> bool:
     """
     Generic HMAC-SHA256 signature verification.

@@ -250,6 +250,16 @@ class LLMClient:
         logger.error(f"Failed to extract JSON from: {text[:100]}...")
         return {}
 
+def extract_json(text: str) -> Dict:
+    """
+    Robust JSON extraction from LLM output.
+    Handles markdown blocks, trailing text, etc.
+    Wrapper for the class method or standalone logic.
+    """
+    # Simply delegate to a temporary instance or duplicate logic 
+    # to keep it importable as a utility function.
+    return LLMClient().extract_json(text)
+
 # Singleton
 _client = None
 

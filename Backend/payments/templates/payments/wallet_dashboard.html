@@ -1,0 +1,216 @@
+{% extends 'payments/base.html' %}
+{% load humanize %}
+
+{% block title %}Overview | Mathia Pay{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-6">
+    <div>
+        <h2 class="h3 fw-bold tracking-tight">Dashboard</h2>
+        <p class="text-muted">Overview of your financial activity.</p>
+    </div>
+    <div>
+        <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#depositModal">
+            <i class="fas fa-plus me-2"></i> Deposit Funds
+        </button>
+    </div>
+</div>
+
+<div class="row g-4">
+    <!-- Balance Card -->
+    <div class="col-md-4">
+        <div class="card h-100">
+            <div class="card-header pb-2">
+                <h5 class="card-title text-sm font-medium text-muted">Total Balance</h5>
+            </div>
+            <div class="card-content pt-0">
+                <div class="d-flex align-items-baseline">
+                    <span class="fs-2 fw-bold">KES {{ balance|intcomma }}</span>
+                </div>
+                <p class="text-xs text-muted mt-1">+20.1% from last month</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Active Invoices Card -->
+    <div class="col-md-4">
+        <div class="card h-100">
+            <div class="card-header pb-2">
+                <h5 class="card-title text-sm font-medium text-muted">Active Invoices</h5>
+            </div>
+            <div class="card-content pt-0">
+                <div class="d-flex align-items-baseline">
+                    <span class="fs-2 fw-bold">12</span>
+                </div>
+                <p class="text-xs text-muted mt-1">2 pending payment</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Total Revenue Card (Placeholder) -->
+    <div class="col-md-4">
+        <div class="card h-100">
+            <div class="card-header pb-2">
+                <h5 class="card-title text-sm font-medium text-muted">Total Revenue</h5>
+            </div>
+            <div class="card-content pt-0">
+                <div class="d-flex align-items-baseline">
+                    <span class="fs-2 fw-bold">KES 45,231</span>
+                </div>
+                <p class="text-xs text-muted mt-1">+12% from last month</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mt-4">
+    <!-- Transaction Chart -->
+    <div class="col-md-7">
+        <div class="card h-100">
+            <div class="card-header">
+                <h5 class="card-title">Overview</h5>
+                <p class="card-description">Monthly transaction volume.</p>
+            </div>
+            <div class="card-content">
+                <canvas id="transactionChart" height="240"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- Recent Activity -->
+    <div class="col-md-5">
+        <div class="card h-100">
+            <div class="card-header">
+                <h5 class="card-title">Recent Sales</h5>
+                <p class="card-description">Latest transactions.</p>
+            </div>
+            <div class="card-content p-0">
+                <div class="table-responsive">
+                    <table class="table mb-0">
+                        <tbody>
+                            {% for tx in transactions %}
+                            <tr>
+                                <td class="ps-4">
+                                    <div class="d-flex flex-column">
+                                        <span class="fw-medium">{{ tx.description|truncatechars:20 }}</span>
+                                        <span class="text-xs text-muted">{{ tx.date|date:"M d" }}</span>
+                                    </div>
+                                </td>
+                                <td class="text-end pe-4">
+                                    <span class="fw-bold fs-6 {% if tx.amount > 0 %}text-success{% endif %}">
+                                        {% if tx.amount > 0 %}+{% endif %}{{ tx.amount|intcomma }}
+                                    </span>
+                                </td>
+                            </tr>
+                            {% empty %}
+                            <tr>
+                                <td colspan="2" class="text-center py-4 text-muted">No recent activity</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Deposit Modal (Cleaned up) -->
+<div class="modal fade" id="depositModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content border-0 shadow-lg" style="border-radius: var(--radius);">
+            <div class="modal-header border-bottom">
+                <h5 class="modal-title fw-bold">Deposit Funds</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body p-4">
+                <form id="depositForm">
+                    <div class="mb-3">
+                        <label class="form-label text-sm fw-medium">Phone Number (M-Pesa)</label>
+                        <input type="tel" name="phone" class="form-control" placeholder="2547..." required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label text-sm fw-medium">Amount (KES)</label>
+                        <input type="number" name="amount" class="form-control" min="10" value="1000" required>
+                    </div>
+
+                    <div class="alert bg-secondary text-secondary-foreground text-sm border-0 mb-4">
+                        <i class="fas fa-info-circle me-1"></i>
+                        Includes <strong>50 KES</strong> platform fee.
+                    </div>
+
+                    <div class="d-grid">
+                        <button type="submit" class="btn btn-primary" id="btnDeposit">
+                            Inititate Payment
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Deposit Form Logic (Same as before)
+    document.getElementById('depositForm').addEventListener('submit', async function (e) {
+        e.preventDefault();
+        const btn = document.getElementById('btnDeposit');
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i> Processing...';
+
+        const formData = new FormData(this);
+
+        try {
+            const response = await fetch("{% url 'payments:initiate_deposit' %}", {
+                method: 'POST',
+                headers: { 'X-CSRFToken': '{{ csrf_token }}' },
+                body: formData
+            });
+            const data = await response.json();
+            if (response.ok) {
+                alert('Success! Check your phone.');
+                location.reload();
+            } else {
+                alert('Error: ' + (data.error || 'Failed'));
+            }
+        } catch (err) {
+            console.error(err);
+            alert('Connection error');
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = 'Initiate Payment';
+        }
+    });
+
+    // Clean Bar Chart
+    const ctx = document.getElementById('transactionChart').getContext('2d');
+    const txData = [{% for tx in transactions reversed %}{ { tx.amount } }, {% endfor %}];
+    const labels = [{% for tx in transactions reversed %}"{{ tx.date|date:'M d' }}", {% endfor %}];
+
+    new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'Volume',
+                data: txData,
+                backgroundColor: '#18181b', // Zinc 950
+                borderRadius: 4,
+                barThickness: 20
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+                x: { grid: { display: false } },
+                y: { grid: { color: '#e4e4e7', borderDash: [4, 4] }, border: { display: false } }
+            }
+        }
+    });
+</script>
+{% endblock %}

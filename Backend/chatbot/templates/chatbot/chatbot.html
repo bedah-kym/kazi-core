@@ -6,9 +6,16 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MATHIA Chat</title>
+    <!-- Bootstrap CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Markdown Support -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
+
     <style>
         :root {
             --chat-primary: #6c5ce7;
@@ -41,6 +48,9 @@
             background: white;
             border-bottom: 1px solid rgba(0, 0, 0, 0.1);
             border-radius: 16px 16px 0 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
 
         .chat-messages {
@@ -70,6 +80,60 @@
             padding: 1rem;
             border-radius: 12px;
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+            line-height: 1.5;
+        }
+
+        /* Markdown Styles within messages */
+        .message-content p {
+            margin-bottom: 0.5rem;
+        }
+
+        .message-content p:last-child {
+            margin-bottom: 0;
+        }
+
+        .message-content ul,
+        .message-content ol {
+            padding-left: 1.5rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .message-content code {
+            background: rgba(0, 0, 0, 0.1);
+            padding: 2px 4px;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }
+
+        .message-content pre {
+            background: #2d3436;
+            color: #dfe6e9;
+            padding: 1rem;
+            border-radius: 8px;
+            overflow-x: auto;
+        }
+
+        .message-content pre code {
+            background: none;
+            color: inherit;
+            padding: 0;
+        }
+
+        .message-content table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 0.5rem 0;
+            font-size: 0.9rem;
+        }
+
+        .message-content th,
+        .message-content td {
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            padding: 0.5rem;
+        }
+
+        .message-content th {
+            background: rgba(0, 0, 0, 0.05);
         }
 
         .user-message {
@@ -82,6 +146,11 @@
             border-radius: 12px 12px 0 12px;
         }
 
+        .user-message .message-content a {
+            color: #fff;
+            text-decoration: underline;
+        }
+
         .bot-message {
             justify-content: flex-start;
         }
@@ -90,6 +159,11 @@
             background: white;
             border: 1px solid rgba(0, 0, 0, 0.1);
             border-radius: 12px 12px 12px 0;
+            color: #2d3436;
+        }
+
+        .bot-message .message-content a {
+            color: var(--chat-primary);
         }
 
         .chat-input {
@@ -168,120 +242,383 @@
             }
         }
 
-        .feedback-buttons {
-            display: flex;
-            gap: 0.5rem;
+        /* Quota Modal Styles */
+        .quota-card {
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            border-left: 5px solid #ccc;
+        }
+
+        .quota-card.good {
+            border-left-color: #2ecc71;
+        }
+
+        .quota-card.warning {
+            border-left-color: #f1c40f;
+        }
+
+        .quota-card.critical {
+            border-left-color: #e67e22;
+        }
+
+        .quota-card.exhausted {
+            border-left-color: #e74c3c;
+        }
+
+        .progress {
+            height: 8px;
+            border-radius: 4px;
             margin-top: 0.5rem;
-        }
-
-        .feedback-btn {
-            background: none;
-            border: 1px solid var(--chat-secondary);
-            border-radius: 20px;
-            padding: 0.3rem 0.8rem;
-            font-size: 0.9rem;
-            color: var(--chat-primary);
-            transition: all 0.2s ease;
-        }
-
-        .feedback-btn:hover {
-            background: var(--chat-primary);
-            color: white;
-            border-color: var(--chat-primary);
-        }
-
-        /* Responsive Design */
-        @media (max-width: 768px) {
-            .chat-container {
-                border-radius: 0;
-                height: 100vh;
-            }
-
-            .message-content {
-                max-width: 90%;
-            }
         }
     </style>
 </head>
 
 <body>
     <div class="chat-container">
+        <!-- Header -->
         <div class="chat-header">
             <h4 class="m-0">
-                <i class="fas fa-robot me-2"></i>
+                <i class="fas fa-robot me-2 text-primary"></i>
                 MATHIA Chat
             </h4>
+            <button class="btn btn-outline-primary btn-sm rounded-pill px-3" onclick="fetchQuotas()">
+                <i class="fas fa-chart-pie me-1"></i> Quotas
+            </button>
         </div>
 
+        <!-- Messages Area -->
         <div class="chat-messages" id="chat-messages">
-            <!-- Messages will be dynamically inserted here -->
+            <!-- Dynamic Messages -->
+            <div class="message bot-message">
+                <div class="message-content">
+                    Hello! I'm <b>Mathia</b>. How can I help you plan your trip today?
+                </div>
+            </div>
         </div>
 
+        <!-- Typing Indicator -->
         <div class="typing-indicator" id="typing-indicator">
             <div class="typing-dot"></div>
             <div class="typing-dot"></div>
             <div class="typing-dot"></div>
         </div>
 
+        <!-- Input Area -->
         <div class="chat-input">
             <div class="input-group">
-                <input type="text" class="form-control" id="user-input" placeholder="Type your message...">
+                <button class="btn btn-link text-secondary" id="voice-btn" onclick="toggleVoice()">
+                    <i class="fas fa-microphone"></i>
+                </button>
+                <input type="text" class="form-control" id="user-input"
+                    placeholder="Type your message... (@mathia for AI)">
                 <button class="btn btn-send" type="button" id="send-button">
                     <i class="fas fa-paper-plane me-1"></i>
-                    Send
                 </button>
+            </div>
+            <div class="text-center mt-2">
+                <small class="text-muted" style="font-size: 0.8rem;">
+                    Try: <span class="badge bg-light text-dark border">@mathia search for cheap flights to
+                        Mombasa</span>
+                </small>
             </div>
         </div>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    <script>
-        // Keep existing WebSocket connection code
-        // ...existing code...
+    <!-- Quota Modal -->
+    <div class="modal fade" id="quotaModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content border-0 shadow">
+                <div class="modal-header border-0">
+                    <h5 class="modal-title fw-bold"><i class="fas fa-tachometer-alt me-2"></i>Usage Constraints</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body" id="quota-body">
+                    <div class="text-center py-4 text-muted">Loading quotas...</div>
+                </div>
+            </div>
+        </div>
+    </div>
 
-        function appendMessage(message, isUser = false) {
+    <!-- Bootstrap Bundle -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+    <script>
+        // --- Configuration ---
+        const ROOM_NAME = "{{ room_name }}";
+        let socket = null;
+        let currentStreamMessage = null;
+        let streamBuffer = "";
+
+        // Voice Config
+        let mediaRecorder = null;
+        let audioChunks = [];
+        let isRecording = false;
+
+        // --- WebSocket Setup ---
+        function connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            socket = new WebSocket(`${protocol}//${window.location.host}/ws/chat/${ROOM_NAME}/`);
+
+            socket.onopen = function (e) {
+                console.log("WebSocket Connected");
+            };
+
+            socket.onmessage = function (e) {
+                const data = JSON.parse(e.data);
+                handleSocketMessage(data);
+            };
+
+            socket.onclose = function (e) {
+                console.error("Chat socket closed unexpectedly. Reconnecting...");
+                setTimeout(connectWebSocket, 3000);
+            };
+        }
+
+        // --- Message Handling ---
+        function handleSocketMessage(data) {
+            console.log("Received:", data.command || data.type);
+
+            if (data.command === 'new_message' || (data.command === 'messages' && Array.isArray(data.messages))) {
+                hideTypingIndicator();
+                if (data.command === 'messages') {
+                    data.messages.forEach(msg => renderMessage(msg));
+                } else {
+                    renderMessage(data.message);
+                }
+            } else if (data.type === 'typing_message') {
+                if (data.from !== "{{ user.username }}") {
+                    showTypingIndicator();
+                    setTimeout(hideTypingIndicator, 3000);
+                }
+            } else if (data.type === 'ai_stream_chunk') {
+                hideTypingIndicator();
+                handleStreamChunk(data);
+            } else if (data.command === 'user_quotas') {
+                updateQuotaUI(data.quotas);
+            }
+        }
+
+        // --- Rendering Logic ---
+        function renderMessage(msg) {
+            if (currentStreamMessage && msg.member && msg.member.user && msg.member.user.username === 'mathia') {
+                currentStreamMessage = null;
+                streamBuffer = "";
+                return;
+            }
+
             const messagesDiv = document.getElementById('chat-messages');
             const messageDiv = document.createElement('div');
+            const isUser = msg.member.user.username === "{{ user.username }}";
+
             messageDiv.className = `message ${isUser ? 'user-message' : 'bot-message'}`;
 
             const content = document.createElement('div');
             content.className = 'message-content';
-            content.textContent = message;
 
-            messageDiv.appendChild(content);
+            // Voice Message Rendering
+            if (msg.is_voice || (msg.audio_url && msg.audio_url !== "null")) {
+                const audio = document.createElement('audio');
+                audio.controls = true;
+                audio.src = msg.audio_url;
+                content.appendChild(audio);
 
-            if (!isUser) {
-                const feedback = document.createElement('div');
-                feedback.className = 'feedback-buttons';
-                feedback.innerHTML = `
-                    <button class="feedback-btn" onclick="provideFeedback(true)">
-                        <i class="fas fa-thumbs-up"></i>
-                    </button>
-                    <button class="feedback-btn" onclick="provideFeedback(false)">
-                        <i class="fas fa-thumbs-down"></i>
-                    </button>
-                `;
-                messageDiv.appendChild(feedback);
+                // Add transcript if available (generic)
+                if (msg.content && msg.content !== "[Voice Message]") {
+                    const transcript = document.createElement('div');
+                    transcript.className = 'mt-2 small text-muted';
+                    transcript.innerHTML = `<i>${msg.content}</i>`;
+                    content.appendChild(transcript);
+                }
+            }
+            // Text Message Rendering
+            else {
+                if (!isUser) {
+                    content.innerHTML = DOMPurify.sanitize(marked.parse(msg.content));
+                } else {
+                    content.textContent = msg.content;
+                }
             }
 
+            messageDiv.appendChild(content);
             messagesDiv.appendChild(messageDiv);
+            scrollToBottom();
+        }
+
+        function handleStreamChunk(data) {
+            // ... (Same as before)
+            const messagesDiv = document.getElementById('chat-messages');
+            if (!currentStreamMessage) {
+                currentStreamMessage = document.createElement('div');
+                currentStreamMessage.className = 'message bot-message';
+                const content = document.createElement('div');
+                content.className = 'message-content';
+                content.id = 'active-stream-content';
+                currentStreamMessage.appendChild(content);
+                messagesDiv.appendChild(currentStreamMessage);
+                streamBuffer = "";
+            }
+            const contentDiv = currentStreamMessage.querySelector('.message-content');
+            streamBuffer += data.chunk;
+            contentDiv.innerHTML = DOMPurify.sanitize(marked.parse(streamBuffer));
+            scrollToBottom();
+            if (data.is_final) {
+                currentStreamMessage = null;
+                streamBuffer = "";
+            }
+        }
+
+        function scrollToBottom() {
+            const messagesDiv = document.getElementById('chat-messages');
             messagesDiv.scrollTop = messagesDiv.scrollHeight;
         }
 
-        function showTypingIndicator() {
-            document.getElementById('typing-indicator').classList.add('active');
+        // --- User Actions ---
+        document.querySelector('#send-button').onclick = sendMessage;
+        document.querySelector('#user-input').onkeyup = function (e) {
+            if (e.key === 'Enter') sendMessage();
+        };
+
+        function sendMessage() {
+            const inputInfo = document.querySelector('#user-input');
+            const message = inputInfo.value.trim();
+
+            if (message) {
+                // Auto-detect quota commands
+                const quotaKeywords = ['show quota', 'my quota', 'show my quota', 'check quota', 'quota status', '@mathia show my quotas'];
+                const isQuotaCommand = quotaKeywords.some(keyword => message.toLowerCase().includes(keyword));
+
+                if (isQuotaCommand) {
+                    inputInfo.value = '';
+                    fetchQuotas();
+                    return; // Don't send to AI
+                }
+
+                socket.send(JSON.stringify({
+                    'command': 'new_message',
+                    'message': message,
+                    'from': "{{ user.username }}",
+                    'chatid': "{{ room_id }}"
+                }));
+                inputInfo.value = '';
+            }
         }
 
+        // --- Voice Features ---
+        async function toggleVoice() {
+            if (isRecording) {
+                stopRecording();
+            } else {
+                startRecording();
+            }
+        }
+
+        async function startRecording() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream);
+                audioChunks = [];
+
+                mediaRecorder.ondataavailable = event => {
+                    audioChunks.push(event.data);
+                };
+
+                mediaRecorder.onstop = sendVoiceMessage;
+
+                mediaRecorder.start();
+                isRecording = true;
+
+                // UI Update
+                const btn = document.getElementById('voice-btn');
+                btn.classList.add('text-danger', 'fa-beat'); // Animate
+                btn.innerHTML = '<i class="fas fa-stop-circle"></i>';
+                document.getElementById('user-input').placeholder = "Recording... Click stop to send.";
+
+            } catch (err) {
+                console.error("Error accessing microphone:", err);
+                alert("Could not access microphone.");
+            }
+        }
+
+        function stopRecording() {
+            if (mediaRecorder && isRecording) {
+                mediaRecorder.stop();
+                isRecording = false;
+
+                // Reset UI
+                const btn = document.getElementById('voice-btn');
+                btn.classList.remove('text-danger', 'fa-beat');
+                btn.innerHTML = '<i class="fas fa-microphone"></i>';
+                document.getElementById('user-input').placeholder = "Type your message... (@mathia for AI)";
+            }
+        }
+
+        function sendVoiceMessage() {
+            const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+            const reader = new FileReader();
+
+            reader.readAsDataURL(audioBlob);
+            reader.onloadend = () => {
+                const base64Audio = reader.result; // "data:audio/webm;base64,....."
+
+                if (socket && socket.readyState === WebSocket.OPEN) {
+                    socket.send(JSON.stringify({
+                        'command': 'voice_message',
+                        'file_data': base64Audio,
+                        'file_name': `voice_${Date.now()}.webm`,
+                        'from': "{{ user.username }}",
+                        'chatid': "{{ room_id }}"
+                    }));
+                }
+            };
+        }
+
+        // --- Quota Features ---
+        function fetchQuotas() {
+            const modal = new bootstrap.Modal(document.getElementById('quotaModal'));
+            modal.show();
+            if (socket) socket.send(JSON.stringify({ 'command': 'get_quotas' }));
+        }
+
+        function updateQuotaUI(quotas) {
+            // ... (Same as before)
+            const container = document.getElementById('quota-body');
+            container.innerHTML = '';
+            Object.keys(quotas).forEach(key => {
+                const q = quotas[key];
+                const pct = Math.min((q.used / q.limit) * 100, 100);
+                const bgMap = { 'green': 'bg-success', 'yellow': 'bg-warning', 'orange': 'bg-warning', 'red': 'bg-danger' };
+                const bgClass = bgMap[q.color] || 'bg-primary';
+                const html = `
+                    <div class="quota-card ${q.status}" style="border-left-color: var(--bs-${q.color === 'orange' ? 'warning' : q.color})">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <strong>${q.name}</strong>
+                            <span class="badge ${bgClass}">${q.status.toUpperCase()}</span>
+                        </div>
+                        <div class="progress">
+                            <div class="progress-bar ${bgClass}" role="progressbar" style="width: ${pct}%"></div>
+                        </div>
+                        <div class="d-flex justify-content-between mt-2 small text-muted">
+                            <span>Used: ${q.used} / ${q.limit}</span>
+                            <span>Resets: ${q.reset}</span>
+                        </div>
+                    </div>
+                `;
+                container.innerHTML += html;
+            });
+        }
+
+        // --- UI Helpers ---
+        function showTypingIndicator() {
+            document.getElementById('typing-indicator').classList.add('active');
+            scrollToBottom();
+        }
         function hideTypingIndicator() {
             document.getElementById('typing-indicator').classList.remove('active');
         }
 
-        function provideFeedback(isPositive) {
-            // Implement feedback functionality
-            console.log(`Feedback: ${isPositive ? 'positive' : 'negative'}`);
-        }
-
-        // ... rest of your existing WebSocket code ...
+        connectWebSocket();
     </script>
 </body>
 

@@ -16,7 +16,7 @@ from cryptography.exceptions import InvalidKey
 import logging
 import asyncio
 from .models import Message, Member, Chatroom, UserModerationStatus, ModerationBatch
-from .tasks import moderate_message_batch, generate_ai_response
+from .tasks import moderate_message_batch, generate_ai_response, generate_voice_response
 from orchestration.intent_parser import parse_intent
 from django.conf import settings 
 logger = logging.getLogger(__name__)
@@ -360,6 +360,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 await self.new_message(data)
             elif command == "file_message":
                 await self.file_message(data)
+            elif command == "get_quotas":
+                await self.send_quotas()
+            elif command == "voice_message":
+                await self.voice_message(data)
             else:
                 await self.send_message({
                     'member': 'system',
@@ -373,6 +377,26 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 'content': "An error occurred processing your request",
                 'timestamp': str(timezone.now())
             })
+            
+    async def send_quotas(self):
+        """Fetch and send user quota stats"""
+        try:
+            from users.quota_service import QuotaService
+            
+            # Use sync_to_async for cache access/calculations if needed
+            # (QuotaService mainly uses cache which is often sync in Django, but django-redis can be sync)
+            service = QuotaService()
+            user_id = self.scope["user"].id
+            
+            # Simple wrapper to run it in threadpool if cache backend is blocking
+            quotas = await sync_to_async(service.get_user_quotas)(user_id)
+            
+            await self.send_message({
+                'command': 'user_quotas',
+                'quotas': quotas
+            })
+        except Exception as e:
+            logger.error(f"Error sending quotas: {e}")
 
     async def fetch_messages(self, data):
         try:
@@ -622,23 +646,31 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     ai_query = message_content[7:].strip()
                     
                     if ai_query:
+                        # Fetch history for conversation context
+                        history_text = await self.get_history_as_text(room_id)
+                        
                         # Step 1: Parse intent
                         intent = await parse_intent(ai_query, {
                             "user_id": member_user.id,
                             "username": member_username,
-                            "room_id": room_id
+                            "room_id": room_id,
+                            "history": history_text
                         })
                         
                         logger.info(f"Intent: {intent}")
                         
                         # Helper to broadcast chunks (Buffered)
                         # We use a mutable container for closure state
-                                                # Helper to broadcast chunks (Buffered & Whitespace Filtered)
+                        # Helper to broadcast chunks (Buffered & Whitespace Filtered)
                         # We use a mutable container for closure state
-                        stream_state = {'buffer': [], 'last_send': 0, 'first_token_sent': False}
+                        stream_state = {'buffer': [], 'last_send': 0, 'first_token_sent': False, 'full_response': []}
                         
                         async def broadcast_chunk(chunk_text, is_final=False):
                             import time
+                            
+                            # Store all chunks to build full response
+                            if chunk_text:
+                                stream_state['full_response'].append(chunk_text)
                             
                             # Filter leading whitespace if first token hasn't been sent
                             if not stream_state['first_token_sent'] and not is_final:
@@ -694,9 +726,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             from orchestration.llm_client import get_llm_client
                             llm_client = get_llm_client()
                             
+                            # Prepend history to query if available
+                            full_query = ai_query
+                            if history_text:
+                                full_query = f"CONVERSATION HISTORY:\n{history_text}\n\nUSER message: {ai_query}"
+                            
                             async for chunk in llm_client.stream_text(
                                 system_prompt="You are Mathia, a helpful AI assistant. Be concise and friendly.",
-                                user_prompt=ai_query,
+                                user_prompt=full_query,
                                 temperature=0.7,
                                 max_tokens=500
                             ):
@@ -704,6 +741,68 @@ class ChatConsumer(AsyncWebsocketConsumer):
                         
                         # End stream
                         await broadcast_chunk("", is_final=True)
+                        
+                        # === NEW: Save complete AI message to database ===
+                        full_response_text = "".join(stream_state['full_response'])
+                        
+                        if full_response_text.strip():
+                            logger.info(f"Saving AI message to database: {full_response_text[:100]}...")
+                            
+                            # Encrypt the AI response
+                            encrypted_message = await self.encrypt_message({
+                                'content': full_response_text,
+                                'timestamp': str(timezone.now())
+                            })
+                            
+                            if encrypted_message:
+                                # Create Mathia user/member if not exists
+                                def _create_ai_message():
+                                    ai_user, _ = User.objects.get_or_create(
+                                        username='mathia',
+                                        defaults={
+                                            'first_name': 'Mathia',
+                                            'last_name': 'AI',
+                                            'is_active': True,
+                                            'email': 'mathia@kwikchat.ai'
+                                        }
+                                    )
+                                    # Use filter().first() to handle duplicate Members
+                                    ai_member = Member.objects.filter(User=ai_user).first()
+                                    if not ai_member:
+                                        ai_member = Member.objects.create(User=ai_user)
+                                    
+                                    payload = json.dumps({
+                                        'data': encrypted_message['data'],
+                                        'nonce': encrypted_message['nonce'],
+                                    })
+                                    
+                                    return Message.objects.create(
+                                        member=ai_member,
+                                        content=payload,
+                                        timestamp=timezone.now()
+                                    )
+                                
+                                ai_message = await sync_to_async(_create_ai_message)()
+                                
+                                # Add to chatroom
+                                current_chat = await self.get_current_chatroom(room_id)
+                                if current_chat:
+                                    await sync_to_async(current_chat.chats.add)(ai_message)
+                                    await sync_to_async(current_chat.save)()
+                                    logger.info(f"AI message saved with ID: {ai_message.id}")
+                                    
+                                    # Trigger Mathia Voice Response (TTS)
+                                    generate_voice_response.delay(ai_message.id)
+                                    
+                                    # Broadcast saved message to clients for proper rendering
+                                    message_json = await self.message_to_json(ai_message)
+                                    await self.channel_layer.group_send(
+                                        self.room_group_name,
+                                        {
+                                            "type": "ai_message_saved",
+                                            "message": message_json
+                                        }
+                                    )
 
             else:
                 await self.send_chat_message({
@@ -831,6 +930,97 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 'member': 'security system',
                 'content': "Error processing file",
                 'timestamp': str(timezone.now())
+                })
+
+    async def voice_message(self, data):
+        """
+        Handle voice note uploads.
+        Expects:
+        - file_data: Base64 encoded audio
+        - file_name: filename (e.g., 'voice_123.webm')
+        """
+        try:
+            member_username = data['from']
+            get_user = sync_to_async(User.objects.filter(username=member_username).first)
+            member_user = await get_user()
+
+            if not member_user:
+                return
+
+            # Rate limit check (reuse file upload or chat limit)
+            if not await self.check_rate_limit(member_user.id):
+                await self.send_chat_message({
+                    'member': 'security system',
+                    'content': "Rate limit exceeded. Please wait.",
+                    'timestamp': str(timezone.now())
+                })
+                return
+
+            file_data = data.get('file_data', '')
+            file_name = data.get('file_name', '').lower()
+
+            if not file_data or not file_name:
+                return
+
+            # Validate Audio Extension
+            allowed_audio = {'.webm', '.mp3', '.wav', '.m4a', '.ogg'}
+            if not any(file_name.endswith(ext) for ext in allowed_audio):
+                await self.send_chat_message({
+                    'member': 'security system',
+                    'content': "Invalid audio format.",
+                    'timestamp': str(timezone.now())
+                })
+                return
+            
+            # Save File
+            file_content = ContentFile(file_data.split(';base64,')[1].encode('utf-8'))
+            file_path = default_storage.save(f"voice/{file_name}", file_content)
+            file_url = default_storage.url(file_path)
+
+            # Create Message with is_voice=True
+            encrypted_content = await self.encrypt_message({
+                'content': "[Voice Message]", # Fallback text
+                'timestamp': str(timezone.now())
+            })
+            
+            create_message = sync_to_async(Message.objects.create)
+            payload = json.dumps({
+                'data': encrypted_content['data'], 
+                'nonce': encrypted_content['nonce']
+            })
+            
+            message = await create_message(
+                member=member_user,
+                content=payload,
+                timestamp=timezone.now(),
+                is_voice=True,          # Flag as voice
+                audio_url=file_url      # Store URL directly
+            )
+
+            # Add to Room
+            current_chat = await self.get_current_chatroom(data['chatid'])
+            if current_chat:
+                await sync_to_async(current_chat.chats.add)(message)
+                await sync_to_async(current_chat.save)()
+
+                # Broadcast
+                message_json = await self.message_to_json(message)
+                # Inject audio_url explicitly into the JSON response for frontend
+                message_json['audio_url'] = file_url
+                message_json['is_voice'] = True
+
+                content = {
+                    "command": "new_message",
+                    "message": message_json
+                }
+                await self.send_chat_message(content)
+
+        except Exception as e:
+            logger.error(f"Error in voice_message: {str(e)}")
+            await self.send_chat_message({
+                'member': 'security system',
+                'content': "Error processing voice message",
+                'timestamp': str(timezone.now())
             })
 
     async def typing_message(self, event):
@@ -840,19 +1030,35 @@ class ChatConsumer(AsyncWebsocketConsumer):
             "from":    event["from"],
         }))
 
-    async def send_chat_message(self, message):
-        await self.channel_layer.group_send(
-            self.room_group_name,
-            {
-                "type": "chat_message",
-                "message": message
-            }
-        )
+    async def ai_message_saved(self, event):
+        """AI message fully saved after streaming"""
+        await self.send_message({
+            "command": "ai_message_saved",
+            "message": event["message"]
+        })
 
-    async def chat_message(self, event):
-        await self.send(text_data=json.dumps(event["message"]))
+    async def ai_voice_ready(self, event):
+        """Mathia voice response is ready"""
+        await self.send_message({
+            "command": "ai_voice_ready",
+            "message_id": event["message_id"],
+            "audio_url": event["audio_url"]
+        })
+
+    async def voice_transcription_ready(self, event):
+        """User voice transcription is ready"""
+        await self.send_message({
+            "command": "voice_transcription_ready",
+            "message_id": event["message_id"],
+            "transcript": event["transcript"]
+        })
 
     async def send_message(self, message):
+        """Helper to send JSON to WebSocket"""
+        await self.send(text_data=json.dumps(message))
+
+    async def send_chat_message(self, message):
+        """Helper to send message to group"""
         await self.send(text_data=json.dumps(message))
         
     async def ai_response_message(self, event):
@@ -876,11 +1082,19 @@ class ChatConsumer(AsyncWebsocketConsumer):
             
             # Create message from AI bot
             def _create_ai_message():
-                ai_user, _ = User.objects.get_or_create(
+                ai_user, created = User.objects.get_or_create(
                     username='mathia',
-                    defaults={'is_active': False}
+                    defaults={
+                        'first_name': 'Mathia',
+                        'last_name': 'AI',
+                        'is_active': True,  # Activate so profile is visible
+                        'email': 'mathia@kwikchat.ai'
+                    }
                 )
-                ai_member, _ = Member.objects.get_or_create(User=ai_user)
+                # Use filter().first() to handle duplicate Members
+                ai_member = Member.objects.filter(User=ai_user).first()
+                if not ai_member:
+                    ai_member = Member.objects.create(User=ai_user)
                 
                 payload = json.dumps({
                     'data': encrypted_message['data'],
@@ -919,6 +1133,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
             "command": "ai_stream",
             "chunk": event.get('chunk'),
             "is_final": event.get('is_final', False)
+        }))
+    
+    async def ai_message_saved(self, event):
+        """Send saved AI message to client for proper rendering with dropdown"""
+        await self.send(text_data=json.dumps({
+            "command": "ai_message_saved",
+            "message": event.get('message')
         }))
         
     @classmethod
@@ -980,6 +1201,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 final_content = db_content
 
             return {
+                'id': message.id,
                 'member': username,
                 'content': final_content,
                 'timestamp': str(message.timestamp)
@@ -991,3 +1213,28 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 'content': 'Error processing message',
                 'timestamp': str(timezone.now())
             }
+    async def get_history_as_text(self, room_id, limit=5):
+        "Fetches last N messages and formats them as plain text history."
+        try:
+            from .models import Chatroom
+            get_room = sync_to_async(Chatroom.objects.get)
+            room = await get_room(id=room_id)
+            
+            def _get_msgs():
+                return list(room.chats.all().order_by('-timestamp')[:limit])
+                
+            messages = await sync_to_async(_get_msgs)()
+            messages.reverse()
+            
+            history_lines = []
+            for msg in messages:
+                msg_json = await self.message_to_json(msg)
+                content = msg_json.get('content', '')
+                member = msg_json.get('member', 'Unknown')
+                if content and not content.startswith('Error:'):
+                    history_lines.append(f'{member}: {content}')
+            
+            return '\n'.join(history_lines)
+        except Exception as e:
+            logger.error(f'Error getting history: {e}')
+            return ''

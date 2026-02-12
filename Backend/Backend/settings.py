@@ -41,16 +41,42 @@ except Exception:
 # See https://docs.djangoproject.com/en/4.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'set-DJANGO_SECRET_KEY-env-var')
+# CRITICAL: SECRET_KEY must be set via environment variable in production
+# CRITICAL: SECRET_KEY must be set via environment variable in production
+# CRITICAL: SECRET_KEY must be set via environment variable in production
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
+if not SECRET_KEY:
+    if os.environ.get('DJANGO_DEBUG', 'False').lower() in ('1', 'true', 'yes'):
+        # Development fallback - still unique per deployment
+        import secrets
+        SECRET_KEY = secrets.token_urlsafe(50)
+        print(f"⚠️  WARNING: Using auto-generated SECRET_KEY. Set DJANGO_SECRET_KEY in .env for consistency.")
+        print(f"Generated key: {SECRET_KEY}")
+    else:
+        raise ValueError(
+            "CRITICAL SECURITY ERROR: DJANGO_SECRET_KEY environment variable must be set in production. "
+            "Generate one with: python -c \"from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())\""
+        )
 
-# SECURITY WARNING: don't run with debug turned on in production!
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DJANGO_DEBUG', 'False').lower() in ('1', 'true', 'yes')
 
-ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+ALLOWED_HOSTS = [host.strip() for host in os.environ.get('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',') if host.strip()]
 
-# you can set a comma-separated list in .env, e.g. DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1
-CSRF_TRUSTED_ORIGINS = [url for url in os.environ.get('DJANGO_CSRF_TRUSTED_ORIGINS', 'http://localhost:8000').split(',') if url]
+# CSRF & CORS configuration - be explicit and restrictive
+# you can set a comma-separated list in .env, e.g. DJANGO_CSRF_TRUSTED_ORIGINS=https://example.com,https://app.example.com
+CSRF_TRUSTED_ORIGINS_STRING = os.environ.get('DJANGO_CSRF_TRUSTED_ORIGINS', '')
+if not CSRF_TRUSTED_ORIGINS_STRING and not DEBUG:
+    raise ValueError(
+        "SECURITY WARNING: DJANGO_CSRF_TRUSTED_ORIGINS must be explicitly set in production. "
+        "Set it in .env as a comma-separated list of allowed origins (e.g., https://example.com)"
+    )
+CSRF_TRUSTED_ORIGINS = [url.strip() for url in CSRF_TRUSTED_ORIGINS_STRING.split(',') if url.strip()] if CSRF_TRUSTED_ORIGINS_STRING else []
+
+# Additional CSRF security
+CSRF_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_HTTPONLY = False
+CSRF_COOKIE_SAMESITE = 'Lax'
 
 # Calendly app credentials (set in .env)
 CALENDLY_CLIENT_ID = os.environ.get('CALENDLY_CLIENT_ID')
@@ -71,10 +97,29 @@ INSTALLED_APPS = [
     'users',
     'Api',
     'orchestration',
+    'travel',
+    'payments',
     'rest_framework',
     'rest_framework.authtoken',
     'django_celery_beat',
-    'django_celery_results' ]
+    'django_celery_results',
+    
+    # Sites (required by allauth)
+    'django.contrib.sites',
+    
+    # Allauth
+    'allauth',
+    'allauth.account',
+    'allauth.socialaccount',
+    'allauth.socialaccount.providers.google',
+    'allauth.socialaccount.providers.github',
+    'allauth.socialaccount.providers.linkedin_oauth2',
+    'allauth.socialaccount.providers.twitter',
+    
+    # Security
+    'axes',
+    'django_ratelimit',
+]
 
 
 MIDDLEWARE = [
@@ -84,8 +129,16 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'chatbot.middleware.EnsureMemberMiddleware',  # Auto-create Member objects
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    
+    # Security Middleware
+    'axes.middleware.AxesMiddleware',  # Brute force protection
+    'csp.middleware.CSPMiddleware',   # Content Security Policy
+    
+    # Allauth Account Middleware
+    'allauth.account.middleware.AccountMiddleware',
 ]
 
 ROOT_URLCONF = 'Backend.urls'
@@ -133,10 +186,7 @@ DATABASES = {
         conn_health_checks=True,
     )
 }
-# Redis configuration for Celery, Caching, and Channels
-# Replace your Redis configuration section with this:
 
-import ssl
 LANGUAGE_CODE = 'en-us'
 
 TIME_ZONE = 'Africa/Nairobi'
@@ -147,32 +197,9 @@ USE_TZ = True
 
 
 # Redis configuration for Celery, Caching, and Channels
-REDIS_URL = os.environ.get('REDIS_URL', 'redis://default:eyiHJLU1pYolD4iknOdwts2GC0wQQRFY@redis-13289.c10.us-east-1-3.ec2.cloud.redislabs.com:13289')
-
-# Parse Upstash URL to check if it's secure
-IS_UPSTASH = REDIS_URL.startswith('rediss://')
-
-# SSL context for Upstash (secure Redis)
-if IS_UPSTASH:
-    try:
-        redis_ssl_context = ssl.create_default_context()
-        redis_ssl_context.check_hostname = False
-        redis_ssl_context.verify_mode = ssl.CERT_NONE
-    except PermissionError:
-        print("WARNING: PermissionError in ssl.create_default_context, disabling SSL verification")
-        redis_ssl_context = None
-else:
-    redis_ssl_context = None
-
-# Celery Broker with SSL support
-CELERY_BROKER_URL = REDIS_URL
-if IS_UPSTASH:
-    CELERY_BROKER_USE_SSL = {
-        'ssl_cert_reqs': ssl.CERT_NONE,
-        'ssl_ca_certs': None,
-        'ssl_certfile': None,
-        'ssl_keyfile': None,
-    }
+# Read Redis URL from environment so containers use the Compose service hostname
+REDIS_URL = os.environ.get('REDIS_URL', 'redis://redis:6379/0')
+CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', REDIS_URL)
 
 # Celery Results
 CELERY_RESULT_BACKEND = 'django-db'  # Using Django DB for results
@@ -191,42 +218,26 @@ CELERY_TASK_SOFT_TIME_LIMIT = 25 * 60
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_WORKER_MAX_TASKS_PER_CHILD = 1000
 
-# Django Cache with SSL
+# Django Cache with local Redis
 CACHES = {
     "default": {
         "BACKEND": "django_redis.cache.RedisCache",
         "LOCATION": REDIS_URL,
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
-            "CONNECTION_POOL_KWARGS": {
-                "ssl_cert_reqs": None if IS_UPSTASH else None,
-            } if IS_UPSTASH else {},
         }
     }
 }
 
-# Channels Layer with SSL
-if IS_UPSTASH:
-    CHANNEL_LAYERS = {
-        "default": {
-            "BACKEND": "channels_redis.core.RedisChannelLayer",
-            "CONFIG": {
-                "hosts": [{
-                    "address": REDIS_URL,
-                    "ssl_cert_reqs": None,
-                }],
-            },
+# Channels Layer with local Redis
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [REDIS_URL],
         },
-    }
-else:
-    CHANNEL_LAYERS = {
-        "default": {
-            "BACKEND": "channels_redis.core.RedisChannelLayer",
-            "CONFIG": {
-                "hosts": [REDIS_URL],
-            },
-        },
-    }
+    },
+}
 
 # Celery Beat Schedule
 CELERY_BEAT_SCHEDULE = {
@@ -236,6 +247,14 @@ CELERY_BEAT_SCHEDULE = {
     },
     'cleanup-old-batches': {
         'task': 'chatbot.tasks.cleanup_old_moderation_batches',
+        'schedule': 86400.0,  # Daily
+    },
+    'reconcile-ledger': {
+        'task': 'payments.tasks.reconcile_ledger',
+        'schedule': 7200.0,  # Every 2 hours
+    },
+    'process-recurring-invoices': {
+        'task': 'payments.tasks.process_recurring_invoices',
         'schedule': 86400.0,  # Daily
     },
 }
@@ -258,9 +277,11 @@ EXCHANGE_RATE_API_KEY = os.environ.get('EXCHANGE_RATE_API_KEY', '')
 AUTH_PASSWORD_VALIDATORS = [
     {
         'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
+        'OPTIONS': {'user_attributes': ['email', 'username', 'first_name', 'last_name']}
     },
     {
         'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
+        'OPTIONS': {'min_length': 12}  # Increased from default 8 for better security
     },
     {
         'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
@@ -270,25 +291,26 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
+# Session security
+SESSION_COOKIE_AGE = 3600  # 1 hour - consider user preference for balance
+SESSION_EXPIRE_AT_BROWSER_CLOSE = True
+SESSION_COOKIE_SECURE = not DEBUG
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = 'Strict'
+
 MEDIA_URL = '/uploads/'  # Base URL for media files
 MEDIA_ROOT = os.path.join(BASE_DIR, 'uploads')  # Directory to store uploaded files
 
 STATIC_URL = 'static/'
-LOGIN_REDIRECT_URL = 'chatbot:redirect_to_home'
-LOGIN_URL='users:login'
-LOGOUT_REDIRECT_URL = 'users:login'
-
-# Internationalization
-# https://docs.djangoproject.com/en/4.1/topics/i18n/
-
-
-
-# Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/4.1/howto/static-files/
-
-STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
+STATICFILES_DIRS = [
+    BASE_DIR / 'chatbot/static',
+]
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+
+LOGIN_REDIRECT_URL = 'users:dashboard'
+LOGIN_URL = 'users:login'
+LOGOUT_REDIRECT_URL = 'users:login'
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.1/ref/settings/#default-auto-field
@@ -307,10 +329,112 @@ REST_FRAMEWORK = {
         "rest_framework.permissions.IsAuthenticatedOrReadOnly"
     ],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.LimitOffsetPagination",
-    "PAGE_SIZE": 5
+    "PAGE_SIZE": 5,
+    "DEFAULT_THROTTLE_CLASSES": [
+        "rest_framework.throttling.AnonRateThrottle",
+        "Api.throttling.GlobalApiThrottle",
+    ],
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": "10/minute",
+        "global_api": "60/minute",  # Default fallback, overridden by class logic
+        "ai_request": "10/day"      # Default fallback
+    }
 }
+
 
 
 # Chat rate limit (messages per minute)
 CHAT_RATE_LIMIT = 30
+
+# ==========================================
+# AUTHENTICATION & SECURITY CONFIGURATION
+# ==========================================
+
+# ==========================================
+# AUTHENTICATION & SECURITY CONFIGURATION
+# ==========================================
+
+AUTHENTICATION_BACKENDS = [
+    'axes.backends.AxesStandaloneBackend',
+    'django.contrib.auth.backends.ModelBackend',
+    'allauth.account.auth_backends.AuthenticationBackend',
+]
+
+SITE_ID = 1
+
+# --- Allauth Settings (Latest Format) ---
+ACCOUNT_LOGIN_METHODS = {'email'}
+ACCOUNT_SIGNUP_FIELDS = ['email*', 'password1*', 'password2*']
+ACCOUNT_EMAIL_VERIFICATION = 'optional'
+ACCOUNT_SESSION_REMEMBER = True
+SOCIALACCOUNT_AUTO_SIGNUP = True
+SOCIALACCOUNT_EMAIL_VERIFICATION = 'none'
+
+# Social Providers
+SOCIALACCOUNT_PROVIDERS = {
+    'google': {
+        'SCOPE': ['profile', 'email'],
+        'AUTH_PARAMS': {'access_type': 'online'},
+        'APP': {
+            'client_id': os.environ.get('GOOGLE_CLIENT_ID', 'dummy_google_client_id'),
+            'secret': os.environ.get('GOOGLE_CLIENT_SECRET', 'dummy_google_secret'),
+        }
+    },
+    'github': {
+        'SCOPE': ['user', 'read:org'],
+        'APP': {
+            'client_id': os.environ.get('GITHUB_CLIENT_ID', 'dummy_github_client_id'),
+            'secret': os.environ.get('GITHUB_CLIENT_SECRET', 'dummy_github_secret'),
+        }
+    },
+    'linkedin_oauth2': {
+        'SCOPE': ['r_liteprofile', 'r_emailaddress'],
+        'APP': {
+            'client_id': os.environ.get('LINKEDIN_CLIENT_ID', 'dummy_linkedin_id'),
+            'secret': os.environ.get('LINKEDIN_CLIENT_SECRET', 'dummy_linkedin_secret'),
+        }
+    },
+    'twitter': {
+        'APP': {
+            'client_id': os.environ.get('TWITTER_CLIENT_ID', 'dummy_twitter_id'),
+            'secret': os.environ.get('TWITTER_CLIENT_SECRET', 'dummy_twitter_secret'),
+        }
+    }
+}
+
+
+# --- AXES (Brute Force Protection) - Enhanced Security ---
+from datetime import timedelta
+
+AXES_FAILURE_LIMIT = 5  
+AXES_COOLOFF_TIME = timedelta(hours=2)
+AXES_LOCKOUT_PARAMETERS = ["username", "ip_address"]
+AXES_RESET_ON_SUCCESS = True 
+AXES_VERBOSE = True 
+AXES_ENABLE_ADMIN = True 
+
+
+# --- CSP (Content Security Policy) ---
+# --- CSP (Content Security Policy) ---
+CSP_DEFAULT_SRC = ("'self'",)
+CSP_STYLE_SRC = ("'self'", "'unsafe-inline'", "https://fonts.googleapis.com", "https://cdnjs.cloudflare.com", "https://cdn.jsdelivr.net")
+CSP_SCRIPT_SRC = ("'self'", "https://js.stripe.com", "https://cdn.tailwindcss.com", "https://cdn.jsdelivr.net", "https://assets.calendly.com", "https://code.jquery.com", "https://cdnjs.cloudflare.com")
+CSP_IMG_SRC = ("'self'", "data:", "https://*")
+CSP_FONT_SRC = ("'self'", "https://fonts.gstatic.com", "https://cdnjs.cloudflare.com")
+CSP_FRAME_SRC = ("'self'", "https://js.stripe.com")
+
+# --- HSTS (HTTP Strict Transport Security) ---
+# Enabled only when DEBUG is False to avoid local dev issues
+if not DEBUG:
+    SECURE_SSL_REDIRECT = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = 31536000  # 1 year
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SESSION_COOKIE_HTTPONLY = True
+    CSRF_COOKIE_HTTPONLY = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+
 

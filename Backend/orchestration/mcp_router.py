@@ -10,6 +10,12 @@ from django.core.cache import cache
 from django_redis import get_redis_connection
 from asgiref.sync import sync_to_async
 import httpx
+from .base_connector import BaseConnector
+from .connectors.whatsapp_connector import WhatsAppConnector
+from .connectors.intersend_connector import IntersendPayConnector
+from .connectors.mailgun_connector import MailgunConnector
+from .connectors.quota_connector import QuotaConnector
+from .connectors.payment_connector import ReadOnlyPaymentConnector
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +30,16 @@ class MCPRouter:
     """
     
     def __init__(self):
+        # Import travel connectors
+        from .connectors.travel_buses_connector import TravelBusesConnector
+        from .connectors.travel_hotels_connector import TravelHotelsConnector
+        from .connectors.travel_flights_connector import TravelFlightsConnector
+        from .connectors.travel_transfers_connector import TravelTransfersConnector
+        from .connectors.travel_events_connector import TravelEventsConnector
+        from .connectors.itinerary_connector import ItineraryConnector
+        
         self.connectors = {
+            # Existing connectors
             "find_jobs": UpworkConnector(),
             "schedule_meeting": CalendarConnector(),
             "check_payments": StripeConnector(),
@@ -32,6 +47,22 @@ class MCPRouter:
             "get_weather": WeatherConnector(),
             "search_gif": GiphyConnector(),
             "convert_currency": CurrencyConnector(),
+            "send_whatsapp": WhatsAppConnector(),
+            "payment_action": IntersendPayConnector(),
+            "send_email": MailgunConnector(),
+            "set_reminder": ReminderConnector(),
+            "check_quotas": QuotaConnector(),
+            "check_balance": ReadOnlyPaymentConnector(),
+            "list_transactions": ReadOnlyPaymentConnector(),
+            "check_invoice_status": ReadOnlyPaymentConnector(),
+            
+            # Travel planner connectors
+            "search_buses": TravelBusesConnector(),
+            "search_hotels": TravelHotelsConnector(),
+            "search_flights": TravelFlightsConnector(),
+            "search_transfers": TravelTransfersConnector(),
+            "search_events": TravelEventsConnector(),
+            "create_itinerary": ItineraryConnector(),
         }
     
     async def route(self, intent: Dict, user_context: Dict) -> Dict:
@@ -342,22 +373,44 @@ class SearchConnector(BaseConnector):
         self.llm = get_llm_client()
     
     async def execute(self, parameters: Dict, context: Dict) -> Dict:
-        """Perform web search"""
+        """Perform web search with strict rate limiting"""
+        from django.core.cache import cache
+        from datetime import datetime
+        
+        user_id = context.get("user_id")
         query = parameters.get("query")
+        
         if not query:
             return {"error": "No search query provided"}
+
+        # RATE LIMIT CHECK
+        if user_id:
+            today = datetime.now().strftime("%Y-%m-%d")
+            limit_key = f"search_limit:{user_id}:{today}"
+            current_count = cache.get(limit_key, 0)
+            
+            if current_count >= 10:
+                return {
+                    "results": [],
+                    "summary": "Daily search limit reached (10/10). Please try again tomorrow.",
+                    "error": "rate_limit_exceeded"
+                }
             
         if not self.llm.anthropic_key:
             logger.warning("Search requested but Anthropic key missing.")
             return {"results": [], "summary": "I cannot browse the live web right now.", "source": "system_fallback"}
             
         try:
+            # Increment usage
+            if user_id:
+                cache.incr(limit_key) if cache.get(limit_key) else cache.set(limit_key, 1, 86400)
+
             system_prompt = "You are a helpful research assistant."
             response = await self.llm.generate_text(system_prompt=system_prompt, user_prompt=f"Search for: {query}", temperature=0.7)
             return {"results": [{"title": "Search Result", "snippet": response[:200] + "..."}], "summary": response, "source": "claude_search"}
         except Exception as e:
             logger.error(f"Search failed: {e}")
-            return {"results": [], "summary": "Search failed.", "error": str(e)}
+            return {"results": [{"title": "Error", "snippet": "Search functionality temporarily unavailable."}], "summary": "Search failed.", "error": str(e)}
 
 
 class WeatherConnector(BaseConnector):
@@ -516,6 +569,80 @@ class CurrencyConnector(BaseConnector):
         except Exception as e:
             logger.error(f"Currency conversion error: {e}")
             return {"status": "error", "message": f"Currency conversion failed: {str(e)}"}
+
+
+class ReminderConnector(BaseConnector):
+    """
+    Sets reminders for the user
+    Expects LLM to return ISO time or relative time string
+    """
+    
+    async def execute(self, parameters: Dict, context: Dict) -> Dict:
+        """Create a reminder"""
+        from chatbot.models import Reminder, Chatroom
+        from django.contrib.auth import get_user_model
+        from django.utils import timezone
+        import dateutil.parser
+        from asgiref.sync import sync_to_async
+        
+        User = get_user_model()
+        user_id = context.get("user_id")
+        room_id = context.get("room_id")
+        
+        content = parameters.get("content", "Reminder")
+        time_str = parameters.get("time")
+        priority = parameters.get("priority", "medium")
+        
+        if not time_str:
+            return {"status": "error", "message": "When should I remind you?"}
+            
+        try:
+            # 1. Try ISO parsing (LLM should prefer this)
+            try:
+                scheduled_time = dateutil.parser.parse(time_str)
+            except Exception:
+                # 2. Fallback: simple check if it's a number (minutes)
+                # In robust prod, use dateparser
+                if "min" in time_str or time_str.isdigit():
+                    minutes = int(''.join(filter(str.isdigit, time_str)))
+                    scheduled_time = timezone.now() + timedelta(minutes=minutes)
+                else:
+                    return {"status": "error", "message": f"I couldn't understand the time '{time_str}'. Please use format like '10 minutes' or '5pm'."}
+            
+            # Ensure timezone aware
+            if timezone.is_naive(scheduled_time):
+                scheduled_time = timezone.make_aware(scheduled_time)
+                
+            if scheduled_time < timezone.now():
+                # Assume tomorrow if time has passed today (simple heuristic)
+                scheduled_time += timedelta(days=1)
+            
+            # Create Reminder
+            user = await sync_to_async(User.objects.get)(pk=user_id)
+            room = await sync_to_async(Chatroom.objects.get)(pk=room_id) if room_id else None
+            
+            reminder = await sync_to_async(Reminder.objects.create)(
+                user=user,
+                room=room,
+                content=content,
+                scheduled_time=scheduled_time,
+                priority=priority,
+                status='pending'
+            )
+            
+            # Format friendly time display
+            local_time = scheduled_time.strftime("%I:%M %p")
+            
+            return {
+                "status": "success",
+                "message": f"✅ I've set a reminder: '{content}' for {local_time}.",
+                "reminder_id": reminder.id,
+                "timestamp": scheduled_time.isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"Reminder error: {e}")
+            return {"status": "error", "message": "Failed to set reminder."}
 
 
 _router = None

@@ -1,0 +1,180 @@
+{% load static %}
+{% load humanize %}
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <title>Reminders - KwikChat</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="{% static 'css/chatbase.css' %}" rel="stylesheet">
+    <link href="{% static 'css/context-panel.css' %}" rel="stylesheet">
+    <link rel="icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
+
+    <style>
+        .reminders-container {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 2rem;
+            background: hsl(var(--background));
+            min-height: 100vh;
+        }
+
+        .reminder-card {
+            background: hsl(var(--card));
+            border: 1px solid hsl(var(--border));
+            border-radius: var(--radius);
+            padding: 1.25rem;
+            margin-bottom: 1rem;
+            transition: all 0.2s;
+        }
+
+        .reminder-card:hover {
+            border-color: hsl(var(--ring));
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+        }
+
+        .reminder-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 0.75rem;
+        }
+
+        .reminder-time {
+            font-size: 0.875rem;
+            color: hsl(var(--muted-foreground));
+        }
+
+        .reminder-content {
+            font-size: 1rem;
+            color: hsl(var(--foreground));
+            margin-bottom: 0.5rem;
+        }
+
+        .reminder-badge {
+            padding: 0.25rem 0.75rem;
+            border-radius: calc(var(--radius) - 2px);
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+
+        .reminder-pending {
+            background: hsl(30, 100%, 95%);
+            color: hsl(30, 100%, 35%);
+        }
+
+        .reminder-sent {
+            background: hsl(140, 60%, 95%);
+            color: hsl(140, 60%, 30%);
+        }
+
+        .dark-mode .reminder-pending {
+            background: hsl(30, 100%, 15%);
+            color: hsl(30, 100%, 75%);
+        }
+
+        .dark-mode .reminder-sent {
+            background: hsl(140, 60%, 15%);
+            color: hsl(140, 60%, 75%);
+        }
+    </style>
+</head>
+
+<body>
+    <button class="dark-mode-toggle" id="darkModeToggle" aria-label="Toggle dark mode">
+        <i class="fas fa-moon"></i>
+    </button>
+
+    <div class="reminders-container">
+        <div class="wallet-header">
+            <div>
+                <h1 class="dashboard-title"><i class="fas fa-bell me-2"></i>My Reminders</h1>
+                <p class="dashboard-subtitle">Scheduled notifications and tasks</p>
+            </div>
+            <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createReminderModal">
+                <i class="fas fa-plus me-2"></i>Create Reminder
+            </button>
+        </div>
+
+        <div class="mt-4">
+            {% if reminders %}
+            {% for reminder in reminders %}
+            <div class="reminder-card">
+                <div class="reminder-header">
+                    <div>
+                        <span class="reminder-badge reminder-{{ reminder.status }}">{{ reminder.status|title }}</span>
+                    </div>
+                    <div class="reminder-time">
+                        <i class="fas fa-clock me-1"></i>{{ reminder.scheduled_time|date:"M d, Y - g:i A" }}
+                    </div>
+                </div>
+                <div class="reminder-content">{{ reminder.content }}</div>
+                <div class="d-flex gap-2 align-items-center">
+                    {% if reminder.via_email %}<i class="fas fa-envelope text-muted" title="Email"></i>{% endif %}
+                    {% if reminder.via_whatsapp %}<i class="fab fa-whatsapp text-muted" title="WhatsApp"></i>{% endif %}
+                    <small class="text-muted ms-auto">Created {{ reminder.created_at|naturaltime }}</small>
+                </div>
+            </div>
+            {% endfor %}
+            {% else %}
+            <div class="text-center text-muted py-5">
+                <i class="fas fa-bell-slash fa-3x mb-3 opacity-25"></i>
+                <p>No reminders yet. Create your first one!</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Create Reminder Modal -->
+    <div class="modal fade" id="createReminderModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="fas fa-plus-circle me-2"></i>Create Reminder</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form method="post" action="{% url 'users:create_reminder' %}">
+                        {% csrf_token %}
+                        <div class="mb-3">
+                            <label class="form-label">What should I remind you about?</label>
+                            <textarea class="form-control" name="content" rows="3"
+                                placeholder="E.g., Call John about the project" required></textarea>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">When?</label>
+                            <input type="datetime-local" class="form-control" name="scheduled_time" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Notify via:</label>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" name="via_email" checked id="viaEmail">
+                                <label class="form-check-label" for="viaEmail">
+                                    <i class="fas fa-envelope me-1"></i>Email
+                                </label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" name="via_whatsapp" id="viaWhatsApp">
+                                <label class="form-check-label" for="viaWhatsApp">
+                                    <i class="fab fa-whatsapp me-1"></i>WhatsApp
+                                </label>
+                            </div>
+                        </div>
+                        <button type="submit" class="btn btn-primary w-100">
+                            <i class="fas fa-check me-2"></i>Create Reminder
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-1.10.2.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{% static 'js/main.js'%}"></script>
+</body>
+
+</html>

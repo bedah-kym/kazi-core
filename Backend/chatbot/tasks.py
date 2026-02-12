@@ -3,11 +3,16 @@ from django.utils import timezone
 from django.core.cache import cache
 import logging
 import json
-from .models import Message, Chatroom, ModerationBatch, UserModerationStatus, AIConversation
+from .models import Message, Chatroom, ModerationBatch, UserModerationStatus, AIConversation, Reminder, DocumentUpload
+from .context_manager import ContextManager
+import pypdf
+from PIL import Image
 from django.contrib.auth import get_user_model
 import os
 import traceback
 from django.conf import settings
+import openai
+from pydub import AudioSegment
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -138,7 +143,7 @@ def moderate_message_batch(self, batch_id):
         return {"error": "batch_not_found"}
     except Exception as e:
         logger.error(f"Error in moderate_message_batch: {e}")
-        logger.error(f"Full traceback: {traceback.format_exc()}")
+        logger.error(traceback.format_exc())
         # Retry on failure
         raise self.retry(exc=e)
 
@@ -213,6 +218,7 @@ def generate_ai_response(self, room_id, user_id, user_message):
                 "Be concise, polite, and professional. "
                 "Encourage respectful collaboration, and flag or refuse to generate content that includes harassment, spam, or scams. "
                 "You can summarize conversations, clarify task details, and offer neutral guidance—never make legal, financial, or medical claims."
+                f"\n\n{ContextManager.get_context_prompt(room_id)}"
             ),
         }
         ]
@@ -313,13 +319,102 @@ def generate_ai_response(self, room_id, user_id, user_message):
             }
         )
         
-        logger.info(f"AI response sent to room {room_id}")
-        
         return {'status': 'success', 'ai_reply': ai_reply}
         
     except Exception as e:
         logger.error(f"Error generating AI response: {e}")
         raise self.retry(exc=e)
+
+@shared_task(bind=True, max_retries=3)
+def transcribe_voice_note(self, message_id):
+    """Transcribe user voice note using OpenAI Whisper"""
+    try:
+        message = Message.objects.get(id=message_id)
+        if not message.audio_url:
+            return "No audio URL found"
+
+        file_path = os.path.join(settings.MEDIA_ROOT, message.audio_url)
+        
+        # OpenAI Whisper
+        client = openai.OpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
+        
+        with open(file_path, "rb") as audio_file:
+            transcript = client.audio.transcriptions.create(
+                model="whisper-1", 
+                file=audio_file
+            )
+        
+        message.voice_transcript = transcript.text
+        message.content = transcript.text # Update content so AI can read it
+        message.save()
+        
+        # Notify room via WebSocket
+        from channels.layers import get_channel_layer
+        from asgiref.sync import async_to_sync
+        channel_layer = get_channel_layer()
+        room = message.chatroom_set.first()
+        if room:
+            async_to_sync(channel_layer.group_send)(
+                f"chat_{room.id}",
+                {
+                    "type": "voice_transcription_ready",
+                    "message_id": message.id,
+                    "transcript": transcript.text
+                }
+            )
+        
+        return transcript.text
+    except Exception as e:
+        logger.error(f"Transcription error: {e}")
+        raise self.retry(exc=e)
+
+@shared_task(bind=True, max_retries=3)
+def generate_voice_response(self, message_id):
+    """Generate audio for AI response using OpenAI TTS"""
+    try:
+        message = Message.objects.get(id=message_id)
+        text = message.content
+        
+        # OpenAI TTS
+        client = openai.OpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
+        
+        response = client.audio.speech.create(
+            model="tts-1",
+            voice="alloy", # alloy, echo, fable, onyx, nova, shimmer
+            input=text
+        )
+        
+        # Save audio file
+        room_id = message.chatroom_set.first().id
+        voice_dir = os.path.join(settings.MEDIA_ROOT, 'ai_speech', str(room_id))
+        os.makedirs(voice_dir, exist_ok=True)
+        
+        file_name = f"reply_{message.id}.mp3"
+        file_path = os.path.join(voice_dir, file_name)
+        response.stream_to_file(file_path)
+        
+        message.audio_url = os.path.join('ai_speech', str(room_id), file_name)
+        message.has_ai_voice = True
+        message.save()
+        
+        # Notify room via WebSocket
+        from channels.layers import get_channel_layer
+        from asgiref.sync import async_to_sync
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            f"chat_{room_id}",
+            {
+                "type": "ai_voice_ready",
+                "message_id": message.id,
+                "audio_url": message.audio_url
+            }
+        )
+        
+        return message.audio_url
+    except Exception as e:
+        logger.error(f"TTS error: {e}")
+        raise self.retry(exc=e)
+
 
 @shared_task
 def moderate_text_realtime(text_content):
@@ -365,3 +460,127 @@ def cleanup_old_moderation_batches():
     
     logger.info(f"Cleaned up {deleted[0]} old moderation batches")
     return {"deleted": deleted[0]}
+
+
+@shared_task
+def check_due_reminders():
+    """
+    Periodic task to check for due reminders and send notifications
+    """
+    now = timezone.now()
+    due_reminders = Reminder.objects.filter(
+        status='pending',
+        scheduled_time__lte=now
+    )
+    
+    count = 0
+    for reminder in due_reminders:
+        try:
+            # 1. Send Notification (Email/WhatsApp)
+            logger.info(f"Sending reminder {reminder.id}: {reminder.content}")
+            
+            # For MVP, we mark as sent. 
+            count += 1
+            reminder.status = 'sent'
+            reminder.save()
+            
+        except Exception as e:
+            logger.error(f"Error sending reminder {reminder.id}: {e}")
+            reminder.status = 'failed'
+            reminder.save()
+            
+    return {"processed": count}
+
+
+@shared_task(bind=True, max_retries=2, default_retry_delay=30)
+def process_document_task(self, document_id):
+    """
+    Extract text and metadata from uploaded documents
+    """
+    try:
+        doc = DocumentUpload.objects.get(id=document_id)
+        doc.status = 'processing'
+        doc.save()
+        
+        logger.info(f"Processing document {document_id} ({doc.file_type})")
+        
+        file_path = doc.file_path
+        # If using local storage, file_path needs to be joined with MEDIA_ROOT
+        full_path = os.path.join(settings.MEDIA_ROOT, file_path)
+        
+        if not os.path.exists(full_path):
+            doc.status = 'failed'
+            doc.processed_text = "File not found on storage"
+            doc.save()
+            return {"error": "file_not_found"}
+            
+        extracted_text = ""
+        metadata = {}
+        
+        if doc.file_type == 'pdf':
+            extracted_text, metadata = extract_text_from_pdf(full_path)
+        elif doc.file_type == 'image':
+            extracted_text, metadata = extract_text_from_image(full_path)
+            
+        doc.processed_text = extracted_text
+        doc.extracted_metadata = metadata
+        doc.status = 'completed'
+        doc.save()
+        
+        logger.info(f"Successfully processed document {document_id}")
+        return {"status": "success", "length": len(extracted_text)}
+        
+    except DocumentUpload.DoesNotExist:
+        logger.error(f"Document {document_id} not found")
+        return {"error": "doc_not_found"}
+    except Exception as e:
+        logger.error(f"Error processing document {document_id}: {e}")
+        logger.error(traceback.format_exc())
+        
+        # Update status to failed
+        try:
+            doc = DocumentUpload.objects.get(id=document_id)
+            doc.status = 'failed'
+            doc.save()
+        except:
+            pass
+            
+        raise self.retry(exc=e)
+
+
+def extract_text_from_pdf(file_path):
+    """Utility to extract text from a PDF file"""
+    text = ""
+    metadata = {}
+    try:
+        with open(file_path, 'rb') as f:
+            reader = pypdf.PdfReader(f)
+            metadata = {
+                "pages": len(reader.pages),
+                "info": reader.metadata if reader.metadata else {}
+            }
+            
+            # Extract from first 10 pages to avoid prompt bloat
+            for i in range(min(len(reader.pages), 10)):
+                text += reader.pages[i].extract_text() + "\n"
+                
+        return text.strip(), metadata
+    except Exception as e:
+        logger.error(f"PDF extraction error: {e}")
+        return f"Extraction failed: {str(e)}", {}
+
+
+def extract_text_from_image(file_path):
+    """Utility to extract metadata and basic info from an image"""
+    metadata = {}
+    try:
+        with Image.open(file_path) as img:
+            metadata = {
+                "format": img.format,
+                "size": img.size,
+                "mode": img.mode
+            }
+        return "Indexed image metadata.", metadata
+    except Exception as e:
+        logger.error(f"Image extraction error: {e}")
+        return f"Image extraction failed: {str(e)}", {}

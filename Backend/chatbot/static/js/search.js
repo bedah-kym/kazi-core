@@ -145,17 +145,20 @@
             return;
         }
 
-        // Get all messages
-        const messages = document.querySelectorAll('#top-chat li');
+        // Get all messages - Target the dynamic room containers
+        // If we have a currentRoomId, search only that room, otherwise search all
+        const selector = window.currentRoomId ? `#messages-room-${window.currentRoomId} li` : '.chat-message-list li';
+        const messages = document.querySelectorAll(selector);
         searchState.matches = [];
 
         messages.forEach((messageEl, index) => {
-            const contentEl = messageEl.querySelector('.message');
+            // Find message content. In some versions it's .message, in others it's .content-text
+            const contentEl = messageEl.querySelector('.message') || messageEl.querySelector('.content-text');
             if (!contentEl) return;
 
             // Get message data
             const messageText = contentEl.textContent.toLowerCase();
-            const timestampEl = messageEl.querySelector('.time-label');
+            const timestampEl = messageEl.querySelector('.time-label') || messageEl.querySelector('.message-time');
             const messageDate = timestampEl ? parseMessageDate(timestampEl.textContent) : null;
 
             // Check if message matches query
@@ -167,7 +170,7 @@
 
             if (matchesQuery && matchesDateFrom && matchesDateTo) {
                 // Message matches - show and highlight
-                messageEl.classList.remove('message-hidden');
+                messageEl.style.display = 'block';
 
                 if (query) {
                     highlightText(contentEl, query);
@@ -175,7 +178,7 @@
                 }
             } else {
                 // Message doesn't match - hide
-                messageEl.classList.add('message-hidden');
+                messageEl.style.display = 'none';
             }
         });
 
@@ -241,8 +244,9 @@
     }
 
     function showAllMessages() {
-        document.querySelectorAll('#top-chat li').forEach(msg => {
-            msg.classList.remove('message-hidden');
+        const selector = window.currentRoomId ? `#messages-room-${window.currentRoomId} li` : '.chat-message-list li';
+        document.querySelectorAll(selector).forEach(msg => {
+            msg.style.display = 'block';
         });
     }
 
@@ -491,7 +495,7 @@
             }
         });
     }
-    
+
 
     function openMini(overlay, panel) {
         overlay.classList.add('open');

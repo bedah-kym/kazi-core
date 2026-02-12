@@ -1,0 +1,568 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description"
+        content="Mathia - The AI Operating System for One-Person Empires. Workflows, Finance, Socials, Travel.">
+    <title>Mathia — The AI Operating System</title>
+
+    <!-- Google Fonts - Inter & Merriweather -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            /* Notion Colors */
+            --notion-bg: #FFFFFF;
+            --notion-text: #37352f;
+            --notion-gray: #F7F7F5;
+            --notion-border: #E9E9E7;
+            --notion-selection: #2eaadc33;
+
+            --spacing-base: 20px;
+            --max-width: 1080px;
+
+            --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, "Apple Color Emoji", Arial, sans-serif;
+        }
+
+        body {
+            font-family: var(--font-sans);
+            color: var(--notion-text);
+            background: var(--notion-bg);
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* Nav */
+        nav {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            background: rgba(255, 255, 255, 0.9);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid var(--notion-border);
+            z-index: 1000;
+            height: 54px;
+            display: flex;
+            align-items: center;
+        }
+
+        .nav-container {
+            width: 100%;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-weight: 600;
+            color: var(--notion-text);
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 16px;
+        }
+
+        .nav-actions {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .btn {
+            padding: 8px 14px;
+            border-radius: 4px;
+            font-size: 14px;
+            text-decoration: none;
+            transition: background 0.1s;
+            font-weight: 500;
+        }
+
+        .btn-text {
+            color: var(--notion-text);
+        }
+
+        .btn-text:hover {
+            background: var(--notion-gray);
+        }
+
+        .btn-primary {
+            background: #000000;
+            color: #FFFFFF;
+        }
+
+        .btn-primary:hover {
+            background: #333333;
+        }
+
+        /* Layout */
+        .container {
+            max-width: var(--max-width);
+            margin: 0 auto;
+            padding: 120px 24px 60px;
+        }
+
+        .section {
+            margin-bottom: 140px;
+        }
+
+        /* Typography */
+        h1 {
+            font-weight: 700;
+            font-size: 64px;
+            line-height: 1.05;
+            letter-spacing: -0.03em;
+            margin-bottom: 24px;
+            color: #000;
+            text-align: center;
+        }
+
+        .hero-subtitle {
+            font-size: 24px;
+            line-height: 1.5;
+            color: #37352f;
+            margin-bottom: 32px;
+            max-width: 750px;
+            margin-left: auto;
+            margin-right: auto;
+            text-align: center;
+        }
+
+        h2 {
+            font-weight: 600;
+            font-size: 42px;
+            margin-bottom: 40px;
+            letter-spacing: -0.02em;
+        }
+
+        h3 {
+            font-weight: 600;
+            font-size: 24px;
+            margin-bottom: 12px;
+        }
+
+        /* Pillars Grid */
+        .pillar-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 32px;
+        }
+
+        .pillar-block {
+            border: 1px solid var(--notion-border);
+            border-radius: 4px;
+            padding: 24px;
+            background: #FFFFFF;
+            transition: box-shadow 0.2s;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .pillar-block:hover {
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.06);
+        }
+
+        .pillar-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .pillar-icon-box {
+            font-size: 24px;
+        }
+
+        .pillar-desc {
+            font-size: 16px;
+            color: rgba(55, 53, 47, 0.65);
+            margin-bottom: 24px;
+            flex-grow: 1;
+        }
+
+        .pillar-image {
+            width: 100%;
+            height: 160px;
+            object-fit: contain;
+            mix-blend-mode: multiply;
+        }
+
+        /* Use Cases Section */
+        .use-cases-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 40px;
+        }
+
+        .use-case-card {
+            background: var(--notion-gray);
+            padding: 32px;
+            border-radius: 4px;
+        }
+
+        .use-case-badge {
+            display: inline-block;
+            background: #e3e2e0;
+            color: #37352f;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            margin-bottom: 12px;
+        }
+
+        /* Workflow Highlight */
+        .workflow-section {
+            background: #000;
+            color: #fff;
+            border-radius: 12px;
+            padding: 60px;
+            position: relative;
+            overflow: hidden;
+            text-align: center;
+        }
+
+        .workflow-section h2,
+        .workflow-section p {
+            color: #fff;
+            text-align: center;
+        }
+
+        .workflow-diagram {
+            margin-top: 40px;
+            background: #fff;
+            border-radius: 8px;
+            padding: 20px;
+            display: inline-block;
+        }
+
+        .workflow-node {
+            display: inline-block;
+            padding: 10px 20px;
+            border: 2px solid #000;
+            border-radius: 99px;
+            font-weight: 600;
+            color: #000;
+            background: #fff;
+        }
+
+        .workflow-arrow {
+            display: inline-block;
+            margin: 0 10px;
+            color: #000;
+        }
+
+        footer {
+            border-top: 1px solid var(--notion-border);
+            padding: 80px 0;
+            text-align: center;
+            font-size: 14px;
+            color: rgba(55, 53, 47, 0.5);
+        }
+
+        @media (max-width: 900px) {
+            .pillar-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .use-cases-grid {
+                grid-template-columns: 1fr;
+            }
+
+            h1 {
+                font-size: 42px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <nav>
+        <div class="nav-container">
+            <a href="/" class="logo">
+                <span style="font-size: 20px;">🤖</span> Mathia.OS
+            </a>
+            <div class="nav-actions">
+                <a href="#use-cases" class="btn btn-text">Use Cases</a>
+                <a href="#workflows" class="btn btn-text">Workflows</a>
+                <a href="{% url 'users:login' %}" class="btn btn-text">Log in</a>
+                <a href="{% url 'users:register' %}" class="btn btn-primary">Get Access</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <!-- Hero -->
+        <div class="section hero">
+            <h1>The Operating System<br>for One-Person Empires.</h1>
+            <p class="hero-subtitle">Workflows, Finance, Socials, Travel, and Documents.<br>One unified chat interface.
+                No complex setup.</p>
+
+            <div style="text-align: center; margin-bottom: 60px;">
+                <a href="{% url 'users:register' %}" class="btn btn-primary"
+                    style="font-size: 18px; padding: 12px 32px;">Start Building</a>
+                <a href="#workflows" class="btn btn-text"
+                    style="font-size: 18px; padding: 12px 32px; text-decoration: underline;">See Workflows</a>
+            </div>
+
+            <img src="{% static 'images/doodle-workflow.png' %}"
+                style="max-width: 100%; height: 300px; object-fit: contain; mix-blend-mode: multiply;"
+                alt="Workflow Doodle">
+        </div>
+
+        <!-- 6 Pillars Grid -->
+        <div class="section">
+            <h5
+                style="text-transform: uppercase; letter-spacing: 0.1em; color: rgba(55,53,47,0.5); font-size: 12px; margin-bottom: 30px; border-bottom: 1px solid var(--notion-border); padding-bottom: 10px;">
+                The OS Modules</h5>
+
+            <div class="pillar-grid">
+                <!-- Workflow -->
+                <div class="pillar-block" style="background: #e3e2e0;"> <!-- Highlighted -->
+                    <div class="pillar-header">
+                        <span class="pillar-icon-box">⚡</span>
+                        <h3>Temporal Workflows</h3>
+                    </div>
+                    <p class="pillar-desc"><strong>Like n8n, but with words.</strong> Describe a process ("When I get an
+                        email, draft a reply in Notion"), and Mathia builds the automation for you.</p>
+                    <img src="{% static 'images/doodle-workflow.png' %}" class="pillar-image" style="height: 120px;"
+                        alt="Workflows">
+                </div>
+
+                <!-- Social -->
+                <div class="pillar-block">
+                    <div class="pillar-header">
+                        <span class="pillar-icon-box">📢</span>
+                        <h3>Social Growth</h3>
+                    </div>
+                    <p class="pillar-desc">"Zero to Viral" monitoring. Manage X, LinkedIn, and Instagram. Track growth
+                        metrics in real-time.</p>
+                    <img src="{% static 'images/doodle-social.png' %}" class="pillar-image" alt="Social">
+                </div>
+
+                <!-- Finance -->
+                <div class="pillar-block">
+                    <div class="pillar-header">
+                        <span class="pillar-icon-box">💸</span>
+                        <h3>Finance & Ledger</h3>
+                    </div>
+                    <p class="pillar-desc">ACID Double-Entry Ledger. Syncs with Quickbooks. Generate invoices and accept
+                        M-Pesa payments.</p>
+                    <img src="{% static 'images/doodle-finance.png' %}" class="pillar-image" alt="Finance">
+                </div>
+
+                <!-- Docs/Notion -->
+                <div class="pillar-block">
+                    <div class="pillar-header">
+                        <span class="pillar-icon-box">🧠</span>
+                        <h3>Deep Notion Sync</h3>
+                    </div>
+                    <p class="pillar-desc">Mathia lives in your knowledge base. Read/Write access to organize tasks,
+                        notes, and strategy.</p>
+                    <img src="{% static 'images/doodle-docs.png' %}" class="pillar-image" alt="Notion">
+                </div>
+
+                <!-- Travel -->
+                <div class="pillar-block">
+                    <div class="pillar-header">
+                        <span class="pillar-icon-box">✈️</span>
+                        <h3>B2B Travel Agent</h3>
+                    </div>
+                    <p class="pillar-desc">Plan trips for clients. Create detailed itineraries and manage logistics
+                        effortlessly.</p>
+                    <img src="{% static 'images/doodle-travel.png' %}" class="pillar-image" alt="Travel">
+                </div>
+
+                <!-- Calendar/Identity -->
+                <div class="pillar-block">
+                    <div class="pillar-header">
+                        <span class="pillar-icon-box">📅</span>
+                        <h3>Calendar & Brand</h3>
+                    </div>
+                    <p class="pillar-desc">Deep <strong>Calendly</strong> integration. Brand building tools for
+                        creators. Own your schedule.</p>
+                    <img src="{% static 'images/doodle-calendar.png' %}" class="pillar-image" alt="Calendar">
+                </div>
+            </div>
+        </div>
+
+        <!-- Use Cases -->
+        <div class="section" id="use-cases">
+            <h2>Who is this for?</h2>
+            <div class="use-cases-grid">
+                <!-- Freelancers -->
+                <div class="use-case-card">
+                    <span class="use-case-badge">Freelancers & Founders</span>
+                    <h3>The "One-Person Empire"</h3>
+                    <p>You do support, sales, and product. Mathia takes over the busywork. "Mathia, invoice this client
+                        and schedule a follow-up."</p>
+                </div>
+
+                <!-- Social Managers -->
+                <div class="use-case-card">
+                    <span class="use-case-badge">Social Media Managers</span>
+                    <h3>Growth on Autopilot</h3>
+                    <p>Manage 5 accounts without losing your mind. Use the Workflow Engine to repurpose content across
+                        platforms automatically.</p>
+                </div>
+
+                <!-- SMEs -->
+                <div class="use-case-card">
+                    <span class="use-case-badge">SMEs & Startups</span>
+                    <h3>An Operational Brain</h3>
+                    <p>Don't hire a COO yet. Let Mathia organize your Notion, track your burn rate in the Ledger, and
+                        manage team travel.</p>
+                </div>
+
+                <!-- Creators -->
+                <div class="use-case-card">
+                    <span class="use-case-badge">Creators</span>
+                    <h3>Brand Builder</h3>
+                    <p>Focus on creating. Let Mathia handle the "Business of You". Sponsorship invoices, calendar
+                        management, and audience analytics.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Workflow Detail -->
+        <div class="section workflow-section" id="workflows">
+            <h2>Temporal Workflow Engine</h2>
+            <p style="max-width: 600px; margin: 0 auto; opacity: 0.9; margin-bottom: 40px;">
+                Design complex automations using just your words. Mathia understands your intent and connects your apps
+                (Notion, Calendly, Quickbooks, Socials).
+            </p>
+
+            <div class="workflow-diagram">
+                <span class="workflow-node">New Calendly Booking</span>
+                <span class="workflow-arrow">→</span>
+                <span class="workflow-node">Create Notion Page</span>
+                <span class="workflow-arrow">→</span>
+                <span class="workflow-node">Draft Invoice</span>
+            </div>
+
+            <!-- Workflow Examples List -->
+            <div
+                style="margin-top: 60px; text-align: left; background: rgba(255,255,255,0.1); padding: 30px; border-radius: 8px;">
+                <h3 style="color: #fff; margin-bottom: 20px; font-size: 20px;">Automation Library</h3>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                    <!-- Social Example -->
+                    <div style="margin-bottom: 10px;">
+                        <strong style="color: #A5B4FC; display: block; margin-bottom: 5px;">Social Growth</strong>
+                        <div style="font-family: monospace; font-size: 13px; color: rgba(255,255,255,0.8);">
+                            "Every Monday at 9am, check my viral tweets from last week and repurpose the best one for
+                            LinkedIn."
+                        </div>
+                    </div>
+                    <!-- Finance Example -->
+                    <div>
+                        <strong style="color: #6EE7B7; display: block; margin-bottom: 5px;">Finance Sync</strong>
+                        <div style="font-family: monospace; font-size: 13px; color: rgba(255,255,255,0.8);">
+                            "When an invoice in Quickbooks is marked 'Paid', send a Thank You email and add the amount
+                            to my Revenue goals in Notion."
+                        </div>
+                    </div>
+                    <!-- Travel Example -->
+                    <div style="margin-bottom: 10px;">
+                        <strong style="color: #FDA4AF; display: block; margin-bottom: 5px;">Travel Logistics</strong>
+                        <div style="font-family: monospace; font-size: 13px; color: rgba(255,255,255,0.8);">
+                            "When I forward a flight confirmation, add it to my 'Trip Itinerary' ledger and block the
+                            dates on Calendly."
+                        </div>
+                    </div>
+                    <!-- Docs Example -->
+                    <div>
+                        <strong style="color: #FCD34D; display: block; margin-bottom: 5px;">Meeting Prep</strong>
+                        <div style="font-family: monospace; font-size: 13px; color: rgba(255,255,255,0.8);">
+                            "15 minutes before a Calendly meeting, find the client's last 3 emails and summarize them in
+                            a Notion scratchpad."
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <br><br>
+            <a href="{% url 'users:register' %}" class="btn btn-text"
+                style="background: #fff; color: #000; padding: 12px 24px;">Try Workflows Beta</a>
+        </div>
+
+        <!-- Community / Testimonials -->
+        <div class="section">
+            <h2>Trusted by Builders.</h2>
+            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; margin-top: 40px;">
+                <!-- User 1 -->
+                <div
+                    style="padding: 24px; border: 1px solid var(--notion-border); border-radius: 4px; background: #fff;">
+                    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
+                        <div style="width: 32px; height: 32px; background: #eee; border-radius: 50%;"></div>
+                        <div>
+                            <div style="font-weight: 600; font-size: 14px;">Sarah J.</div>
+                            <div style="font-size: 12px; color: #666;">Freelance Designer</div>
+                        </div>
+                    </div>
+                    <p style="font-size: 14px; margin: 0; color: #333;">"I used to spend Fridays just doing invoices and
+                        organizing Notion tasks. Mathia does it automatically now. It feels like I hired a virtual
+                        assistant."</p>
+                </div>
+
+                <!-- User 2 -->
+                <div
+                    style="padding: 24px; border: 1px solid var(--notion-border); border-radius: 4px; background: #fff;">
+                    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
+                        <div style="width: 32px; height: 32px; background: #eee; border-radius: 50%;"></div>
+                        <div>
+                            <div style="font-weight: 600; font-size: 14px;">David K.</div>
+                            <div style="font-size: 12px; color: #666;">Growth Lead</div>
+                        </div>
+                    </div>
+                    <p style="font-size: 14px; margin: 0; color: #333;">"The workflow engine is insane. I just typed
+                        'Post my LinkedIn thread to X' and it actually did it. Zero setup."</p>
+                </div>
+
+                <!-- User 3 -->
+                <div
+                    style="padding: 24px; border: 1px solid var(--notion-border); border-radius: 4px; background: #fff;">
+                    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
+                        <div style="width: 32px; height: 32px; background: #eee; border-radius: 50%;"></div>
+                        <div>
+                            <div style="font-weight: 600; font-size: 14px;">Elena R.</div>
+                            <div style="font-size: 12px; color: #666;">Agency Owner</div>
+                        </div>
+                    </div>
+                    <p style="font-size: 14px; margin: 0; color: #333;">"Finally, something that connects my weird stack
+                        of Quickbooks, Notion, and Calendly without breaking."</p>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <footer>
+        <div class="container" style="padding: 0;">
+            <p><strong>Mathia.OS</strong> &copy; 2026. Built for builders.</p>
+        </div>
+    </footer>
+
+</body>
+
+</html>

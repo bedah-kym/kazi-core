@@ -1,31 +1,45 @@
-
 # Use an official Python runtime as a parent image
 FROM python:3.11-slim
 
 # Set environment variables
-ENV PYTHONDONTWRITEBYTECODE 1
-ENV PYTHONUNBUFFERED 1
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # Set work directory
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
+# Install system dependencies (includes ffmpeg for voice features)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
     netcat-openbsd \
-    && rm -rf /var/lib/apt/lists/*
+    ffmpeg \
+    tzdata \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
-# Install Python dependencies
+# Create a non-root user
+RUN addgroup --system django && adduser --system --group django
+
+# Install Python dependencies first (for better layer caching)
 COPY requirements.txt /app/
-RUN pip install --upgrade pip && pip install -r requirements.txt
+RUN pip install --upgrade pip && \
+    pip install -r requirements.txt
 
-# Copy project
+# Copy project files
 COPY . /app/
 
-# Copy entrypoint script
+# Own the app directory
+RUN chown -R django:django /app
+
+# Copy and make entrypoint executable
 COPY entrypoint.sh /app/
 RUN chmod +x /app/entrypoint.sh
+
+# Switch to non-root user
+USER django
 
 # Run entrypoint.sh
 ENTRYPOINT ["/app/entrypoint.sh"]

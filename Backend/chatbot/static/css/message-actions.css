@@ -1,0 +1,400 @@
+/* Message Actions Dropdown Styles */
+
+.message-actions-dropdown {
+    /* Anchor the dropdown to the top-right of the message bubble so each
+       message gets its own positioned menu. Using absolute prevents the
+       menu from appearing in the same place for every message. */
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    display: inline-block;
+    z-index: 1200;
+}
+
+.message-actions-btn {
+    background: none;
+    border: none;
+    color: #6c757d;
+    cursor: pointer;
+    font-size: 14px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    transition: all 0.2s;
+    opacity: 0;
+}
+
+.message:hover .message-actions-btn {
+    opacity: 1;
+}
+
+.message-actions-btn:hover {
+    background: rgba(0, 0, 0, 0.05);
+    color: #495057;
+}
+
+body.dark-mode .message-actions-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #e9ecef;
+}
+
+.message-actions-menu {
+    position: absolute;
+    /* place the menu below the action button and align to the right edge */
+    top: calc(100% + 6px);
+    right: 0;
+    left: auto;
+    background: white;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    min-width: 180px;
+    z-index: 1400;
+    display: none;
+    overflow: hidden;
+}
+
+/* Make sure menus don't overflow on small screens */
+@media (max-width: 768px) {
+    .message-actions-menu {
+        min-width: 140px;
+        max-width: calc(100vw - 32px);
+        right: 8px;
+        left: auto;
+    }
+
+    .message-actions-dropdown {
+        top: 6px;
+        right: 6px;
+    }
+}
+
+.message-actions-menu.show {
+    display: block;
+    animation: dropdownFadeIn 0.2s ease-out;
+}
+
+@keyframes dropdownFadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.message-actions-item {
+    display: flex;
+    align-items: center;
+    padding: 10px 16px;
+    cursor: pointer;
+    transition: background 0.2s;
+    border: none;
+    background: none;
+    width: 100%;
+    text-align: left;
+    font-size: 14px;
+    color: #495057;
+}
+
+.message-actions-item:hover {
+    background: #f8f9fa;
+}
+
+.message-actions-item i {
+    margin-right: 10px;
+    width: 16px;
+    text-align: center;
+}
+
+.message-actions-item.danger {
+    color: #dc3545;
+}
+
+.message-actions-item.danger:hover {
+    background: #fff5f5;
+}
+
+body.dark-mode .message-actions-menu {
+    background: #2a2a2a;
+    border-color: rgba(255, 255, 255, 0.1);
+}
+
+body.dark-mode .message-actions-item {
+    color: #e9ecef;
+}
+
+body.dark-mode .message-actions-item:hover {
+    background: #333;
+}
+
+/* Document Upload Modal */
+.upload-modal {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 10000;
+    align-items: center;
+    justify-content: center;
+}
+
+.upload-modal.show {
+    display: flex;
+}
+
+.upload-modal-content {
+    background: white;
+    border-radius: 12px;
+    padding: 24px;
+    max-width: 500px;
+    width: 90%;
+    max-height: 80vh;
+    overflow-y: auto;
+}
+
+body.dark-mode .upload-modal-content {
+    background: #2a2a2a;
+}
+
+.upload-modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.upload-modal-title {
+    font-size: 20px;
+    font-weight: 600;
+    margin: 0;
+}
+
+.upload-modal-close {
+    background: none;
+    border: none;
+    font-size: 24px;
+    cursor: pointer;
+    color: #6c757d;
+    padding: 0;
+    width: 32px;
+    height: 32px;
+    border-radius: 4px;
+    transition: background 0.2s;
+}
+
+.upload-modal-close:hover {
+    background: rgba(0, 0, 0, 0.05);
+}
+
+.upload-dropzone {
+    border: 2px dashed #dee2e6;
+    border-radius: 8px;
+    padding: 40px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.3s;
+    margin-bottom: 16px;
+}
+
+.upload-dropzone:hover,
+.upload-dropzone.drag-over {
+    border-color: #667eea;
+    background: rgba(102, 126, 234, 0.05);
+}
+
+.upload-dropzone i {
+    font-size: 48px;
+    color: #667eea;
+    margin-bottom: 16px;
+}
+
+.upload-dropzone-text {
+    font-size: 16px;
+    color: #495057;
+    margin-bottom: 8px;
+}
+
+.upload-dropzone-hint {
+    font-size: 14px;
+    color: #6c757d;
+}
+
+.upload-quota-info {
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-bottom: 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+body.dark-mode .upload-quota-info {
+    background: #333;
+}
+
+.upload-quota-label {
+    font-size: 14px;
+    color: #6c757d;
+}
+
+.upload-quota-count {
+    font-size: 16px;
+    font-weight: 600;
+    color: #667eea;
+}
+
+.upload-quota-count.warning {
+    color: #ffc107;
+}
+
+.upload-quota-count.danger {
+    color: #dc3545;
+}
+
+.upload-restrictions {
+    font-size: 13px;
+    color: #6c757d;
+    margin-bottom: 16px;
+}
+
+.upload-restrictions strong {
+    color: #495057;
+}
+
+body.dark-mode .upload-restrictions strong {
+    color: #e9ecef;
+}
+
+.upload-preview {
+    margin-top: 16px;
+    padding: 12px;
+    background: #f8f9fa;
+    border-radius: 8px;
+}
+
+body.dark-mode .upload-preview {
+    background: #333;
+}
+
+.upload-preview-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.upload-preview-icon {
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: white;
+    border-radius: 6px;
+    font-size: 20px;
+}
+
+body.dark-mode .upload-preview-icon {
+    background: #2a2a2a;
+}
+
+.upload-preview-info {
+    flex: 1;
+}
+
+.upload-preview-name {
+    font-size: 14px;
+    font-weight: 500;
+    margin-bottom: 4px;
+}
+
+.upload-preview-size {
+    font-size: 12px;
+    color: #6c757d;
+}
+
+.upload-progress {
+    width: 100%;
+    height: 4px;
+    background: #dee2e6;
+    border-radius: 2px;
+    overflow: hidden;
+    margin-top: 8px;
+}
+
+.upload-progress-bar {
+    height: 100%;
+    background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+    transition: width 0.3s;
+}
+
+/* Success/Error Messages */
+.action-toast {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background: white;
+    border-radius: 8px;
+    padding: 12px 20px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    z-index: 10001;
+    animation: slideInUp 0.3s ease-out;
+}
+
+@keyframes slideInUp {
+    from {
+        transform: translateY(100px);
+        opacity: 0;
+    }
+
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+.action-toast.success {
+    border-left: 4px solid #28a745;
+}
+
+.action-toast.error {
+    border-left: 4px solid #dc3545;
+}
+
+.action-toast.warning {
+    border-left: 4px solid #ffc107;
+}
+
+.action-toast i {
+    font-size: 20px;
+}
+
+.action-toast.success i {
+    color: #28a745;
+}
+
+.action-toast.error i {
+    color: #dc3545;
+}
+
+.action-toast.warning i {
+    color: #ffc107;
+}
+
+.action-toast-message {
+    font-size: 14px;
+}
+
+body.dark-mode .action-toast {
+    background: #2a2a2a;
+    color: #e9ecef;
+}

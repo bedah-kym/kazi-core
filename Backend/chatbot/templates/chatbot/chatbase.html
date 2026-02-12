@@ -11,12 +11,21 @@
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <link href="{% static 'css/chatbase.css' %}" rel="stylesheet">
     <!-- AI Assistant Styles -->
-    <link href="{% static 'css/ai-assistant.css' %}" rel="stylesheet">
+    <link rel="stylesheet" href="{% static 'css/ai-assistant.css' %}">
+
+    <!-- Wavesurfer.js for Audio Waveforms -->
+    <script src="https://unpkg.com/wavesurfer.js@7/dist/wavesurfer.min.js"></script>
+    <!-- Context Panel Styles (Inlined for reliability) -->
+    <link href="{% static 'css/context-panel.css'%}" rel="stylesheet">
+    <!-- Message Actions Styles -->
+    <link href="{% static 'css/message-actions.css'%}" rel="stylesheet">
     <!--favicon-->
     <link rel="icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
     <!-- Highlight.js CSS -->
     <link rel="stylesheet"
         href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <!-- Driver.js CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/driver.js@1.0.1/dist/driver.css" />
     <style>
         /* Custom styles for code blocks */
         pre {
@@ -62,38 +71,96 @@
         .message p:last-child {
             margin-bottom: 0;
         }
+
+        /* Quota UI Styles */
+        .quota-card {
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            border-left: 5px solid #ccc;
+            transition: all 0.2s ease;
+            text-align: left;
+        }
+
+        .quota-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+        }
+
+        .quota-card.good {
+            border-left-color: #2ecc71;
+        }
+
+        .quota-card.warning {
+            border-left-color: #f1c40f;
+        }
+
+        .quota-card.critical {
+            border-left-color: #e67e22;
+        }
+
+        .quota-card.exhausted {
+            border-left-color: #e74c3c;
+        }
+
+        .quota-progress {
+            height: 8px;
+            border-radius: 4px;
+            margin: 10px 0;
+            background-color: #e9ecef;
+            overflow: hidden;
+            display: flex;
+        }
+
+        .quota-progress-bar {
+            height: 100%;
+            transition: width 0.6s ease;
+        }
     </style>
 </head>
 
-<body>
+<body class="chat-page">
     <button class="dark-mode-toggle" id="darkModeToggle" aria-label="Toggle dark mode">
         <i class="fas fa-moon"></i>
     </button>
+    <!-- Mobile people list toggle is implemented in the header (#menuToggle) to avoid duplicate toggles -->
     <div class="container-fluid p-0">
+        <!-- Backdrop for mobile people list -->
+        <div class="people-backdrop" id="peopleBackdrop"></div>
         <div class="row g-0">
             <div class="col-md-4 col-lg-3 people-list">
                 <div class="p-3 people-list-content">
-                    <div class="search-bar input-group mb-3">
-                        <span class="input-group-text p-3 bg-light border-0">
-                            <i class=""></i>
-                        </span>
-                        <input type="text" class="form-control border-0 bg-light" id="search"
-                            placeholder="Search People...">
-                        <span class="input-group-text bg-light border-0">
-                            <i class="fas fa-search text-muted"></i>
-                        </span>
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <div class="search-bar input-group flex-grow-1 me-2 mb-0">
+                            <span class="input-group-text p-3 bg-light border-0">
+                                <i class=""></i>
+                            </span>
+                            <input type="text" class="form-control border-0 bg-light" id="search"
+                                placeholder="Search People...">
+                            <span class="input-group-text bg-light border-0">
+                                <i class="fas fa-search text-muted"></i>
+                            </span>
+                        </div>
+                        <button class="btn btn-primary rounded-circle" data-bs-toggle="modal"
+                            data-bs-target="#createRoomModal" title="Create New Room">
+                            <i class="fas fa-plus"></i>
+                        </button>
                     </div>
                     <ul class="list-unstyled chat-list">
                         {% for chatroom in chatrooms %}
-                        <li class="clearfix {% if chatroom.id == room_name %}active{% endif %}">
-                            <a href="{% url 'chatbot:bot-home' chatroom.id %}" class="text-decoration-none">
+                        <li class="clearfix {% if chatroom.id == room_name %}active{% endif %}"
+                            id="room-li-{{ chatroom.id }}">
+                            <a href="{% url 'chatbot:bot-home' chatroom.id %}" class="text-decoration-none"
+                                onclick="switchRoom(event, '{{ chatroom.id }}', '{{ chatroom.name|escapejs }}')">
                                 <div class="d-flex align-items-center">
-                                    <img src="https://bootdey.com/img/Content/avatar/avatar1.png"
-                                        class="avatar-img me-2" alt="avatar">
+                                    <img src="{{ chatroom.avatar }}" class="avatar-img me-2" alt="avatar">
                                     <div>
                                         <div class="fw-bold">
-                                            {{ room_member }}
-                                            <span class="status-dot sidebar-dot" data-user="{{ room_member }}"></span>
+                                            {{ chatroom.name }}
+                                            <!-- Valid user for status dot might be tricky in groups, 
+                                                 using display name for now if it's a single user -->
+                                            <span class="status-dot sidebar-dot" data-user="{{ chatroom.name }}"></span>
                                         </div>
                                     </div>
                                 </div>
@@ -116,7 +183,14 @@
                             <i class="fas fa-calendar-days"></i>
                         </button>
                         <button id="openSettings" class="btn btn-link">
-                            <i class="fas fa-cog fa-spin"></i>
+                            <i class="fas fa-cog"></i>
+                        </button>
+                        <button id="startTour" class="btn btn-link text-primary" title="Guided Tour">
+                            <i class="fas fa-wand-magic-sparkles"></i>
+                        </button>
+                        <button type="button" class="btn btn-link text-warning" title="Usage Quotas"
+                            onclick="fetchQuotas()">
+                            <i class="fas fa-chart-pie"></i>
                         </button>
                     </div>
                 </div>
@@ -148,7 +222,29 @@
                                 </div>
                             </div>
                         </div>
-                        <div class="col-4 text-end">
+                        <div class="col-4 text-end d-flex align-items-center justify-content-end">
+                            <div class="d-none d-lg-flex align-items-center me-3 border-end pe-3">
+                                <a href="{% url 'users:dashboard' %}" class="btn btn-link text-muted me-1"
+                                    title="Dashboard">
+                                    <i class="fas fa-home"></i>
+                                </a>
+                                <a href="{% url 'payments:wallet_dashboard' %}" class="btn btn-link text-muted me-1"
+                                    title="Wallet">
+                                    <i class="fas fa-wallet"></i>
+                                </a>
+                                <a href="{% url 'users:reminders' %}" class="btn btn-link text-muted me-1"
+                                    title="Reminders">
+                                    <i class="fas fa-bell"></i>
+                                </a>
+                                <a href="{% url 'users:settings' %}" class="btn btn-link text-muted" title="Settings">
+                                    <i class="fas fa-cog"></i>
+                                </a>
+                            </div>
+
+                            <button class="btn btn-light me-2" data-bs-toggle="modal" data-bs-target="#inviteUserModal"
+                                title="Invite User">
+                                <i class="fas fa-user-plus"></i>
+                            </button>
                             <button class="btn btn-light me-2" id="searchToggle" title="Search in chat">
                                 <i class="fas fa-search"></i>
                             </button>
@@ -205,14 +301,9 @@
                     </div>
                 </div>
 
-                <div class="chat-history">
-                    <ul id="top-chat" class="list-unstyled mb-0">
-                        <!-- Messages will be inserted here -->
-                    </ul>
-                    <div class="typing-indicator" id="typing-indicator" style="display:none;">
-                        <em id="typing-user" class="user-name"></em>
-                        <span></span><span></span><span></span>
-                    </div>
+                <div class="chat-history" id="chat-rooms-container">
+                    <!-- Dynamic Room Containers will be injected here by JS -->
+                    <!-- Initial placeholder/loading state can go here -->
                 </div>
 
                 <div class="file-preview">
@@ -229,15 +320,130 @@
                 </div>
 
                 <div class="chat-message">
+                    <!-- Voice Recording Overlay -->
+                    <div id="voice-recording-overlay" class="recording-overlay" style="display: none;">
+                        <div class="d-flex align-items-center justify-content-between w-100 px-3">
+                            <div class="recording-pulse"></div>
+                            <div class="recording-timer">0:00</div>
+                            <div id="recording-waveform"></div>
+                            <button id="cancel-recording" class="btn text-danger">
+                                <i class="fas fa-times"></i>
+                            </button>
+                        </div>
+                    </div>
+
                     <div class="input-group">
                         <button id="emoji" class="btn">
                             <i class="far fa-smile fa-2x"></i>
                         </button>
+
+                        <!-- Voice Record Button -->
+                        <button id="voice-record-btn" class="btn">
+                            <i class="fas fa-microphone"></i>
+                        </button>
+
                         <input type="text" class="form-control" id="chat-message-input"
                             placeholder="Type your message...">
                         <button class="btn btn-primary" id="chat-message-submit">
                             <i class="fas fa-paper-plane"></i>
                         </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Context Panel Toggle Button -->
+    <button class="context-panel-toggle" id="contextPanelToggle" title="AI Memory & Notes">
+        <i class="fas fa-brain"></i>
+    </button>
+
+    <!-- Context Panel (Shadcn-inspired) -->
+    <div class="context-panel" id="contextPanel">
+        <div class="context-panel-header">
+            <div class="d-flex justify-content-between align-items-start w-100">
+                <div>
+                    <h2 class="context-panel-title">
+                        <i class="fas fa-brain"></i>
+                        AI Memory
+                    </h2>
+                    <p class="context-panel-subtitle">Context & Important Notes</p>
+                </div>
+                <!-- Close button in header -->
+                <button class="btn btn-link text-muted p-0 context-panel-close" id="closeContextPanel"
+                    title="Close panel">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+        </div>
+
+        <div class="context-panel-content" id="contextPanelContent">
+            <div class="context-loading">
+                <div class="spinner"></div>
+                <p style="margin-top: 0.75rem;">Loading context...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- INVITE USER MODAL -->
+    <div class="modal fade" id="inviteUserModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Invite User</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <form id="inviteUserForm" onsubmit="handleInviteUser(event)">
+                        <div class="mb-3">
+                            <label for="inviteEmail" class="form-label">User Email</label>
+                            <input type="email" class="form-control" id="inviteEmail" required
+                                placeholder="user@example.com">
+                        </div>
+                        <div id="inviteMessage" class="mb-3 text-center"></div>
+                        <button type="submit" class="btn btn-primary w-100">Invite</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- CREATE ROOM MODAL -->
+    <div class="modal fade" id="createRoomModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Create New Room</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <div class="row g-3">
+                        <div class="col-6">
+                            <form action="{% url 'chatbot:create_room' %}" method="POST">
+                                {% csrf_token %}
+                                <input type="hidden" name="room_type" value="general">
+                                <button type="submit" class="btn btn-outline-primary w-100 h-100 p-4 border-2">
+                                    <div class="text-center">
+                                        <i class="fas fa-robot fa-3x mb-3 text-primary"></i>
+                                        <h5 class="mb-1">General Room</h5>
+                                        <small class="text-muted">Chat with Mathia AI</small>
+                                    </div>
+                                </button>
+                            </form>
+                        </div>
+                        <div class="col-6">
+                            <form action="{% url 'chatbot:create_room' %}" method="POST">
+                                {% csrf_token %}
+                                <input type="hidden" name="room_type" value="private">
+                                <button type="submit" class="btn btn-outline-secondary w-100 h-100 p-4 border-2">
+                                    <div class="text-center">
+                                        <i class="fas fa-lock fa-3x mb-3 text-secondary"></i>
+                                        <h5 class="mb-1">Private Room</h5>
+                                        <small class="text-muted">Your private space</small>
+                                    </div>
+                                </button>
+                            </form>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -365,15 +571,29 @@
     <script src="https://cdn.jsdelivr.net/npm/emoji-mart@latest/dist/browser.js"></script>
 
     <script>
-        var roomName = {{ room_name }};
-        var username = {{ username }};
-        var otherUser = '{{ room_member }}';
+        // Use window properties for global sync across all files
+        // NOTE: room_name and username are already JSON-encoded in views.py
+        window.roomName = {{ room_name }};
+        window.usernameGlobal = {{ username }};
+        window.currentRoomId = window.roomName || null;
+        window.otherUser = '{{ room_member|default:"" }}';
+
+        // Legacy support for older scripts
+        var roomName = window.roomName;
+        var username = window.usernameGlobal;
+        var otherUser = window.otherUser;
     </script>
 
     <script src="{% static 'js/main.js'%}"></script>
+    <script src="{% static 'js/message-actions.js'%}"></script>
     <script src="{% static 'js/ai-assistant.js' %}"></script>
     <script src="{% static 'js/calendar.js' %}"></script>
     <script src="{% static 'js/search.js'%}"></script>
+    <script src="{% static 'js/context-panel.js' %}"></script>
+    <!-- Driver.js -->
+    <script src="https://cdn.jsdelivr.net/npm/driver.js@1.0.1/dist/driver.js.iife.js"></script>
+    <script src="{% static 'js/onboarding.js' %}"></script>
+    <script src="{% static 'js/voice-assistant.js' %}"></script>
 
     <!-- Inline styles for calendar button and dark mode support -->
     <style>
@@ -444,7 +664,112 @@
             background-color: #333;
             border-color: #4da3ff;
         }
+
+        /* Pulse animation for the Tour button */
+        #startTour i {
+            animation: tour-pulse 2s infinite;
+        }
+
+        @keyframes tour-pulse {
+            0% {
+                transform: scale(1);
+            }
+
+            50% {
+                transform: scale(1.2) rotate(10deg);
+                color: #6c5ce7;
+            }
+
+            100% {
+                transform: scale(1);
+            }
+        }
     </style>
+    <!-- Quota Modal -->
+    <div class="modal fade" id="quotaModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content border-0 shadow">
+                <div class="modal-header border-0 pb-0">
+                    <h5 class="modal-title fw-bold">
+                        <i class="fas fa-tachometer-alt me-2 text-primary"></i>Usage & Limits
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body pt-3" id="quota-modal-body">
+                    <div class="text-center py-4">
+                        <div class="spinner-border text-primary spinner-border-sm me-2" role="status"></div>
+                        <span class="text-muted">Fetching latest usage data...</span>
+                    </div>
+                </div>
+                <div class="modal-footer border-0 pt-0">
+                    <small class="text-muted w-100 text-center">Limits are based on your current workspace plan.</small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function fetchQuotas() {
+            const modalElement = document.getElementById('quotaModal');
+            let modal = bootstrap.Modal.getInstance(modalElement);
+            if (!modal) {
+                modal = new bootstrap.Modal(modalElement);
+            }
+            modal.show();
+
+            const socket = typeof getCurrentSocket === 'function' ? getCurrentSocket() : null;
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ 'command': 'get_quotas' }));
+            } else {
+                document.getElementById('quota-modal-body').innerHTML =
+                    '<div class="alert alert-warning py-2 mb-0">Chat disconnected. Reconnecting...</div>';
+            }
+        }
+
+        function updateQuotaUI(quotas) {
+            const container = document.getElementById('quota-modal-body');
+            if (!container) return;
+
+            container.innerHTML = '';
+
+            const keys = Object.keys(quotas);
+            keys.forEach(key => {
+                const q = quotas[key];
+                const pct = Math.min((q.used / q.limit) * 100, 100);
+
+                const colorMap = {
+                    'green': 'success',
+                    'yellow': 'warning',
+                    'orange': 'warning',
+                    'red': 'danger'
+                };
+                const bsColor = colorMap[q.color] || 'primary';
+
+                const card = document.createElement('div');
+                card.className = `quota-card ${q.status}`;
+                card.innerHTML = `
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                        <span class="fw-bold text-dark">${q.name}</span>
+                        <span class="badge bg-${bsColor}-subtle text-${bsColor} border border-${bsColor}-subtle">
+                            ${q.status.toUpperCase()}
+                        </span>
+                    </div>
+                    <div class="quota-progress">
+                        <div class="quota-progress-bar bg-${bsColor}" style="width: ${pct}%"></div>
+                    </div>
+                    <div class="d-flex justify-content-between x-small text-muted mt-1" style="font-size: 0.75rem;">
+                        <span>Used: <strong>${q.used}</strong> / ${q.limit} ${q.unit}</span>
+                        <span>Resets: ${q.reset}</span>
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+
+            if (keys.length === 0) {
+                container.innerHTML = '<div class="text-center py-4 text-muted">No quota information available.</div>';
+            }
+        }
+    </script>
 </body>
 
 </html>

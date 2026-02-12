@@ -1,0 +1,1 @@
+"""Travel app migrations init"""

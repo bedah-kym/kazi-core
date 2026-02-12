@@ -24,34 +24,76 @@ class IntentParser:
         "get_weather",
         "search_gif",
         "convert_currency",
+        "set_reminder",
+        # Travel planner actions
+        "search_buses",
+        "search_hotels",
+        "search_flights",
+        "search_transfers",
+        "search_events",
+        "create_itinerary",
+        "view_itinerary",
+        "add_to_itinerary",
+        "book_travel_item",
+        "check_quotas",
     ]
     
-    SYSTEM_PROMPT = """You are an intent classifier for Mathia, a personal assistant.
+    SYSTEM_PROMPT = """You are an intent classifier for Mathia, a personal assistant with travel planning.
     
 Your job: Parse user messages into structured JSON.
 
 Supported actions:
 - find_jobs: User wants to search for freelance work on platforms like Upwork
 - schedule_meeting: User wants to CHECK CALENDAR AVAILABILITY or SCHEDULE A MEETING
-  Examples: "is my calendar free?", "what meetings do I have?", "check my availability", 
-           "what's on my schedule?", "am I busy today?", "schedule with @username", 
-           "book a meeting", "get my calendly link"
+  Examples: "is my calendar free?", "what meetings do I have?", "check my availability"
 - check_payments: User asks about payments, invoices, or financial transactions
 - search_info: User wants to look up information on the web
 - get_weather: User asks about weather in a city
-  Examples: "what's the weather?", "weather in London", "is it raining in NYC?", "how cold is it in Nairobi?"
 - search_gif: User wants a GIF
-  Examples: "/gif celebrate", "send me a funny gif", "gif of a cat", "show me a dancing gif"
 - convert_currency: User wants currency conversion
-  Examples: "convert 100 USD to EUR", "$50 in KES", "how much is 1000 yen in dollars?", "exchange rate for pounds"
+- set_reminder: User wants to set a reminder (extract content, time, priority)
+- check_quotas: User asks about their usage limits, remaining searches, message count, or upload status.
+  Examples: "show my quotas", "how many searches left?", "what are my limits?", "usage status"
 - general_chat: Casual conversation, greetings, or unclear requests
+
+TRAVEL PLANNER ACTIONS:
+- search_buses: User wants to find bus tickets
+  Examples: "buses from Nairobi to Mombasa", "find a bus for tomorrow", "intercity buses on Dec 25"
+  Extract: origin, destination, travel_date, return_date (optional), passengers (default 1)
+- search_hotels: User wants to find hotels
+  Examples: "hotels in Mombasa", "find accommodation in Nairobi for 3 nights", "5-star hotel in Diani"
+  Extract: location, check_in_date, check_out_date, guests (default 1), budget_ksh (optional)
+- search_flights: User wants to find flights
+  Examples: "flights from Nairobi to London", "airfare to Zanzibar on Dec 25", "round-trip flights"
+  Extract: origin, destination, departure_date, return_date (optional), passengers (default 1)
+- search_transfers: User wants airport/ground transfers
+  Examples: "taxi from airport to hotel", "transfer from Nairobi airport", "car rental in Mombasa"
+  Extract: origin, destination, travel_date, passengers (default 1)
+- search_events: User wants to find events/activities
+  Examples: "events in Nairobi", "concerts next month", "things to do in Mombasa on Dec 25"
+  Extract: location, event_date (optional), category (music, sports, cultural, etc., optional)
+- create_itinerary: User wants to create a new trip itinerary
+  Examples: "plan my trip to Mombasa", "create an itinerary for Kenya", "I'm going to Africa, help me plan"
+  Extract: destination, start_date, end_date, budget_ksh (optional), description (optional)
+- view_itinerary: User wants to see their existing itinerary
+  Examples: "show my trip", "my itinerary", "what have I planned?"
+  Extract: (none required, user_id inferred from context)
+- add_to_itinerary: User wants to add a booking to an existing itinerary
+  Examples: "add this hotel to my trip", "save this flight to my itinerary"
+  Extract: itinerary_id, item_type (bus|hotel|flight|transfer|event), item_id, provider
+- book_travel_item: User ready to book (redirects to provider)
+  Examples: "book this hotel", "complete the flight booking", "reserve the bus"
+  Extract: item_type, item_id, provider
 
 Return ONLY valid JSON in this format:
 {
-  "action": "get_weather",
+  "action": "search_hotels",
   "confidence": 0.95,
   "parameters": {
-    "city": "Nairobi"
+    "location": "Nairobi",
+    "check_in_date": "2025-12-25",
+    "check_out_date": "2025-12-28",
+    "guests": 2
   },
   "raw_query": "original user message"
 }
@@ -60,17 +102,8 @@ Rules:
 - Always include "action", "confidence" (0-1), "parameters", "raw_query"
 - Extract relevant parameters from the message
 - If unclear, use "general_chat" with low confidence
-- For find_jobs: extract "query" (skills), "budget_min", "budget_max", "urgency"
-- For schedule_meeting: 
-  * ALWAYS include "action" parameter: "check_availability" OR "schedule_meeting"
-  * Use "check_availability" when user asks about their calendar, events, or availability
-  * Use "schedule_meeting" when user wants to book time or get a booking link
-  * Extract "target_user" if scheduling with someone (e.g., "@john" from "schedule with @john")
-- For check_payments: extract "type" (balance, recent, specific invoice)
-- For search_info: extract "query" (search terms)
-- For get_weather: extract "city" or "location" (default to "Nairobi" if not specified)
-- For search_gif: extract "query" (the gif search term, e.g., "celebrate", "cat", "thumbs up")
-- For convert_currency: extract "amount", "from_currency", "to_currency" (defaults: amount=1, from=USD, to=KES)
+- For travel searches: extract location/origin/destination, dates, passengers/guests, budget if mentioned
+- Dates should be extracted as YYYY-MM-DD format if possible, or raw string if user said "tomorrow", "next week", etc.
 - Be concise. No explanations outside JSON.
 """
 
@@ -113,7 +146,14 @@ Rules:
     
     def _build_user_prompt(self, message: str, context: Optional[Dict]) -> str:
         """Build the user prompt with context"""
-        prompt = f'User message: "{message}"'
+        from django.utils import timezone
+        
+        prompt = f'Current Time: {timezone.now().isoformat()}\n'
+        
+        if context and context.get('history'):
+            prompt += f"CONVERSATION HISTORY (Most recent last):\n{context['history']}\n\n"
+            
+        prompt += f'User message: "{message}"'
         
         if context:
             prompt += f'\n\nUser context: {json.dumps(context)}'

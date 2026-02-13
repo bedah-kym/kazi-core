@@ -45,4 +45,4 @@ USER django
 ENTRYPOINT ["/app/entrypoint.sh"]
 
 # Default command for platforms like Railway (can be overridden)
-CMD ["sh", "-c", "gunicorn Backend.asgi:application -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT:-8000} --workers 4"]
+CMD ["sh", "-c", "gunicorn Backend.asgi:application -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT:-8000} --workers ${WEB_CONCURRENCY:-1} --timeout ${GUNICORN_TIMEOUT:-120}"]

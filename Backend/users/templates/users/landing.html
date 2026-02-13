@@ -272,12 +272,29 @@
             color: #000;
         }
 
+        .testimonials-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 24px;
+            margin-top: 40px;
+        }
+
         footer {
             border-top: 1px solid var(--notion-border);
             padding: 80px 0;
             text-align: center;
             font-size: 14px;
             color: rgba(55, 53, 47, 0.5);
+        }
+
+        @media (max-width: 1100px) {
+            .pillar-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .testimonials-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
         }
 
         @media (max-width: 900px) {
@@ -291,6 +308,81 @@
 
             h1 {
                 font-size: 42px;
+            }
+
+            .section {
+                margin-bottom: 90px;
+            }
+
+            .container {
+                padding: 110px 20px 50px;
+            }
+        }
+
+        @media (max-width: 700px) {
+            nav {
+                height: auto;
+                padding: 10px 0;
+            }
+
+            .nav-container {
+                flex-wrap: wrap;
+                gap: 12px;
+            }
+
+            .nav-actions {
+                flex-wrap: wrap;
+                gap: 8px;
+                width: 100%;
+                justify-content: flex-start;
+            }
+
+            .btn {
+                font-size: 13px;
+                padding: 7px 10px;
+            }
+
+            .container {
+                padding: 100px 18px 40px;
+            }
+
+            h1 {
+                font-size: 34px;
+            }
+
+            .hero-subtitle {
+                font-size: 18px;
+            }
+
+            h2 {
+                font-size: 30px;
+            }
+
+            .pillar-block {
+                padding: 18px;
+            }
+
+            .use-case-card {
+                padding: 24px;
+            }
+
+            .workflow-section {
+                padding: 36px 24px;
+            }
+
+            .workflow-diagram {
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+                align-items: center;
+            }
+
+            .workflow-arrow {
+                display: none;
+            }
+
+            .testimonials-grid {
+                grid-template-columns: 1fr;
             }
         }
     </style>
@@ -317,7 +409,7 @@
         <div class="section hero">
             <h1>The Operating System<br>for One-Person Empires.</h1>
             <p class="hero-subtitle">Workflows, Finance, Socials, Travel, and Documents.<br>One unified chat interface.
-                No complex setup.</p>
+                For SMEs and growing teams: cut ops overhead and move faster.</p>
 
             <div style="text-align: center; margin-bottom: 60px;">
                 <a href="{% url 'users:register' %}" class="btn btn-primary"
@@ -509,7 +601,7 @@
         <!-- Community / Testimonials -->
         <div class="section">
             <h2>Trusted by Builders.</h2>
-            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; margin-top: 40px;">
+            <div class="testimonials-grid">
                 <!-- User 1 -->
                 <div
                     style="padding: 24px; border: 1px solid var(--notion-border); border-radius: 4px; background: #fff;">

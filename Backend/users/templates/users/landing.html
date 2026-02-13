@@ -272,6 +272,192 @@
             color: #000;
         }
 
+        .eyebrow {
+            text-transform: uppercase;
+            letter-spacing: 0.14em;
+            color: rgba(55, 53, 47, 0.55);
+            font-size: 11px;
+            font-weight: 600;
+            margin-bottom: 16px;
+        }
+
+        .impact-section {
+            border: 1px solid var(--notion-border);
+            border-radius: 12px;
+            padding: 48px;
+            background: #fff;
+        }
+
+        .impact-header {
+            max-width: 720px;
+            margin: 0 auto 36px;
+            text-align: center;
+        }
+
+        .impact-subtitle {
+            font-size: 18px;
+            color: rgba(55, 53, 47, 0.7);
+        }
+
+        .impact-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            margin-bottom: 28px;
+        }
+
+        .impact-card {
+            border: 1px solid var(--notion-border);
+            border-radius: 10px;
+            padding: 20px;
+            background: var(--notion-gray);
+        }
+
+        .impact-card h3 {
+            font-size: 18px;
+            margin-bottom: 10px;
+        }
+
+        .impact-card p {
+            font-size: 15px;
+            color: rgba(55, 53, 47, 0.7);
+        }
+
+        .impact-icon {
+            font-size: 20px;
+            margin-bottom: 10px;
+        }
+
+        .impact-icon i {
+            color: #000;
+        }
+
+        .impact-checklist {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 14px;
+            border-top: 1px solid var(--notion-border);
+            padding-top: 24px;
+            font-size: 14px;
+            color: rgba(55, 53, 47, 0.75);
+        }
+
+        .impact-check {
+            display: flex;
+            gap: 8px;
+            align-items: flex-start;
+        }
+
+        .impact-check span {
+            font-weight: 600;
+            color: #000;
+        }
+
+        .impact-note {
+            margin-top: 20px;
+            font-size: 13px;
+            color: rgba(55, 53, 47, 0.6);
+            text-align: center;
+        }
+
+        .compare-section {
+            border: 1px solid var(--notion-border);
+            border-radius: 12px;
+            padding: 46px;
+            background: #fff;
+        }
+
+        .compare-header {
+            text-align: center;
+            margin-bottom: 26px;
+        }
+
+        .compare-subtitle {
+            font-size: 16px;
+            color: rgba(55, 53, 47, 0.7);
+        }
+
+        .compare-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 20px;
+        }
+
+        .compare-card {
+            border: 1px solid var(--notion-border);
+            border-radius: 10px;
+            padding: 22px;
+            background: var(--notion-gray);
+        }
+
+        .compare-title {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 12px;
+        }
+
+        .compare-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            display: grid;
+            gap: 10px;
+            color: rgba(55, 53, 47, 0.75);
+            font-size: 15px;
+        }
+
+        .how-section {
+            text-align: center;
+        }
+
+        .how-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 24px;
+            margin-top: 30px;
+        }
+
+        .how-card {
+            border: 1px solid var(--notion-border);
+            border-radius: 12px;
+            padding: 28px 24px;
+            background: #fff;
+            text-align: left;
+        }
+
+        .how-step {
+            font-weight: 700;
+            font-size: 12px;
+            letter-spacing: 0.12em;
+            margin-bottom: 14px;
+            color: rgba(55, 53, 47, 0.55);
+        }
+
+        .how-card p {
+            color: rgba(55, 53, 47, 0.7);
+        }
+
+        .cta-section {
+            border: 1px solid var(--notion-border);
+            border-radius: 16px;
+            padding: 50px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 30px;
+            background: var(--notion-gray);
+        }
+
+        .cta-section h2 {
+            margin-bottom: 12px;
+        }
+
+        .cta-actions {
+            display: flex;
+            gap: 14px;
+            flex-wrap: wrap;
+        }
+
         .testimonials-grid {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
@@ -289,6 +475,18 @@
 
         @media (max-width: 1100px) {
             .pillar-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .impact-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .impact-checklist {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .how-grid {
                 grid-template-columns: repeat(2, 1fr);
             }
 
@@ -358,6 +556,24 @@
                 font-size: 30px;
             }
 
+            .impact-section {
+                padding: 32px;
+            }
+
+            .compare-section {
+                padding: 32px;
+            }
+
+            .compare-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .impact-grid,
+            .impact-checklist,
+            .how-grid {
+                grid-template-columns: 1fr;
+            }
+
             .pillar-block {
                 padding: 18px;
             }
@@ -368,6 +584,12 @@
 
             .workflow-section {
                 padding: 36px 24px;
+            }
+
+            .cta-section {
+                padding: 32px;
+                flex-direction: column;
+                align-items: flex-start;
             }
 
             .workflow-diagram {
@@ -396,6 +618,7 @@
                 <span style="font-size: 20px;">🤖</span> Mathia.OS
             </a>
             <div class="nav-actions">
+                <a href="#impact" class="btn btn-text">Impact</a>
                 <a href="#use-cases" class="btn btn-text">Use Cases</a>
                 <a href="#workflows" class="btn btn-text">Workflows</a>
                 <a href="{% url 'users:login' %}" class="btn btn-text">Log in</a>
@@ -407,9 +630,10 @@
     <div class="container">
         <!-- Hero -->
         <div class="section hero">
+            <div class="eyebrow">Built for SMEs and lean teams</div>
             <h1>The Operating System<br>for One-Person Empires.</h1>
-            <p class="hero-subtitle">Workflows, Finance, Socials, Travel, and Documents.<br>One unified chat interface.
-                For SMEs and growing teams: cut ops overhead and move faster.</p>
+            <p class="hero-subtitle">Workflows, finance, social growth, travel, and documents - in one command center.
+                Cut handoffs, keep cash flow visible, and stay ahead of client work.</p>
 
             <div style="text-align: center; margin-bottom: 60px;">
                 <a href="{% url 'users:register' %}" class="btn btn-primary"
@@ -421,6 +645,42 @@
             <img src="{% static 'images/doodle-workflow.png' %}"
                 style="max-width: 100%; height: 300px; object-fit: contain; mix-blend-mode: multiply;"
                 alt="Workflow Doodle">
+        </div>
+
+        <!-- Impact -->
+        <div class="section impact-section" id="impact">
+            <div class="impact-header">
+                <div class="eyebrow">Business Impact</div>
+                <h2>Make operations feel lighter in week one.</h2>
+                <p class="impact-subtitle">Mathia replaces scattered tools with a single operating system for finance,
+                    client work, and growth. You get clarity, speed, and fewer bottlenecks.</p>
+            </div>
+
+            <div class="impact-grid">
+                <div class="impact-card">
+                    <div class="impact-icon"><i class="fas fa-cogs"></i></div>
+                    <h3>Run the back office</h3>
+                    <p>Automate invoices, reminders, and follow-ups without growing headcount.</p>
+                </div>
+                <div class="impact-card">
+                    <div class="impact-icon"><i class="fas fa-chart-line"></i></div>
+                    <h3>See the business</h3>
+                    <p>Track growth, cash flow, and performance in one place, not six tabs.</p>
+                </div>
+                <div class="impact-card">
+                    <div class="impact-icon"><i class="fas fa-handshake"></i></div>
+                    <h3>Deliver client-ready work</h3>
+                    <p>Ship itineraries, reports, and updates that look like a larger team built them.</p>
+                </div>
+            </div>
+
+            <div class="impact-checklist">
+                <div class="impact-check"><span>✓</span>Fewer handoffs between tools</div>
+                <div class="impact-check"><span>✓</span>One ledger for every transaction</div>
+                <div class="impact-check"><span>✓</span>Automations that match how your team works</div>
+            </div>
+
+            <div class="impact-note">Start small, prove impact, then scale the workflows that pay off.</div>
         </div>
 
         <!-- 6 Pillars Grid -->
@@ -495,6 +755,58 @@
                     <p class="pillar-desc">Deep <strong>Calendly</strong> integration. Brand building tools for
                         creators. Own your schedule.</p>
                     <img src="{% static 'images/doodle-calendar.png' %}" class="pillar-image" alt="Calendar">
+                </div>
+            </div>
+        </div>
+
+        <!-- Comparison -->
+        <div class="section compare-section">
+            <div class="compare-header">
+                <div class="eyebrow">What changes</div>
+                <h2>From tool sprawl to one operating system.</h2>
+                <p class="compare-subtitle">Keep your stack, stop the context switching.</p>
+            </div>
+            <div class="compare-grid">
+                <div class="compare-card">
+                    <div class="compare-title">Before Mathia</div>
+                    <ul class="compare-list">
+                        <li>Ops spread across docs, chats, and spreadsheets</li>
+                        <li>Unclear ownership for client follow ups</li>
+                        <li>Finance data lives in too many places</li>
+                        <li>Busywork slows delivery and growth</li>
+                    </ul>
+                </div>
+                <div class="compare-card">
+                    <div class="compare-title">With Mathia</div>
+                    <ul class="compare-list">
+                        <li>One system for workflows, finance, and delivery</li>
+                        <li>Automations keep tasks moving without reminders</li>
+                        <li>Ledger view ties revenue to operations</li>
+                        <li>Teams ship client work with less overhead</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- How It Works -->
+        <div class="section how-section" id="how">
+            <div class="eyebrow">How it works</div>
+            <h2>From intent to execution in three steps.</h2>
+            <div class="how-grid">
+                <div class="how-card">
+                    <div class="how-step">STEP 01</div>
+                    <h3>Connect your stack</h3>
+                    <p>Plug in your existing tools so Mathia knows where your work already lives.</p>
+                </div>
+                <div class="how-card">
+                    <div class="how-step">STEP 02</div>
+                    <h3>Describe the workflow</h3>
+                    <p>Use plain language to create automations that match your real processes.</p>
+                </div>
+                <div class="how-card">
+                    <div class="how-step">STEP 03</div>
+                    <h3>Run and refine</h3>
+                    <p>Track outcomes, keep your ledger clean, and scale what works.</p>
                 </div>
             </div>
         </div>
@@ -600,7 +912,7 @@
 
         <!-- Community / Testimonials -->
         <div class="section">
-            <h2>Trusted by Builders.</h2>
+            <h2>Trusted by teams who run the business.</h2>
             <div class="testimonials-grid">
                 <!-- User 1 -->
                 <div
@@ -644,6 +956,22 @@
                     <p style="font-size: 14px; margin: 0; color: #333;">"Finally, something that connects my weird stack
                         of Quickbooks, Notion, and Calendly without breaking."</p>
                 </div>
+            </div>
+        </div>
+
+        <div class="section cta-section">
+            <div>
+                <div class="eyebrow">Ready to move faster?</div>
+                <h2>Give your team an operating system.</h2>
+                <p class="hero-subtitle" style="text-align: left; margin: 0;">
+                    Start free, prove the impact, then scale with confidence.
+                </p>
+            </div>
+            <div class="cta-actions">
+                <a href="{% url 'users:register' %}" class="btn btn-primary"
+                    style="font-size: 16px; padding: 12px 28px;">Get Access</a>
+                <a href="#impact" class="btn btn-text"
+                    style="font-size: 16px; padding: 12px 28px; text-decoration: underline;">See Impact</a>
             </div>
         </div>
 

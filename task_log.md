@@ -20,6 +20,26 @@
 
 ---
 
+## Current Session: Feb 3, 2026 - GPT-5
+**Objective:** Fix chat reply continuity, dialog state, email/travel errors, reminders delivery, Temporal worker stability, and OCI deployment prep.
+
+### Completed
+1. Added reply threading for chat messages (parent FK, WS payload `reply_to`, JSON serialization, UI state).
+2. Implemented dialog state cache in MCP router to fill missing params across connectors (per user+room, 6h TTL).
+3. Hardened LLM JSON extraction to tolerate malformed outputs (fallback literal_eval parsing).
+4. Amadeus fixes: better error surfacing, date validation, fallback on provider errors; removed default `nonStop` param to stop 400s.
+5. Booking edge case: `book_travel_item` now extracts numeric IDs from text and returns a clear prompt if missing.
+6. Reminders: real delivery via WhatsApp + email with fallback, rate limit 10 sends / 12h, and error logging.
+7. Temporal worker: fixed compose command path, stabilized worker start; moved to unsandboxed workflow runner.
+8. OCI deployment prep: added `docker-compose.oci.yml`, `scripts/oci-bootstrap.sh`, and `docs/deploy/oci.md` guide.
+
+### Notes
+- `docker-compose.yml` updated for Temporal worker to use `/app/Backend/manage.py`.
+- Reply threading migration added: `Backend/chatbot/migrations/0011_message_parent.py`.
+- Invoice flow: new `InvoiceConnector` to create IntaSend payment link and optionally email via Mailgun.
+
+---
+
 ## Current Session: Jan 24, 2026 - GPT-5
 **Objective:** Harden chat access and uploads, align wallet source of truth, add R2 storage, and tighten encryption.
 
@@ -134,3 +154,12 @@
 
 ---
 *Created by Antigravity (AI Assistant) at the suggestion of User.*
+
+---
+
+## 2026-02-04 — Trial Funnel & Marketing Pages
+- **Built invite-only trial funnel** with questionnaire, staff review, superuser invite sending, and unique one-time activation links (30-day window enforced).
+- **New marketing/value pages**: Why Mathia, Playbooks, Pricing, Trust, How It Works, Workflow Library, Updates — all CTAs now point to the trial request form.
+- **Trial enforcement**: middleware downgrades expired trials to Free and prompts upgrade; workspace tracks trial start/end dates.
+- **Ops & reporting**: admin screens for TrialApplications/Invites; daily Celery beat job emails a batched summary to superusers and `bedankimani860@gmail.com`.
+- **Mobile/UX fixes**: chat typing indicator gap removed; mobile header actions now accessible via dropdown; landing page mobile nav added.

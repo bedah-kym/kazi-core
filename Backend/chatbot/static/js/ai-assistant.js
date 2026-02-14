@@ -88,33 +88,94 @@ class MathiaAssistant {
     // QUICK PROMPTS
     // ============================================
     setupQuickPrompts() {
-        // Check if quick prompts already exist
         if (document.querySelector('.mathia-quick-prompts')) return;
+
+        const ACTIONS = [
+            {
+                id: 'invoice',
+                label: 'Send Invoice',
+                icon: 'fas fa-file-invoice-dollar',
+                fields: [
+                    { name: 'amount', label: 'Amount (KES)', type: 'number', placeholder: '1500', required: true },
+                    { name: 'payer', label: 'Payer Email', type: 'email', placeholder: 'payer@example.com', required: false },
+                    { name: 'desc', label: 'Description', type: 'text', placeholder: 'Design work', required: true },
+                ],
+                buildPrompt: (v) => `@mathia create an invoice for ${v.amount || '0'} KES ${v.payer ? 'to ' + v.payer : ''} for ${v.desc || 'services'} and email it`
+            },
+            {
+                id: 'balance',
+                label: 'Balance & Txns',
+                icon: 'fas fa-wallet',
+                fields: [],
+                buildPrompt: () => `@mathia show my balance and last 3 transactions`
+            },
+            {
+                id: 'reminder',
+                label: 'Set Reminder',
+                icon: 'fas fa-bell',
+                fields: [
+                    { name: 'content', label: 'Reminder', type: 'text', placeholder: 'Follow up with client', required: true },
+                    { name: 'time', label: 'When', type: 'text', placeholder: 'today 5pm', required: true },
+                    { name: 'channel', label: 'Channel', type: 'select', options: ['email', 'whatsapp', 'both'], required: true, default: 'email' },
+                ],
+                buildPrompt: (v) => `@mathia set a reminder to "${v.content}" at ${v.time} via ${v.channel || 'email'}`
+            },
+            {
+                id: 'flights',
+                label: 'Find Flights',
+                icon: 'fas fa-plane-departure',
+                fields: [
+                    { name: 'origin', label: 'From', type: 'text', placeholder: 'Nairobi', required: true },
+                    { name: 'dest', label: 'To', type: 'text', placeholder: 'London', required: true },
+                    { name: 'date', label: 'Date', type: 'date', placeholder: '', required: true },
+                    { name: 'pax', label: 'Passengers', type: 'number', placeholder: '1', required: false },
+                ],
+                buildPrompt: (v) => `@mathia find flights from ${v.origin} to ${v.dest} on ${v.date} for ${v.pax || 1} passenger${(v.pax||1)>1?'s':''}`
+            },
+            {
+                id: 'email',
+                label: 'Send Email',
+                icon: 'fas fa-envelope',
+                fields: [
+                    { name: 'to', label: 'To', type: 'email', placeholder: 'user@example.com', required: true },
+                    { name: 'subject', label: 'Subject', type: 'text', placeholder: 'Project Update', required: true },
+                    { name: 'body', label: 'Body', type: 'textarea', placeholder: 'Here is the latest status...', required: true },
+                ],
+                buildPrompt: (v) => `@mathia send an email to ${v.to} subject ${v.subject} body ${v.body}`
+            },
+            {
+                id: 'withdraw_check',
+                label: 'Safe Withdraw Check',
+                icon: 'fas fa-shield-alt',
+                fields: [
+                    { name: 'phone', label: 'Phone', type: 'text', placeholder: '+254700000000', required: true },
+                    { name: 'amount', label: 'Amount', type: 'number', placeholder: '3000', required: true },
+                ],
+                buildPrompt: (v) => `@mathia check withdraw policy for ${v.phone} amount ${v.amount}`
+            },
+            {
+                id: 'whatsapp',
+                label: 'Send WhatsApp',
+                icon: 'fab fa-whatsapp',
+                fields: [
+                    { name: 'phone', label: 'Phone', type: 'text', placeholder: 'whatsapp:+2547...', required: true },
+                    { name: 'message', label: 'Message', type: 'textarea', placeholder: 'Hello, quick update...', required: true },
+                ],
+                buildPrompt: (v) => `@mathia send a whatsapp to ${v.phone} saying ${v.message}`
+            },
+        ];
 
         const promptsContainer = document.createElement('div');
         promptsContainer.className = 'mathia-quick-prompts';
         promptsContainer.innerHTML = `
             <div class="quick-prompts-header">
                 <i class="fas fa-robot"></i>
-                <span>Quick AI Actions</span>
+                <span>Quick Actions (live)</span>
                 <button class="btn-close-prompts" title="Hide">
                     <i class="fas fa-times"></i>
                 </button>
             </div>
-            <div class="quick-prompts-list">
-                <button class="quick-prompt-btn" data-prompt="Summarize the last few messages">
-                    <i class="fas fa-compress"></i> Summarize Chat
-                </button>
-                <button class="quick-prompt-btn" data-prompt="Help me understand this topic">
-                    <i class="fas fa-question-circle"></i> Explain
-                </button>
-                <button class="quick-prompt-btn" data-prompt="What are the key points from this conversation?">
-                    <i class="fas fa-list"></i> Key Points
-                </button>
-                <button class="quick-prompt-btn" data-prompt="Can you help me with">
-                    <i class="fas fa-hands-helping"></i> Get Help
-                </button>
-            </div>
+            <div class="quick-prompts-list"></div>
         `;
 
         // Insert before chat history
@@ -123,10 +184,18 @@ class MathiaAssistant {
             chatContainer.insertBefore(promptsContainer, this.chatHistory);
         }
 
-        // Hide by default (we use CSS transitions)
+        const listEl = promptsContainer.querySelector('.quick-prompts-list');
+        ACTIONS.forEach(action => {
+            const btn = document.createElement('button');
+            btn.className = 'quick-prompt-btn';
+            btn.dataset.actionId = action.id;
+            btn.innerHTML = `<i class="${action.icon}"></i> ${action.label}`;
+            btn.addEventListener('click', () => this.openActionForm(action, promptsContainer));
+            listEl.appendChild(btn);
+        });
+
         promptsContainer.classList.remove('active');
 
-        // Toggle quick prompts visibility when @mathia is typed
         this.messageInput.addEventListener('input', (e) => {
             if (e.target.value.toLowerCase().includes('@mathia')) {
                 promptsContainer.classList.add('active');
@@ -135,21 +204,59 @@ class MathiaAssistant {
             }
         });
 
-
-        // Handle prompt clicks
-        promptsContainer.querySelectorAll('.quick-prompt-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                const prompt = btn.dataset.prompt;
-                this.sendToMathia(prompt);
-                promptsContainer.classList.remove('active');
-
-            });
-        });
-
-        // Close button
         promptsContainer.querySelector('.btn-close-prompts').addEventListener('click', () => {
             promptsContainer.classList.remove('active');
         });
+    }
+
+    openActionForm(action, container) {
+        const existing = document.querySelector('.mathia-action-modal');
+        if (existing) existing.remove();
+
+        const modal = document.createElement('div');
+        modal.className = 'mathia-action-modal';
+        const fieldsHtml = (action.fields || []).map(f => {
+            const required = f.required ? 'required' : '';
+            if (f.type === 'select') {
+                const opts = (f.options || []).map(o => `<option value="${o}" ${f.default===o?'selected':''}>${o}</option>`).join('');
+                return `<label>${f.label}<select name="${f.name}" ${required}>${opts}</select></label>`;
+            }
+            if (f.type === 'textarea') {
+                return `<label>${f.label}<textarea name="${f.name}" placeholder="${f.placeholder||''}" ${required}></textarea></label>`;
+            }
+            return `<label>${f.label}<input name="${f.name}" type="${f.type||'text'}" placeholder="${f.placeholder||''}" value="${f.default||''}" ${required}/></label>`;
+        }).join('');
+
+        modal.innerHTML = `
+            <div class="mathia-action-modal-content">
+                <div class="modal-header">
+                    <span>${action.label}</span>
+                    <button class="close-modal">&times;</button>
+                </div>
+                <form class="mathia-action-form">
+                    ${fieldsHtml || '<p>No inputs needed.</p>'}
+                    <div class="modal-actions">
+                        <button type="submit" class="btn-primary">Run</button>
+                        <button type="button" class="btn-secondary close-modal">Cancel</button>
+                    </div>
+                </form>
+            </div>
+        `;
+
+        modal.querySelectorAll('.close-modal').forEach(btn => btn.addEventListener('click', () => modal.remove()));
+
+        modal.querySelector('form').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            const values = {};
+            formData.forEach((v, k) => values[k] = v.toString().trim());
+            const prompt = action.buildPrompt(values);
+            this.sendToMathia(prompt);
+            modal.remove();
+            container.classList.remove('active');
+        });
+
+        document.body.appendChild(modal);
     }
 
     sendToMathia(message) {

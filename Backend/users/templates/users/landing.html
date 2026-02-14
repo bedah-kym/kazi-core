@@ -32,13 +32,15 @@
         :root {
             /* Notion Colors */
             --notion-bg: #FFFFFF;
-            --notion-text: #37352f;
+            --notion-text: #1d1c1a;
             --notion-gray: #F7F7F5;
             --notion-border: #E9E9E7;
             --notion-selection: #2eaadc33;
 
+            --nav-height: 64px;
             --spacing-base: 20px;
             --max-width: 1080px;
+            --shadow-card: 0 10px 30px rgba(0, 0, 0, 0.08);
 
             --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, "Apple Color Emoji", Arial, sans-serif;
 
@@ -54,6 +56,7 @@
             background: var(--notion-bg);
             line-height: 1.5;
             -webkit-font-smoothing: antialiased;
+            padding-top: var(--nav-height);
         }
 
         /* Nav */
@@ -66,7 +69,7 @@
             backdrop-filter: blur(10px);
             border-bottom: 1px solid var(--notion-border);
             z-index: 1000;
-            height: 54px;
+            height: var(--nav-height);
             display: flex;
             align-items: center;
         }
@@ -97,6 +100,23 @@
             align-items: center;
         }
 
+        .mobile-toggle {
+            display: none;
+            width: 44px;
+            height: 44px;
+            border: 1px solid var(--notion-border);
+            border-radius: 8px;
+            background: #fff;
+            align-items: center;
+            justify-content: center;
+            color: #111;
+        }
+
+        .mobile-toggle:focus-visible {
+            outline: 2px solid #000;
+            outline-offset: 2px;
+        }
+
         .btn {
             padding: 8px 14px;
             border-radius: 4px;
@@ -105,6 +125,10 @@
             transition: background 0.1s, transform var(--motion-fast) var(--motion-ease),
                 box-shadow var(--motion-fast) var(--motion-ease);
             font-weight: 500;
+            min-height: 44px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
         }
 
         .btn-text {
@@ -171,7 +195,7 @@
         /* Typography */
         h1 {
             font-weight: 700;
-            font-size: 64px;
+            font-size: clamp(36px, 6vw, 64px);
             line-height: 1.05;
             letter-spacing: -0.03em;
             margin-bottom: 24px;
@@ -180,7 +204,7 @@
         }
 
         .hero-subtitle {
-            font-size: 24px;
+            font-size: clamp(18px, 3vw, 24px);
             line-height: 1.5;
             color: #37352f;
             margin-bottom: 32px;
@@ -192,21 +216,21 @@
 
         h2 {
             font-weight: 600;
-            font-size: 42px;
+            font-size: clamp(28px, 4vw, 42px);
             margin-bottom: 40px;
             letter-spacing: -0.02em;
         }
 
         h3 {
             font-weight: 600;
-            font-size: 24px;
+            font-size: clamp(18px, 3vw, 24px);
             margin-bottom: 12px;
         }
 
         /* Pillars Grid */
         .pillar-grid {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
             gap: 32px;
         }
 
@@ -219,6 +243,7 @@
                 transform var(--motion-base) var(--motion-ease);
             display: flex;
             flex-direction: column;
+            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.02);
         }
 
         .pillar-block:hover {
@@ -234,7 +259,14 @@
         }
 
         .pillar-icon-box {
-            font-size: 24px;
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            background: #f2f2f0;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
         }
 
         .pillar-desc {
@@ -561,16 +593,39 @@
         }
 
         @media (max-width: 900px) {
-            .pillar-grid {
-                grid-template-columns: 1fr;
-            }
-
             .use-cases-grid {
                 grid-template-columns: 1fr;
             }
 
-            h1 {
-                font-size: 42px;
+            .nav-actions {
+                position: fixed;
+                top: var(--nav-height);
+                right: 16px;
+                left: 16px;
+                background: #fff;
+                border: 1px solid var(--notion-border);
+                border-radius: 12px;
+                box-shadow: var(--shadow-card);
+                padding: 12px;
+                flex-direction: column;
+                gap: 8px;
+                display: none;
+            }
+
+            .nav-actions.open {
+                display: flex;
+            }
+
+            .mobile-toggle {
+                display: inline-flex;
+            }
+
+            nav {
+                height: var(--nav-height);
+            }
+
+            .container {
+                padding-top: 90px;
             }
 
             .section {
@@ -680,31 +735,52 @@
     <nav>
         <div class="nav-container">
             <a href="/" class="logo">
-                <span style="font-size: 20px;">🤖</span> Mathia.OS
+                <span style="font-size: 20px;"><i class="fas fa-robot"></i></span> Mathia.OS
             </a>
             <div class="nav-actions">
                 <a href="#impact" class="btn btn-text">Impact</a>
                 <a href="#use-cases" class="btn btn-text">Use Cases</a>
                 <a href="#workflows" class="btn btn-text">Workflows</a>
+                <a href="{% url 'users:pricing' %}" class="btn btn-text">Pricing</a>
                 <a href="{% url 'users:login' %}" class="btn btn-text">Log in</a>
-                <a href="{% url 'users:register' %}" class="btn btn-primary">Get Access</a>
+                <a href="{% url 'users:trial_apply' %}" class="btn btn-primary">Get Access</a>
             </div>
         </div>
     </nav>
 
     <div class="container">
         <!-- Hero -->
-        <div class="section hero reveal stagger">
-            <div class="eyebrow stagger-item">Built for SMEs and lean teams</div>
-            <h1 class="stagger-item">The Operating System<br>for One-Person Empires.</h1>
-            <p class="hero-subtitle stagger-item">Workflows, finance, social growth, travel, and documents - in one command center.
-                Cut handoffs, keep cash flow visible, and stay ahead of client work.</p>
+        <div class="section hero">
+            <div style="display:inline-flex; align-items:center; gap:8px; background:#f1f0ee; border:1px solid var(--notion-border); padding:6px 10px; border-radius:999px; font-size:13px; margin:0 auto 16px; text-align:center;">
+                <span style="font-weight:700;">30-day invite-only trial</span>
+                <span style="color:#666;">Request an invite to unlock full workflows</span>
+            </div>
+            <h1>The Operating System<br>for One-Person Empires.</h1>
+            <p class="hero-subtitle">Workflows, Finance, Socials, Travel, and Documents.<br>One unified chat interface.
+                No complex setup.</p>
 
-            <div class="stagger-item" style="text-align: center; margin-bottom: 60px;">
-                <a href="{% url 'users:register' %}" class="btn btn-primary"
-                    style="font-size: 18px; padding: 12px 32px;">Start Building</a>
+            <div style="text-align: center; margin-bottom: 60px;">
+                <a href="{% url 'users:trial_apply' %}" class="btn btn-primary"
+                    style="font-size: 18px; padding: 12px 32px;">Request Invite</a>
                 <a href="#workflows" class="btn btn-text"
                     style="font-size: 18px; padding: 12px 32px; text-decoration: underline;">See Workflows</a>
+                <div style="font-size: 13px; color:#555; margin-top:10px;">Try Mathia free for 30 days after invite approval.</div>
+            </div>
+
+            <div class="proof-strip"
+                style="display:grid; grid-template-columns: repeat(auto-fit,minmax(180px,1fr)); gap:16px; margin:0 auto 50px; max-width:860px;">
+                <div style="background:#f7f7f5; border:1px solid var(--notion-border); border-radius:10px; padding:14px 16px;">
+                    <div style="font-size:13px; letter-spacing:0.05em; text-transform:uppercase; color:#666;">Time to first workflow</div>
+                    <div style="font-weight:700; font-size:20px;">&lt; 10 minutes</div>
+                </div>
+                <div style="background:#f7f7f5; border:1px solid var(--notion-border); border-radius:10px; padding:14px 16px;">
+                    <div style="font-size:13px; letter-spacing:0.05em; text-transform:uppercase; color:#666;">Retention lift</div>
+                    <div style="font-weight:700; font-size:20px;">+30% from proactive nudges</div>
+                </div>
+                <div style="background:#f7f7f5; border:1px solid var(--notion-border); border-radius:10px; padding:14px 16px;">
+                    <div style="font-size:13px; letter-spacing:0.05em; text-transform:uppercase; color:#666;">Teams using Mathia</div>
+                    <div style="font-weight:700; font-size:20px;">Freelancers -> SMB Ops</div>
+                </div>
             </div>
 
             <img class="stagger-item" src="{% static 'images/doodle-workflow.png' %}"
@@ -758,7 +834,7 @@
                 <!-- Workflow -->
                 <div class="pillar-block stagger-item" style="background: #e3e2e0;"> <!-- Highlighted -->
                     <div class="pillar-header">
-                        <span class="pillar-icon-box">⚡</span>
+                        <span class="pillar-icon-box"><i class="fas fa-bolt"></i></span>
                         <h3>Temporal Workflows</h3>
                     </div>
                     <p class="pillar-desc"><strong>Like n8n, but with words.</strong> Describe a process ("When I get an
@@ -770,7 +846,7 @@
                 <!-- Social -->
                 <div class="pillar-block stagger-item">
                     <div class="pillar-header">
-                        <span class="pillar-icon-box">📢</span>
+                        <span class="pillar-icon-box"><i class="fas fa-share-nodes"></i></span>
                         <h3>Social Growth</h3>
                     </div>
                     <p class="pillar-desc">"Zero to Viral" monitoring. Manage X, LinkedIn, and Instagram. Track growth
@@ -781,7 +857,7 @@
                 <!-- Finance -->
                 <div class="pillar-block stagger-item">
                     <div class="pillar-header">
-                        <span class="pillar-icon-box">💸</span>
+                        <span class="pillar-icon-box"><i class="fas fa-wallet"></i></span>
                         <h3>Finance & Ledger</h3>
                     </div>
                     <p class="pillar-desc">ACID Double-Entry Ledger. Syncs with Quickbooks. Generate invoices and accept
@@ -792,7 +868,7 @@
                 <!-- Docs/Notion -->
                 <div class="pillar-block stagger-item">
                     <div class="pillar-header">
-                        <span class="pillar-icon-box">🧠</span>
+                        <span class="pillar-icon-box"><i class="fas fa-note-sticky"></i></span>
                         <h3>Deep Notion Sync</h3>
                     </div>
                     <p class="pillar-desc">Mathia lives in your knowledge base. Read/Write access to organize tasks,
@@ -803,7 +879,7 @@
                 <!-- Travel -->
                 <div class="pillar-block stagger-item">
                     <div class="pillar-header">
-                        <span class="pillar-icon-box">✈️</span>
+                        <span class="pillar-icon-box"><i class="fas fa-plane-departure"></i></span>
                         <h3>B2B Travel Agent</h3>
                     </div>
                     <p class="pillar-desc">Plan trips for clients. Create detailed itineraries and manage logistics
@@ -814,7 +890,7 @@
                 <!-- Calendar/Identity -->
                 <div class="pillar-block stagger-item">
                     <div class="pillar-header">
-                        <span class="pillar-icon-box">📅</span>
+                        <span class="pillar-icon-box"><i class="fas fa-calendar-check"></i></span>
                         <h3>Calendar & Brand</h3>
                     </div>
                     <p class="pillar-desc">Deep <strong>Calendly</strong> integration. Brand building tools for

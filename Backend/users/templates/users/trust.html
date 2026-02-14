@@ -1,0 +1,97 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trust & Safety</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        :root { --text:#1d1c1a; --muted:#5c5a57; --bg:#fff; --border:#e9e9e7; --accent:#000; --radius:12px; --max:1080px; }
+        body { margin:0; font-family:'Inter', sans-serif; background:var(--bg); color:var(--text); line-height:1.6; }
+        nav { position:sticky; top:0; background:rgba(255,255,255,0.95); backdrop-filter:blur(8px); border-bottom:1px solid var(--border); padding:14px 18px; }
+        nav .row { max-width:var(--max); margin:0 auto; display:flex; justify-content:space-between; align-items:center; gap:12px; }
+        .logo { text-decoration:none; color:var(--text); font-weight:700; display:flex; gap:8px; align-items:center; }
+        .btn { padding:10px 16px; border-radius:10px; text-decoration:none; font-weight:600; border:1px solid transparent; display:inline-flex; align-items:center; justify-content:center; gap:8px; min-height:44px; }
+        .btn-primary { background:var(--accent); color:#fff; }
+        .btn-ghost { border:1px solid var(--border); color:var(--text); }
+        .container { max-width:var(--max); margin:0 auto; padding:40px 22px 80px; }
+        h1 { font-size:clamp(30px,5vw,46px); margin:12px 0; }
+        h2 { font-size:clamp(22px,4vw,30px); margin:22px 0 10px; }
+        .muted { color:var(--muted); }
+        .grid { display:grid; gap:16px; }
+        .cards { grid-template-columns: repeat(auto-fit, minmax(260px,1fr)); }
+        .card { background:#fff; border:1px solid var(--border); border-radius:var(--radius); padding:18px 20px; box-shadow:0 8px 24px rgba(0,0,0,0.05); }
+        ul { padding-left:18px; margin:0; }
+        li { margin-bottom:6px; }
+        .badge { display:inline-flex; align-items:center; gap:6px; padding:6px 10px; border-radius:999px; background:#e0f2fe; color:#075985; font-weight:600; font-size:13px; }
+    </style>
+</head>
+<body>
+    <nav>
+        <div class="row">
+            <a class="logo" href="/"><i class="fas fa-robot"></i> Mathia.OS</a>
+            <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                <a class="btn btn-ghost" href="{% url 'users:pricing' %}">Pricing</a>
+                <a class="btn btn-primary" href="{% url 'users:register' %}">Request Invite</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <span class="badge"><i class="fas fa-shield-heart"></i> Trust first</span>
+        <h1>Built to be helpful, careful, and clear</h1>
+        <p class="muted" style="max-width:780px;">Mathia earns trust by keeping context scoped, letting you opt in, and making every nudge explainable.</p>
+
+        <h2>Safety promises</h2>
+        <div class="grid cards">
+            <div class="card">
+                <h3><i class="fas fa-user-check me-2"></i> You are in control</h3>
+                <ul>
+                    <li>Invite-only access; you choose who joins your workspace.</li>
+                    <li>Per-room consent for sharing context and reminders.</li>
+                    <li>Clear reasons for every proactive nudge.</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3><i class="fas fa-hourglass-half me-2"></i> Short-lived memory</h3>
+                <ul>
+                    <li>Conversation context refreshes regularly to avoid stale or over-shared data.</li>
+                    <li>Each room keeps its own memory; nothing crosses rooms or users.</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3><i class="fas fa-receipt me-2"></i> Guardrails on money</h3>
+                <ul>
+                    <li>Safe defaults on payment amounts and recipients.</li>
+                    <li>Human approval for sensitive actions and transfers.</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3><i class="fas fa-file-shield me-2"></i> Transparency</h3>
+                <ul>
+                    <li>Activity summaries so you can see what ran and why.</li>
+                    <li>Easy ways to pause nudges or disconnect integrations.</li>
+                </ul>
+            </div>
+        </div>
+
+        <h2>Common questions</h2>
+        <div class="card">
+            <ul>
+                <li><strong>Can I stop nudges?</strong> Yes, you can pause or mute them per room or per user.</li>
+                <li><strong>How long is context kept?</strong> Only as long as needed to keep a conversation coherent, then it resets.</li>
+                <li><strong>How do I invite my team safely?</strong> You control invites; each teammate gets their own access and room-level permissions.</li>
+            </ul>
+        </div>
+
+        <div style="margin-top:32px; display:flex; gap:12px; flex-wrap:wrap;">
+            <a class="btn btn-primary" href="{% url 'users:register' %}">Request invite</a>
+            <a class="btn btn-ghost" href="{% url 'users:playbooks' %}">See playbooks</a>
+        </div>
+    </div>
+</body>
+</html>

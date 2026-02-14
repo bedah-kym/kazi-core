@@ -882,6 +882,26 @@
                 container.innerHTML = '<div class="text-center py-4 text-muted">No quota information available.</div>';
             }
         }
+
+        // Keep the viewport near the newest messages without breaking history load
+        document.addEventListener('DOMContentLoaded', () => {
+            const chatHistory = document.querySelector('.chat-history');
+            if (!chatHistory) return;
+
+            const scrollToBottom = () => {
+                chatHistory.scrollTop = chatHistory.scrollHeight;
+            };
+
+            scrollToBottom();
+
+            const observer = new MutationObserver(() => {
+                const distance = chatHistory.scrollHeight - chatHistory.scrollTop - chatHistory.clientHeight;
+                if (distance < 140) {
+                    scrollToBottom();
+                }
+            });
+            observer.observe(chatHistory, { childList: true, subtree: true });
+        });
     </script>
 </body>
 

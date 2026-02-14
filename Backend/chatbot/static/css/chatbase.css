@@ -16,14 +16,24 @@
     --text-color: #e8eaed;
 }
 
+html, body {
+    height: 100%;
+    min-height: 100dvh;
+    overflow: hidden;
+}
+
 body {
     background-color: var(--bg-light);
     color: var(--text-color);
-    height: 100vh;
-    min-height: 100dvh;
-    overflow: hidden;
+    margin: 0;
     font-size: var(--chat-font-size);
     transition: background-color 0.3s, color 0.3s;
+}
+
+.chat-page .container-fluid.p-0,
+.chat-page .row.g-0 {
+    height: 100vh;
+    min-height: 100dvh;
 }
 
 
@@ -31,8 +41,8 @@ body {
 .chat-container {
     display: flex;
     flex-direction: column;
-    height: 100vh;
-    max-height: 100vh;
+    height: 100%;
+    max-height: 100%;
     background: var(--chat-bg);
     box-shadow: 0 0 15px rgba(0, 0, 0, 0.1);
     transition: background 0.3s;
@@ -43,7 +53,7 @@ body {
     background: #fff;
     background-image: url('https://www.transparenttextures.com/patterns/brick-wall.png');
     border-right: 1px solid #eee;
-    height: 100vh;
+    height: 100%;
     position: relative;
     display: flex;
     flex-direction: column;
@@ -211,19 +221,18 @@ body {
 
 /* Mobile layout hardening to prevent overlap and keep input visible */
 @media (max-width: 768px) {
-    body {
+    .chat-page .container-fluid.p-0 {
+        height: 100%;
         min-height: 100dvh;
-        height: auto;
-        overflow: hidden;
     }
 
-    .container-fluid.p-0 {
-        height: 100dvh;
+    .chat-page .row.g-0 {
+        height: 100%;
     }
 
     .chat-container {
-        height: 100dvh;
-        max-height: 100dvh;
+        height: 100%;
+        max-height: 100%;
         border-radius: 0;
         box-shadow: none;
     }
@@ -331,6 +340,8 @@ body {
     position: relative;
     transition: background 0.3s;
     z-index: 1;
+    overscroll-behavior: contain;
+    scroll-behavior: smooth;
 }
 
 /* When quick prompts are visible, adjust slightly */
@@ -343,8 +354,8 @@ body {
     position: relative;
     transition: background 0.3s;
     z-index: 1;
-    background: var(--bg-light);
-    background-image: url('https://www.transparenttextures.com/patterns/brick-wall.png');
+    background: #1f2125;
+    background-image: none;
 }
 
 .chat-history::before {
@@ -366,6 +377,7 @@ body {
         radial-gradient(circle at 20% 50%, rgba(58, 110, 165, 0.05) 0%, transparent 50%),
         radial-gradient(circle at 80% 80%, rgba(58, 110, 165, 0.05) 0%, transparent 50%),
         radial-gradient(circle at 40% 20%, rgba(67, 97, 238, 0.05) 0%, transparent 50%);
+    opacity: 0.12;
 }
 
 .chat-history ul,

@@ -1311,8 +1311,15 @@ function escapeRegex(string) {
 
 // Emoji & init
 function initEmojiPicker() {
+    const applyTheme = (theme) => {
+        document.body.setAttribute('data-theme', theme);
+        document.documentElement.setAttribute('data-theme', theme);
+        localStorage.setItem('theme', theme);
+        document.querySelector('em-emoji-picker')?.setAttribute('theme', theme);
+    };
+
     const savedTheme = localStorage.getItem('theme') || 'light';
-    document.body.setAttribute('data-theme', savedTheme);
+    applyTheme(savedTheme);
     const pickerOptions = {
         onEmojiSelect: function (emoji) {
             const input = document.getElementById('chat-message-input');
@@ -1332,9 +1339,7 @@ function initEmojiPicker() {
     document.getElementById('darkModeToggle')?.addEventListener('click', () => {
         const currentTheme = document.body.getAttribute('data-theme');
         const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
-        document.body.setAttribute('data-theme', newTheme);
-        localStorage.setItem('theme', newTheme);
-        document.querySelector('em-emoji-picker')?.setAttribute('theme', newTheme);
+        applyTheme(newTheme);
     });
 }
 

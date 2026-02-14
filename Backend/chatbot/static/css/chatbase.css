@@ -27,6 +27,9 @@ body {
 
 
 .chat-container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
     max-height: 100vh;
     background: var(--chat-bg);
     box-shadow: 0 0 15px rgba(0, 0, 0, 0.1);
@@ -117,93 +120,184 @@ body {
         transform: scale(1);
         opacity: 1;
     }
-
     50% {
         transform: scale(1.02);
         opacity: 0.95;
     }
-
     100% {
         transform: scale(1);
-
-        /* Mobile / small-screen tweaks scoped to chat page to avoid site-wide regressions */
-        @media (max-width: 768px) {
-            .chat-page .chat-message {
-                padding: 10px;
-            }
-
-            .chat-page .input-group {
-                display: flex;
-                gap: 8px;
-                align-items: center;
-            }
-
-            .chat-page #emoji,
-            .chat-page #voice-record-btn {
-                width: 40px;
-                height: 40px;
-                border-radius: 50%;
-                display: inline-flex;
-                align-items: center;
-                justify-content: center;
-                padding: 6px;
-            }
-
-            .chat-page #chat-message-input {
-                flex: 1 1 auto;
-                margin-right: 6px;
-                padding: 8px 12px;
-                border-radius: 18px;
-            }
-
-            .chat-page #chat-message-submit {
-                width: 40px;
-                height: 40px;
-                border-radius: 50%;
-                padding: 0;
-            }
-
-            .chat-page .message {
-                max-width: calc(100% - 90px);
-                padding: 10px 14px;
-                border-radius: 14px;
-            }
-
-            .chat-page .time-label {
-                display: block;
-                margin-top: 6px;
-                font-size: 0.72em;
-                opacity: 0.75;
-            }
-
-            /* Show the header hamburger (menuToggle) on small screens */
-            .chat-page .toggle-btn {
-                display: inline-block;
-            }
-
-            /* Ensure the recording overlay floats above the input and messages */
-            .chat-page .recording-overlay {
-                position: fixed;
-                left: 12px;
-                right: 12px;
-                bottom: 16px;
-                z-index: 2500;
-            }
-
-            /* Slightly lift the people-list when open so it doesn't underlap status bars */
-            .chat-page .people-list.open {
-                position: fixed;
-                top: 56px;
-                bottom: 0;
-                left: 0;
-                width: 280px;
-                z-index: 2400;
-                box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15);
-                background: var(--chat-bg);
-            }
-        }
-
         opacity: 1;
+    }
+}
+
+/* Mobile / small-screen tweaks scoped to chat page to avoid site-wide regressions */
+@media (max-width: 768px) {
+    .chat-page .chat-message {
+        padding: 10px;
+    }
+
+    .chat-page .input-group {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+    }
+
+    .chat-page #emoji,
+    .chat-page #voice-record-btn {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 6px;
+    }
+
+    .chat-page #chat-message-input {
+        flex: 1 1 auto;
+        margin-right: 6px;
+        padding: 8px 12px;
+        border-radius: 18px;
+    }
+
+    .chat-page #chat-message-submit {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        padding: 0;
+    }
+
+    .chat-page .message {
+        max-width: calc(100% - 90px);
+        padding: 10px 14px;
+        border-radius: 14px;
+    }
+
+    .chat-page .time-label {
+        display: block;
+        margin-top: 6px;
+        font-size: 0.72em;
+        opacity: 0.75;
+    }
+
+    /* Show the header hamburger (menuToggle) on small screens */
+    .chat-page .toggle-btn {
+        display: inline-block;
+    }
+
+    /* Ensure the recording overlay floats above the input and messages */
+    .chat-page .recording-overlay {
+        position: fixed;
+        left: 12px;
+        right: 12px;
+        bottom: 16px;
+        z-index: 2500;
+    }
+
+    /* Slightly lift the people-list when open so it doesn't underlap status bars */
+    .chat-page .people-list.open {
+        position: fixed;
+        top: 56px;
+        bottom: 0;
+        left: 0;
+        width: 280px;
+        z-index: 2400;
+        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15);
+        background: var(--chat-bg);
+    }
+}
+
+/* Mobile layout hardening to prevent overlap and keep input visible */
+@media (max-width: 768px) {
+    body {
+        min-height: 100dvh;
+        height: auto;
+        overflow: hidden;
+    }
+
+    .container-fluid.p-0 {
+        height: 100dvh;
+    }
+
+    .chat-container {
+        height: 100dvh;
+        max-height: 100dvh;
+        border-radius: 0;
+        box-shadow: none;
+    }
+
+    .chat-header {
+        position: sticky;
+        top: 0;
+        z-index: 2100;
+        padding: 12px;
+        border-radius: 0;
+        backdrop-filter: blur(8px);
+    }
+
+    .chat-history {
+        padding: 14px 14px 130px;
+        background: #f9fafb;
+    }
+
+    .chat-message {
+        position: sticky;
+        bottom: 0;
+        padding: 12px 14px calc(12px + env(safe-area-inset-bottom, 0px));
+        background: var(--chat-bg);
+        border-top: 1px solid #e5e7eb;
+        z-index: 2100;
+    }
+
+    .chat-message .input-group {
+        background: #f1f2f4;
+        border-radius: 14px;
+        padding: 6px;
+    }
+
+    .chat-message .form-control {
+        font-size: 16px;
+    }
+
+    .chat-history .message {
+        max-width: 92%;
+    }
+
+    .people-list {
+        position: fixed;
+        top: 0;
+        bottom: 0;
+        left: -100%;
+        width: 85%;
+        max-width: 320px;
+        z-index: 2400;
+        transition: left 220ms ease;
+        background: var(--chat-bg);
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+    }
+
+    .people-list.open {
+        left: 0;
+    }
+
+    .people-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.25);
+        z-index: 2300;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 180ms ease;
+    }
+
+    .people-backdrop.show {
+        opacity: 1;
+        pointer-events: auto;
+    }
+
+    .chat-header .avatar-img {
+        width: 40px;
+        height: 40px;
     }
 }
 
@@ -225,20 +319,21 @@ body {
 }
 
 .chat-history {
-    height: calc(100vh - 180px);
+    flex: 1 1 auto;
+    min-height: 0;
     overflow-y: auto;
     overflow-x: hidden;
     padding: 24px;
-    background: linear-gradient(180deg, #e8ecf1 0%, #f5f7fa 50%, #e8ecf1 100%);
-    background-image: url('https://www.transparenttextures.com/patterns/brick-wall.png');
+    background: #f7f7f5;
     position: relative;
     transition: background 0.3s;
     z-index: 1;
 }
 
 /* When quick prompts are visible, adjust slightly */
+/* Keep a bit more space when prompts appear */
 .chat-container.prompts-visible .chat-history {
-    height: calc(100vh - 240px);
+    padding-bottom: 140px;
 }
 
 [data-theme="dark"] .chat-history {
@@ -246,53 +341,13 @@ body {
     transition: background 0.3s;
     position: relative;
     z-index: 1;
-    background: var(--bg-light);
-    background-image: url('https://www.transparenttextures.com/patterns/brick-wall.png');
-}
-
-[data-theme="dark"] .chat-history::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    animation: floatingBubbles 20s ease-in-out infinite;
-    pointer-events: none;
-    z-index: 0;
-    opacity: 0.15;
-    background:
-        radial-gradient(circle at 20% 50%, rgba(79, 140, 255, 0.03) 0%, transparent 50%),
-        radial-gradient(circle at 80% 80%, rgba(79, 140, 255, 0.03) 0%, transparent 50%),
-        radial-gradient(circle at 40% 20%, rgba(102, 126, 234, 0.03) 0%, transparent 50%);
-
-
-}
-
-/* Animated background pattern */
-.chat-history::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background:
-        radial-gradient(circle at 20% 50%, rgba(79, 140, 255, 0.03) 0%, transparent 50%),
-        radial-gradient(circle at 80% 80%, rgba(79, 140, 255, 0.03) 0%, transparent 50%),
-        radial-gradient(circle at 40% 20%, rgba(102, 126, 234, 0.03) 0%, transparent 50%);
-    animation: floatingBubbles 20s ease-in-out infinite;
-    pointer-events: none;
-    z-index: 0;
-    opacity: 0.15;
-    /* make the bubbles more visible */
+    background: #26282c;
 }
 
 .chat-history ul,
 .chat-history .typing-indicator {
     position: relative;
     z-index: 2;
-    /* keep messages above the animation */
 }
 
 @keyframes floatingBubbles {

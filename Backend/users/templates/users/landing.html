@@ -18,6 +18,10 @@
     <!-- Favicon -->
     <link rel="icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
 
+    <script>
+        document.documentElement.classList.add('js');
+    </script>
+
     <style>
         * {
             margin: 0;
@@ -37,6 +41,11 @@
             --max-width: 1080px;
 
             --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, "Apple Color Emoji", Arial, sans-serif;
+
+            --motion-fast: 180ms;
+            --motion-base: 240ms;
+            --motion-slow: 360ms;
+            --motion-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
         }
 
         body {
@@ -93,7 +102,8 @@
             border-radius: 4px;
             font-size: 14px;
             text-decoration: none;
-            transition: background 0.1s;
+            transition: background 0.1s, transform var(--motion-fast) var(--motion-ease),
+                box-shadow var(--motion-fast) var(--motion-ease);
             font-weight: 500;
         }
 
@@ -112,6 +122,39 @@
 
         .btn-primary:hover {
             background: #333333;
+        }
+
+        .btn:hover {
+            transform: translateY(-1px);
+        }
+
+        .btn:focus-visible {
+            outline: 2px solid #000;
+            outline-offset: 2px;
+        }
+
+        /* Motion */
+        .js .reveal .stagger-item {
+            opacity: 0;
+            transform: translateY(16px);
+            transition: opacity var(--motion-slow) var(--motion-ease),
+                transform var(--motion-slow) var(--motion-ease);
+            will-change: opacity, transform;
+        }
+
+        .js .reveal.is-visible .stagger-item {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .card-hover {
+            transition: transform var(--motion-base) var(--motion-ease),
+                box-shadow var(--motion-base) var(--motion-ease);
+        }
+
+        .card-hover:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 12px 24px rgba(0, 0, 0, 0.08);
         }
 
         /* Layout */
@@ -172,13 +215,15 @@
             border-radius: 4px;
             padding: 24px;
             background: #FFFFFF;
-            transition: box-shadow 0.2s;
+            transition: box-shadow var(--motion-base) var(--motion-ease),
+                transform var(--motion-base) var(--motion-ease);
             display: flex;
             flex-direction: column;
         }
 
         .pillar-block:hover {
-            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.06);
+            box-shadow: 0 12px 24px rgba(0, 0, 0, 0.08);
+            transform: translateY(-4px);
         }
 
         .pillar-header {
@@ -465,6 +510,26 @@
             margin-top: 40px;
         }
 
+        @media (prefers-reduced-motion: reduce) {
+            .js .reveal .stagger-item {
+                opacity: 1;
+                transition: none !important;
+                transform: none !important;
+            }
+
+            .card-hover,
+            .btn,
+            .pillar-block {
+                transition: none !important;
+            }
+
+            .card-hover:hover,
+            .btn:hover,
+            .pillar-block:hover {
+                transform: none !important;
+            }
+        }
+
         footer {
             border-top: 1px solid var(--notion-border);
             padding: 80px 0;
@@ -629,69 +694,69 @@
 
     <div class="container">
         <!-- Hero -->
-        <div class="section hero">
-            <div class="eyebrow">Built for SMEs and lean teams</div>
-            <h1>The Operating System<br>for One-Person Empires.</h1>
-            <p class="hero-subtitle">Workflows, finance, social growth, travel, and documents - in one command center.
+        <div class="section hero reveal stagger">
+            <div class="eyebrow stagger-item">Built for SMEs and lean teams</div>
+            <h1 class="stagger-item">The Operating System<br>for One-Person Empires.</h1>
+            <p class="hero-subtitle stagger-item">Workflows, finance, social growth, travel, and documents - in one command center.
                 Cut handoffs, keep cash flow visible, and stay ahead of client work.</p>
 
-            <div style="text-align: center; margin-bottom: 60px;">
+            <div class="stagger-item" style="text-align: center; margin-bottom: 60px;">
                 <a href="{% url 'users:register' %}" class="btn btn-primary"
                     style="font-size: 18px; padding: 12px 32px;">Start Building</a>
                 <a href="#workflows" class="btn btn-text"
                     style="font-size: 18px; padding: 12px 32px; text-decoration: underline;">See Workflows</a>
             </div>
 
-            <img src="{% static 'images/doodle-workflow.png' %}"
+            <img class="stagger-item" src="{% static 'images/doodle-workflow.png' %}"
                 style="max-width: 100%; height: 300px; object-fit: contain; mix-blend-mode: multiply;"
                 alt="Workflow Doodle">
         </div>
 
         <!-- Impact -->
-        <div class="section impact-section" id="impact">
-            <div class="impact-header">
+        <div class="section impact-section reveal stagger" id="impact">
+            <div class="impact-header stagger-item">
                 <div class="eyebrow">Business Impact</div>
                 <h2>Make operations feel lighter in week one.</h2>
                 <p class="impact-subtitle">Mathia replaces scattered tools with a single operating system for finance,
                     client work, and growth. You get clarity, speed, and fewer bottlenecks.</p>
             </div>
 
-            <div class="impact-grid">
-                <div class="impact-card">
+            <div class="impact-grid stagger">
+                <div class="impact-card card-hover stagger-item">
                     <div class="impact-icon"><i class="fas fa-cogs"></i></div>
                     <h3>Run the back office</h3>
                     <p>Automate invoices, reminders, and follow-ups without growing headcount.</p>
                 </div>
-                <div class="impact-card">
+                <div class="impact-card card-hover stagger-item">
                     <div class="impact-icon"><i class="fas fa-chart-line"></i></div>
                     <h3>See the business</h3>
                     <p>Track growth, cash flow, and performance in one place, not six tabs.</p>
                 </div>
-                <div class="impact-card">
+                <div class="impact-card card-hover stagger-item">
                     <div class="impact-icon"><i class="fas fa-handshake"></i></div>
                     <h3>Deliver client-ready work</h3>
                     <p>Ship itineraries, reports, and updates that look like a larger team built them.</p>
                 </div>
             </div>
 
-            <div class="impact-checklist">
+            <div class="impact-checklist stagger-item">
                 <div class="impact-check"><span>✓</span>Fewer handoffs between tools</div>
                 <div class="impact-check"><span>✓</span>One ledger for every transaction</div>
                 <div class="impact-check"><span>✓</span>Automations that match how your team works</div>
             </div>
 
-            <div class="impact-note">Start small, prove impact, then scale the workflows that pay off.</div>
+            <div class="impact-note stagger-item">Start small, prove impact, then scale the workflows that pay off.</div>
         </div>
 
         <!-- 6 Pillars Grid -->
-        <div class="section">
-            <h5
+        <div class="section reveal stagger">
+            <h5 class="stagger-item"
                 style="text-transform: uppercase; letter-spacing: 0.1em; color: rgba(55,53,47,0.5); font-size: 12px; margin-bottom: 30px; border-bottom: 1px solid var(--notion-border); padding-bottom: 10px;">
                 The OS Modules</h5>
 
-            <div class="pillar-grid">
+            <div class="pillar-grid stagger">
                 <!-- Workflow -->
-                <div class="pillar-block" style="background: #e3e2e0;"> <!-- Highlighted -->
+                <div class="pillar-block stagger-item" style="background: #e3e2e0;"> <!-- Highlighted -->
                     <div class="pillar-header">
                         <span class="pillar-icon-box">⚡</span>
                         <h3>Temporal Workflows</h3>
@@ -703,7 +768,7 @@
                 </div>
 
                 <!-- Social -->
-                <div class="pillar-block">
+                <div class="pillar-block stagger-item">
                     <div class="pillar-header">
                         <span class="pillar-icon-box">📢</span>
                         <h3>Social Growth</h3>
@@ -714,7 +779,7 @@
                 </div>
 
                 <!-- Finance -->
-                <div class="pillar-block">
+                <div class="pillar-block stagger-item">
                     <div class="pillar-header">
                         <span class="pillar-icon-box">💸</span>
                         <h3>Finance & Ledger</h3>
@@ -725,7 +790,7 @@
                 </div>
 
                 <!-- Docs/Notion -->
-                <div class="pillar-block">
+                <div class="pillar-block stagger-item">
                     <div class="pillar-header">
                         <span class="pillar-icon-box">🧠</span>
                         <h3>Deep Notion Sync</h3>
@@ -736,7 +801,7 @@
                 </div>
 
                 <!-- Travel -->
-                <div class="pillar-block">
+                <div class="pillar-block stagger-item">
                     <div class="pillar-header">
                         <span class="pillar-icon-box">✈️</span>
                         <h3>B2B Travel Agent</h3>
@@ -747,7 +812,7 @@
                 </div>
 
                 <!-- Calendar/Identity -->
-                <div class="pillar-block">
+                <div class="pillar-block stagger-item">
                     <div class="pillar-header">
                         <span class="pillar-icon-box">📅</span>
                         <h3>Calendar & Brand</h3>
@@ -760,14 +825,14 @@
         </div>
 
         <!-- Comparison -->
-        <div class="section compare-section">
-            <div class="compare-header">
+        <div class="section compare-section reveal stagger">
+            <div class="compare-header stagger-item">
                 <div class="eyebrow">What changes</div>
                 <h2>From tool sprawl to one operating system.</h2>
                 <p class="compare-subtitle">Keep your stack, stop the context switching.</p>
             </div>
-            <div class="compare-grid">
-                <div class="compare-card">
+            <div class="compare-grid stagger">
+                <div class="compare-card card-hover stagger-item">
                     <div class="compare-title">Before Mathia</div>
                     <ul class="compare-list">
                         <li>Ops spread across docs, chats, and spreadsheets</li>
@@ -776,7 +841,7 @@
                         <li>Busywork slows delivery and growth</li>
                     </ul>
                 </div>
-                <div class="compare-card">
+                <div class="compare-card card-hover stagger-item">
                     <div class="compare-title">With Mathia</div>
                     <ul class="compare-list">
                         <li>One system for workflows, finance, and delivery</li>
@@ -789,21 +854,21 @@
         </div>
 
         <!-- How It Works -->
-        <div class="section how-section" id="how">
-            <div class="eyebrow">How it works</div>
-            <h2>From intent to execution in three steps.</h2>
-            <div class="how-grid">
-                <div class="how-card">
+        <div class="section how-section reveal stagger" id="how">
+            <div class="eyebrow stagger-item">How it works</div>
+            <h2 class="stagger-item">From intent to execution in three steps.</h2>
+            <div class="how-grid stagger">
+                <div class="how-card card-hover stagger-item">
                     <div class="how-step">STEP 01</div>
                     <h3>Connect your stack</h3>
                     <p>Plug in your existing tools so Mathia knows where your work already lives.</p>
                 </div>
-                <div class="how-card">
+                <div class="how-card card-hover stagger-item">
                     <div class="how-step">STEP 02</div>
                     <h3>Describe the workflow</h3>
                     <p>Use plain language to create automations that match your real processes.</p>
                 </div>
-                <div class="how-card">
+                <div class="how-card card-hover stagger-item">
                     <div class="how-step">STEP 03</div>
                     <h3>Run and refine</h3>
                     <p>Track outcomes, keep your ledger clean, and scale what works.</p>
@@ -812,11 +877,11 @@
         </div>
 
         <!-- Use Cases -->
-        <div class="section" id="use-cases">
-            <h2>Who is this for?</h2>
-            <div class="use-cases-grid">
+        <div class="section reveal stagger" id="use-cases">
+            <h2 class="stagger-item">Who is this for?</h2>
+            <div class="use-cases-grid stagger">
                 <!-- Freelancers -->
-                <div class="use-case-card">
+                <div class="use-case-card card-hover stagger-item">
                     <span class="use-case-badge">Freelancers & Founders</span>
                     <h3>The "One-Person Empire"</h3>
                     <p>You do support, sales, and product. Mathia takes over the busywork. "Mathia, invoice this client
@@ -824,7 +889,7 @@
                 </div>
 
                 <!-- Social Managers -->
-                <div class="use-case-card">
+                <div class="use-case-card card-hover stagger-item">
                     <span class="use-case-badge">Social Media Managers</span>
                     <h3>Growth on Autopilot</h3>
                     <p>Manage 5 accounts without losing your mind. Use the Workflow Engine to repurpose content across
@@ -832,7 +897,7 @@
                 </div>
 
                 <!-- SMEs -->
-                <div class="use-case-card">
+                <div class="use-case-card card-hover stagger-item">
                     <span class="use-case-badge">SMEs & Startups</span>
                     <h3>An Operational Brain</h3>
                     <p>Don't hire a COO yet. Let Mathia organize your Notion, track your burn rate in the Ledger, and
@@ -840,7 +905,7 @@
                 </div>
 
                 <!-- Creators -->
-                <div class="use-case-card">
+                <div class="use-case-card card-hover stagger-item">
                     <span class="use-case-badge">Creators</span>
                     <h3>Brand Builder</h3>
                     <p>Focus on creating. Let Mathia handle the "Business of You". Sponsorship invoices, calendar
@@ -850,14 +915,14 @@
         </div>
 
         <!-- Workflow Detail -->
-        <div class="section workflow-section" id="workflows">
-            <h2>Temporal Workflow Engine</h2>
-            <p style="max-width: 600px; margin: 0 auto; opacity: 0.9; margin-bottom: 40px;">
+        <div class="section workflow-section reveal stagger" id="workflows">
+            <h2 class="stagger-item">Temporal Workflow Engine</h2>
+            <p class="stagger-item" style="max-width: 600px; margin: 0 auto; opacity: 0.9; margin-bottom: 40px;">
                 Design complex automations using just your words. Mathia understands your intent and connects your apps
                 (Notion, Calendly, Quickbooks, Socials).
             </p>
 
-            <div class="workflow-diagram">
+            <div class="workflow-diagram stagger-item">
                 <span class="workflow-node">New Calendly Booking</span>
                 <span class="workflow-arrow">→</span>
                 <span class="workflow-node">Create Notion Page</span>
@@ -866,7 +931,7 @@
             </div>
 
             <!-- Workflow Examples List -->
-            <div
+            <div class="stagger-item"
                 style="margin-top: 60px; text-align: left; background: rgba(255,255,255,0.1); padding: 30px; border-radius: 8px;">
                 <h3 style="color: #fff; margin-bottom: 20px; font-size: 20px;">Automation Library</h3>
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
@@ -906,16 +971,16 @@
             </div>
 
             <br><br>
-            <a href="{% url 'users:register' %}" class="btn btn-text"
+            <a href="{% url 'users:register' %}" class="btn btn-text stagger-item"
                 style="background: #fff; color: #000; padding: 12px 24px;">Try Workflows Beta</a>
         </div>
 
         <!-- Community / Testimonials -->
-        <div class="section">
-            <h2>Trusted by teams who run the business.</h2>
-            <div class="testimonials-grid">
+        <div class="section reveal stagger">
+            <h2 class="stagger-item">Trusted by teams who run the business.</h2>
+            <div class="testimonials-grid stagger">
                 <!-- User 1 -->
-                <div
+                <div class="card-hover stagger-item"
                     style="padding: 24px; border: 1px solid var(--notion-border); border-radius: 4px; background: #fff;">
                     <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
                         <div style="width: 32px; height: 32px; background: #eee; border-radius: 50%;"></div>
@@ -930,7 +995,7 @@
                 </div>
 
                 <!-- User 2 -->
-                <div
+                <div class="card-hover stagger-item"
                     style="padding: 24px; border: 1px solid var(--notion-border); border-radius: 4px; background: #fff;">
                     <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
                         <div style="width: 32px; height: 32px; background: #eee; border-radius: 50%;"></div>
@@ -944,7 +1009,7 @@
                 </div>
 
                 <!-- User 3 -->
-                <div
+                <div class="card-hover stagger-item"
                     style="padding: 24px; border: 1px solid var(--notion-border); border-radius: 4px; background: #fff;">
                     <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
                         <div style="width: 32px; height: 32px; background: #eee; border-radius: 50%;"></div>
@@ -959,29 +1024,69 @@
             </div>
         </div>
 
-        <div class="section cta-section">
-            <div>
+        <div class="section cta-section reveal stagger">
+            <div class="stagger-item">
                 <div class="eyebrow">Ready to move faster?</div>
                 <h2>Give your team an operating system.</h2>
                 <p class="hero-subtitle" style="text-align: left; margin: 0;">
                     Start free, prove the impact, then scale with confidence.
                 </p>
             </div>
-            <div class="cta-actions">
-                <a href="{% url 'users:register' %}" class="btn btn-primary"
+            <div class="cta-actions stagger">
+                <a href="{% url 'users:register' %}" class="btn btn-primary stagger-item"
                     style="font-size: 16px; padding: 12px 28px;">Get Access</a>
-                <a href="#impact" class="btn btn-text"
+                <a href="#impact" class="btn btn-text stagger-item"
                     style="font-size: 16px; padding: 12px 28px; text-decoration: underline;">See Impact</a>
             </div>
         </div>
 
     </div>
 
-    <footer>
+    <footer class="reveal stagger">
         <div class="container" style="padding: 0;">
-            <p><strong>Mathia.OS</strong> &copy; 2026. Built for builders.</p>
+            <p class="stagger-item"><strong>Mathia.OS</strong> &copy; 2026. Built for builders.</p>
         </div>
     </footer>
+
+    <script>
+        (function () {
+            var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)');
+            var revealSections = document.querySelectorAll('.reveal');
+
+            var applyStagger = function () {
+                var groups = document.querySelectorAll('.stagger');
+                groups.forEach(function (group) {
+                    var items = group.querySelectorAll('.stagger-item');
+                    items.forEach(function (item, index) {
+                        var delay = Math.min(index * 80, 240);
+                        item.style.transitionDelay = delay + 'ms';
+                    });
+                });
+            };
+
+            applyStagger();
+
+            if (prefersReduced.matches || !('IntersectionObserver' in window)) {
+                revealSections.forEach(function (section) {
+                    section.classList.add('is-visible');
+                });
+                return;
+            }
+
+            var observer = new IntersectionObserver(function (entries, obs) {
+                entries.forEach(function (entry) {
+                    if (entry.isIntersecting) {
+                        entry.target.classList.add('is-visible');
+                        obs.unobserve(entry.target);
+                    }
+                });
+            }, { threshold: 0.18, rootMargin: '0px 0px -10% 0px' });
+
+            revealSections.forEach(function (section) {
+                observer.observe(section);
+            });
+        })();
+    </script>
 
 </body>
 

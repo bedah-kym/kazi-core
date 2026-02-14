@@ -22,6 +22,7 @@ urlpatterns = [
     path('settings/', feature_views.settings, name='settings'),
     path('settings/profile/', feature_views.profile_settings, name='profile_settings'),
     path('settings/goals/', feature_views.goals_settings, name='goals_settings'),
+    path('rooms/list/', dashboard_views.list_rooms, name='list_rooms'),
     
     # Integrations
     path('integrations/whatsapp/connect/', integrations_views.connect_whatsapp, name='connect_whatsapp'),

@@ -38,12 +38,9 @@ def pin_message_to_notes(request, room_id, message_id):
         
         # Get decrypted content from request body (frontend sends decrypted content)
         message_content = request.data.get('message_content', '')
-        
+        # Fallback to a placeholder so we still pin even if the client did not send content
         if not message_content:
-            return Response(
-                {"error": "Message content is required"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            message_content = "Pinned message (content not provided by client)"
         
         # Get or create room context
         room_context, _ = RoomContext.objects.get_or_create(chatroom=chatroom)
@@ -106,12 +103,8 @@ def reply_to_message(request, room_id, message_id):
         
         # Get decrypted content from request body (frontend sends decrypted content)
         message_content = request.data.get('message_content', '')
-        
         if not message_content:
-            return Response(
-                {"error": "Message content is required"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            message_content = "Replying to this message"
         
         # Get the message being replied to
         original_message = get_object_or_404(Message, id=message_id)

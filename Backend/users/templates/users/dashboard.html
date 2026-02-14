@@ -321,9 +321,11 @@
 
         <!-- Quick Actions -->
         <div class="quick-actions">
-            <a href="{% url 'chatbot:redirect_to_home' %}" class="quick-action-btn">
+            <a href="#" class="quick-action-btn" id="start-chatting-btn"
+                data-rooms-url="{% url 'users:list_rooms' %}"
+                data-create-url="{% url 'chatbot:create_room' %}">
                 <i class="fas fa-comment-dots quick-action-icon"></i>
-                <span>Start Chatting</span>
+                <span>Find My Rooms</span>
             </a>
             <a href="{% url 'users:reminders' %}" class="quick-action-btn">
                 <i class="fas fa-plus-circle quick-action-icon"></i>
@@ -337,6 +339,28 @@
                 <i class="fas fa-money-bill-wave quick-action-icon"></i>
                 <span>Add Funds</span>
             </a>
+        </div>
+
+        <!-- Rooms Panel -->
+        <div class="card mt-4 d-none" id="rooms-panel">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <div class="d-flex align-items-center gap-2">
+                        <i class="fas fa-comments text-primary"></i>
+                        <h2 class="h5 mb-0">Your Rooms</h2>
+                    </div>
+                    <button class="btn btn-sm btn-outline-secondary" id="refresh-rooms-btn" type="button">
+                        <i class="fas fa-rotate"></i> Refresh
+                    </button>
+                </div>
+                <div id="rooms-status" class="text-muted small">Click "Find My Rooms" to load your chats.</div>
+                <div id="rooms-list" class="list-group list-group-flush mt-2"></div>
+                <div class="mt-3">
+                    <a href="{% url 'chatbot:create_room' %}" id="create-room-link" class="btn btn-outline-primary btn-sm d-none">
+                        <i class="fas fa-plus"></i> Create new room
+                    </a>
+                </div>
+            </div>
         </div>
 
         <!-- Recent Activity -->
@@ -369,6 +393,99 @@
     <script src="https://code.jquery.com/jquery-1.10.2.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="{% static 'js/main.js'%}"></script>
+    <script>
+        (function () {
+            const startBtn = document.getElementById('start-chatting-btn');
+            const panel = document.getElementById('rooms-panel');
+            const listEl = document.getElementById('rooms-list');
+            const statusEl = document.getElementById('rooms-status');
+            const refreshBtn = document.getElementById('refresh-rooms-btn');
+            const createLink = document.getElementById('create-room-link');
+
+            if (!startBtn || !panel || !listEl || !statusEl) return;
+
+            const roomsUrl = startBtn.dataset.roomsUrl;
+            const createUrl = startBtn.dataset.createUrl;
+
+            function setStatus(text, tone = 'muted') {
+                statusEl.textContent = text || '';
+                statusEl.className = text ? `small text-${tone}` : 'small text-muted';
+            }
+
+            function renderRooms(rooms) {
+                listEl.innerHTML = '';
+
+                if (!rooms || rooms.length === 0) {
+                    setStatus('No rooms found. Create one to start chatting.', 'warning');
+                    if (createLink) createLink.classList.remove('d-none');
+                    return;
+                }
+
+                setStatus('');
+                rooms.forEach((room) => {
+                    const item = document.createElement('a');
+                    item.href = room.url || createUrl || '#';
+                    item.className = 'list-group-item list-group-item-action d-flex align-items-center gap-2';
+
+                    const icon = document.createElement('i');
+                    icon.className = `fas ${room.has_ai ? 'fa-robot text-primary' : 'fa-comments text-secondary'}`;
+
+                    const name = document.createElement('span');
+                    name.className = 'fw-semibold';
+                    name.textContent = room.name;
+
+                    const time = document.createElement('span');
+                    time.className = 'text-muted small ms-auto';
+                    time.textContent = room.last_message_at
+                        ? new Date(room.last_message_at).toLocaleString()
+                        : 'No messages yet';
+
+                    item.appendChild(icon);
+                    item.appendChild(name);
+                    item.appendChild(time);
+
+                    listEl.appendChild(item);
+                });
+
+                if (createLink) createLink.classList.remove('d-none');
+            }
+
+            function loadRooms(force = false) {
+                if (!roomsUrl) return;
+
+                panel.classList.remove('d-none');
+                setStatus('Loading rooms...', 'info');
+
+                const url = force ? `${roomsUrl}?refresh=1` : roomsUrl;
+
+                fetch(url, {
+                    headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                    credentials: 'same-origin'
+                })
+                    .then((res) => {
+                        if (!res.ok) throw new Error('Failed to load rooms');
+                        return res.json();
+                    })
+                    .then((payload) => renderRooms(payload.rooms || []))
+                    .catch(() => {
+                        setStatus('Could not load rooms right now. Try again or create a new room.', 'danger');
+                        if (createLink) createLink.classList.remove('d-none');
+                    });
+            }
+
+            startBtn.addEventListener('click', function (e) {
+                e.preventDefault();
+                loadRooms(false);
+            });
+
+            if (refreshBtn) {
+                refreshBtn.addEventListener('click', function (e) {
+                    e.preventDefault();
+                    loadRooms(true);
+                });
+            }
+        })();
+    </script>
 </body>
 
 </html>

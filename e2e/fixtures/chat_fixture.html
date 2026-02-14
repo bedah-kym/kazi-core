@@ -1,0 +1,126 @@
+<!doctype html>
+<html>
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Chat Fixture</title>
+    <style>
+        /* Minimal styles to match selectors used by scripts */
+        .people-list {
+            background: #fff;
+            width: 260px;
+        }
+
+        .people-list.open {
+            left: 0;
+        }
+
+        .people-toggle {
+            position: fixed;
+            left: 12px;
+            top: 12px;
+        }
+
+        .search-panel {
+            display: none;
+        }
+
+        .search-panel.active {
+            display: block;
+        }
+
+        .context-panel {
+            display: none;
+        }
+
+        .context-panel.open {
+            display: block;
+        }
+
+        .recording-overlay {
+            display: none;
+        }
+
+        .recording-overlay.show {
+            display: flex;
+        }
+
+        .message {
+            padding: 8px;
+            border: 1px solid #ddd;
+            margin: 8px 0;
+            position: relative;
+        }
+    </style>
+</head>
+
+<body class="chat-page">
+    <!-- Header hamburger (single toggle used on small screens) -->
+    <header class="fixture-header">
+        <button class="toggle-btn d-md-none me-2" id="menuToggle" aria-label="Open conversations">
+            <span class="hamburger"></span>
+        </button>
+    </header>
+
+    <div class="people-list" id="peopleList">
+        <div class="people-list-content">Conversations</div>
+    </div>
+    <button id="peopleToggle" class="people-toggle">☰</button>
+    <div id="peopleBackdrop" class="people-backdrop"></div>
+
+    <div class="chat-container">
+        <button id="searchToggle">Search</button>
+        <div class="search-panel" id="searchPanel">
+            <button id="closeSearch">Close</button>
+            <input id="messageSearchInput" />
+        </div>
+
+        <button id="contextPanelToggle">Context</button>
+        <div id="contextPanel" class="context-panel">
+            <button class="context-panel-close">X</button>
+            <div id="contextPanelContent"></div>
+        </div>
+
+        <div class="chat-history">
+            <ul id="top-chat">
+                <li>
+                    <div class="message mathia-message" data-id="m1">
+                        <div class="mathia-content">Hello from Mathia</div>
+                        <!-- dropdown will be injected by message-actions.js -->
+                    </div>
+                </li>
+                <li>
+                    <div class="message mathia-message" data-id="m2">
+                        <div class="mathia-content">Another Mathia message</div>
+                    </div>
+                </li>
+            </ul>
+        </div>
+
+        <div class="chat-message">
+            <div id="voice-recording-overlay" class="recording-overlay" style="display:none;">
+                <button id="cancel-recording">X</button>
+                <div class="recording-timer">0:00</div>
+            </div>
+
+            <div class="input-group">
+                <button id="emoji" class="btn">
+                    <i class="far fa-smile fa-2x"></i>
+                </button>
+
+                <!-- Voice Record Button -->
+                <button id="voice-record-btn" class="btn">
+                    <i class="fas fa-microphone"></i>
+                </button>
+
+                <input type="text" class="form-control" id="chat-message-input" placeholder="Type your message...">
+                <button class="btn btn-primary" id="chat-message-submit">
+                    <i class="fas fa-paper-plane"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+</body>
+
+</html>

@@ -6,6 +6,8 @@ from django.contrib.auth import login, authenticate
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django.contrib.auth.models import User
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError
 from django.urls import reverse
 from users.models import Workspace
 
@@ -13,22 +15,33 @@ from users.models import Workspace
 def register(request):
     """User registration view"""
     if request.method == 'POST':
-        full_name = request.POST.get('full_name', '')
-        email = request.POST.get('email', '')
-        username = request.POST.get('username', '')
+        full_name = request.POST.get('full_name', '').strip()
+        email = request.POST.get('email', '').strip().lower()
+        username = request.POST.get('username', '').strip()
         password1 = request.POST.get('password1', '')
         password2 = request.POST.get('password2', '')
+
+        if not full_name or not email or not username or not password1 or not password2:
+            messages.error(request, 'All fields are required')
+            return render(request, 'users/register.html')
         
         # Validation
         if password1 != password2:
             messages.error(request, 'Passwords do not match')
             return render(request, 'users/register.html')
+
+        try:
+            validate_password(password1)
+        except ValidationError as exc:
+            for error in exc.messages:
+                messages.error(request, error)
+            return render(request, 'users/register.html')
         
-        if User.objects.filter(username=username).exists():
+        if User.objects.filter(username__iexact=username).exists():
             messages.error(request, 'Username already exists')
             return render(request, 'users/register.html')
         
-        if User.objects.filter(email=email).exists():
+        if User.objects.filter(email__iexact=email).exists():
             messages.error(request, 'Email already registered')
             return render(request, 'users/register.html')
         
@@ -47,8 +60,12 @@ def register(request):
                 user.last_name = names[1]
             user.save()
             
-            # Login user
-            login(request, user)
+            # Login user with a known backend
+            auth_user = authenticate(request, username=username, password=password1)
+            if auth_user is not None:
+                login(request, auth_user)
+            else:
+                login(request, user, backend='django.contrib.auth.backends.ModelBackend')
             
             # Redirect to onboarding
             return redirect('users:onboarding')

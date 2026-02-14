@@ -28,10 +28,6 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 env_path = BASE_DIR.parent / '.env'
 load_dotenv(dotenv_path=env_path, override=True)
 
-# Debug: Print to verify it loaded
-print(f"DEBUG: REDIS_URL from env = {os.environ.get('REDIS_URL', 'NOT FOUND')}")
-
-
 # attempt to load .env from project root (one level above BASE_DIR)
 try:
     load_dotenv(str(BASE_DIR.parent / '.env'))
@@ -173,15 +169,6 @@ TEMPLATES = [
 WSGI_APPLICATION = 'Backend.wsgi.application'
 
 ASGI_APPLICATION = "Backend.asgi.application"
-
-CHANNEL_LAYERS = {
-    "default": {
-        "BACKEND": "channels_redis.core.RedisChannelLayer",
-        "CONFIG": {
-            "hosts": [("127.0.0.1", 6379)],
-        },
-    },
-}
 
 
 # Database
@@ -384,8 +371,6 @@ LOGOUT_REDIRECT_URL = 'users:login'
 # https://docs.djangoproject.com/en/4.1/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
-
-ASGI_APPLICATION = "Backend.asgi.application"
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [

@@ -54,10 +54,12 @@ class TokenEncryption:
         
         if key_string:
             try:
-                # Key should be base64-encoded 32 bytes
-                cls._key = base64.urlsafe_b64decode(key_string)
-                if len(cls._key) != 32:
-                    raise ValueError(f"Encryption key must be 32 bytes, got {len(cls._key)}")
+                # Key should be base64-encoded 32 bytes (Fernet expects the encoded form)
+                key_bytes = key_string.strip().encode('utf-8')
+                decoded = base64.urlsafe_b64decode(key_bytes)
+                if len(decoded) != 32:
+                    raise ValueError(f"Encryption key must be 32 bytes, got {len(decoded)}")
+                cls._key = key_bytes
                 return cls._key
             except Exception as e:
                 raise EncryptionKeyError(f"Invalid ENCRYPTION_KEY format: {e}")

@@ -76,10 +76,10 @@ Access the OS at: [http://localhost:8000](http://localhost:8000)
 
 ## Railway Deployment
 
-This repo already includes a `Dockerfile` and an entrypoint that runs migrations and `collectstatic` for the web service.
+This repo includes a `Dockerfile` and an entrypoint that runs migrations and `collectstatic` for the web service.
 
 1. Create a Railway project and connect this repo.
-2. Add PostgreSQL and Redis plugins (Railway will inject `DATABASE_URL` and `REDIS_URL`).
+2. Add PostgreSQL and Redis plugins (Railway injects `DATABASE_URL` and `REDIS_URL`).
 3. Set required environment variables:
    - `DJANGO_SECRET_KEY`
    - `DJANGO_DEBUG=false`

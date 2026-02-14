@@ -7,10 +7,46 @@ import json
 from django.http import JsonResponse
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from django.core.cache import cache
+from django.utils import timezone
 
 from django.conf import settings
 import os
 
+
+
+def _ensure_default_room(user):
+    """
+    Create a default general room for the user if none exists.
+    Adds Mathia when available and seeds a welcome message.
+    """
+    User = get_user_model()
+    with transaction.atomic():
+        existing = Chatroom.objects.filter(participants__User=user).first()
+        if existing:
+            return existing
+
+        user_member, _ = Member.objects.get_or_create(User=user)
+        new_room = Chatroom.objects.create()
+        new_room.participants.add(user_member)
+
+        try:
+            mathia_user = User.objects.get(username='mathia')
+            mathia_member, _ = Member.objects.get_or_create(User=mathia_user)
+            new_room.participants.add(mathia_member)
+
+            msg = Message.objects.create(
+                member=mathia_member,
+                content="Welcome to your new General room! I'm here to help.",
+                timestamp=timezone.now()
+            )
+            new_room.chats.add(msg)
+        except User.DoesNotExist:
+            # Bot user not provisioned yet; room still created for the user
+            pass
+
+        cache.delete(f"user_rooms:{user.id}")
+        return new_room
 
 
 @login_required
@@ -160,20 +196,15 @@ def upload_file(request):
 
 
 def welcomepage(request):
-    if request.user.is_authenticated:
-        # Find the first room the user is in
-        ignored_room_ids = [1, 2, 3, 4] # Legacy rooms to potentially ignore if needed, but safe to remove if data is clean
-        
-        # Try to find user's general room (with Mathia) or just first available
-        first_room = Chatroom.objects.filter(participants__User=request.user).first()
-        
-        if first_room:
-            return redirect(reverse("chatbot:bot-home", kwargs={"room_name": first_room.id}))
-            
-        # If no room exists, create one (fallback)
-        return redirect('chatbot:create_room') 
-        
-    return redirect("users:login")
+    if not request.user.is_authenticated:
+        return redirect("users:login")
+
+    # Try to find the user's first room; if none, create a default one atomically.
+    first_room = Chatroom.objects.filter(participants__User=request.user).first()
+    if not first_room:
+        first_room = _ensure_default_room(request.user)
+
+    return redirect(reverse("chatbot:bot-home", kwargs={"room_name": first_room.id}))
 
 @login_required
 def create_room(request):
@@ -182,41 +213,41 @@ def create_room(request):
     Support POST for creation, GET for showing a form if needed (we'll use modal/API mainly).
     Types: 'general' (with Mathia), 'private' (just user for now)
     """
-    if request.method == 'POST':
-        room_type = request.POST.get('room_type', 'general')
+    room_type = request.POST.get('room_type') or request.GET.get('room_type') or 'general'
+    
+    User = get_user_model()
+    user_member, _ = Member.objects.get_or_create(User=request.user)
+
+    # If the user already has a room and we're not forcing a new one, reuse it to avoid duplicates.
+    if request.method == 'GET':
+        existing = Chatroom.objects.filter(participants__User=request.user).first()
+        if existing:
+            return redirect(reverse("chatbot:bot-home", kwargs={"room_name": existing.id}))
+
+    with transaction.atomic():
+        new_room = Chatroom.objects.create()
+        new_room.participants.add(user_member)
         
-        User = get_user_model()
-        user_member, _ = Member.objects.get_or_create(User=request.user)
-        
-        with transaction.atomic():
-            new_room = Chatroom.objects.create()
-            new_room.participants.add(user_member)
-            
-            if room_type == 'general':
-                # Add Mathia
-                try:
-                    mathia_user = User.objects.get(username='mathia')
-                    mathia_member, _ = Member.objects.get_or_create(User=mathia_user)
-                    new_room.participants.add(mathia_member)
-                    
-                    # Welcome message
-                    import django.utils.timezone
-                    msg = Message.objects.create(
-                        member=mathia_member,
-                        content="Welcome to your new General room! I'm here to help.",
-                        timestamp=django.utils.timezone.now()
-                    )
-                    new_room.chats.add(msg)
-                    
-                except User.DoesNotExist:
-                    pass
-            
-            # For 'private', we just leave it with user (or add invited users later)
-            
-            return redirect(reverse("chatbot:bot-home", kwargs={"room_name": new_room.id}))
-            
-    # If GET, maybe redirect to home or show a simple error/form
-    return redirect('chatbot:welcomepage')
+        if room_type == 'general':
+            # Add Mathia
+            try:
+                mathia_user = User.objects.get(username='mathia')
+                mathia_member, _ = Member.objects.get_or_create(User=mathia_user)
+                new_room.participants.add(mathia_member)
+                
+                # Welcome message
+                msg = Message.objects.create(
+                    member=mathia_member,
+                    content="Welcome to your new General room! I'm here to help.",
+                    timestamp=timezone.now()
+                )
+                new_room.chats.add(msg)
+                
+            except User.DoesNotExist:
+                pass
+    
+    cache.delete(f"user_rooms:{request.user.id}")
+    return redirect(reverse("chatbot:bot-home", kwargs={"room_name": new_room.id}))
 
 
 from django.core.exceptions import ValidationError

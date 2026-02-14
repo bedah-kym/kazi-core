@@ -18,6 +18,10 @@
     <!-- Favicon -->
     <link rel="icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
 
+    <script>
+        document.documentElement.classList.add('js');
+    </script>
+
     <style>
         * {
             margin: 0;
@@ -38,7 +42,12 @@
             --max-width: 1080px;
             --shadow-card: 0 10px 30px rgba(0, 0, 0, 0.08);
 
-            --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+            --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, "Apple Color Emoji", Arial, sans-serif;
+
+            --motion-fast: 180ms;
+            --motion-base: 240ms;
+            --motion-slow: 360ms;
+            --motion-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
         }
 
         body {
@@ -113,7 +122,8 @@
             border-radius: 4px;
             font-size: 14px;
             text-decoration: none;
-            transition: background 0.1s;
+            transition: background 0.1s, transform var(--motion-fast) var(--motion-ease),
+                box-shadow var(--motion-fast) var(--motion-ease);
             font-weight: 500;
             min-height: 44px;
             display: inline-flex;
@@ -136,6 +146,39 @@
 
         .btn-primary:hover {
             background: #333333;
+        }
+
+        .btn:hover {
+            transform: translateY(-1px);
+        }
+
+        .btn:focus-visible {
+            outline: 2px solid #000;
+            outline-offset: 2px;
+        }
+
+        /* Motion */
+        .js .reveal .stagger-item {
+            opacity: 0;
+            transform: translateY(16px);
+            transition: opacity var(--motion-slow) var(--motion-ease),
+                transform var(--motion-slow) var(--motion-ease);
+            will-change: opacity, transform;
+        }
+
+        .js .reveal.is-visible .stagger-item {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .card-hover {
+            transition: transform var(--motion-base) var(--motion-ease),
+                box-shadow var(--motion-base) var(--motion-ease);
+        }
+
+        .card-hover:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 12px 24px rgba(0, 0, 0, 0.08);
         }
 
         /* Layout */
@@ -196,14 +239,16 @@
             border-radius: 4px;
             padding: 24px;
             background: #FFFFFF;
-            transition: box-shadow 0.2s;
+            transition: box-shadow var(--motion-base) var(--motion-ease),
+                transform var(--motion-base) var(--motion-ease);
             display: flex;
             flex-direction: column;
             box-shadow: 0 3px 10px rgba(0, 0, 0, 0.02);
         }
 
         .pillar-block:hover {
-            box-shadow: var(--shadow-card);
+            box-shadow: 0 12px 24px rgba(0, 0, 0, 0.08);
+            transform: translateY(-4px);
         }
 
         .pillar-header {
@@ -304,12 +349,247 @@
             color: #000;
         }
 
+        .eyebrow {
+            text-transform: uppercase;
+            letter-spacing: 0.14em;
+            color: rgba(55, 53, 47, 0.55);
+            font-size: 11px;
+            font-weight: 600;
+            margin-bottom: 16px;
+        }
+
+        .impact-section {
+            border: 1px solid var(--notion-border);
+            border-radius: 12px;
+            padding: 48px;
+            background: #fff;
+        }
+
+        .impact-header {
+            max-width: 720px;
+            margin: 0 auto 36px;
+            text-align: center;
+        }
+
+        .impact-subtitle {
+            font-size: 18px;
+            color: rgba(55, 53, 47, 0.7);
+        }
+
+        .impact-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            margin-bottom: 28px;
+        }
+
+        .impact-card {
+            border: 1px solid var(--notion-border);
+            border-radius: 10px;
+            padding: 20px;
+            background: var(--notion-gray);
+        }
+
+        .impact-card h3 {
+            font-size: 18px;
+            margin-bottom: 10px;
+        }
+
+        .impact-card p {
+            font-size: 15px;
+            color: rgba(55, 53, 47, 0.7);
+        }
+
+        .impact-icon {
+            font-size: 20px;
+            margin-bottom: 10px;
+        }
+
+        .impact-icon i {
+            color: #000;
+        }
+
+        .impact-checklist {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 14px;
+            border-top: 1px solid var(--notion-border);
+            padding-top: 24px;
+            font-size: 14px;
+            color: rgba(55, 53, 47, 0.75);
+        }
+
+        .impact-check {
+            display: flex;
+            gap: 8px;
+            align-items: flex-start;
+        }
+
+        .impact-check span {
+            font-weight: 600;
+            color: #000;
+        }
+
+        .impact-note {
+            margin-top: 20px;
+            font-size: 13px;
+            color: rgba(55, 53, 47, 0.6);
+            text-align: center;
+        }
+
+        .compare-section {
+            border: 1px solid var(--notion-border);
+            border-radius: 12px;
+            padding: 46px;
+            background: #fff;
+        }
+
+        .compare-header {
+            text-align: center;
+            margin-bottom: 26px;
+        }
+
+        .compare-subtitle {
+            font-size: 16px;
+            color: rgba(55, 53, 47, 0.7);
+        }
+
+        .compare-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 20px;
+        }
+
+        .compare-card {
+            border: 1px solid var(--notion-border);
+            border-radius: 10px;
+            padding: 22px;
+            background: var(--notion-gray);
+        }
+
+        .compare-title {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 12px;
+        }
+
+        .compare-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            display: grid;
+            gap: 10px;
+            color: rgba(55, 53, 47, 0.75);
+            font-size: 15px;
+        }
+
+        .how-section {
+            text-align: center;
+        }
+
+        .how-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 24px;
+            margin-top: 30px;
+        }
+
+        .how-card {
+            border: 1px solid var(--notion-border);
+            border-radius: 12px;
+            padding: 28px 24px;
+            background: #fff;
+            text-align: left;
+        }
+
+        .how-step {
+            font-weight: 700;
+            font-size: 12px;
+            letter-spacing: 0.12em;
+            margin-bottom: 14px;
+            color: rgba(55, 53, 47, 0.55);
+        }
+
+        .how-card p {
+            color: rgba(55, 53, 47, 0.7);
+        }
+
+        .cta-section {
+            border: 1px solid var(--notion-border);
+            border-radius: 16px;
+            padding: 50px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 30px;
+            background: var(--notion-gray);
+        }
+
+        .cta-section h2 {
+            margin-bottom: 12px;
+        }
+
+        .cta-actions {
+            display: flex;
+            gap: 14px;
+            flex-wrap: wrap;
+        }
+
+        .testimonials-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 24px;
+            margin-top: 40px;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .js .reveal .stagger-item {
+                opacity: 1;
+                transition: none !important;
+                transform: none !important;
+            }
+
+            .card-hover,
+            .btn,
+            .pillar-block {
+                transition: none !important;
+            }
+
+            .card-hover:hover,
+            .btn:hover,
+            .pillar-block:hover {
+                transform: none !important;
+            }
+        }
+
         footer {
             border-top: 1px solid var(--notion-border);
             padding: 80px 0;
             text-align: center;
             font-size: 14px;
             color: rgba(55, 53, 47, 0.5);
+        }
+
+        @media (max-width: 1100px) {
+            .pillar-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .impact-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .impact-checklist {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .how-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .testimonials-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
         }
 
         @media (max-width: 900px) {
@@ -347,6 +627,105 @@
             .container {
                 padding-top: 90px;
             }
+
+            .section {
+                margin-bottom: 90px;
+            }
+
+            .container {
+                padding: 110px 20px 50px;
+            }
+        }
+
+        @media (max-width: 700px) {
+            nav {
+                height: auto;
+                padding: 10px 0;
+            }
+
+            .nav-container {
+                flex-wrap: wrap;
+                gap: 12px;
+            }
+
+            .nav-actions {
+                flex-wrap: wrap;
+                gap: 8px;
+                width: 100%;
+                justify-content: flex-start;
+            }
+
+            .btn {
+                font-size: 13px;
+                padding: 7px 10px;
+            }
+
+            .container {
+                padding: 100px 18px 40px;
+            }
+
+            h1 {
+                font-size: 34px;
+            }
+
+            .hero-subtitle {
+                font-size: 18px;
+            }
+
+            h2 {
+                font-size: 30px;
+            }
+
+            .impact-section {
+                padding: 32px;
+            }
+
+            .compare-section {
+                padding: 32px;
+            }
+
+            .compare-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .impact-grid,
+            .impact-checklist,
+            .how-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .pillar-block {
+                padding: 18px;
+            }
+
+            .use-case-card {
+                padding: 24px;
+            }
+
+            .workflow-section {
+                padding: 36px 24px;
+            }
+
+            .cta-section {
+                padding: 32px;
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            .workflow-diagram {
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+                align-items: center;
+            }
+
+            .workflow-arrow {
+                display: none;
+            }
+
+            .testimonials-grid {
+                grid-template-columns: 1fr;
+            }
         }
     </style>
 </head>
@@ -358,12 +737,8 @@
             <a href="/" class="logo">
                 <span style="font-size: 20px;"><i class="fas fa-robot"></i></span> Mathia.OS
             </a>
-            <button class="mobile-toggle" id="navToggle" aria-label="Toggle navigation">
-                <i class="fas fa-bars"></i>
-            </button>
-            <div class="nav-actions" id="navActions">
-                <a href="{% url 'users:why_mathia' %}" class="btn btn-text">Why Mathia</a>
-                <a href="{% url 'users:playbooks' %}" class="btn btn-text">Playbooks</a>
+            <div class="nav-actions">
+                <a href="#impact" class="btn btn-text">Impact</a>
                 <a href="#use-cases" class="btn btn-text">Use Cases</a>
                 <a href="#workflows" class="btn btn-text">Workflows</a>
                 <a href="{% url 'users:pricing' %}" class="btn btn-text">Pricing</a>
@@ -408,20 +783,56 @@
                 </div>
             </div>
 
-            <img src="{% static 'images/doodle-workflow.png' %}"
+            <img class="stagger-item" src="{% static 'images/doodle-workflow.png' %}"
                 style="max-width: 100%; height: 300px; object-fit: contain; mix-blend-mode: multiply;"
                 alt="Workflow Doodle">
         </div>
 
+        <!-- Impact -->
+        <div class="section impact-section reveal stagger" id="impact">
+            <div class="impact-header stagger-item">
+                <div class="eyebrow">Business Impact</div>
+                <h2>Make operations feel lighter in week one.</h2>
+                <p class="impact-subtitle">Mathia replaces scattered tools with a single operating system for finance,
+                    client work, and growth. You get clarity, speed, and fewer bottlenecks.</p>
+            </div>
+
+            <div class="impact-grid stagger">
+                <div class="impact-card card-hover stagger-item">
+                    <div class="impact-icon"><i class="fas fa-cogs"></i></div>
+                    <h3>Run the back office</h3>
+                    <p>Automate invoices, reminders, and follow-ups without growing headcount.</p>
+                </div>
+                <div class="impact-card card-hover stagger-item">
+                    <div class="impact-icon"><i class="fas fa-chart-line"></i></div>
+                    <h3>See the business</h3>
+                    <p>Track growth, cash flow, and performance in one place, not six tabs.</p>
+                </div>
+                <div class="impact-card card-hover stagger-item">
+                    <div class="impact-icon"><i class="fas fa-handshake"></i></div>
+                    <h3>Deliver client-ready work</h3>
+                    <p>Ship itineraries, reports, and updates that look like a larger team built them.</p>
+                </div>
+            </div>
+
+            <div class="impact-checklist stagger-item">
+                <div class="impact-check"><span>✓</span>Fewer handoffs between tools</div>
+                <div class="impact-check"><span>✓</span>One ledger for every transaction</div>
+                <div class="impact-check"><span>✓</span>Automations that match how your team works</div>
+            </div>
+
+            <div class="impact-note stagger-item">Start small, prove impact, then scale the workflows that pay off.</div>
+        </div>
+
         <!-- 6 Pillars Grid -->
-        <div class="section">
-            <h5
+        <div class="section reveal stagger">
+            <h5 class="stagger-item"
                 style="text-transform: uppercase; letter-spacing: 0.1em; color: rgba(55,53,47,0.5); font-size: 12px; margin-bottom: 30px; border-bottom: 1px solid var(--notion-border); padding-bottom: 10px;">
                 The OS Modules</h5>
 
-            <div class="pillar-grid">
+            <div class="pillar-grid stagger">
                 <!-- Workflow -->
-                <div class="pillar-block" style="background: #e3e2e0;"> <!-- Highlighted -->
+                <div class="pillar-block stagger-item" style="background: #e3e2e0;"> <!-- Highlighted -->
                     <div class="pillar-header">
                         <span class="pillar-icon-box"><i class="fas fa-bolt"></i></span>
                         <h3>Temporal Workflows</h3>
@@ -433,7 +844,7 @@
                 </div>
 
                 <!-- Social -->
-                <div class="pillar-block">
+                <div class="pillar-block stagger-item">
                     <div class="pillar-header">
                         <span class="pillar-icon-box"><i class="fas fa-share-nodes"></i></span>
                         <h3>Social Growth</h3>
@@ -444,7 +855,7 @@
                 </div>
 
                 <!-- Finance -->
-                <div class="pillar-block">
+                <div class="pillar-block stagger-item">
                     <div class="pillar-header">
                         <span class="pillar-icon-box"><i class="fas fa-wallet"></i></span>
                         <h3>Finance & Ledger</h3>
@@ -455,7 +866,7 @@
                 </div>
 
                 <!-- Docs/Notion -->
-                <div class="pillar-block">
+                <div class="pillar-block stagger-item">
                     <div class="pillar-header">
                         <span class="pillar-icon-box"><i class="fas fa-note-sticky"></i></span>
                         <h3>Deep Notion Sync</h3>
@@ -466,7 +877,7 @@
                 </div>
 
                 <!-- Travel -->
-                <div class="pillar-block">
+                <div class="pillar-block stagger-item">
                     <div class="pillar-header">
                         <span class="pillar-icon-box"><i class="fas fa-plane-departure"></i></span>
                         <h3>B2B Travel Agent</h3>
@@ -477,7 +888,7 @@
                 </div>
 
                 <!-- Calendar/Identity -->
-                <div class="pillar-block">
+                <div class="pillar-block stagger-item">
                     <div class="pillar-header">
                         <span class="pillar-icon-box"><i class="fas fa-calendar-check"></i></span>
                         <h3>Calendar & Brand</h3>
@@ -489,12 +900,64 @@
             </div>
         </div>
 
+        <!-- Comparison -->
+        <div class="section compare-section reveal stagger">
+            <div class="compare-header stagger-item">
+                <div class="eyebrow">What changes</div>
+                <h2>From tool sprawl to one operating system.</h2>
+                <p class="compare-subtitle">Keep your stack, stop the context switching.</p>
+            </div>
+            <div class="compare-grid stagger">
+                <div class="compare-card card-hover stagger-item">
+                    <div class="compare-title">Before Mathia</div>
+                    <ul class="compare-list">
+                        <li>Ops spread across docs, chats, and spreadsheets</li>
+                        <li>Unclear ownership for client follow ups</li>
+                        <li>Finance data lives in too many places</li>
+                        <li>Busywork slows delivery and growth</li>
+                    </ul>
+                </div>
+                <div class="compare-card card-hover stagger-item">
+                    <div class="compare-title">With Mathia</div>
+                    <ul class="compare-list">
+                        <li>One system for workflows, finance, and delivery</li>
+                        <li>Automations keep tasks moving without reminders</li>
+                        <li>Ledger view ties revenue to operations</li>
+                        <li>Teams ship client work with less overhead</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- How It Works -->
+        <div class="section how-section reveal stagger" id="how">
+            <div class="eyebrow stagger-item">How it works</div>
+            <h2 class="stagger-item">From intent to execution in three steps.</h2>
+            <div class="how-grid stagger">
+                <div class="how-card card-hover stagger-item">
+                    <div class="how-step">STEP 01</div>
+                    <h3>Connect your stack</h3>
+                    <p>Plug in your existing tools so Mathia knows where your work already lives.</p>
+                </div>
+                <div class="how-card card-hover stagger-item">
+                    <div class="how-step">STEP 02</div>
+                    <h3>Describe the workflow</h3>
+                    <p>Use plain language to create automations that match your real processes.</p>
+                </div>
+                <div class="how-card card-hover stagger-item">
+                    <div class="how-step">STEP 03</div>
+                    <h3>Run and refine</h3>
+                    <p>Track outcomes, keep your ledger clean, and scale what works.</p>
+                </div>
+            </div>
+        </div>
+
         <!-- Use Cases -->
-        <div class="section" id="use-cases">
-            <h2>Who is this for?</h2>
-            <div class="use-cases-grid">
+        <div class="section reveal stagger" id="use-cases">
+            <h2 class="stagger-item">Who is this for?</h2>
+            <div class="use-cases-grid stagger">
                 <!-- Freelancers -->
-                <div class="use-case-card">
+                <div class="use-case-card card-hover stagger-item">
                     <span class="use-case-badge">Freelancers & Founders</span>
                     <h3>The "One-Person Empire"</h3>
                     <p>You do support, sales, and product. Mathia takes over the busywork. "Mathia, invoice this client
@@ -502,7 +965,7 @@
                 </div>
 
                 <!-- Social Managers -->
-                <div class="use-case-card">
+                <div class="use-case-card card-hover stagger-item">
                     <span class="use-case-badge">Social Media Managers</span>
                     <h3>Growth on Autopilot</h3>
                     <p>Manage 5 accounts without losing your mind. Use the Workflow Engine to repurpose content across
@@ -510,7 +973,7 @@
                 </div>
 
                 <!-- SMEs -->
-                <div class="use-case-card">
+                <div class="use-case-card card-hover stagger-item">
                     <span class="use-case-badge">SMEs & Startups</span>
                     <h3>An Operational Brain</h3>
                     <p>Don't hire a COO yet. Let Mathia organize your Notion, track your burn rate in the Ledger, and
@@ -518,7 +981,7 @@
                 </div>
 
                 <!-- Creators -->
-                <div class="use-case-card">
+                <div class="use-case-card card-hover stagger-item">
                     <span class="use-case-badge">Creators</span>
                     <h3>Brand Builder</h3>
                     <p>Focus on creating. Let Mathia handle the "Business of You". Sponsorship invoices, calendar
@@ -528,14 +991,14 @@
         </div>
 
         <!-- Workflow Detail -->
-        <div class="section workflow-section" id="workflows">
-            <h2>Temporal Workflow Engine</h2>
-            <p style="max-width: 600px; margin: 0 auto; opacity: 0.9; margin-bottom: 40px;">
+        <div class="section workflow-section reveal stagger" id="workflows">
+            <h2 class="stagger-item">Temporal Workflow Engine</h2>
+            <p class="stagger-item" style="max-width: 600px; margin: 0 auto; opacity: 0.9; margin-bottom: 40px;">
                 Design complex automations using just your words. Mathia understands your intent and connects your apps
                 (Notion, Calendly, Quickbooks, Socials).
             </p>
 
-            <div class="workflow-diagram">
+            <div class="workflow-diagram stagger-item">
                 <span class="workflow-node">New Calendly Booking</span>
                 <span class="workflow-arrow">→</span>
                 <span class="workflow-node">Create Notion Page</span>
@@ -544,7 +1007,7 @@
             </div>
 
             <!-- Workflow Examples List -->
-            <div
+            <div class="stagger-item"
                 style="margin-top: 60px; text-align: left; background: rgba(255,255,255,0.1); padding: 30px; border-radius: 8px;">
                 <h3 style="color: #fff; margin-bottom: 20px; font-size: 20px;">Automation Library</h3>
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
@@ -584,16 +1047,16 @@
             </div>
 
             <br><br>
-            <a href="{% url 'users:trial_apply' %}" class="btn btn-text"
+            <a href="{% url 'users:register' %}" class="btn btn-text stagger-item"
                 style="background: #fff; color: #000; padding: 12px 24px;">Try Workflows Beta</a>
         </div>
 
         <!-- Community / Testimonials -->
-        <div class="section">
-            <h2>Trusted by Builders.</h2>
-            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; margin-top: 40px;">
+        <div class="section reveal stagger">
+            <h2 class="stagger-item">Trusted by teams who run the business.</h2>
+            <div class="testimonials-grid stagger">
                 <!-- User 1 -->
-                <div
+                <div class="card-hover stagger-item"
                     style="padding: 24px; border: 1px solid var(--notion-border); border-radius: 4px; background: #fff;">
                     <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
                         <div style="width: 32px; height: 32px; background: #eee; border-radius: 50%;"></div>
@@ -608,7 +1071,7 @@
                 </div>
 
                 <!-- User 2 -->
-                <div
+                <div class="card-hover stagger-item"
                     style="padding: 24px; border: 1px solid var(--notion-border); border-radius: 4px; background: #fff;">
                     <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
                         <div style="width: 32px; height: 32px; background: #eee; border-radius: 50%;"></div>
@@ -622,7 +1085,7 @@
                 </div>
 
                 <!-- User 3 -->
-                <div
+                <div class="card-hover stagger-item"
                     style="padding: 24px; border: 1px solid var(--notion-border); border-radius: 4px; background: #fff;">
                     <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
                         <div style="width: 32px; height: 32px; background: #eee; border-radius: 50%;"></div>
@@ -637,21 +1100,70 @@
             </div>
         </div>
 
+        <div class="section cta-section reveal stagger">
+            <div class="stagger-item">
+                <div class="eyebrow">Ready to move faster?</div>
+                <h2>Give your team an operating system.</h2>
+                <p class="hero-subtitle" style="text-align: left; margin: 0;">
+                    Start free, prove the impact, then scale with confidence.
+                </p>
+            </div>
+            <div class="cta-actions stagger">
+                <a href="{% url 'users:register' %}" class="btn btn-primary stagger-item"
+                    style="font-size: 16px; padding: 12px 28px;">Get Access</a>
+                <a href="#impact" class="btn btn-text stagger-item"
+                    style="font-size: 16px; padding: 12px 28px; text-decoration: underline;">See Impact</a>
+            </div>
+        </div>
+
     </div>
 
-    <footer>
+    <footer class="reveal stagger">
         <div class="container" style="padding: 0;">
-            <p><strong>Mathia.OS</strong> &copy; 2026. Built for builders.</p>
+            <p class="stagger-item"><strong>Mathia.OS</strong> &copy; 2026. Built for builders.</p>
         </div>
     </footer>
 
     <script>
-        const navToggle = document.getElementById('navToggle');
-        const navActions = document.getElementById('navActions');
-        navToggle?.addEventListener('click', () => {
-            navActions.classList.toggle('open');
-        });
+        (function () {
+            var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)');
+            var revealSections = document.querySelectorAll('.reveal');
+
+            var applyStagger = function () {
+                var groups = document.querySelectorAll('.stagger');
+                groups.forEach(function (group) {
+                    var items = group.querySelectorAll('.stagger-item');
+                    items.forEach(function (item, index) {
+                        var delay = Math.min(index * 80, 240);
+                        item.style.transitionDelay = delay + 'ms';
+                    });
+                });
+            };
+
+            applyStagger();
+
+            if (prefersReduced.matches || !('IntersectionObserver' in window)) {
+                revealSections.forEach(function (section) {
+                    section.classList.add('is-visible');
+                });
+                return;
+            }
+
+            var observer = new IntersectionObserver(function (entries, obs) {
+                entries.forEach(function (entry) {
+                    if (entry.isIntersecting) {
+                        entry.target.classList.add('is-visible');
+                        obs.unobserve(entry.target);
+                    }
+                });
+            }, { threshold: 0.18, rootMargin: '0px 0px -10% 0px' });
+
+            revealSections.forEach(function (section) {
+                observer.observe(section);
+            });
+        })();
     </script>
+
 </body>
 
 </html>

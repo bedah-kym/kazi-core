@@ -43,6 +43,100 @@
     border-top-color: rgba(255, 255, 255, 0.1);
 }
 
+/* Quick action modal */
+.mathia-action-modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+    backdrop-filter: blur(6px);
+}
+
+.mathia-action-modal-content {
+    background: rgba(255,255,255,0.92);
+    border-radius: 14px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.2);
+    padding: 18px;
+    width: 420px;
+    max-width: 90vw;
+    color: #222;
+}
+
+.mathia-action-modal .modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-weight: 600;
+    font-size: 16px;
+    margin-bottom: 10px;
+}
+
+.mathia-action-modal .close-modal {
+    background: none;
+    border: none;
+    font-size: 20px;
+    cursor: pointer;
+    color: #555;
+}
+
+.mathia-action-form label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 10px;
+    font-size: 13px;
+}
+
+.mathia-action-form input,
+.mathia-action-form select,
+.mathia-action-form textarea {
+    border: 1px solid #d5d5d5;
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 14px;
+}
+
+.mathia-action-form textarea {
+    min-height: 80px;
+    resize: vertical;
+}
+
+.mathia-action-modal .modal-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.mathia-action-modal .btn-primary,
+.mathia-action-modal .btn-secondary {
+    border: none;
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 14px;
+    cursor: pointer;
+}
+
+.mathia-action-modal .btn-primary {
+    background: linear-gradient(135deg, #4f8dfd, #7aa8ff);
+    color: #fff;
+}
+
+.mathia-action-modal .btn-secondary {
+    background: #f2f2f2;
+    color: #444;
+}
+
+.mathia-action-modal .btn-primary:hover {
+    filter: brightness(0.95);
+}
+
+.mathia-action-modal .btn-secondary:hover {
+    background: #e7e7e7;
+}
+
 .recording-pulse {
     width: 12px;
     height: 12px;

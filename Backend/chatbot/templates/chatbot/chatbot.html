@@ -27,6 +27,7 @@
             font-family: 'Inter', sans-serif;
             background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
             height: 100vh;
+            height: 100dvh;
             margin: 0;
             overflow: hidden;
         }
@@ -34,6 +35,8 @@
         .chat-container {
             max-width: 1200px;
             height: 100vh;
+            height: 100dvh;
+            max-height: 100dvh;
             margin: 0 auto;
             background: rgba(255, 255, 255, 0.95);
             backdrop-filter: blur(10px);
@@ -54,10 +57,13 @@
         }
 
         .chat-messages {
+            position: relative;
             flex: 1;
             overflow-y: auto;
             padding: 1.5rem;
+            padding-bottom: calc(5.5rem + env(safe-area-inset-bottom, 0px));
             scroll-behavior: smooth;
+            scroll-padding-bottom: 120px;
         }
 
         .message {
@@ -168,6 +174,7 @@
 
         .chat-input {
             padding: 1.5rem;
+            padding-bottom: calc(1.5rem + env(safe-area-inset-bottom, 0px));
             background: white;
             border-top: 1px solid rgba(0, 0, 0, 0.1);
             border-radius: 0 0 16px 16px;
@@ -177,6 +184,13 @@
             background: var(--chat-background);
             border-radius: 12px;
             padding: 0.5rem;
+            gap: 0.5rem;
+            align-items: center;
+        }
+
+        .input-group button {
+            min-width: 44px;
+            min-height: 44px;
         }
 
         .form-control {
@@ -194,6 +208,8 @@
             padding: 0.7rem 1.5rem;
             color: white;
             transition: all 0.3s ease;
+            min-width: 48px;
+            min-height: 44px;
         }
 
         .btn-send:hover {
@@ -202,15 +218,21 @@
         }
 
         .typing-indicator {
-            display: flex;
-            padding: 0.5rem;
+            display: none;
+            position: absolute;
+            left: 1.5rem;
+            right: 1.5rem;
+            bottom: 12px;
+            padding: 0.5rem 0.75rem;
             gap: 0.3rem;
-            opacity: 0;
-            transition: opacity 0.3s ease;
+            background: #fff;
+            border-radius: 10px;
+            box-shadow: 0 6px 18px rgba(0, 0, 0, 0.06);
+            align-items: center;
         }
 
         .typing-indicator.active {
-            opacity: 1;
+            display: inline-flex;
         }
 
         .typing-dot {
@@ -296,13 +318,11 @@
                     Hello! I'm <b>Mathia</b>. How can I help you plan your trip today?
                 </div>
             </div>
-        </div>
-
-        <!-- Typing Indicator -->
-        <div class="typing-indicator" id="typing-indicator">
-            <div class="typing-dot"></div>
-            <div class="typing-dot"></div>
-            <div class="typing-dot"></div>
+            <div class="typing-indicator" id="typing-indicator">
+                <div class="typing-dot"></div>
+                <div class="typing-dot"></div>
+                <div class="typing-dot"></div>
+            </div>
         </div>
 
         <!-- Input Area -->

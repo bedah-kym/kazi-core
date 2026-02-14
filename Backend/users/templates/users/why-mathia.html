@@ -1,0 +1,186 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Why Mathia</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --text: #1d1c1a;
+            --muted: #5c5a57;
+            --bg: #ffffff;
+            --border: #e9e9e7;
+            --accent: #000;
+            --card: #f7f7f5;
+            --radius: 12px;
+            --max: 1080px;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: 'Inter', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.5;
+        }
+        nav {
+            position: sticky;
+            top: 0;
+            background: rgba(255,255,255,0.95);
+            backdrop-filter: blur(8px);
+            border-bottom: 1px solid var(--border);
+            padding: 14px 18px;
+        }
+        nav .row {
+            max-width: var(--max);
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+        }
+        .logo {
+            text-decoration: none;
+            color: var(--text);
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .btn {
+            padding: 10px 16px;
+            border-radius: 10px;
+            border: 1px solid transparent;
+            font-weight: 600;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            min-height: 44px;
+        }
+        .btn-primary { background: var(--accent); color: #fff; }
+        .btn-ghost { border: 1px solid var(--border); color: var(--text); }
+        .container {
+            max-width: var(--max);
+            margin: 0 auto;
+            padding: 40px 22px 80px;
+        }
+        h1 { font-size: clamp(32px, 5vw, 48px); margin: 12px 0; }
+        h2 { font-size: clamp(24px, 4vw, 32px); margin: 32px 0 16px; }
+        .muted { color: var(--muted); }
+        .grid { display: grid; gap: 18px; }
+        .grid.two { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+        .grid.three { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+        .card {
+            background: #fff;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 18px 20px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.05);
+        }
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 10px;
+            border-radius: 999px;
+            background: #eef2ff;
+            color: #4338ca;
+            font-weight: 600;
+            font-size: 13px;
+        }
+        ul { padding-left: 18px; margin: 10px 0; }
+        li { margin-bottom: 8px; }
+        .pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 12px;
+            border-radius: 12px;
+            background: var(--card);
+            border: 1px solid var(--border);
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+    <nav>
+        <div class="row">
+            <a class="logo" href="/"><i class="fas fa-robot"></i> Mathia.OS</a>
+            <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                <a class="btn btn-ghost" href="{% url 'users:pricing' %}">Pricing</a>
+                <a class="btn btn-primary" href="{% url 'users:trial_apply' %}">Request Invite</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <span class="badge"><i class="fas fa-sparkles"></i> 30-day invite-only trial</span>
+        <h1>Why teams choose Mathia</h1>
+        <p class="muted" style="max-width:720px;">
+            Mathia is the operating system for small, fast-moving teams. It remembers what matters, nudges the next best action, and ships workflows without set-up hell.
+        </p>
+        <div style="display:flex; gap:12px; flex-wrap:wrap; margin:18px 0 30px;">
+            <div class="pill"><i class="fas fa-clock"></i> Time to first workflow: under 10 minutes</div>
+            <div class="pill"><i class="fas fa-chart-line"></i> +30% retention from proactive nudges</div>
+            <div class="pill"><i class="fas fa-lock"></i> Invite-only 30-day trial</div>
+        </div>
+
+        <h2>What you get</h2>
+        <div class="grid two">
+            <div class="card">
+                <h3><i class="fas fa-bolt me-1"></i> Proactive help</h3>
+                <p class="muted">Mathia notices stuck work and surfaces the next step: send the invoice, schedule the follow-up, or repurpose a post.</p>
+            </div>
+            <div class="card">
+                <h3><i class="fas fa-diagram-project me-1"></i> Workflows in words</h3>
+                <p class="muted">Describe the outcome, not the wiring. Mathia assembles the flow across your calendar, docs, payments, and socials.</p>
+            </div>
+            <div class="card">
+                <h3><i class="fas fa-people-group me-1"></i> Room-level context</h3>
+                <p class="muted">Each client or project keeps its own memory, so replies stay relevant without re-explaining.</p>
+            </div>
+            <div class="card">
+                <h3><i class="fas fa-wallet me-1"></i> Cashflow momentum</h3>
+                <p class="muted">Send payment links, chase status, and log revenue with one prompt.</p>
+            </div>
+        </div>
+
+        <h2>How it feels in practice</h2>
+        <div class="grid three">
+            <div class="card">
+                <strong>Freelancer</strong>
+                <ul>
+                    <li>"After every client call, draft a recap and a payment link if they agreed."</li>
+                    <li>"If a message is unanswered for 24h, cue a polite nudge."</li>
+                </ul>
+            </div>
+            <div class="card">
+                <strong>Ops lead</strong>
+                <ul>
+                    <li>"Every Friday, summarize open issues by room and assign next owners."</li>
+                    <li>"When travel changes, notify finance and adjust per diem."</li>
+                </ul>
+            </div>
+            <div class="card">
+                <strong>Growth</strong>
+                <ul>
+                    <li>"Pick the best-performing post and republish to LinkedIn at 9am."</li>
+                    <li>"After a Calendly booking, send a prep doc and collect materials."</li>
+                </ul>
+            </div>
+        </div>
+
+        <div style="margin-top:40px; display:flex; gap:12px; flex-wrap:wrap;">
+            <a class="btn btn-primary" href="{% url 'users:trial_apply' %}">Request invite</a>
+            <a class="btn btn-ghost" href="{% url 'users:playbooks' %}">See playbooks</a>
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,109 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Playbooks</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --text: #1d1c1a;
+            --muted: #5c5a57;
+            --bg: #fff;
+            --border: #e9e9e7;
+            --card: #f7f7f5;
+            --accent: #000;
+            --radius: 12px;
+            --max: 1080px;
+        }
+        body { margin:0; font-family:'Inter', sans-serif; background:var(--bg); color:var(--text); line-height:1.6; }
+        nav { position:sticky; top:0; background:rgba(255,255,255,0.95); backdrop-filter:blur(8px); border-bottom:1px solid var(--border); padding:14px 18px; }
+        nav .row { max-width:var(--max); margin:0 auto; display:flex; align-items:center; justify-content:space-between; gap:12px; }
+        .logo { text-decoration:none; color:var(--text); font-weight:700; display:flex; gap:8px; align-items:center; }
+        .btn { padding:10px 16px; border-radius:10px; text-decoration:none; font-weight:600; border:1px solid transparent; display:inline-flex; align-items:center; justify-content:center; gap:8px; min-height:44px;}
+        .btn-primary { background:var(--accent); color:#fff; }
+        .btn-ghost { border:1px solid var(--border); color:var(--text); }
+        .container { max-width:var(--max); margin:0 auto; padding:40px 22px 80px; }
+        h1 { font-size:clamp(30px,5vw,46px); margin:12px 0; }
+        h2 { font-size:clamp(22px,4vw,30px); margin:24px 0 12px; }
+        h3 { margin:0 0 8px; }
+        .muted { color:var(--muted); }
+        .grid { display:grid; gap:18px; }
+        .grid.cards { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+        .card { background:#fff; border:1px solid var(--border); border-radius:var(--radius); padding:18px 20px; box-shadow:0 8px 24px rgba(0,0,0,0.05); display:flex; flex-direction:column; gap:10px; }
+        ul { padding-left:18px; margin:0; }
+        li { margin-bottom:6px; }
+        .badge { display:inline-flex; align-items:center; gap:6px; padding:6px 10px; border-radius:999px; background:#eef2ff; color:#4338ca; font-weight:600; font-size:13px; }
+    </style>
+</head>
+<body>
+    <nav>
+        <div class="row">
+            <a class="logo" href="/"><i class="fas fa-robot"></i> Mathia.OS</a>
+            <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                <a class="btn btn-ghost" href="{% url 'users:why_mathia' %}">Why Mathia</a>
+                <a class="btn btn-primary" href="{% url 'users:trial_apply' %}">Request Invite</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <span class="badge"><i class="fas fa-sparkles"></i> 30-day invite-only trial</span>
+        <h1>Playbooks for real teams</h1>
+        <p class="muted" style="max-width:760px;">Pick a persona to see ready-to-run prompts and flows. Copy them, tweak them, and ship in minutes.</p>
+
+        <h2>Choose your lane</h2>
+        <div class="grid cards">
+            <div class="card">
+                <h3><i class="fas fa-briefcase me-2"></i> Freelancer / Founder</h3>
+                <p class="muted">Keep cash and follow-ups moving without adding more tools.</p>
+                <ul>
+                    <li>"After every client call, draft recap + payment link; schedule follow-up in 2 days."</li>
+                    <li>"If an invoice is overdue 3 days, send a gentle nudge and surface the contact thread."</li>
+                    <li>"Create a weekly digest of open tasks per client room."</li>
+                </ul>
+                <p><strong>Outcome:</strong> Faster payouts, fewer missed replies.</p>
+            </div>
+            <div class="card">
+                <h3><i class="fas fa-diagram-project me-2"></i> Ops / Support Lead</h3>
+                <p class="muted">Stay ahead of stalled work and keep stakeholders aligned.</p>
+                <ul>
+                    <li>"Every morning, list rooms with overdue tasks and propose owners."</li>
+                    <li>"When travel changes, notify finance and update the shared itinerary."</li>
+                    <li>"Create a Friday summary of resolved vs. pending issues with next steps."</li>
+                </ul>
+                <p><strong>Outcome:</strong> Clear ownership, less chasing.</p>
+            </div>
+            <div class="card">
+                <h3><i class="fas fa-bullhorn me-2"></i> Growth / RevOps</h3>
+                <p class="muted">Repurpose what is working and close loops automatically.</p>
+                <ul>
+                    <li>"Pick last week's best post and republish to LinkedIn at 9am with a fresh hook."</li>
+                    <li>"After a Calendly booking, send prep doc, collect materials, and remind 1 hour before."</li>
+                    <li>"When a deal closes, send invoice + thank-you note and log revenue goals."</li>
+                </ul>
+                <p><strong>Outcome:</strong> More pipeline touches without more tabs.</p>
+            </div>
+            <div class="card">
+                <h3><i class="fas fa-plane-departure me-2"></i> Travel / Field Teams</h3>
+                <p class="muted">Keep itineraries, alerts, and receipts in sync.</p>
+                <ul>
+                    <li>"When a flight confirmation arrives, add to trip plan and block the calendar."</li>
+                    <li>"Day-of-travel checklist to traveler + finance with per diem and hotel info."</li>
+                    <li>"Summarize trip expenses and send a reimbursement reminder."</li>
+                </ul>
+                <p><strong>Outcome:</strong> Fewer surprises on the road.</p>
+            </div>
+        </div>
+
+        <div style="margin-top:32px; display:flex; gap:12px; flex-wrap:wrap;">
+            <a class="btn btn-primary" href="{% url 'users:trial_apply' %}">Request invite</a>
+            <a class="btn btn-ghost" href="{% url 'users:workflows_library' %}">Browse workflow library</a>
+        </div>
+    </div>
+</body>
+</html>

@@ -13,6 +13,7 @@ from decimal import Decimal
 import os    
 from pathlib import Path
 import dj_database_url
+from celery.schedules import crontab
 # load environment variables from project .env
 try:
     from dotenv import load_dotenv
@@ -134,6 +135,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'users.middleware.TrialExpiryMiddleware',
     'chatbot.middleware.EnsureMemberMiddleware',  # Auto-create Member objects
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
@@ -268,6 +270,10 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'chatbot.tasks.check_due_reminders',
         'schedule': 60.0,  # Every minute
     },
+    'send-trial-summary': {
+        'task': 'users.tasks.send_trial_summary_task',
+        'schedule': crontab(hour=7, minute=0),  # every day at 07:00
+    },
 }
 
 # AI Moderation Settings
@@ -281,6 +287,10 @@ HF_MONTHLY_LIMIT = 10000  # e.g., 10,000 tokens per month
 OPENWEATHER_API_KEY = os.environ.get('OPENWEATHER_API_KEY', '')
 GIPHY_API_KEY = os.environ.get('GIPHY_API_KEY', '')
 EXCHANGE_RATE_API_KEY = os.environ.get('EXCHANGE_RATE_API_KEY', '')
+
+# LLM cost guards
+LLM_MAX_TOKENS = int(os.environ.get('LLM_MAX_TOKENS', 700))  # hard ceiling per call
+LLM_PROMPT_CHAR_LIMIT = int(os.environ.get('LLM_PROMPT_CHAR_LIMIT', 4000))  # truncate user prompt to this many chars
 
 # Password validation
 # https://docs.djangoproject.com/en/4.1/ref/settings/#auth-password-validators

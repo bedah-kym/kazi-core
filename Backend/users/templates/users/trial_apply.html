@@ -1,0 +1,154 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Request Invite • Mathia Trial</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0f0f10;
+            --card: #141417;
+            --accent: #8b5cf6;
+            --text: #f5f5f7;
+            --muted: #9ca3af;
+            --border: #1f1f24;
+            --radius: 14px;
+            --max: 960px;
+        }
+        * { box-sizing: border-box; }
+        body { margin:0; font-family:'Inter', sans-serif; background: radial-gradient(circle at 20% 20%, rgba(139,92,246,0.12), transparent 32%), radial-gradient(circle at 80% 0%, rgba(59,130,246,0.12), transparent 28%), var(--bg); color: var(--text); min-height:100vh; }
+        nav { padding: 18px 20px; position: sticky; top: 0; background: rgba(15,15,16,0.85); backdrop-filter: blur(10px); border-bottom: 1px solid var(--border); }
+        nav .row { max-width: var(--max); margin: 0 auto; display:flex; align-items:center; justify-content:space-between; gap:12px; }
+        .logo { text-decoration:none; color:var(--text); font-weight:700; display:flex; gap:8px; align-items:center; }
+        .btn { padding:10px 16px; border-radius:12px; border:1px solid transparent; text-decoration:none; font-weight:600; display:inline-flex; align-items:center; justify-content:center; gap:8px; min-height:44px; }
+        .btn-primary { background:var(--accent); color:#0b0720; }
+        .container { max-width: var(--max); margin: 0 auto; padding: 40px 22px 80px; }
+        h1 { font-size: clamp(30px, 5vw, 46px); margin: 12px 0; }
+        p { color: var(--muted); }
+        form { margin-top: 20px; display: grid; gap: 14px; }
+        label { font-weight: 600; display:block; margin-bottom:6px; }
+        input, textarea, select {
+            width: 100%;
+            padding: 12px 14px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            background: #0d0d11;
+            color: var(--text);
+            font-size: 15px;
+        }
+        textarea { resize: vertical; min-height: 96px; }
+        .card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 20px 22px;
+            box-shadow: 0 12px 30px rgba(0,0,0,0.35);
+        }
+        .tag {
+            display:inline-flex; align-items:center; gap:8px;
+            background: rgba(139,92,246,0.12);
+            color: #c4b5fd;
+            padding: 8px 12px;
+            border-radius: 999px;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+        }
+        .row2 { display:grid; gap:14px; grid-template-columns: repeat(auto-fit, minmax(240px,1fr)); }
+        .hint { font-size: 13px; color: var(--muted); margin-top:4px; }
+    </style>
+</head>
+<body>
+    <nav>
+        <div class="row">
+            <a class="logo" href="/"><i class="fas fa-robot"></i> Mathia.OS</a>
+            <a class="btn btn-primary" href="{% url 'users:pricing' %}"><i class="fas fa-arrow-left"></i> Back to pricing</a>
+        </div>
+    </nav>
+
+    <div class="container">
+        <span class="tag"><i class="fas fa-ticket"></i> 30-day invite-only trial</span>
+        <h1>Tell us how you’ll use Mathia</h1>
+        <p>We prioritize builders who will run real workflows in the next 30 days. Share your context so we can get you the right setup.</p>
+
+        <div class="card">
+            {% if form.errors %}
+            <div style="background: rgba(239,68,68,0.12); border:1px solid rgba(248,113,113,0.4); color:#fecdd3; padding:10px 12px; border-radius:12px; margin-bottom:12px;">
+                Please fix the highlighted fields.
+            </div>
+            {% endif %}
+            <form method="post">
+                {% csrf_token %}
+                <div class="row2">
+                    <div>
+                        <label for="id_name">Your name</label>
+                        {{ form.name }}
+                    </div>
+                    <div>
+                        <label for="id_email">Work email</label>
+                        {{ form.email }}
+                        <div class="hint">Use the email you'll activate with (links are unique).</div>
+                    </div>
+                </div>
+                <div class="row2">
+                    <div>
+                        <label for="id_role">Role / title</label>
+                        {{ form.role }}
+                    </div>
+                    <div>
+                        <label for="id_company">Company / brand</label>
+                        {{ form.company }}
+                    </div>
+                </div>
+                <div class="row2">
+                    <div>
+                        <label for="id_industry">Industry</label>
+                        {{ form.industry }}
+                    </div>
+                    <div>
+                        <label for="id_team_size">Team size</label>
+                        {{ form.team_size }}
+                    </div>
+                </div>
+                <div>
+                    <label for="id_primary_use_case">What should Mathia do first?</label>
+                    {{ form.primary_use_case }}
+                </div>
+                <div>
+                    <label for="id_pain_points">Where are you stuck today?</label>
+                    {{ form.pain_points }}
+                </div>
+                <div class="row2">
+                    <div>
+                        <label for="id_success_metric">How will you know this worked?</label>
+                        {{ form.success_metric }}
+                    </div>
+                    <div>
+                        <label for="id_budget_readiness">Budget readiness</label>
+                        {{ form.budget_readiness }}
+                    </div>
+                </div>
+                <div class="row2">
+                    <div>
+                        <label for="id_go_live_timeframe">Go-live timeframe</label>
+                        {{ form.go_live_timeframe }}
+                    </div>
+                    <div>
+                        <label for="id_current_stack">Your current stack</label>
+                        {{ form.current_stack }}
+                    </div>
+                </div>
+                <div>
+                    <label for="id_heard_from">How did you hear about Mathia?</label>
+                    {{ form.heard_from }}
+                </div>
+                <button type="submit" class="btn btn-primary" style="margin-top:6px; width:100%; justify-content:center;">
+                    <i class="fas fa-paper-plane"></i> Submit & request invite
+                </button>
+            </form>
+        </div>
+    </div>
+</body>
+</html>

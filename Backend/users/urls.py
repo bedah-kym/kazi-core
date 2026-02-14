@@ -29,4 +29,19 @@ urlpatterns = [
     path('integrations/mailgun/connect/', integrations_views.connect_mailgun, name='connect_mailgun'),
     path('integrations/intasend/connect/', integrations_views.connect_intasend, name='connect_intasend'),
     path('integrations/disconnect/<str:integration_type>/', integrations_views.disconnect_integration, name='disconnect_integration'),
+
+    # Marketing / value pages
+    path('why/', views.why_mathia, name='why_mathia'),
+    path('playbooks/', views.playbooks, name='playbooks'),
+    path('pricing/', views.pricing, name='pricing'),
+    path('trust/', views.trust, name='trust'),
+    path('how-it-works/', views.how_it_works, name='how_it_works'),
+    path('workflows/', views.workflows_library, name='workflows_library'),
+    path('updates/', views.updates, name='updates'),
+
+    # Trial funnel
+    path('trial/apply/', views.trial_apply, name='trial_apply'),
+    path('trial/applications/', views.trial_applications, name='trial_applications'),
+    path('trial/applications/<int:pk>/send/', views.send_trial_invite, name='send_trial_invite'),
+    path('trial/activate/<str:token>/', views.activate_trial, name='activate_trial'),
 ]

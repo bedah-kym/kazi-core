@@ -1,449 +1,192 @@
 {% load static %}
+{% load socialaccount %}
 <!DOCTYPE html>
-<html lang="en" class="dark">
-
+<html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
-  <meta http-equiv="x-ua-compatible" content="ie=edge" />
-  <title>KwikChat — Sign in</title>
-
-  <!-- Tailwind CSS -->
-  <script src="https://cdn.tailwindcss.com"></script>
-
-  <!-- Font Awesome -->
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
-
-  <!-- Inter font (shadcn default) -->
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-
-  <script>
-    // Tailwind config for shadcn-like design system
-    tailwind.config = {
-      darkMode: 'class',
-      theme: {
-        extend: {
-          colors: {
-            border: 'hsl(var(--border))',
-            input: 'hsl(var(--input))',
-            ring: 'hsl(var(--ring))',
-            background: 'hsl(var(--background))',
-            foreground: 'hsl(var(--foreground))',
-            primary: {
-              DEFAULT: 'hsl(var(--primary))',
-              foreground: 'hsl(var(--primary-foreground))',
-            },
-            secondary: {
-              DEFAULT: 'hsl(var(--secondary))',
-              foreground: 'hsl(var(--secondary-foreground))',
-            },
-            muted: {
-              DEFAULT: 'hsl(var(--muted))',
-              foreground: 'hsl(var(--muted-foreground))',
-            },
-            accent: {
-              DEFAULT: 'hsl(var(--accent))',
-              foreground: 'hsl(var(--accent-foreground))',
-            },
-            destructive: {
-              DEFAULT: 'hsl(var(--destructive))',
-              foreground: 'hsl(var(--destructive-foreground))',
-            },
-            card: {
-              DEFAULT: 'hsl(var(--card))',
-              foreground: 'hsl(var(--card-foreground))',
-            },
-          },
-          borderRadius: {
-            lg: 'var(--radius)',
-            md: 'calc(var(--radius) - 2px)',
-            sm: 'calc(var(--radius) - 4px)',
-          },
-          fontFamily: {
-            sans: ['Inter', 'system-ui', 'sans-serif'],
-          },
-        },
-      },
-    }
-  </script>
-
-  <style>
-    /* Shadcn UI Color System */
-    :root {
-      --background: 0 0% 100%;
-      --foreground: 222.2 84% 4.9%;
-      --card: 0 0% 100%;
-      --card-foreground: 222.2 84% 4.9%;
-      --primary: 222.2 47.4% 11.2%;
-      --primary-foreground: 210 40% 98%;
-      --secondary: 210 40% 96.1%;
-      --secondary-foreground: 222.2 47.4% 11.2%;
-      --muted: 210 40% 96.1%;
-      --muted-foreground: 215.4 16.3% 46.9%;
-      --accent: 210 40% 96.1%;
-      --accent-foreground: 222.2 47.4% 11.2%;
-      --destructive: 0 84.2% 60.2%;
-      --destructive-foreground: 210 40% 98%;
-      --border: 214.3 31.8% 91.4%;
-      --input: 214.3 31.8% 91.4%;
-      --ring: 222.2 84% 4.9%;
-      --radius: 0.5rem;
-    }
-
-    .dark {
-      --background: 222.2 84% 4.9%;
-      --foreground: 210 40% 98%;
-      --card: 222.2 84% 4.9%;
-      --card-foreground: 210 40% 98%;
-      --primary: 210 40% 98%;
-      --primary-foreground: 222.2 47.4% 11.2%;
-      --secondary: 217.2 32.6% 17.5%;
-      --secondary-foreground: 210 40% 98%;
-      --muted: 217.2 32.6% 17.5%;
-      --muted-foreground: 215 20.2% 65.1%;
-      --accent: 217.2 32.6% 17.5%;
-      --accent-foreground: 210 40% 98%;
-      --destructive: 0 62.8% 30.6%;
-      --destructive-foreground: 210 40% 98%;
-      --border: 217.2 32.6% 17.5%;
-      --input: 217.2 32.6% 17.5%;
-      --ring: 212.7 26.8% 83.9%;
-    }
-
-    * {
-      border-color: hsl(var(--border));
-    }
-
-    body {
-      font-family: 'Inter', system-ui, sans-serif;
-    }
-
-    /* Custom smooth transitions */
-    .theme-transition {
-      transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
-    }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mathia - Sign in</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --notion-bg: #ffffff;
+            --notion-text: #37352f;
+            --notion-gray: #f7f7f5;
+            --notion-border: #e9e9e7;
+            --notion-muted: rgba(55, 53, 47, 0.65);
+            --accent: #000000;
+            --radius: 12px;
+            --max: 960px;
+            --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: var(--font-sans);
+            background: var(--notion-bg);
+            color: var(--notion-text);
+            line-height: 1.6;
+        }
+        nav {
+            position: sticky;
+            top: 0;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(8px);
+            border-bottom: 1px solid var(--notion-border);
+            padding: 14px 18px;
+            z-index: 10;
+        }
+        nav .row {
+            max-width: var(--max);
+            margin: 0 auto;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+        .logo {
+            text-decoration: none;
+            color: var(--notion-text);
+            font-weight: 700;
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        .btn {
+            padding: 10px 16px;
+            border-radius: 10px;
+            border: 1px solid transparent;
+            text-decoration: none;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            min-height: 44px;
+        }
+        .btn-primary { background: var(--accent); color: #ffffff; }
+        .btn-ghost { border: 1px solid var(--notion-border); color: var(--notion-text); }
+        .container {
+            max-width: 520px;
+            margin: 0 auto;
+            padding: 48px 22px 80px;
+        }
+        .card {
+            background: #ffffff;
+            border: 1px solid var(--notion-border);
+            border-radius: var(--radius);
+            padding: 28px;
+            box-shadow: 0 10px 24px rgba(0, 0, 0, 0.05);
+        }
+        h1 { font-size: 28px; margin: 0 0 6px; }
+        p { color: var(--notion-muted); margin: 0; }
+        form { display: grid; gap: 14px; margin-top: 22px; }
+        label { font-weight: 600; display: block; margin-bottom: 6px; }
+        input {
+            width: 100%;
+            padding: 10px 12px;
+            border-radius: 8px;
+            border: 1px solid var(--notion-border);
+            background: #ffffff;
+            color: var(--notion-text);
+            font-size: 15px;
+        }
+        .field-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+        .muted-link { color: var(--notion-muted); text-decoration: none; font-size: 13px; }
+        .muted-link:hover { text-decoration: underline; }
+        .divider {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 18px 0;
+            color: var(--notion-muted);
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+        .divider::before,
+        .divider::after {
+            content: "";
+            flex: 1;
+            height: 1px;
+            background: var(--notion-border);
+        }
+        .social-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 10px;
+        }
+        .alert {
+            background: #f1f0ee;
+            border: 1px solid var(--notion-border);
+            color: var(--notion-text);
+            padding: 10px 12px;
+            border-radius: 10px;
+            font-size: 14px;
+            margin-top: 16px;
+        }
+        .footer-links {
+            margin-top: 18px;
+            display: grid;
+            gap: 6px;
+            font-size: 14px;
+        }
+        .footer-links a { color: var(--notion-text); text-decoration: underline; }
+    </style>
 </head>
-
-<body class="bg-background text-foreground theme-transition min-h-screen">
-
-  <!-- Theme Toggle Button (Fixed top-right) -->
-  <button id="themeToggle"
-    class="fixed top-4 right-4 z-50 p-2.5 rounded-md bg-card border border-border hover:bg-accent transition-colors"
-    aria-label="Toggle theme">
-    <i class="fas fa-moon dark:hidden text-foreground"></i>
-    <i class="fas fa-sun hidden dark:inline text-foreground"></i>
-  </button>
-
-  <div class="min-h-screen flex items-center justify-center p-4">
-    <div class="w-full max-w-5xl">
-      <div class="grid lg:grid-cols-2 gap-8 items-center">
-
-        <!-- Left Column - Branding & Info -->
-        <div class="hidden lg:flex flex-col justify-center space-y-6 pr-8">
-          <div class="space-y-4">
-            <div class="flex items-center space-x-3">
-              <div class="w-12 h-12 rounded-lg bg-primary flex items-center justify-center">
-                <i class="fas fa-bolt text-primary-foreground text-xl"></i>
-              </div>
-              <h1 class="text-3xl font-bold tracking-tight">KwikChat</h1>
-            </div>
-            <p class="text-xl text-muted-foreground leading-relaxed">
-              Fast, secure, and intelligent messaging for modern teams.
-            </p>
-          </div>
-
-          <div class="space-y-4 pt-6">
-            <div class="flex items-start space-x-3">
-              <div class="w-8 h-8 rounded-md bg-muted flex items-center justify-center flex-shrink-0 mt-0.5">
-                <i class="fas fa-shield-alt text-sm text-muted-foreground"></i>
-              </div>
-              <div>
-                <h3 class="font-semibold text-sm mb-1">Enterprise Security</h3>
-                <p class="text-sm text-muted-foreground">End-to-end encryption for all your conversations</p>
-              </div>
-            </div>
-
-            <div class="flex items-start space-x-3">
-              <div class="w-8 h-8 rounded-md bg-muted flex items-center justify-center flex-shrink-0 mt-0.5">
-                <i class="fas fa-robot text-sm text-muted-foreground"></i>
-              </div>
-              <div>
-                <h3 class="font-semibold text-sm mb-1">AI-Powered Assistant</h3>
-                <p class="text-sm text-muted-foreground">Smart replies and contextual suggestions</p>
-              </div>
-            </div>
-
-            <div class="flex items-start space-x-3">
-              <div class="w-8 h-8 rounded-md bg-muted flex items-center justify-center flex-shrink-0 mt-0.5">
-                <i class="fas fa-bolt text-sm text-muted-foreground"></i>
-              </div>
-              <div>
-                <h3 class="font-semibold text-sm mb-1">Lightning Fast</h3>
-                <p class="text-sm text-muted-foreground">Real-time messaging with zero lag</p>
-              </div>
-            </div>
-          </div>
-
-          <div class="pt-6 border-t border-border">
-            <p class="text-sm text-muted-foreground">
-              "This platform has transformed how our team communicates. It's fast, intuitive, and just works."
-            </p>
-            <div class="flex items-center space-x-2 mt-3">
-              <div class="w-8 h-8 rounded-full bg-muted"></div>
-              <div class="text-sm">
-                <p class="font-medium">Sarah Johnson</p>
-                <p class="text-muted-foreground text-xs">Product Manager, TechCorp</p>
-              </div>
-            </div>
-          </div>
+<body>
+    <nav>
+        <div class="row">
+            <a class="logo" href="/"><i class="fas fa-robot"></i> Mathia.OS</a>
+            <a class="btn btn-ghost" href="{% url 'users:trial_apply' %}">Request invite</a>
         </div>
+    </nav>
 
-        <!-- Right Column - Login Form -->
-        <div class="w-full">
-          <div class="bg-card border border-border rounded-lg p-8 shadow-sm theme-transition">
-            <div class="mb-8">
-              <h2 class="text-2xl font-semibold tracking-tight mb-2">Welcome back</h2>
-              <p class="text-sm text-muted-foreground">
-                Enter your credentials to sign in to your account
-              </p>
-            </div>
-
-            <!-- Error Messages -->
-            {% if form.errors %}
-            <div class="mb-6 p-4 rounded-md bg-destructive/10 border border-destructive/20" role="alert">
-              <div class="flex items-center space-x-2">
-                <i class="fas fa-exclamation-circle text-destructive text-sm"></i>
-                <p class="text-sm text-destructive font-medium">Invalid username or password. Please try again.</p>
-              </div>
-            </div>
-            {% endif %}
+    <div class="container">
+        <div class="card">
+            <h1>Welcome back</h1>
+            <p>Sign in to pick up where your workflows left off.</p>
 
             {% if messages %}
             {% for message in messages %}
-            <div class="mb-6 p-4 rounded-md bg-primary/10 border border-primary/20" role="status">
-              <div class="flex items-center space-x-2">
-                <i class="fas fa-info-circle text-primary text-sm"></i>
-                <p class="text-sm text-primary font-medium">{{ message }}</p>
-              </div>
-            </div>
+            <div class="alert">{{ message }}</div>
             {% endfor %}
             {% endif %}
 
-            <form method="post" id="loginForm" novalidate class="space-y-6">
-              {% csrf_token %}
-
-              <!-- Username -->
-              <div class="space-y-2">
-                <label for="username" class="text-sm font-medium block">
-                  Username
-                </label>
-                <div class="relative">
-                  <input type="text" name="username" id="username"
-                    class="w-full px-3 py-2 bg-background border border-input rounded-md text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background transition-all theme-transition"
-                    placeholder="Enter your username" required minlength="3" autocomplete="username">
+            <form method="post">
+                {% csrf_token %}
+                <div>
+                    <label for="username">Username</label>
+                    <input type="text" name="username" id="username" required autocomplete="username" placeholder="Enter your username">
                 </div>
-              </div>
-
-              <!-- Password -->
-              <div class="space-y-2">
-                <div class="flex items-center justify-between">
-                  <label for="password" class="text-sm font-medium block">
-                    Password
-                  </label>
-                  <a href="#" class="text-sm text-primary hover:underline">
-                    Forgot password?
-                  </a>
+                <div>
+                    <div class="field-row">
+                        <label for="password">Password</label>
+                        <a href="#" class="muted-link">Forgot password?</a>
+                    </div>
+                    <input type="password" name="password" id="password" required autocomplete="current-password" placeholder="Enter your password">
                 </div>
-                <div class="relative">
-                  <input type="password" name="password" id="password"
-                    class="w-full px-3 py-2 bg-background border border-input rounded-md text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background transition-all theme-transition pr-10"
-                    placeholder="Enter your password" required minlength="8" autocomplete="current-password">
-                  <button type="button" id="togglePassword"
-                    class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                    aria-label="Toggle password visibility">
-                    <i class="fas fa-eye text-sm"></i>
-                  </button>
-                </div>
-              </div>
-
-              <!-- Remember Me -->
-              <div class="flex items-center space-x-2">
-                <input type="checkbox" name="remember" id="remember"
-                  class="w-4 h-4 rounded border-input text-primary focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background cursor-pointer">
-                <label for="remember" class="text-sm text-muted-foreground cursor-pointer select-none">
-                  Remember me for 30 days
-                </label>
-              </div>
-
-              <!-- Submit Button -->
-              <button type="submit" id="submitBtn"
-                class="w-full py-2.5 px-4 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2">
-                <span id="btnSpinner" class="hidden">
-                  <svg class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                    <path class="opacity-75" fill="currentColor"
-                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z">
-                    </path>
-                  </svg>
-                </span>
-                <span id="btnText">
-                  <i class="fas fa-sign-in-alt mr-2"></i>Sign in
-                </span>
-              </button>
-
-              <!-- Divider -->
-              <div class="relative my-6">
-                <div class="absolute inset-0 flex items-center">
-                  <div class="w-full border-t border-border"></div>
-                </div>
-                <div class="relative flex justify-center text-xs uppercase">
-                  <span class="bg-card px-2 text-muted-foreground">Or continue with</span>
-                </div>
-              </div>
-
-              {% load socialaccount %}
-              <!-- Social Login -->
-              <div class="grid grid-cols-2 gap-4">
-                <a href="{% provider_login_url 'google' %}"
-                  class="py-2.5 px-4 border border-input bg-background hover:bg-accent hover:text-accent-foreground rounded-md text-sm font-medium transition-colors flex items-center justify-center space-x-2">
-                  <i class="fab fa-google"></i>
-                  <span>Google</span>
-                </a>
-                <a href="{% provider_login_url 'github' %}"
-                  class="py-2.5 px-4 border border-input bg-background hover:bg-accent hover:text-accent-foreground rounded-md text-sm font-medium transition-colors flex items-center justify-center space-x-2">
-                  <i class="fab fa-github"></i>
-                  <span>GitHub</span>
-                </a>
-                <a href="{% provider_login_url 'linkedin_oauth2' %}"
-                  class="py-2.5 px-4 border border-input bg-background hover:bg-accent hover:text-accent-foreground rounded-md text-sm font-medium transition-colors flex items-center justify-center space-x-2">
-                  <i class="fab fa-linkedin"></i>
-                  <span>LinkedIn</span>
-                </a>
-                <a href="{% provider_login_url 'twitter' %}"
-                  class="py-2.5 px-4 border border-input bg-background hover:bg-accent hover:text-accent-foreground rounded-md text-sm font-medium transition-colors flex items-center justify-center space-x-2">
-                  <i class="fab fa-twitter"></i>
-                  <span>Twitter</span>
-                </a>
-              </div>
+                <button type="submit" class="btn btn-primary" style="width:100%; justify-content:center;">
+                    <i class="fas fa-sign-in-alt"></i> Sign in
+                </button>
             </form>
 
-            <!-- Footer -->
-            <div class="mt-8 pt-6 border-t border-border text-center">
-              <p class="text-sm text-muted-foreground">
-                Don't have an account?
-                <a href="{% url 'users:register' %}" class="text-primary hover:underline font-medium">Sign up</a>
-              </p>
+            <div class="divider">Or continue with</div>
+            <div class="social-grid">
+                <a href="{% provider_login_url 'google' %}" class="btn btn-ghost"><i class="fab fa-google"></i> Google</a>
+                <a href="{% provider_login_url 'github' %}" class="btn btn-ghost"><i class="fab fa-github"></i> GitHub</a>
+                <a href="{% provider_login_url 'linkedin_oauth2' %}" class="btn btn-ghost"><i class="fab fa-linkedin"></i> LinkedIn</a>
+                <a href="{% provider_login_url 'twitter' %}" class="btn btn-ghost"><i class="fab fa-twitter"></i> Twitter</a>
             </div>
-          </div>
 
-          <!-- Mobile branding (shown only on small screens) -->
-          <div class="lg:hidden mt-8 text-center">
-            <p class="text-xs text-muted-foreground">
-              © 2025 KwikChat. All rights reserved.
-            </p>
-          </div>
+            <div class="footer-links">
+                <span>Need access? <a href="{% url 'users:trial_apply' %}">Request an invite</a>.</span>
+                <span>Have an invite? <a href="{% url 'users:register' %}">Create your account</a>.</span>
+            </div>
         </div>
-
-      </div>
     </div>
-  </div>
-
-  <script>
-    // ========================================
-    // Theme Toggle with localStorage persistence
-    // ========================================
-    const themeToggle = document.getElementById('themeToggle');
-    const html = document.documentElement;
-
-    // Load theme from localStorage or default to dark
-    const currentTheme = localStorage.getItem('theme') || 'dark';
-    html.classList.toggle('dark', currentTheme === 'dark');
-
-    themeToggle.addEventListener('click', () => {
-      const isDark = html.classList.contains('dark');
-      html.classList.toggle('dark');
-      localStorage.setItem('theme', isDark ? 'light' : 'dark');
-    });
-
-    // ========================================
-    // Form handling
-    // ========================================
-    const form = document.getElementById('loginForm');
-    const submitBtn = document.getElementById('submitBtn');
-    const btnText = document.getElementById('btnText');
-    const btnSpinner = document.getElementById('btnSpinner');
-    const inputs = form.querySelectorAll('input[required]');
-    const togglePassword = document.getElementById('togglePassword');
-    const passwordInput = document.getElementById('password');
-
-    // Password visibility toggle
-    togglePassword.addEventListener('click', () => {
-      const type = passwordInput.type === 'password' ? 'text' : 'password';
-      passwordInput.type = type;
-      const icon = togglePassword.querySelector('i');
-      icon.classList.toggle('fa-eye');
-      icon.classList.toggle('fa-eye-slash');
-    });
-
-    // Input validation
-    function validateInput(input) {
-      const isValid = input.checkValidity();
-      if (!isValid) {
-        input.classList.add('border-destructive');
-        input.classList.remove('border-input');
-      } else {
-        input.classList.remove('border-destructive');
-        input.classList.add('border-input');
-      }
-      return isValid;
-    }
-
-    inputs.forEach(input => {
-      input.addEventListener('blur', () => validateInput(input));
-      input.addEventListener('input', () => {
-        if (input.classList.contains('border-destructive')) {
-          validateInput(input);
-        }
-      });
-    });
-
-    // Form submission
-    form.addEventListener('submit', (e) => {
-      let isValid = true;
-
-      inputs.forEach(input => {
-        if (!validateInput(input)) {
-          isValid = false;
-        }
-      });
-
-      if (!isValid) {
-        e.preventDefault();
-        const firstError = form.querySelector('.border-destructive');
-        if (firstError) firstError.focus();
-        return;
-      }
-
-      // Show loading state
-      submitBtn.disabled = true;
-      btnText.classList.add('hidden');
-      btnSpinner.classList.remove('hidden');
-    });
-
-    // Restore state on back/refresh
-    window.addEventListener('pageshow', (event) => {
-      if (event.persisted) {
-        submitBtn.disabled = false;
-        btnText.classList.remove('hidden');
-        btnSpinner.classList.add('hidden');
-        inputs.forEach(input => {
-          input.classList.remove('border-destructive');
-          input.classList.add('border-input');
-        });
-      }
-    });
-  </script>
 </body>
-
 </html>

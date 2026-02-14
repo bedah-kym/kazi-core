@@ -1,227 +1,175 @@
 {% load static %}
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="utf-8">
-    <title>Register - KwikChat</title>
+    <title>Create Account - Mathia</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-    <link href="{% static 'css/context-panel.css' %}" rel="stylesheet">
     <link rel="icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
 
     <style>
+        :root {
+            --notion-bg: #ffffff;
+            --notion-text: #37352f;
+            --notion-gray: #f7f7f5;
+            --notion-border: #e9e9e7;
+            --notion-muted: rgba(55, 53, 47, 0.65);
+            --accent: #000000;
+            --radius: 12px;
+            --max: 960px;
+            --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+        }
+        * { box-sizing: border-box; }
         body {
-            background: hsl(var(--background));
-            min-height: 100vh;
+            margin: 0;
+            font-family: var(--font-sans);
+            background: var(--notion-bg);
+            color: var(--notion-text);
+            line-height: 1.6;
+        }
+        nav {
+            position: sticky;
+            top: 0;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(8px);
+            border-bottom: 1px solid var(--notion-border);
+            padding: 14px 18px;
+            z-index: 10;
+        }
+        nav .row {
+            max-width: var(--max);
+            margin: 0 auto;
             display: flex;
             align-items: center;
-            justify-content: center;
+            justify-content: space-between;
+            gap: 12px;
         }
-
-        .register-container {
-            max-width: 500px;
-            width: 100%;
-            padding: 2rem;
-        }
-
-        .register-card {
-            background: hsl(var(--card));
-            border: 1px solid hsl(var(--border));
-            border-radius: var(--radius);
-            padding: 2.5rem;
-            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
-        }
-
-        .register-logo {
-            text-align: center;
-            margin-bottom: 2rem;
-        }
-
-        .register-logo h1 {
-            font-size: 2rem;
+        .logo {
+            text-decoration: none;
+            color: var(--notion-text);
             font-weight: 700;
-            color: hsl(var(--foreground));
-            margin-bottom: 0.5rem;
-        }
-
-        .register-logo p {
-            color: hsl(var(--muted-foreground));
-            font-size: 0.9375rem;
-        }
-
-        .form-label {
-            color: hsl(var(--foreground));
-            font-weight: 500;
-            margin-bottom: 0.5rem;
-        }
-
-        .form-control {
-            background: hsl(var(--background));
-            border: 1px solid hsl(var(--border));
-            color: hsl(var(--foreground));
-            border-radius: calc(var(--radius) - 2px);
-            padding: 0.75rem 1rem;
-        }
-
-        .form-control:focus {
-            border-color: hsl(var(--ring));
-            box-shadow: 0 0 0 3px hsla(var(--ring) / 0.1);
-        }
-
-        .btn-register {
-            width: 100%;
-            padding: 0.875rem;
-            background: hsl(var(--primary));
-            color: hsl(var(--primary-foreground));
-            border: none;
-            border-radius: calc(var(--radius) - 2px);
-            font-weight: 600;
-            transition: all 0.2s;
-        }
-
-        .btn-register:hover {
-            opacity: 0.9;
-            transform: translateY(-1px);
-        }
-
-        .divider {
-            text-align: center;
-            margin: 1.5rem 0;
-            position: relative;
-        }
-
-        .divider::before {
-            content: '';
-            position: absolute;
-            top: 50%;
-            left: 0;
-            right: 0;
-            height: 1px;
-            background: hsl(var(--border));
-        }
-
-        .divider span {
-            background: hsl(var(--card));
-            padding: 0 1rem;
-            position: relative;
-            color: hsl(var(--muted-foreground));
-            font-size: 0.875rem;
-        }
-
-        .social-btns {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 0.75rem;
-        }
-
-        .social-btn {
-            padding: 0.75rem;
-            border: 1px solid hsl(var(--border));
-            background: hsl(var(--background));
-            color: hsl(var(--foreground));
-            border-radius: calc(var(--radius) - 2px);
-            text-decoration: none;
             display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        .btn {
+            padding: 10px 16px;
+            border-radius: 10px;
+            border: 1px solid transparent;
+            text-decoration: none;
+            font-weight: 600;
+            display: inline-flex;
             align-items: center;
             justify-content: center;
-            gap: 0.5rem;
-            transition: all 0.2s;
+            gap: 8px;
+            min-height: 44px;
         }
-
-        .social-btn:hover {
-            border-color: hsl(var(--ring));
-            background: hsl(var(--accent));
+        .btn-primary { background: var(--accent); color: #ffffff; }
+        .btn-ghost { border: 1px solid var(--notion-border); color: var(--notion-text); }
+        .container {
+            max-width: 560px;
+            margin: 0 auto;
+            padding: 48px 22px 80px;
         }
-
-        .login-link {
-            text-align: center;
-            margin-top: 1.5rem;
-            color: hsl(var(--muted-foreground));
+        .card {
+            background: #ffffff;
+            border: 1px solid var(--notion-border);
+            border-radius: var(--radius);
+            padding: 28px;
+            box-shadow: 0 10px 24px rgba(0, 0, 0, 0.05);
         }
-
-        .login-link a {
-            color: hsl(var(--primary));
-            text-decoration: none;
+        h1 { font-size: 28px; margin: 0 0 6px; }
+        p { color: var(--notion-muted); margin: 0; }
+        form { display: grid; gap: 14px; margin-top: 22px; }
+        label { font-weight: 600; display: block; margin-bottom: 6px; }
+        input {
+            width: 100%;
+            padding: 10px 12px;
+            border-radius: 8px;
+            border: 1px solid var(--notion-border);
+            background: #ffffff;
+            color: var(--notion-text);
+            font-size: 15px;
         }
-
-        .login-link a:hover {
-            text-decoration: underline;
+        .alert {
+            background: #f1f0ee;
+            border: 1px solid var(--notion-border);
+            color: var(--notion-text);
+            padding: 10px 12px;
+            border-radius: 10px;
+            font-size: 14px;
+            margin-top: 16px;
         }
+        .footer-links {
+            margin-top: 18px;
+            display: grid;
+            gap: 6px;
+            font-size: 14px;
+        }
+        .footer-links a { color: var(--notion-text); text-decoration: underline; }
     </style>
 </head>
 
 <body>
-    <div class="register-container">
-        <div class="register-card">
-            <div class="register-logo">
-                <h1><i class="fas fa-brain me-2"></i>KwikChat</h1>
-                <p>Your Personal Brand OS</p>
-            </div>
+    <nav>
+        <div class="row">
+            <a class="logo" href="/"><i class="fas fa-robot"></i> Mathia.OS</a>
+            <a class="btn btn-ghost" href="{% url 'users:trial_apply' %}">Request invite</a>
+        </div>
+    </nav>
+
+    <div class="container">
+        <div class="card">
+            <h1>Create your account</h1>
+            <p>Use the email tied to your invite to unlock the 30-day trial.</p>
 
             {% if messages %}
             {% for message in messages %}
-            <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
-                {{ message }}
-                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-            </div>
+            <div class="alert">{{ message }}</div>
             {% endfor %}
             {% endif %}
 
             <form method="post">
                 {% csrf_token %}
-                <div class="mb-3">
-                    <label class="form-label">Full Name</label>
-                    <input type="text" class="form-control" name="full_name" required>
+                <div>
+                    <label for="full_name">Full name</label>
+                    <input type="text" id="full_name" name="full_name" required>
                 </div>
 
-                <div class="mb-3">
-                    <label class="form-label">Email</label>
-                    <input type="email" class="form-control" name="email" required>
+                <div>
+                    <label for="email">Email</label>
+                    <input type="email" id="email" name="email" required>
                 </div>
 
-                <div class="mb-3">
-                    <label class="form-label">Username</label>
-                    <input type="text" class="form-control" name="username" required>
+                <div>
+                    <label for="username">Username</label>
+                    <input type="text" id="username" name="username" required>
                 </div>
 
-                <div class="mb-3">
-                    <label class="form-label">Password</label>
-                    <input type="password" class="form-control" name="password1" required>
+                <div>
+                    <label for="password1">Password</label>
+                    <input type="password" id="password1" name="password1" required>
                 </div>
 
-                <div class="mb-4">
-                    <label class="form-label">Confirm Password</label>
-                    <input type="password" class="form-control" name="password2" required>
+                <div>
+                    <label for="password2">Confirm password</label>
+                    <input type="password" id="password2" name="password2" required>
                 </div>
 
-                <button type="submit" class="btn-register">
-                    Create Account
+                <button type="submit" class="btn btn-primary" style="width:100%; justify-content:center;">
+                    Create account
                 </button>
             </form>
 
-            <div class="divider">
-                <span>Or continue with</span>
-            </div>
-
-            <div class="social-btns">
-                {% load socialaccount %}
-                <a href="{% provider_login_url 'google' %}" class="social-btn">
-                    <i class="fab fa-google"></i> Google
-                </a>
-                <a href="{% provider_login_url 'github' %}" class="social-btn">
-                    <i class="fab fa-github"></i> GitHub
-                </a>
-            </div>
-
-            <div class="login-link">
-                Already have an account? <a href="{% url 'users:login' %}">Sign in</a>
+            <div class="footer-links">
+                <span>Already have an account? <a href="{% url 'users:login' %}">Sign in</a>.</span>
+                <span>Need access? <a href="{% url 'users:trial_apply' %}">Request an invite</a>.</span>
             </div>
         </div>
     </div>
-
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
-
 </html>

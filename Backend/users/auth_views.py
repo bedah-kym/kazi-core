@@ -131,7 +131,7 @@ def onboarding(request):
             workspace.onboarding_completed = True
             workspace.save()
             
-            messages.success(request, 'Welcome to KwikChat! Your workspace is ready.')
+            messages.success(request, 'Welcome to Mathia! Your workspace is ready.')
             return redirect('users:dashboard')
     
     return render(request, 'users/onboarding.html', {

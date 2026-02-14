@@ -4,81 +4,153 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Request Invite • Mathia Trial</title>
+    <title>Request Invite - Mathia Trial</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <style>
         :root {
-            --bg: #0f0f10;
-            --card: #141417;
-            --accent: #8b5cf6;
-            --text: #f5f5f7;
-            --muted: #9ca3af;
-            --border: #1f1f24;
-            --radius: 14px;
+            --notion-bg: #ffffff;
+            --notion-text: #37352f;
+            --notion-gray: #f7f7f5;
+            --notion-border: #e9e9e7;
+            --notion-muted: rgba(55, 53, 47, 0.65);
+            --accent: #000000;
+            --radius: 12px;
             --max: 960px;
+            --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
         }
         * { box-sizing: border-box; }
-        body { margin:0; font-family:'Inter', sans-serif; background: radial-gradient(circle at 20% 20%, rgba(139,92,246,0.12), transparent 32%), radial-gradient(circle at 80% 0%, rgba(59,130,246,0.12), transparent 28%), var(--bg); color: var(--text); min-height:100vh; }
-        nav { padding: 18px 20px; position: sticky; top: 0; background: rgba(15,15,16,0.85); backdrop-filter: blur(10px); border-bottom: 1px solid var(--border); }
-        nav .row { max-width: var(--max); margin: 0 auto; display:flex; align-items:center; justify-content:space-between; gap:12px; }
-        .logo { text-decoration:none; color:var(--text); font-weight:700; display:flex; gap:8px; align-items:center; }
-        .btn { padding:10px 16px; border-radius:12px; border:1px solid transparent; text-decoration:none; font-weight:600; display:inline-flex; align-items:center; justify-content:center; gap:8px; min-height:44px; }
-        .btn-primary { background:var(--accent); color:#0b0720; }
-        .container { max-width: var(--max); margin: 0 auto; padding: 40px 22px 80px; }
+        body {
+            margin: 0;
+            font-family: var(--font-sans);
+            background: var(--notion-bg);
+            color: var(--notion-text);
+            line-height: 1.6;
+        }
+        nav {
+            position: sticky;
+            top: 0;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(8px);
+            border-bottom: 1px solid var(--notion-border);
+            padding: 14px 18px;
+            z-index: 10;
+        }
+        nav .row {
+            max-width: var(--max);
+            margin: 0 auto;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+        .logo {
+            text-decoration: none;
+            color: var(--notion-text);
+            font-weight: 700;
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        .btn {
+            padding: 10px 16px;
+            border-radius: 10px;
+            border: 1px solid transparent;
+            text-decoration: none;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            min-height: 44px;
+        }
+        .btn-primary { background: var(--accent); color: #ffffff; }
+        .btn-ghost { border: 1px solid var(--notion-border); color: var(--notion-text); }
+        .container {
+            max-width: var(--max);
+            margin: 0 auto;
+            padding: 40px 22px 80px;
+        }
         h1 { font-size: clamp(30px, 5vw, 46px); margin: 12px 0; }
-        p { color: var(--muted); }
-        form { margin-top: 20px; display: grid; gap: 14px; }
-        label { font-weight: 600; display:block; margin-bottom:6px; }
+        p { color: var(--notion-muted); }
+        .tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: var(--notion-gray);
+            border: 1px solid var(--notion-border);
+            padding: 6px 12px;
+            border-radius: 999px;
+            font-weight: 600;
+            font-size: 13px;
+        }
+        .card {
+            margin-top: 18px;
+            background: #ffffff;
+            border: 1px solid var(--notion-border);
+            border-radius: var(--radius);
+            padding: 22px;
+            box-shadow: 0 10px 24px rgba(0, 0, 0, 0.05);
+        }
+        form { display: grid; gap: 14px; }
+        .row2 { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+        label { font-weight: 600; display: block; margin-bottom: 6px; }
         input, textarea, select {
             width: 100%;
-            padding: 12px 14px;
-            border-radius: 12px;
-            border: 1px solid var(--border);
-            background: #0d0d11;
-            color: var(--text);
+            padding: 10px 12px;
+            border-radius: 8px;
+            border: 1px solid var(--notion-border);
+            background: #ffffff;
+            color: var(--notion-text);
             font-size: 15px;
         }
         textarea { resize: vertical; min-height: 96px; }
-        .card {
-            background: var(--card);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            padding: 20px 22px;
-            box-shadow: 0 12px 30px rgba(0,0,0,0.35);
+        .hint { font-size: 13px; color: var(--notion-muted); margin-top: 4px; }
+        .alert {
+            background: #f1f0ee;
+            border: 1px solid var(--notion-border);
+            color: var(--notion-text);
+            padding: 10px 12px;
+            border-radius: 10px;
+            margin-bottom: 12px;
+            font-size: 14px;
         }
-        .tag {
-            display:inline-flex; align-items:center; gap:8px;
-            background: rgba(139,92,246,0.12);
-            color: #c4b5fd;
-            padding: 8px 12px;
-            border-radius: 999px;
-            font-weight: 700;
-            letter-spacing: 0.02em;
+        .alert-error {
+            background: #fff2f0;
+            border-color: #f2c6c2;
+            color: #7a231b;
         }
-        .row2 { display:grid; gap:14px; grid-template-columns: repeat(auto-fit, minmax(240px,1fr)); }
-        .hint { font-size: 13px; color: var(--muted); margin-top:4px; }
+        @media (max-width: 640px) {
+            .container { padding: 32px 18px 60px; }
+        }
     </style>
 </head>
 <body>
     <nav>
         <div class="row">
             <a class="logo" href="/"><i class="fas fa-robot"></i> Mathia.OS</a>
-            <a class="btn btn-primary" href="{% url 'users:pricing' %}"><i class="fas fa-arrow-left"></i> Back to pricing</a>
+            <a class="btn btn-ghost" href="{% url 'users:pricing' %}"><i class="fas fa-arrow-left"></i> Back to pricing</a>
         </div>
     </nav>
 
     <div class="container">
         <span class="tag"><i class="fas fa-ticket"></i> 30-day invite-only trial</span>
-        <h1>Tell us how you’ll use Mathia</h1>
-        <p>We prioritize builders who will run real workflows in the next 30 days. Share your context so we can get you the right setup.</p>
+        <h1>Tell us how you will use Mathia</h1>
+        <p>We prioritize teams ready to run real workflows in the next 30 days. Share your context so we can set you up fast.</p>
 
         <div class="card">
-            {% if form.errors %}
-            <div style="background: rgba(239,68,68,0.12); border:1px solid rgba(248,113,113,0.4); color:#fecdd3; padding:10px 12px; border-radius:12px; margin-bottom:12px;">
-                Please fix the highlighted fields.
-            </div>
+            {% if messages %}
+            {% for message in messages %}
+            <div class="alert">{{ message }}</div>
+            {% endfor %}
             {% endif %}
+
+            {% if form.errors %}
+            <div class="alert alert-error">Please fix the highlighted fields.</div>
+            {% endif %}
+
             <form method="post">
                 {% csrf_token %}
                 <div class="row2">
@@ -89,16 +161,16 @@
                     <div>
                         <label for="id_email">Work email</label>
                         {{ form.email }}
-                        <div class="hint">Use the email you'll activate with (links are unique).</div>
+                        <div class="hint">Use the email you will activate with (links are unique).</div>
                     </div>
                 </div>
                 <div class="row2">
                     <div>
-                        <label for="id_role">Role / title</label>
+                        <label for="id_role">Role or title</label>
                         {{ form.role }}
                     </div>
                     <div>
-                        <label for="id_company">Company / brand</label>
+                        <label for="id_company">Company or brand</label>
                         {{ form.company }}
                     </div>
                 </div>
@@ -144,8 +216,8 @@
                     <label for="id_heard_from">How did you hear about Mathia?</label>
                     {{ form.heard_from }}
                 </div>
-                <button type="submit" class="btn btn-primary" style="margin-top:6px; width:100%; justify-content:center;">
-                    <i class="fas fa-paper-plane"></i> Submit & request invite
+                <button type="submit" class="btn btn-primary" style="margin-top:6px; width:100%;">
+                    <i class="fas fa-paper-plane"></i> Submit and request invite
                 </button>
             </form>
         </div>

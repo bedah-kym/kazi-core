@@ -1,10 +1,13 @@
 """Travel app views (REST API endpoints)"""
 import logging
+import datetime
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import status
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
+from django.contrib import messages
 
 from .models import Itinerary, ItineraryItem, Event
 from .serializers import ItinerarySerializer, ItineraryItemSerializer, EventSerializer
@@ -175,19 +178,84 @@ from django.contrib.auth.decorators import login_required
 @login_required
 def plan_trip_wizard(request):
     """Render the Trip Planning Wizard"""
+    if request.method == 'POST':
+        destination = request.POST.get('destination', '').strip()
+        start_date_raw = request.POST.get('start_date', '').strip()
+        end_date_raw = request.POST.get('end_date', '').strip()
+        budget_band = request.POST.get('budget', '').strip()
+        interests_raw = request.POST.get('interests', '').strip()
+
+        if not destination or not start_date_raw or not end_date_raw:
+            messages.error(request, "Destination and dates are required.")
+            return render(request, 'travel/plan_trip.html')
+
+        try:
+            start_date = datetime.date.fromisoformat(start_date_raw)
+            end_date = datetime.date.fromisoformat(end_date_raw)
+        except ValueError:
+            messages.error(request, "Please provide valid dates.")
+            return render(request, 'travel/plan_trip.html')
+
+        if end_date < start_date:
+            messages.error(request, "End date must be after the start date.")
+            return render(request, 'travel/plan_trip.html')
+
+        start_dt = timezone.make_aware(datetime.datetime.combine(start_date, datetime.time.min))
+        end_dt = timezone.make_aware(datetime.datetime.combine(end_date, datetime.time.max))
+
+        interests = [i for i in interests_raw.split(',') if i]
+
+        itinerary = Itinerary.objects.create(
+            user=request.user,
+            title=f"Trip to {destination}",
+            description=f"Trip planning for {destination}.",
+            region='worldwide',
+            start_date=start_dt,
+            end_date=end_dt,
+            metadata={
+                'destination': destination,
+                'budget_band': budget_band,
+                'interests': interests,
+            },
+        )
+        return redirect('travel:view_itinerary', itinerary_id=itinerary.id)
+
     return render(request, 'travel/plan_trip.html')
 
 @login_required
 def itinerary_list(request):
     """Render the Itinerary List (user-friendly UI)"""
     itineraries = Itinerary.objects.filter(user=request.user).order_by('-created_at')
-    return render(request, 'travel/itinerary_list.html', {'itineraries': itineraries})
+    now = timezone.now()
+    upcoming_count = itineraries.filter(start_date__gte=now, status__in=['draft', 'active']).count()
+    completed_count = itineraries.filter(status='completed').count()
+    return render(
+        request,
+        'travel/itinerary_list.html',
+        {
+            'itineraries': itineraries,
+            'upcoming_count': upcoming_count,
+            'completed_count': completed_count,
+        },
+    )
 
 @login_required
 def view_itinerary(request, itinerary_id):
     """Render the Itinerary Detail View"""
     itinerary = get_object_or_404(Itinerary, id=itinerary_id, user=request.user)
-    return render(request, 'travel/itinerary_detail.html', {'itinerary': itinerary})
+    destination = itinerary.metadata.get('destination') if isinstance(itinerary.metadata, dict) else None
+    travelers = None
+    if isinstance(itinerary.metadata, dict):
+        travelers = itinerary.metadata.get('travelers')
+    return render(
+        request,
+        'travel/itinerary_detail.html',
+        {
+            'itinerary': itinerary,
+            'destination': destination,
+            'travelers': travelers or 1,
+        },
+    )
 
 
 @api_view(['POST'])

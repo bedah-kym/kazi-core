@@ -1,229 +1,225 @@
 {% load static %}
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ itinerary.title }} | Mathia</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <!-- Font Awesome -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <!-- Leaflet CSS (Map placeholder) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
     <style>
+        :root {
+            --notion-bg: #ffffff;
+            --notion-text: #37352f;
+            --notion-gray: #f7f7f5;
+            --notion-border: #e9e9e7;
+            --notion-muted: rgba(55, 53, 47, 0.65);
+            --accent: #000000;
+            --radius: 12px;
+            --max: 1100px;
+            --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+        }
+        * { box-sizing: border-box; }
         body {
-            font-family: 'Inter', sans-serif;
+            margin: 0;
+            font-family: var(--font-sans);
+            background: var(--notion-bg);
+            color: var(--notion-text);
+            line-height: 1.6;
+        }
+        nav {
+            position: sticky;
+            top: 0;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(8px);
+            border-bottom: 1px solid var(--notion-border);
+            padding: 14px 18px;
+            z-index: 10;
+        }
+        nav .row {
+            max-width: var(--max);
+            margin: 0 auto;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+        .logo {
+            text-decoration: none;
+            color: var(--notion-text);
+            font-weight: 700;
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        .btn {
+            padding: 10px 16px;
+            border-radius: 10px;
+            border: 1px solid transparent;
+            text-decoration: none;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            min-height: 44px;
+        }
+        .btn-primary { background: var(--accent); color: #ffffff; }
+        .btn-ghost { border: 1px solid var(--notion-border); color: var(--notion-text); }
+        .container {
+            max-width: var(--max);
+            margin: 0 auto;
+            padding: 36px 22px 80px;
+        }
+        h1 { font-size: clamp(28px, 4vw, 40px); margin: 0 0 10px; }
+        .muted { color: var(--notion-muted); }
+        .meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 14px;
+            color: var(--notion-muted);
+            font-size: 14px;
+        }
+        .grid {
+            display: grid;
+            gap: 24px;
+            grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+            margin-top: 24px;
+        }
+        .card {
+            background: #ffffff;
+            border: 1px solid var(--notion-border);
+            border-radius: var(--radius);
+            padding: 18px;
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.05);
+        }
+        .timeline {
+            display: grid;
+            gap: 16px;
+        }
+        .item {
+            border: 1px solid var(--notion-border);
+            border-radius: 12px;
+            padding: 14px;
+            background: #ffffff;
+        }
+        .item-header {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+        }
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 4px 10px;
+            border-radius: 999px;
+            border: 1px solid var(--notion-border);
+            font-size: 12px;
+            font-weight: 600;
+            background: var(--notion-gray);
+        }
+        .summary-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 8px 0;
+            border-bottom: 1px solid var(--notion-border);
+            font-size: 14px;
+        }
+        .summary-row:last-child { border-bottom: none; }
+        #map { height: 220px; border-radius: 12px; border: 1px solid var(--notion-border); }
+        .empty {
+            text-align: center;
+            border: 1px dashed var(--notion-border);
+            border-radius: var(--radius);
+            padding: 30px 20px;
+            background: var(--notion-gray);
+        }
+        @media (max-width: 900px) {
+            .grid { grid-template-columns: 1fr; }
         }
     </style>
 </head>
-
-<body class="bg-gray-50 min-h-screen">
-
-    <!-- Header / Breadcrumb -->
-    <header class="bg-white border-b border-gray-200 sticky top-0 z-30">
-        <div class="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
-            <div class="flex items-center gap-2 text-sm text-gray-500">
-                <a href="/travel/itineraries/" class="hover:text-gray-900 transition-colors">My Trips</a>
-                <i class="fas fa-chevron-right text-xs"></i>
-                <span class="font-medium text-gray-900">{{ itinerary.title }}</span>
-            </div>
-
-            <div class="flex items-center gap-2">
-                <div class="relative group">
-                    <button
-                        class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background border border-slate-200 bg-white hover:bg-slate-100 hover:text-slate-900 h-9 px-4 py-2">
-                        <i class="fas fa-share-alt mr-2"></i> Share
-                    </button>
-                </div>
-                <div class="relative group">
-                    <button
-                        class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background bg-slate-900 text-white hover:bg-slate-900/90 h-9 px-4 py-2 shadow">
-                        <i class="fas fa-download mr-2"></i> Export
-                    </button>
-                </div>
+<body>
+    <nav>
+        <div class="row">
+            <a class="logo" href="/"><i class="fas fa-robot"></i> Mathia.OS</a>
+            <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                <a class="btn btn-ghost" href="{% url 'travel:itinerary_list' %}">Back to trips</a>
+                <a class="btn btn-primary" href="{% url 'travel:plan_trip' %}">Plan new trip</a>
             </div>
         </div>
-    </header>
+    </nav>
 
-    <div class="max-w-6xl mx-auto px-4 py-8">
-
-        <!-- Hero Section -->
-        <div class="mb-8">
-            <h1 class="text-3xl font-bold tracking-tight text-gray-900">{{ itinerary.title }}</h1>
-            <div class="flex items-center gap-4 mt-2 text-gray-500 text-sm">
-                <div class="flex items-center">
-                    <i class="fas fa-map-marker-alt mr-1.5 text-gray-400"></i>
-                    {{ itinerary.destination|default:itinerary.region|title }}
-                </div>
-                <div class="flex items-center">
-                    <i class="fas fa-calendar mr-1.5 text-gray-400"></i>
-                    {{ itinerary.start_date|date:"M d" }} - {{ itinerary.end_date|date:"M d, Y" }}
-                </div>
-                <div class="flex items-center">
-                    <i class="fas fa-wallet mr-1.5 text-gray-400"></i>
-                    {% if itinerary.budget_ksh %}KES
-                    {{ itinerary.budget_ksh|floatformat:0 }}{% else %}Budget not set{%endif %}
-                </div>
-            </div>
+    <div class="container">
+        <h1>{{ itinerary.title }}</h1>
+        <div class="meta">
+            <span><i class="fas fa-map-marker-alt"></i> {{ destination|default:itinerary.region|title }}</span>
+            <span><i class="fas fa-calendar"></i> {{ itinerary.start_date|date:"M d, Y" }} - {{ itinerary.end_date|date:"M d, Y" }}</span>
+            <span><i class="fas fa-wallet"></i> {% if itinerary.budget_ksh %}{{ itinerary.budget_currency }} {{ itinerary.budget_ksh|floatformat:0 }}{% else %}Budget not set{% endif %}</span>
         </div>
 
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-
-            <!-- Left Column: Timeline -->
-            <div class="lg:col-span-2 space-y-8">
-                <div>
-                    <h3 class="font-semibold text-lg text-gray-900 mb-4 flex items-center">
-                        <i class="fas fa-list-ul mr-2 text-slate-500"></i> Itinerary
-                    </h3>
-
-                    <div class="relative border-l border-gray-200 ml-3 space-y-8 pb-8">
-                        {% for item in itinerary.items.all %}
-                        <div class="relative pl-8">
-                            <!-- Timeline Dot -->
-                            <span class="absolute -left-1.5 top-1.5 h-3 w-3 rounded-full border-2 border-white 
-                                {% if item.category == 'flight' %} bg-blue-500
-                                {% elif item.category == 'hotel' %} bg-amber-500
-                                {% else %} bg-slate-500 {% endif %} ring-4 ring-gray-50 box-content"></span>
-
-                            <!-- Date Label -->
-                            <time class="mb-1 text-sm font-medium leading-none text-gray-400 block">{{
-                                item.start_datetime|date:"M d, H:i" }}</time>
-
-                            <!-- Item Card -->
-                            <div
-                                class="rounded-lg border bg-card text-card-foreground shadow-sm bg-white mt-2 group hover:shadow-md transition-all duration-200">
-                                <div class="p-4">
-                                    <div class="flex justify-between items-start">
-                                        <div>
-                                            <h4 class="font-semibold text-gray-900">{{ item.title }}</h4>
-                                            <p class="text-sm text-gray-500 mt-1">{{ item.location }}</p>
-                                        </div>
-                                        <span class="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold
-                                            {% if item.category == 'flight' %} bg-blue-50 text-blue-700 border-blue-200
-                                            {% elif item.category == 'hotel' %} bg-amber-50 text-amber-700 border-amber-200
-                                            {% else %} bg-slate-50 text-slate-700 border-slate-200 {% endif %}">
-                                            {{ item.category|title }}
-                                        </span>
-                                    </div>
-
-                                    {% if item.notes %}
-                                    <div
-                                        class="mt-3 text-sm text-gray-600 bg-gray-50 p-2 rounded-md border border-gray-100">
-                                        <i class="fas fa-sticky-note mr-1 text-gray-400"></i> {{ item.notes }}
-                                    </div>
-                                    {% endif %}
-
-                                    <!-- Actions -->
-                                    <div
-                                        class="mt-4 flex items-center justify-end gap-2 border-t border-gray-50 pt-3 opacity-0 group-hover:opacity-100 transition-opacity">
-                                        <button
-                                            class="text-sm text-gray-500 hover:text-slate-900 font-medium px-2 py-1 rounded hover:bg-gray-100">Edit</button>
-
-                                        <form method="POST" action="{% url 'travel:delete_itinerary_item' item.id %}"
-                                            onsubmit="return confirm('Remove this item?');">
-                                            {% csrf_token %}
-                                            <button type="submit"
-                                                class="text-sm text-red-400 hover:text-red-600 font-medium px-2 py-1 rounded hover:bg-red-50">Remove</button>
-                                        </form>
-                                    </div>
-                                </div>
+        <div class="grid">
+            <div class="card">
+                <h3>Itinerary</h3>
+                <div class="timeline">
+                    {% for item in itinerary.items.all %}
+                    <div class="item">
+                        <div class="item-header">
+                            <div>
+                                <strong>{{ item.title }}</strong><br>
+                                <span class="muted">{{ item.location_name|default:"Location not set" }}</span>
                             </div>
+                            <span class="badge">{{ item.item_type|title }}</span>
                         </div>
-                        {% empty %}
-                        <div
-                            class="ml-6 flex flex-col items-center justify-center rounded-lg border border-dashed border-gray-300 p-8 text-center bg-white">
-                            <i class="fas fa-inbox text-gray-300 text-3xl mb-3"></i>
-                            <h3 class="text-sm font-semibold text-gray-900">Your itinerary is empty</h3>
-                            <p class="mt-1 text-sm text-gray-500">Ask Mathia to adds items like flights, hotels, or
-                                events.</p>
-                            <a href="{% url 'chatbot:redirect_to_home' %}"
-                                class="mt-4 inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors bg-slate-900 text-white h-9 px-4 py-2 hover:bg-slate-800">
-                                <i class="fas fa-robot mr-2"></i> Go to Chat
-                            </a>
+                        <div class="muted" style="font-size:13px; margin-top:6px;">
+                            {{ item.start_datetime|date:"M d, H:i" }}
+                            {% if item.end_datetime %}- {{ item.end_datetime|date:"M d, H:i" }}{% endif %}
                         </div>
-                        {% endfor %}
+                        {% if item.description %}
+                        <div style="margin-top:8px; font-size:14px; color: var(--notion-muted);">{{ item.description }}</div>
+                        {% endif %}
+                        <div style="margin-top:10px; display:flex; justify-content:flex-end; gap:8px;">
+                            <form method="post" action="{% url 'travel:delete_itinerary_item' item.id %}" onsubmit="return confirm('Remove this item?');">
+                                {% csrf_token %}
+                                <button type="submit" class="btn btn-ghost"><i class="fas fa-trash-alt"></i> Remove</button>
+                            </form>
+                        </div>
                     </div>
+                    {% empty %}
+                    <div class="empty">
+                        <p class="muted">No items yet. Add details from chat when you are ready.</p>
+                        <a class="btn btn-primary" href="{% url 'chatbot:redirect_to_home' %}">Open Chat</a>
+                    </div>
+                    {% endfor %}
                 </div>
             </div>
 
-            <!-- Right Column: Map & Summary -->
-            <div class="space-y-6">
-                <!-- Map Placeholder -->
-                <div
-                    class="rounded-xl overflow-hidden border border-slate-200 shadow-sm bg-slate-100 h-64 relative group">
-                    <div id="map" class="h-full w-full z-10"></div>
-                    <div
-                        class="absolute inset-0 flex items-center justify-center pointer-events-none z-20 bg-black/5 group-hover:bg-transparent transition-colors">
-                        <span
-                            class="bg-white/90 backdrop-blur-sm px-3 py-1 rounded-full text-xs font-medium text-gray-600 shadow-sm border border-gray-100">Interactive
-                            Map</span>
-                    </div>
+            <div class="card">
+                <h3>Trip summary</h3>
+                <div class="summary-row"><span>Duration</span><strong>{{ itinerary.duration_days }} days</strong></div>
+                <div class="summary-row"><span>Travelers</span><strong>{{ travelers }}</strong></div>
+                <div class="summary-row"><span>Status</span><strong>{{ itinerary.status|title }}</strong></div>
+                <div style="margin-top:16px;">
+                    <div id="map"></div>
                 </div>
-
-                <!-- Summary Card -->
-                <div class="rounded-xl border bg-card text-card-foreground shadow-sm bg-white p-5">
-                    <h3 class="font-semibold text-gray-900 mb-4">Trip Summary</h3>
-                    <div class="space-y-3 text-sm">
-                        <div class="flex justify-between py-2 border-b border-gray-50">
-                            <span class="text-gray-500">Duration</span>
-                            <span class="font-medium text-gray-900">{{ itinerary.duration_days }} Days</span>
-                        </div>
-                        <div class="flex justify-between py-2 border-b border-gray-50">
-                            <span class="text-gray-500">Est. Cost</span>
-                            <span class="font-medium text-gray-900">
-                                {% if itinerary.budget_ksh %}KES
-                                {{ itinerary.budget_ksh|floatformat:0 }}{% else %}-{%endif %}
-                            </span>
-                        </div>
-                        <div class="flex justify-between py-2 border-b border-gray-50">
-                            <span class="text-gray-500">Travelers</span>
-                            <span class="font-medium text-gray-900">{{ itinerary.travelers|default:"1" }}</span>
-                        </div>
-                        <div class="flex justify-between py-2">
-                            <span class="text-gray-500">Status</span>
-                            <span class="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold
-                                {% if itinerary.status == 'draft' %} bg-yellow-50 text-yellow-700 border-yellow-200
-                                {% elif itinerary.status == 'completed' %} bg-blue-50 text-blue-700 border-blue-200
-                                {% else %} bg-green-50 text-green-700 border-green-200 {% endif %}">
-                                {{ itinerary.status|title }}
-                            </span>
-                        </div>
-                    </div>
+                <div style="margin-top:16px; font-size:14px; color: var(--notion-muted);">
+                    Ask Mathia to add flights, hotels, or activities for this trip.
                 </div>
-
-                <!-- AI Helper Card -->
-                <div class="rounded-xl border border-indigo-100 bg-indigo-50/50 p-5">
-                    <div class="flex items-center gap-3 mb-2">
-                        <div class="h-8 w-8 rounded-full bg-indigo-600 flex items-center justify-center text-white">
-                            <i class="fas fa-robot text-xs"></i>
-                        </div>
-                        <h4 class="font-semibold text-indigo-950">Mathia AI</h4>
-                    </div>
-                    <p class="text-xs text-indigo-800/80 leading-relaxed mb-3">
-                        I can help you detailed plans to this trip. Try asking "Find vegan restaurants in
-                        {{itinerary.destination }}"
-                    </p>
-                    <a href="{% url 'chatbot:redirect_to_home' %}"
-                        class="text-xs font-medium text-indigo-700 hover:text-indigo-900 hover:underline">
-                        Open Chat &rarr;
-                    </a>
-                </div>
-
+                <a class="btn btn-ghost" style="margin-top:12px;" href="{% url 'chatbot:redirect_to_home' %}">Go to Chat</a>
             </div>
         </div>
     </div>
 
-    <!-- Leaflet JS -->
     <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
     <script>
-        // Simple Map Init
         var map = L.map('map').setView([0, 0], 2);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             attribution: '&copy; OpenStreetMap contributors'
         }).addTo(map);
     </script>
 </body>
-
 </html>

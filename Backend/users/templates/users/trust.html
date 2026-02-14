@@ -36,7 +36,7 @@
             <a class="logo" href="/"><i class="fas fa-robot"></i> Mathia.OS</a>
             <div style="display:flex; gap:10px; flex-wrap:wrap;">
                 <a class="btn btn-ghost" href="{% url 'users:pricing' %}">Pricing</a>
-                <a class="btn btn-primary" href="{% url 'users:register' %}">Request Invite</a>
+                <a class="btn btn-primary" href="{% url 'users:trial_apply' %}">Request invite</a>
             </div>
         </div>
     </nav>
@@ -89,7 +89,7 @@
         </div>
 
         <div style="margin-top:32px; display:flex; gap:12px; flex-wrap:wrap;">
-            <a class="btn btn-primary" href="{% url 'users:register' %}">Request invite</a>
+            <a class="btn btn-primary" href="{% url 'users:trial_apply' %}">Request invite</a>
             <a class="btn btn-ghost" href="{% url 'users:playbooks' %}">See playbooks</a>
         </div>
     </div>

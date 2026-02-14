@@ -1,205 +1,268 @@
 {% load static %}
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8">
     <title>Plan Your Trip | Mathia</title>
-    <!-- Bootstrap CSS -->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <!-- Font Awesome -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <!-- Google Fonts -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <style>
+        :root {
+            --notion-bg: #ffffff;
+            --notion-text: #37352f;
+            --notion-gray: #f7f7f5;
+            --notion-border: #e9e9e7;
+            --notion-muted: rgba(55, 53, 47, 0.65);
+            --accent: #000000;
+            --radius: 12px;
+            --max: 960px;
+            --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+        }
+        * { box-sizing: border-box; }
         body {
-            font-family: 'Inter', sans-serif;
-            background: #f8f9fa;
+            margin: 0;
+            font-family: var(--font-sans);
+            background: var(--notion-bg);
+            color: var(--notion-text);
+            line-height: 1.6;
         }
-
-        .wizard-container {
-            max-width: 800px;
-            margin: 40px auto;
-            background: white;
-            padding: 40px;
-            border-radius: 20px;
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.05);
+        nav {
+            position: sticky;
+            top: 0;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(8px);
+            border-bottom: 1px solid var(--notion-border);
+            padding: 14px 18px;
+            z-index: 10;
         }
-
-        .step-indicator {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 40px;
-            position: relative;
-        }
-
-        .step-indicator::before {
-            content: '';
-            position: absolute;
-            top: 15px;
-            left: 0;
-            right: 0;
-            height: 2px;
-            background: #e9ecef;
-            z-index: 1;
-        }
-
-        .step {
-            position: relative;
-            z-index: 2;
-            background: white;
-            width: 32px;
-            height: 32px;
-            border-radius: 50%;
-            border: 2px solid #e9ecef;
+        nav .row {
+            max-width: var(--max);
+            margin: 0 auto;
             display: flex;
             align-items: center;
-            justify-content: center;
-            font-weight: 600;
-            color: #adb5bd;
-            transition: all 0.3s;
+            justify-content: space-between;
+            gap: 12px;
         }
-
-        .step.active {
-            border-color: #6c5ce7;
-            color: #6c5ce7;
-            background: #f0f0ff;
+        .logo {
+            text-decoration: none;
+            color: var(--notion-text);
+            font-weight: 700;
+            display: flex;
+            gap: 8px;
+            align-items: center;
         }
-
-        .step.completed {
-            border-color: #6c5ce7;
-            background: #6c5ce7;
-            color: white;
-        }
-
-        .form-label {
-            font-weight: 500;
-            color: #495057;
-        }
-
-        .interest-card {
-            border: 1px solid #dee2e6;
-            border-radius: 12px;
-            padding: 20px;
-            cursor: pointer;
-            transition: all 0.2s;
-            text-align: center;
-        }
-
-        .interest-card:hover {
-            border-color: #6c5ce7;
-            background: #f8f9fa;
-        }
-
-        .interest-card.selected {
-            border-color: #6c5ce7;
-            background: #f0f0ff;
-            color: #6c5ce7;
-        }
-
-        .btn-primary {
-            background: #6c5ce7;
-            border: none;
-            padding: 12px 30px;
+        .btn {
+            padding: 10px 16px;
             border-radius: 10px;
+            border: 1px solid transparent;
+            text-decoration: none;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            min-height: 44px;
         }
-
-        .btn-primary:hover {
-            background: #5649c0;
+        .btn-primary { background: var(--accent); color: #ffffff; }
+        .btn-ghost { border: 1px solid var(--notion-border); color: var(--notion-text); }
+        .container {
+            max-width: var(--max);
+            margin: 0 auto;
+            padding: 40px 22px 80px;
+        }
+        .card {
+            background: #ffffff;
+            border: 1px solid var(--notion-border);
+            border-radius: var(--radius);
+            padding: 28px;
+            box-shadow: 0 10px 24px rgba(0, 0, 0, 0.05);
+        }
+        h1 { font-size: clamp(28px, 4vw, 40px); margin: 8px 0 6px; }
+        p { color: var(--notion-muted); margin: 0; }
+        label { font-weight: 600; display: block; margin-bottom: 6px; }
+        input, select {
+            width: 100%;
+            padding: 10px 12px;
+            border-radius: 8px;
+            border: 1px solid var(--notion-border);
+            background: #ffffff;
+            color: var(--notion-text);
+            font-size: 15px;
+        }
+        .row2 {
+            display: grid;
+            gap: 14px;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        }
+        .eyebrow {
+            text-transform: uppercase;
+            letter-spacing: 0.14em;
+            color: rgba(55, 53, 47, 0.55);
+            font-size: 11px;
+            font-weight: 600;
+        }
+        .steps {
+            display: flex;
+            gap: 10px;
+            margin: 18px 0 24px;
+        }
+        .step {
+            flex: 1;
+            padding: 8px 10px;
+            border-radius: 999px;
+            border: 1px solid var(--notion-border);
+            text-align: center;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--notion-muted);
+            background: var(--notion-gray);
+        }
+        .step.active {
+            color: var(--notion-text);
+            background: #ffffff;
+            border-color: var(--notion-text);
+        }
+        .wizard-step { display: none; }
+        .wizard-step.active { display: block; }
+        .interest-grid {
+            display: grid;
+            gap: 12px;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        }
+        .interest-card {
+            border: 1px solid var(--notion-border);
+            border-radius: 12px;
+            padding: 16px;
+            text-align: center;
+            cursor: pointer;
+            background: #ffffff;
+            transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
+        }
+        .interest-card:hover {
+            border-color: #bcbab5;
+            box-shadow: 0 8px 18px rgba(0, 0, 0, 0.06);
+            transform: translateY(-2px);
+        }
+        .interest-card.selected {
+            border-color: var(--notion-text);
+            background: var(--notion-gray);
+        }
+        .summary {
+            border: 1px solid var(--notion-border);
+            border-radius: 12px;
+            padding: 16px;
+            display: grid;
+            gap: 10px;
+            background: var(--notion-gray);
+        }
+        .summary-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+            font-size: 14px;
+        }
+        .alert {
+            background: #f1f0ee;
+            border: 1px solid var(--notion-border);
+            color: var(--notion-text);
+            padding: 10px 12px;
+            border-radius: 10px;
+            font-size: 14px;
+            margin-bottom: 16px;
+        }
+        @media (max-width: 640px) {
+            .card { padding: 22px; }
         }
     </style>
 </head>
-
 <body>
+    <nav>
+        <div class="row">
+            <a class="logo" href="/"><i class="fas fa-robot"></i> Mathia.OS</a>
+            <a class="btn btn-ghost" href="{% url 'travel:itinerary_list' %}">View trips</a>
+        </div>
+    </nav>
 
     <div class="container">
-        <div class="wizard-container">
-            <h2 class="text-center mb-4">Plan Your Next Adventure</h2>
+        <div class="card">
+            <div class="eyebrow">Travel planner</div>
+            <h1>Plan your next trip</h1>
+            <p>Collect the basics, then let Mathia structure the itinerary in your workspace.</p>
 
-            <!-- Steps -->
-            <div class="step-indicator">
-                <div class="step active" id="step1-ind">1</div>
-                <div class="step" id="step2-ind">2</div>
-                <div class="step" id="step3-ind">3</div>
+            {% if messages %}
+            {% for message in messages %}
+            <div class="alert">{{ message }}</div>
+            {% endfor %}
+            {% endif %}
+
+            <div class="steps">
+                <div class="step active" id="step-label-1">Basics</div>
+                <div class="step" id="step-label-2">Interests</div>
+                <div class="step" id="step-label-3">Review</div>
             </div>
 
-            <form id="tripForm">
-                <!-- Step 1: Basics -->
-                <div class="wizard-step" id="step1">
-                    <h4 class="mb-4">Where to?</h4>
-                    <div class="mb-3">
-                        <label class="form-label">Destination</label>
-                        <input type="text" class="form-control form-control-lg" name="destination"
-                            placeholder="e.g. Paris, Tokyo, Cape Town" required>
-                    </div>
-                    <div class="row mb-3">
-                        <div class="col-md-6">
-                            <label class="form-label">Start Date</label>
-                            <input type="date" class="form-control" name="start_date" required>
+            <form id="tripForm" method="post" action="{% url 'travel:plan_trip' %}">
+                {% csrf_token %}
+
+                <div class="wizard-step active" id="step-1">
+                    <div class="row2">
+                        <div>
+                            <label for="destination">Destination</label>
+                            <input type="text" id="destination" name="destination" placeholder="e.g., Paris, Tokyo, Cape Town" required>
                         </div>
-                        <div class="col-md-6">
-                            <label class="form-label">End Date</label>
-                            <input type="date" class="form-control" name="end_date" required>
+                        <div>
+                            <label for="budget">Budget band</label>
+                            <select id="budget" name="budget">
+                                <option value="low">Budget</option>
+                                <option value="medium" selected>Standard</option>
+                                <option value="high">Premium</option>
+                            </select>
                         </div>
                     </div>
-                    <div class="mb-4">
-                        <label class="form-label">Budget (USD)</label>
-                        <select class="form-select" name="budget">
-                            <option value="low">Budget ($)</option>
-                            <option value="medium" selected>Standard ($$)</option>
-                            <option value="high">Luxury ($$$)</option>
-                        </select>
+                    <div class="row2" style="margin-top:14px;">
+                        <div>
+                            <label for="start_date">Start date</label>
+                            <input type="date" id="start_date" name="start_date" required>
+                        </div>
+                        <div>
+                            <label for="end_date">End date</label>
+                            <input type="date" id="end_date" name="end_date" required>
+                        </div>
                     </div>
-                    <div class="d-flex justify-content-end">
-                        <button type="button" class="btn btn-primary" onclick="nextStep(2)">Next <i
-                                class="fas fa-arrow-right ms-1"></i></button>
+                    <div style="display:flex; justify-content:flex-end; margin-top:18px;">
+                        <button type="button" class="btn btn-primary" onclick="nextStep(2)">Continue</button>
                     </div>
                 </div>
 
-                <!-- Step 2: Interests -->
-                <div class="wizard-step d-none" id="step2">
-                    <h4 class="mb-4">What do you like?</h4>
-                    <div class="row g-3 mb-4">
-                        <div class="col-6 col-md-3">
-                            <div class="interest-card" onclick="toggleInterest(this, 'adventure')">
-                                <i class="fas fa-hiking fa-2x mb-2"></i><br>Adventure
-                            </div>
-                        </div>
-                        <div class="col-6 col-md-3">
-                            <div class="interest-card" onclick="toggleInterest(this, 'culture')">
-                                <i class="fas fa-landmark fa-2x mb-2"></i><br>Culture
-                            </div>
-                        </div>
-                        <div class="col-6 col-md-3">
-                            <div class="interest-card" onclick="toggleInterest(this, 'food')">
-                                <i class="fas fa-utensils fa-2x mb-2"></i><br>Foodie
-                            </div>
-                        </div>
-                        <div class="col-6 col-md-3">
-                            <div class="interest-card" onclick="toggleInterest(this, 'relax')">
-                                <i class="fas fa-umbrella-beach fa-2x mb-2"></i><br>Relax
-                            </div>
-                        </div>
+                <div class="wizard-step" id="step-2">
+                    <p style="margin-bottom:12px;">Pick the themes you care about most.</p>
+                    <div class="interest-grid">
+                        <div class="interest-card" data-value="adventure" onclick="toggleInterest(this)"><i class="fas fa-hiking"></i><br>Adventure</div>
+                        <div class="interest-card" data-value="culture" onclick="toggleInterest(this)"><i class="fas fa-landmark"></i><br>Culture</div>
+                        <div class="interest-card" data-value="food" onclick="toggleInterest(this)"><i class="fas fa-utensils"></i><br>Food</div>
+                        <div class="interest-card" data-value="relax" onclick="toggleInterest(this)"><i class="fas fa-umbrella-beach"></i><br>Relax</div>
                     </div>
                     <input type="hidden" name="interests" id="interestsInput">
-                    <div class="d-flex justify-content-between">
-                        <button type="button" class="btn btn-outline-secondary" onclick="prevStep(1)">Back</button>
-                        <button type="button" class="btn btn-primary" onclick="nextStep(3)">Next <i
-                                class="fas fa-arrow-right ms-1"></i></button>
+                    <div style="display:flex; justify-content:space-between; margin-top:18px;">
+                        <button type="button" class="btn btn-ghost" onclick="prevStep(1)">Back</button>
+                        <button type="button" class="btn btn-primary" onclick="nextStep(3)">Review</button>
                     </div>
                 </div>
 
-                <!-- Step 3: Confirmation -->
-                <div class="wizard-step d-none" id="step3">
-                    <h4 class="mb-4">Generating Your Trip...</h4>
-                    <div class="text-center py-5">
-                        <div class="spinner-border text-primary mb-3" role="status" style="width: 3rem; height: 3rem;">
-                        </div>
-                        <p class="text-muted">Mathia is checking flights, hotels, and visas for you.</p>
+                <div class="wizard-step" id="step-3">
+                    <p style="margin-bottom:12px;">Confirm the details before creating the itinerary.</p>
+                    <div class="summary">
+                        <div class="summary-row"><span>Destination</span><strong id="summaryDestination"></strong></div>
+                        <div class="summary-row"><span>Dates</span><strong id="summaryDates"></strong></div>
+                        <div class="summary-row"><span>Budget band</span><strong id="summaryBudget"></strong></div>
+                        <div class="summary-row"><span>Interests</span><strong id="summaryInterests"></strong></div>
                     </div>
-                    <div id="resultArea" class="d-none">
-                        <!-- Results will be injected here -->
+                    <div style="display:flex; justify-content:space-between; margin-top:18px;">
+                        <button type="button" class="btn btn-ghost" onclick="prevStep(2)">Back</button>
+                        <button type="submit" class="btn btn-primary">Create itinerary</button>
                     </div>
                 </div>
             </form>
@@ -207,76 +270,68 @@
     </div>
 
     <script>
-        let currentInterests = [];
+        var currentStep = 1;
+        var interests = [];
+
+        function setStep(step) {
+            currentStep = step;
+            document.querySelectorAll('.wizard-step').forEach(function (el) {
+                el.classList.remove('active');
+            });
+            document.getElementById('step-' + step).classList.add('active');
+
+            document.querySelectorAll('.step').forEach(function (el, index) {
+                if (index + 1 === step) {
+                    el.classList.add('active');
+                } else {
+                    el.classList.remove('active');
+                }
+            });
+        }
 
         function nextStep(step) {
-            // Validation for step 1
             if (step === 2) {
-                const dest = document.querySelector('input[name="destination"]').value;
-                if (!dest) { alert("Please enter a destination"); return; }
+                var destination = document.getElementById('destination').value.trim();
+                var startDate = document.getElementById('start_date').value;
+                var endDate = document.getElementById('end_date').value;
+                if (!destination || !startDate || !endDate) {
+                    alert('Please fill in destination and dates.');
+                    return;
+                }
             }
-
-            // Hide all steps
-            document.querySelectorAll('.wizard-step').forEach(el => el.classList.add('d-none'));
-            // Show current
-            document.getElementById(`step${step}`).classList.remove('d-none');
-
-            // Update indicators
-            for (let i = 1; i <= 3; i++) {
-                const ind = document.getElementById(`step${i}-ind`);
-                if (i < step) ind.classList.add('completed');
-                if (i === step) ind.classList.add('active');
-            }
-
             if (step === 3) {
-                submitForm();
+                updateSummary();
             }
+            setStep(step);
         }
 
         function prevStep(step) {
-            document.querySelectorAll('.wizard-step').forEach(el => el.classList.add('d-none'));
-            document.getElementById(`step${step}`).classList.remove('d-none');
+            setStep(step);
         }
 
-        function toggleInterest(el, value) {
-            el.classList.toggle('selected');
-            if (currentInterests.includes(value)) {
-                currentInterests = currentInterests.filter(i => i !== value);
+        function toggleInterest(card) {
+            var value = card.getAttribute('data-value');
+            card.classList.toggle('selected');
+            if (interests.indexOf(value) >= 0) {
+                interests = interests.filter(function (item) { return item !== value; });
             } else {
-                currentInterests.push(value);
+                interests.push(value);
             }
-            document.getElementById('interestsInput').value = currentInterests.join(',');
+            document.getElementById('interestsInput').value = interests.join(',');
         }
 
-        async function submitForm() {
-            const formData = new FormData(document.getElementById('tripForm'));
-            const data = Object.fromEntries(formData.entries());
+        function updateSummary() {
+            var destination = document.getElementById('destination').value.trim();
+            var startDate = document.getElementById('start_date').value;
+            var endDate = document.getElementById('end_date').value;
+            var budget = document.getElementById('budget').value;
+            var budgetLabel = budget === 'low' ? 'Budget' : budget === 'high' ? 'Premium' : 'Standard';
 
-            // Here we would typically call the API
-            // For now, simulate success after 3 seconds
-            setTimeout(() => {
-                document.querySelector('.spinner-border').classList.add('d-none');
-                document.querySelector('h4').innerText = "Trip Ready!";
-                const res = document.getElementById('resultArea');
-                res.classList.remove('d-none');
-                res.innerHTML = `
-                <div class="alert alert-success">
-                    Itinerary Created for <strong>${data.destination}</strong>!
-                </div>
-                <a href="/travel/itineraries/" class="btn btn-primary w-100">View My Itineraries</a>
-            `;
-            }, 2000);
-
-            // In real impl:
-            /*
-            const response = await fetch('/travel/api/itinerary/create_smart/', {
-                 method: 'POST',
-                 body: JSON.stringify(data)
-            });
-            */
+            document.getElementById('summaryDestination').textContent = destination || '-';
+            document.getElementById('summaryDates').textContent = startDate && endDate ? (startDate + ' to ' + endDate) : '-';
+            document.getElementById('summaryBudget').textContent = budgetLabel;
+            document.getElementById('summaryInterests').textContent = interests.length ? interests.join(', ') : 'Not set';
         }
     </script>
-
 </body>
-
 </html>

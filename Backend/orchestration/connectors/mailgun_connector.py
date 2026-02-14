@@ -64,7 +64,7 @@ class MailgunConnector(BaseConnector):
             }
             
         if not from_email:
-            from_email = f"KwikChat <mailgun@{self.domain}>"
+            from_email = f"Mathia <mailgun@{self.domain}>"
 
         try:
             url = f"{self.base_url}/messages"

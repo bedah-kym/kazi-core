@@ -20,6 +20,8 @@ body {
     background-color: var(--bg-light);
     color: var(--text-color);
     height: 100vh;
+    min-height: 100dvh;
+    overflow: hidden;
     font-size: var(--chat-font-size);
     transition: background-color 0.3s, color 0.3s;
 }
@@ -324,7 +326,8 @@ body {
     overflow-y: auto;
     overflow-x: hidden;
     padding: 24px;
-    background: #f7f7f5;
+    background: linear-gradient(180deg, #e8ecf1 0%, #f5f7fa 50%, #e8ecf1 100%);
+    background-image: url('https://www.transparenttextures.com/patterns/brick-wall.png');
     position: relative;
     transition: background 0.3s;
     z-index: 1;
@@ -339,9 +342,30 @@ body {
 [data-theme="dark"] .chat-history {
     position: relative;
     transition: background 0.3s;
-    position: relative;
     z-index: 1;
-    background: #26282c;
+    background: var(--bg-light);
+    background-image: url('https://www.transparenttextures.com/patterns/brick-wall.png');
+}
+
+.chat-history::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background:
+        radial-gradient(circle at 20% 50%, rgba(79, 140, 255, 0.03) 0%, transparent 50%),
+        radial-gradient(circle at 80% 80%, rgba(79, 140, 255, 0.03) 0%, transparent 50%),
+        radial-gradient(circle at 40% 20%, rgba(102, 126, 234, 0.03) 0%, transparent 50%);
+    animation: floatingBubbles 20s ease-in-out infinite;
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.15;
+}
+
+[data-theme="dark"] .chat-history::before {
+    background:
+        radial-gradient(circle at 20% 50%, rgba(58, 110, 165, 0.05) 0%, transparent 50%),
+        radial-gradient(circle at 80% 80%, rgba(58, 110, 165, 0.05) 0%, transparent 50%),
+        radial-gradient(circle at 40% 20%, rgba(67, 97, 238, 0.05) 0%, transparent 50%);
 }
 
 .chat-history ul,

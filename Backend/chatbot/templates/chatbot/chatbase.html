@@ -341,16 +341,29 @@
                                 </a>
                             </div>
 
-                            <button class="btn btn-light me-2" data-bs-toggle="modal" data-bs-target="#inviteUserModal"
-                                title="Invite User">
-                                <i class="fas fa-user-plus"></i>
-                            </button>
-                            <button class="btn btn-light me-2" id="searchToggle" title="Search in chat">
-                                <i class="fas fa-search"></i>
-                            </button>
-                            <button class="btn btn-light me-2" id="upload">
-                                <i class="fas fa-upload"></i>
-                            </button>
+                            <div class="d-none d-lg-flex align-items-center">
+                                <button class="btn btn-light me-2" data-bs-toggle="modal" data-bs-target="#inviteUserModal"
+                                    title="Invite User">
+                                    <i class="fas fa-user-plus"></i>
+                                </button>
+                                <button class="btn btn-light me-2" id="searchToggle" title="Search in chat">
+                                    <i class="fas fa-search"></i>
+                                </button>
+                                <button class="btn btn-light me-2" id="upload">
+                                    <i class="fas fa-upload"></i>
+                                </button>
+                            </div>
+
+                            <div class="dropdown d-lg-none">
+                                <button class="btn btn-light" data-bs-toggle="dropdown" aria-label="More chat actions">
+                                    <i class="fas fa-ellipsis-h"></i>
+                                </button>
+                                <ul class="dropdown-menu dropdown-menu-end shadow-sm">
+                                    <li><a class="dropdown-item" data-bs-toggle="modal" data-bs-target="#inviteUserModal"><i class="fas fa-user-plus me-2"></i>Invite user</a></li>
+                                    <li><button class="dropdown-item" type="button" onclick="document.getElementById('searchToggle').click();"><i class="fas fa-search me-2"></i>Search</button></li>
+                                    <li><button class="dropdown-item" type="button" onclick="document.getElementById('upload').click();"><i class="fas fa-upload me-2"></i>Upload</button></li>
+                                </ul>
+                            </div>
                             <input type="file" id="fileInput" class="d-none" accept="image/*, .pdf, .doc, .docx, .txt">
                         </div>
                     </div>

@@ -170,9 +170,9 @@ function connectToChat(roomId) {
     }
 
     console.log(`🔌 Connecting socket for room ${roomId}...`);
-    const socket = new ReconnectingWebSocket(
-        'ws://' + window.location.host + '/ws/chat/' + roomId + '/'
-    );
+    const protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+    const socketUrl = protocol + window.location.host + '/ws/chat/' + roomId + '/';
+    const socket = new ReconnectingWebSocket(socketUrl);
 
     activeRooms[roomId] = {
         socket: socket,

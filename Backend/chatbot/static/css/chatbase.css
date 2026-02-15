@@ -85,7 +85,9 @@ body {
 .people-list-content {
     flex: 1;
     overflow-y: auto;
-    padding-bottom: 80px !important;
+    min-height: 0;
+    overscroll-behavior: contain;
+    /* No padding-bottom hack needed — .listbottom is now flex-based, not absolute */
 }
 
 .chat-list li {
@@ -741,12 +743,9 @@ em-emoji-picker {
     background: #f44336;
 }
 
-/* the login and settings bar */
+/* the login and settings bar — flex-based so it sticks to bottom of sidebar */
 .listbottom {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
+    flex-shrink: 0;
     background: #fff;
     z-index: 100;
     padding: 15px;
@@ -1259,10 +1258,7 @@ em-emoji-picker {
     }
 
     .listbottom {
-        position: absolute;
-        bottom: 0;
-        left: 0;
-        right: 0;
+        flex-shrink: 0;
         background: #fff;
         z-index: 100;
         padding: 10px;
@@ -1294,7 +1290,11 @@ em-emoji-picker {
     body {
         background-color: #f8f9fa;
         margin-top: 14px;
-        overflow-y: hidden;
+        overflow: hidden;
+        overscroll-behavior: none;
+        touch-action: manipulation;
+        position: fixed;
+        width: 100%;
     }
 
     /* Hide people list by default on mobile */
@@ -1401,9 +1401,11 @@ em-emoji-picker {
     }
 
     .chat-message {
-        position: absolute;
+        position: sticky;
         bottom: 0;
         width: 100%;
+        flex-shrink: 0;
+        z-index: 10;
     }
 
     /* ==== MODAL FIXES FOR MOBILE ==== */

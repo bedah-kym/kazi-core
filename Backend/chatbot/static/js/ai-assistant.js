@@ -130,7 +130,7 @@ class MathiaAssistant {
                     { name: 'date', label: 'Date', type: 'date', placeholder: '', required: true },
                     { name: 'pax', label: 'Passengers', type: 'number', placeholder: '1', required: false },
                 ],
-                buildPrompt: (v) => `@mathia find flights from ${v.origin} to ${v.dest} on ${v.date} for ${v.pax || 1} passenger${(v.pax||1)>1?'s':''}`
+                buildPrompt: (v) => `@mathia find flights from ${v.origin} to ${v.dest} on ${v.date} for ${v.pax || 1} passenger${(v.pax || 1) > 1 ? 's' : ''}`
             },
             {
                 id: 'email',
@@ -206,6 +206,10 @@ class MathiaAssistant {
 
         promptsContainer.querySelector('.btn-close-prompts').addEventListener('click', () => {
             promptsContainer.classList.remove('active');
+            // Also clear @mathia from input so the input listener doesn't re-open it
+            if (this.messageInput && this.messageInput.value.toLowerCase().includes('@mathia')) {
+                this.messageInput.value = this.messageInput.value.replace(/@mathia/gi, '').trim();
+            }
         });
     }
 
@@ -218,13 +222,13 @@ class MathiaAssistant {
         const fieldsHtml = (action.fields || []).map(f => {
             const required = f.required ? 'required' : '';
             if (f.type === 'select') {
-                const opts = (f.options || []).map(o => `<option value="${o}" ${f.default===o?'selected':''}>${o}</option>`).join('');
+                const opts = (f.options || []).map(o => `<option value="${o}" ${f.default === o ? 'selected' : ''}>${o}</option>`).join('');
                 return `<label>${f.label}<select name="${f.name}" ${required}>${opts}</select></label>`;
             }
             if (f.type === 'textarea') {
-                return `<label>${f.label}<textarea name="${f.name}" placeholder="${f.placeholder||''}" ${required}></textarea></label>`;
+                return `<label>${f.label}<textarea name="${f.name}" placeholder="${f.placeholder || ''}" ${required}></textarea></label>`;
             }
-            return `<label>${f.label}<input name="${f.name}" type="${f.type||'text'}" placeholder="${f.placeholder||''}" value="${f.default||''}" ${required}/></label>`;
+            return `<label>${f.label}<input name="${f.name}" type="${f.type || 'text'}" placeholder="${f.placeholder || ''}" value="${f.default || ''}" ${required}/></label>`;
         }).join('');
 
         modal.innerHTML = `
@@ -243,7 +247,15 @@ class MathiaAssistant {
             </div>
         `;
 
+        // Close modal when clicking X or Cancel buttons
         modal.querySelectorAll('.close-modal').forEach(btn => btn.addEventListener('click', () => modal.remove()));
+
+        // Close modal when clicking the backdrop (outside .mathia-action-modal-content)
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                modal.remove();
+            }
+        });
 
         modal.querySelector('form').addEventListener('submit', (e) => {
             e.preventDefault();

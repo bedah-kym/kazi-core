@@ -47,7 +47,7 @@
 .mathia-action-modal {
     position: fixed;
     inset: 0;
-    background: rgba(0,0,0,0.45);
+    background: rgba(0, 0, 0, 0.45);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -56,9 +56,9 @@
 }
 
 .mathia-action-modal-content {
-    background: rgba(255,255,255,0.92);
+    background: rgba(255, 255, 255, 0.92);
     border-radius: 14px;
-    box-shadow: 0 12px 40px rgba(0,0,0,0.2);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.2);
     padding: 18px;
     width: 420px;
     max-width: 90vw;
@@ -449,7 +449,8 @@
     animation: fadeIn 0.3s ease;
     opacity: 0;
     pointer-events: none;
-    transition: opacity 0.25s ease;
+    visibility: hidden;
+    transition: opacity 0.25s ease, visibility 0.25s ease;
 }
 
 .chat-container {
@@ -459,6 +460,7 @@
 .mathia-quick-prompts.active {
     opacity: 1;
     pointer-events: auto;
+    visibility: visible;
     padding: 16px;
 }
 

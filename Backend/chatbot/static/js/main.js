@@ -1314,8 +1314,15 @@ function initEmojiPicker() {
     const applyTheme = (theme) => {
         document.body.setAttribute('data-theme', theme);
         document.documentElement.setAttribute('data-theme', theme);
+        // Sync body.dark-mode class so CSS using either selector convention works
+        document.body.classList.toggle('dark-mode', theme === 'dark');
         localStorage.setItem('theme', theme);
         document.querySelector('em-emoji-picker')?.setAttribute('theme', theme);
+        // Update dark mode toggle icon
+        const toggleIcon = document.querySelector('#darkModeToggle i');
+        if (toggleIcon) {
+            toggleIcon.className = theme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
+        }
     };
 
     const savedTheme = localStorage.getItem('theme') || 'light';

@@ -737,6 +737,10 @@
             <a href="/" class="logo">
                 <span style="font-size: 20px;"><i class="fas fa-robot"></i></span> Mathia.OS
             </a>
+            <button class="mobile-toggle" aria-label="Toggle menu"
+                style="background: none; border: none; font-size: 24px; cursor: pointer;">
+                <i class="fas fa-bars"></i>
+            </button>
             <div class="nav-actions">
                 <a href="#impact" class="btn btn-text">Impact</a>
                 <a href="#use-cases" class="btn btn-text">Use Cases</a>
@@ -751,12 +755,14 @@
     <div class="container">
         <!-- Hero -->
         <div class="section hero reveal stagger">
-            <div class="stagger-item" style="display:inline-flex; align-items:center; gap:8px; background:#f1f0ee; border:1px solid var(--notion-border); padding:6px 10px; border-radius:999px; font-size:13px; margin:0 auto 16px; text-align:center;">
+            <div class="stagger-item"
+                style="display:inline-flex; align-items:center; gap:8px; background:#f1f0ee; border:1px solid var(--notion-border); padding:6px 10px; border-radius:999px; font-size:13px; margin:0 auto 16px; text-align:center;">
                 <span style="font-weight:700;">30-day invite-only trial</span>
                 <span style="color:#666;">Request an invite to unlock full workflows</span>
             </div>
             <h1 class="stagger-item">The Operating System<br>for One-Person Empires.</h1>
-            <p class="hero-subtitle stagger-item">Workflows, finance, social growth, travel, and documents - in one command center.
+            <p class="hero-subtitle stagger-item">Workflows, finance, social growth, travel, and documents - in one
+                command center.
                 Cut handoffs, keep cash flow visible, and stay ahead of client work.</p>
 
             <div class="stagger-item" style="text-align: center; margin-bottom: 60px;">
@@ -764,21 +770,28 @@
                     style="font-size: 18px; padding: 12px 32px;">Request invite</a>
                 <a href="#workflows" class="btn btn-text"
                     style="font-size: 18px; padding: 12px 32px; text-decoration: underline;">See Workflows</a>
-                <div style="font-size: 13px; color:#555; margin-top:10px;">Try Mathia free for 30 days after invite approval.</div>
+                <div style="font-size: 13px; color:#555; margin-top:10px;">Try Mathia free for 30 days after invite
+                    approval.</div>
             </div>
 
             <div class="proof-strip"
                 style="display:grid; grid-template-columns: repeat(auto-fit,minmax(180px,1fr)); gap:16px; margin:0 auto 50px; max-width:860px;">
-                <div class="stagger-item" style="background:#f7f7f5; border:1px solid var(--notion-border); border-radius:10px; padding:14px 16px;">
-                    <div style="font-size:13px; letter-spacing:0.05em; text-transform:uppercase; color:#666;">Fast to first workflow</div>
+                <div class="stagger-item"
+                    style="background:#f7f7f5; border:1px solid var(--notion-border); border-radius:10px; padding:14px 16px;">
+                    <div style="font-size:13px; letter-spacing:0.05em; text-transform:uppercase; color:#666;">Fast to
+                        first workflow</div>
                     <div style="font-weight:700; font-size:20px;">Set up without extra tools</div>
                 </div>
-                <div class="stagger-item" style="background:#f7f7f5; border:1px solid var(--notion-border); border-radius:10px; padding:14px 16px;">
-                    <div style="font-size:13px; letter-spacing:0.05em; text-transform:uppercase; color:#666;">Less follow-up drift</div>
+                <div class="stagger-item"
+                    style="background:#f7f7f5; border:1px solid var(--notion-border); border-radius:10px; padding:14px 16px;">
+                    <div style="font-size:13px; letter-spacing:0.05em; text-transform:uppercase; color:#666;">Less
+                        follow-up drift</div>
                     <div style="font-weight:700; font-size:20px;">Nudges keep work moving</div>
                 </div>
-                <div class="stagger-item" style="background:#f7f7f5; border:1px solid var(--notion-border); border-radius:10px; padding:14px 16px;">
-                    <div style="font-size:13px; letter-spacing:0.05em; text-transform:uppercase; color:#666;">Built for lean teams</div>
+                <div class="stagger-item"
+                    style="background:#f7f7f5; border:1px solid var(--notion-border); border-radius:10px; padding:14px 16px;">
+                    <div style="font-size:13px; letter-spacing:0.05em; text-transform:uppercase; color:#666;">Built for
+                        lean teams</div>
                     <div style="font-weight:700; font-size:20px;">From solo ops to small teams</div>
                 </div>
             </div>
@@ -821,7 +834,8 @@
                 <div class="impact-check"><span>✓</span>Automations that match how your team works</div>
             </div>
 
-            <div class="impact-note stagger-item">Start small, prove impact, then scale the workflows that pay off.</div>
+            <div class="impact-note stagger-item">Start small, prove impact, then scale the workflows that pay off.
+            </div>
         </div>
 
         <!-- 6 Pillars Grid -->
@@ -910,6 +924,9 @@
             <div class="compare-grid stagger">
                 <div class="compare-card card-hover stagger-item">
                     <div class="compare-title">Before Mathia</div>
+                    <img src="{% static 'images/fragmentation-visual.png' %}"
+                        style="width: 100%; height: 180px; object-fit: contain; margin-bottom: 20px; mix-blend-mode: multiply;"
+                        alt="Fragmentation">
                     <ul class="compare-list">
                         <li>Ops spread across docs, chats, and spreadsheets</li>
                         <li>Unclear ownership for client follow ups</li>
@@ -919,6 +936,9 @@
                 </div>
                 <div class="compare-card card-hover stagger-item">
                     <div class="compare-title">With Mathia</div>
+                    <img src="{% static 'images/unified-solution.png' %}"
+                        style="width: 100%; height: 180px; object-fit: contain; margin-bottom: 20px; mix-blend-mode: multiply;"
+                        alt="Unified Solution">
                     <ul class="compare-list">
                         <li>One system for workflows, finance, and delivery</li>
                         <li>Automations keep tasks moving without reminders</li>
@@ -1102,6 +1122,35 @@
 
     <script>
         (function () {
+            // Mobile Menu
+            const toggle = document.querySelector('.mobile-toggle');
+            const navActions = document.querySelector('.nav-actions');
+
+            if (toggle && navActions) {
+                toggle.addEventListener('click', function () {
+                    navActions.classList.toggle('open');
+                    const icon = toggle.querySelector('i');
+                    if (navActions.classList.contains('open')) {
+                        icon.classList.remove('fa-bars');
+                        icon.classList.add('fa-times');
+                    } else {
+                        icon.classList.remove('fa-times');
+                        icon.classList.add('fa-bars');
+                    }
+                });
+
+                // Close menu when clicking a link
+                navActions.querySelectorAll('a').forEach(function (link) {
+                    link.addEventListener('click', function () {
+                        navActions.classList.remove('open');
+                        const icon = toggle.querySelector('i');
+                        icon.classList.remove('fa-times');
+                        icon.classList.add('fa-bars');
+                    });
+                });
+            }
+
+            // Intersection Observer for Reveal
             var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)');
             var revealSections = document.querySelectorAll('.reveal');
 

@@ -1,4 +1,4 @@
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from asgiref.sync import sync_to_async
 from datetime import datetime, timedelta
 from django.utils import timezone
@@ -210,9 +210,14 @@ class ItineraryConnector:
             return {"status": "error", "message": "User context missing"}
 
         from travel.models import ItineraryItem, BookingReference
+        from travel.search_state import find_result
         import re
 
-        raw_item_id = parameters.get("item_id")
+        raw_item_id = (
+            parameters.get("item_id")
+            or parameters.get("flight_id")
+            or parameters.get("id")
+        )
         item_id = None
         if isinstance(raw_item_id, int):
             item_id = raw_item_id
@@ -223,29 +228,85 @@ class ItineraryConnector:
                     item_id = int(match.group())
                 except Exception:
                     item_id = None
+        item_type = parameters.get("item_type")
 
-        if not item_id:
+        existing_item = None
+        if item_id:
+            existing_item = await sync_to_async(
+                lambda: ItineraryItem.objects.filter(id=item_id, itinerary__user_id=user_id).first()
+            )()
+
+        # If we don't have a saved itinerary item, try to resolve from last search results
+        search_action = self._resolve_search_action(item_type, raw_item_id) or 'search_flights'
+        search_metadata: Dict[str, Any] = {}
+        if not existing_item and search_action:
+            candidate, search_metadata = find_result(user_id, search_action, raw_item_id)
+            if (not candidate) and parameters.get("flight_number"):
+                candidate, search_metadata = find_result(
+                    user_id,
+                    search_action,
+                    parameters.get("flight_number")
+                )
+            if (not candidate) and item_id:
+                candidate, search_metadata = find_result(user_id, search_action, item_id)
+
+            if candidate:
+                inferred_type = item_type or self._infer_item_type_from_action(search_action)
+                existing_item = await self._create_item_from_search(
+                    user_id=user_id,
+                    item_type=inferred_type,
+                    item_data=candidate,
+                    search_metadata=search_metadata,
+                )
+
+        if not existing_item:
             return {
                 "status": "error",
-                "message": "item_id is required and must be a numeric option from the list (e.g., 1, 2, 3)."
+                "message": (
+                    "I couldn't match that option to your latest search. "
+                    "Please pick an option number from the last list or run a new search."
+                )
             }
 
         def _create_booking():
-            item = ItineraryItem.objects.filter(id=item_id, itinerary__user_id=user_id).first()
-            if not item:
-                return None, "Item not found"
+            item = existing_item
 
+            # Avoid duplicate booking references for the same item
+            existing_booking = getattr(item, "booking_reference", None)
+            if existing_booking:
+                return existing_booking, None
+
+            booking_url = (
+                parameters.get("booking_url")
+                or item.booking_url
+                or "https://amadeus.com"
+            )
             booking = BookingReference.objects.create(
                 itinerary_item=item,
                 provider=item.provider or parameters.get("provider") or "Unknown",
-                provider_booking_id=str(parameters.get("provider_booking_id") or item.provider_id or item.id),
+                provider_booking_id=str(
+                    parameters.get("provider_booking_id")
+                    or parameters.get("booking_reference")
+                    or item.provider_id
+                    or raw_item_id
+                    or item.id
+                ),
+                booking_reference=str(
+                    parameters.get("booking_reference")
+                    or parameters.get("provider_booking_id")
+                    or item.provider_id
+                    or raw_item_id
+                    or item.id
+                ),
+                confirmation_code=parameters.get("confirmation_code"),
                 status='pending',
-                booking_url=parameters.get("booking_url") or item.booking_url or "",
+                booking_url=booking_url,
                 confirmation_email=parameters.get("confirmation_email")
             )
 
             item.status = 'booked'
-            item.save(update_fields=['status'])
+            item.booking_url = item.booking_url or booking_url
+            item.save(update_fields=['status', 'booking_url'])
             return booking, None
 
         booking, error = await sync_to_async(_create_booking)()
@@ -258,3 +319,138 @@ class ItineraryConnector:
             "booking_id": booking.id,
             "booking_url": booking.booking_url
         }
+
+    def _resolve_search_action(self, item_type: Optional[str], raw_item_id: Any) -> Optional[str]:
+        mapping = {
+            'flight': 'search_flights',
+            'hotel': 'search_hotels',
+            'bus': 'search_buses',
+            'transfer': 'search_transfers',
+            'event': 'search_events',
+        }
+        if item_type and item_type.lower() in mapping:
+            return mapping[item_type.lower()]
+
+        if isinstance(raw_item_id, str):
+            lower = raw_item_id.lower()
+            for prefix, action in mapping.items():
+                if lower.startswith(prefix):
+                    return action
+        return None
+
+    def _infer_item_type_from_action(self, action: Optional[str]) -> str:
+        reverse_map = {
+            'search_flights': 'flight',
+            'search_hotels': 'hotel',
+            'search_buses': 'bus',
+            'search_transfers': 'transfer',
+            'search_events': 'event',
+        }
+        return reverse_map.get(action or '', 'other')
+
+    async def _get_or_create_itinerary(
+        self,
+        user_id: int,
+        title_hint: Optional[str],
+        start_date: Optional[str],
+        end_date: Optional[str],
+    ):
+        from travel.models import Itinerary
+
+        def _resolve_itinerary():
+            qs = Itinerary.objects.filter(user_id=user_id)
+            itin = qs.filter(status='active').first() or qs.order_by('-created_at').first()
+            if itin:
+                return itin
+
+            start_dt = self._parse_datetime(start_date, fallback_days=1)
+            end_dt = self._parse_datetime(end_date, fallback_days=3)
+            start_dt = timezone.make_aware(start_dt) if timezone.is_naive(start_dt) else start_dt
+            end_dt = timezone.make_aware(end_dt) if timezone.is_naive(end_dt) else end_dt
+
+            return Itinerary.objects.create(
+                user_id=user_id,
+                title=title_hint or "New Itinerary",
+                region='worldwide',
+                start_date=start_dt,
+                end_date=end_dt,
+                status='active'
+            )
+
+        return await sync_to_async(_resolve_itinerary)()
+
+    def _combine_date_time(self, date_str: Optional[str], time_str: Optional[str]) -> datetime:
+        if date_str:
+            try:
+                dt_str = f"{date_str} {time_str or '09:00'}"
+                dt = datetime.fromisoformat(dt_str)
+                return timezone.make_aware(dt) if timezone.is_naive(dt) else dt
+            except Exception:
+                pass
+        fallback = timezone.now() + timedelta(days=1)
+        return fallback
+
+    def _location_hint(self, search_metadata: Dict[str, Any]) -> Optional[str]:
+        origin = search_metadata.get('origin')
+        destination = search_metadata.get('destination')
+        if origin or destination:
+            return f"{origin or ''}->{destination or ''}".strip('->')
+        return search_metadata.get('location') or search_metadata.get('city')
+
+    async def _create_item_from_search(
+        self,
+        user_id: int,
+        item_type: str,
+        item_data: Dict[str, Any],
+        search_metadata: Dict[str, Any],
+    ):
+        from travel.models import ItineraryItem
+
+        itinerary = await self._get_or_create_itinerary(
+            user_id=user_id,
+            title_hint=search_metadata.get('title') or search_metadata.get('destination'),
+            start_date=search_metadata.get('departure_date') or search_metadata.get('check_in') or search_metadata.get('travel_date'),
+            end_date=search_metadata.get('return_date') or search_metadata.get('check_out') or search_metadata.get('travel_date'),
+        )
+
+        start_dt = self._combine_date_time(
+            search_metadata.get('departure_date')
+            or search_metadata.get('check_in')
+            or search_metadata.get('travel_date'),
+            item_data.get('departure_time') or search_metadata.get('travel_time')
+        )
+
+        title = (
+            item_data.get('title')
+            or item_data.get('name')
+            or item_data.get('flight_number')
+            or f"{item_type.title()} Option"
+        )
+
+        provider = item_data.get('provider') or search_metadata.get('provider') or "Unknown"
+        provider_id = item_data.get('provider_id') or item_data.get('id')
+        booking_url = item_data.get('booking_url') or search_metadata.get('booking_url') or "https://amadeus.com"
+
+        def _create():
+            return ItineraryItem.objects.create(
+                itinerary=itinerary,
+                item_type=item_type or 'other',
+                title=title,
+                description=item_data.get('description'),
+                start_datetime=start_dt,
+                end_datetime=None,
+                location_name=item_data.get('location') or self._location_hint(search_metadata),
+                provider=provider,
+                provider_id=provider_id,
+                price_ksh=item_data.get('price_ksh') or 0,
+                booking_url=booking_url,
+                metadata={
+                    'provider': provider,
+                    'provider_id': provider_id,
+                    'search_action': search_metadata.get('search_action'),
+                    'raw_result': item_data,
+                },
+                status='planned'
+            )
+
+        return await sync_to_async(_create)()

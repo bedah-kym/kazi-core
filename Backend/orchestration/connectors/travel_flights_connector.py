@@ -294,6 +294,7 @@ class TravelFlightsConnector(BaseTravelConnector):
 
                 results.append({
                     'id': f"flight_{i+1:03d}",
+                    'provider_id': str(offer.get('id', f"offer_{i+1}")),
                     'provider': 'Amadeus',
                     'airline': airline,
                     'flight_number': f"{airline}{flight_number}",
@@ -363,6 +364,7 @@ class TravelFlightsConnector(BaseTravelConnector):
         for i, flight in enumerate(flights):
             results.append({
                 'id': f'flight_{i+1:03d}',
+                'provider_id': f'fallback_{i+1:03d}',
                 'provider': 'Amadeus',
                 'airline': flight['airline'],
                 'flight_number': f"{flight['code']}{1000 + i}",

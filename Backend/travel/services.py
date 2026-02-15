@@ -462,12 +462,18 @@ class BookingOrchestrator:
     async def record_booking(self, item_id: int, confirmation_code: str, booking_reference: str) -> BookingReference:
         """Record a completed booking"""
         item = await sync_to_async(ItineraryItem.objects.get)(id=item_id)
-        
+        provider = item.metadata.get('provider') if isinstance(item.metadata, dict) else None
+        booking_url = item.metadata.get('booking_url') if isinstance(item.metadata, dict) else None
+        provider_booking_id = booking_reference or item.provider_id or str(item.id)
+
         booking_ref = await sync_to_async(BookingReference.objects.create)(
             itinerary_item=item,
-            confirmation_code=confirmation_code,
+            provider=item.provider or provider or "Unknown",
+            provider_booking_id=provider_booking_id,
             booking_reference=booking_reference,
+            confirmation_code=confirmation_code,
             status='confirmed',
+            booking_url=booking_url or item.booking_url or "https://amadeus.com",
             metadata={'booked_at': datetime.now().isoformat()}
         )
         
@@ -484,8 +490,8 @@ class BookingOrchestrator:
             booking_ref = await sync_to_async(BookingReference.objects.get)(itinerary_item_id=item_id)
             return {
                 'status': booking_ref.status,
-                'confirmation_code': booking_ref.confirmation_code,
-                'booking_reference': booking_ref.booking_reference,
+                'confirmation_code': booking_ref.confirmation_code or booking_ref.provider_booking_id,
+                'booking_reference': booking_ref.booking_reference or booking_ref.provider_booking_id,
                 'booked_at': booking_ref.created_at.isoformat(),
                 'expires_at': (booking_ref.created_at + timedelta(days=30)).isoformat()
             }

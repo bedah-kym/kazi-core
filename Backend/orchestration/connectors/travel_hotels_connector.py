@@ -168,6 +168,7 @@ class TravelHotelsConnector(BaseTravelConnector):
 
                 results.append({
                     'id': f"hotel_{i+1:03d}",
+                    'provider_id': str(hotel_info.get('hotelId') or i + 1),
                     'provider': 'Amadeus',
                     'name': name,
                     'location': hotel_info.get('cityCode', ''),
@@ -226,6 +227,7 @@ class TravelHotelsConnector(BaseTravelConnector):
         for i, hotel in enumerate(hotels):
             results.append({
                 'id': f'hotel_{i+1:03d}',
+                'provider_id': f'fallback_{i+1:03d}',
                 'provider': 'Amadeus',
                 'name': hotel['name'],
                 'location': location,

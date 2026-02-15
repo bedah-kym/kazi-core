@@ -148,6 +148,7 @@ class TravelTransfersConnector(BaseTravelConnector):
 
                 results.append({
                     'id': f"transfer_{i+1:03d}",
+                    'provider_id': str(offer.get('id', f"offer_{i+1}")),
                     'provider': 'Amadeus',
                     'vehicle_type': vehicle.get('code', 'Sedan'),
                     'capacity': int(vehicle.get('seats', 4) or 4),
@@ -195,6 +196,7 @@ class TravelTransfersConnector(BaseTravelConnector):
         results = []
         results.append({
             'id': 'transfer_001',
+            'provider_id': 'fallback_001',
             'provider': 'Amadeus',
             'vehicle_type': 'Standard Sedan',
             'capacity': 4,
@@ -209,6 +211,7 @@ class TravelTransfersConnector(BaseTravelConnector):
         if service_type == 'premium' or passengers > 4:
             results.append({
                 'id': 'transfer_002',
+                'provider_id': 'fallback_002',
                 'provider': 'Amadeus',
                 'vehicle_type': 'SUV',
                 'capacity': 6,

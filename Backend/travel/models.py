@@ -227,6 +227,8 @@ class BookingReference(models.Model):
     
     provider = models.CharField(max_length=100)  # Buupass, Booking.com, etc.
     provider_booking_id = models.CharField(max_length=255)  # Confirmation ID from provider
+    booking_reference = models.CharField(max_length=255, blank=True, null=True)  # External booking reference
+    confirmation_code = models.CharField(max_length=255, blank=True, null=True)  # PNR or confirmation code
     
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     
@@ -242,7 +244,8 @@ class BookingReference(models.Model):
         ordering = ['-booked_at']
     
     def __str__(self):
-        return f"{self.provider} booking: {self.provider_booking_id}"
+        ref = self.booking_reference or self.provider_booking_id or self.confirmation_code or "unknown"
+        return f"{self.provider} booking: {ref}"
 
 
 class TripFeedback(models.Model):

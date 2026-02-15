@@ -119,6 +119,13 @@ class BaseTravelConnector(BaseConnector):
                     'cached': False,
                     'message': f'Failed to fetch from {self.PROVIDER_NAME}: {str(last_error)}'
                 }
+
+            # Remember last results per user to enable follow-up booking by option number/ID
+            self._store_last_results(
+                user_id=context.get('user_id'),
+                action=parameters.get('action'),
+                result=result
+            )
             
             # Cache successful result
             await self._cache_result(query_hash, parameters, result)
@@ -238,3 +245,23 @@ class BaseTravelConnector(BaseConnector):
         except Exception as e:
             logger.error(f"Parallel fetch error: {e}")
             return []
+
+    def _store_last_results(self, user_id: Any, action: Optional[str], result: Dict) -> None:
+        """Persist last search results for quick booking resolution."""
+        if not user_id or not action or not isinstance(result, dict):
+            return
+        try:
+            from travel.search_state import store_last_results
+
+            metadata = dict(result.get('metadata') or {})
+            metadata.setdefault('search_action', action)
+
+            store_last_results(
+                user_id=user_id,
+                action=action,
+                results=result.get('results', []),
+                metadata=metadata,
+                ttl_seconds=self.CACHE_TTL_SECONDS,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug(f"{self.PROVIDER_NAME}: unable to store last results: {exc}")

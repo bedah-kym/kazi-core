@@ -5,12 +5,15 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import time
+from datetime import date, timedelta
 from typing import Any, Dict, List, Optional
 
 from asgiref.sync import sync_to_async
 from django.core.cache import cache
 from django.utils import timezone
+from django.conf import settings
 
 from orchestration.llm_client import get_llm_client
 from workflows.capabilities import SYSTEM_CAPABILITIES, validate_workflow_definition
@@ -54,6 +57,22 @@ _TRAVEL_ACTION_PLURALS = {
     "transfer": "transfers",
     "event": "events",
 }
+_MONTHS = {
+    "jan": 1,
+    "feb": 2,
+    "mar": 3,
+    "apr": 4,
+    "may": 5,
+    "jun": 6,
+    "jul": 7,
+    "aug": 8,
+    "sep": 9,
+    "oct": 10,
+    "nov": 11,
+    "dec": 12,
+}
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+_PHONE_RE = re.compile(r"\+?\d{7,15}")
 
 _AUTOMATION_HINTS = (
     "workflow",
@@ -83,6 +102,188 @@ def _has_high_risk_step(steps: List[Dict[str, Any]]) -> bool:
         if (service, action) in _HIGH_RISK_ACTIONS:
             return True
     return False
+
+
+def _extract_dates_from_text(message: str) -> List[str]:
+    if not message:
+        return []
+
+    dates: List[str] = []
+    lowered = message.lower()
+    today = timezone.localdate()
+
+    if "today" in lowered:
+        dates.append(today.isoformat())
+    if "tomorrow" in lowered:
+        dates.append((today + timedelta(days=1)).isoformat())
+
+    for match in re.finditer(r"\b(20\d{2})-(\d{2})-(\d{2})\b", message):
+        dates.append(match.group(0))
+
+    for match in re.finditer(
+        r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s*(\d{1,2})(?:st|nd|rd|th)?\s*(20\d{2})\b",
+        lowered,
+    ):
+        month = _MONTHS.get(match.group(1)[:3])
+        day = int(match.group(2))
+        year = int(match.group(3))
+        if month:
+            try:
+                dates.append(date(year, month, day).isoformat())
+            except ValueError:
+                continue
+
+    for match in re.finditer(
+        r"\b(\d{1,2})(?:st|nd|rd|th)?\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s*(20\d{2})\b",
+        lowered,
+    ):
+        day = int(match.group(1))
+        month = _MONTHS.get(match.group(2)[:3])
+        year = int(match.group(3))
+        if month:
+            try:
+                dates.append(date(year, month, day).isoformat())
+            except ValueError:
+                continue
+
+    for match in re.finditer(
+        r"\b(\d{1,2})(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)(20\d{2})\b",
+        lowered,
+    ):
+        day = int(match.group(1))
+        month = _MONTHS.get(match.group(2))
+        year = int(match.group(3))
+        if month:
+            try:
+                dates.append(date(year, month, day).isoformat())
+            except ValueError:
+                continue
+
+    # De-duplicate while preserving order
+    seen = set()
+    unique = []
+    for d in dates:
+        if d not in seen:
+            seen.add(d)
+            unique.append(d)
+    return unique
+
+
+def _extract_first_email(message: str) -> Optional[str]:
+    if not message:
+        return None
+    match = _EMAIL_RE.search(message)
+    return match.group(0) if match else None
+
+
+def _extract_first_phone(message: str) -> Optional[str]:
+    if not message:
+        return None
+    match = _PHONE_RE.search(message.replace(" ", ""))
+    return match.group(0) if match else None
+
+
+def _extract_passengers(message: str) -> Optional[int]:
+    if not message:
+        return None
+    lowered = message.lower()
+    match = re.search(r"\b(\d{1,2})\s*(passenger|passengers|pax|adults?)\b", lowered)
+    if match:
+        try:
+            return int(match.group(1))
+        except ValueError:
+            return None
+    return None
+
+
+def _extract_item_id(message: str) -> Optional[str]:
+    if not message:
+        return None
+    lowered = message.lower()
+    match = re.search(r"\b(option|flight|hotel|bus|transfer|event)\s*#?\s*(\d+)\b", lowered)
+    if match:
+        return match.group(2)
+    return None
+
+
+def _extract_origin_destination(message: str) -> Dict[str, Optional[str]]:
+    if not message:
+        return {"origin": None, "destination": None}
+    match = re.search(
+        r"\bfrom\s+(.+?)\s+to\s+(.+?)(?:\s+on|\s+leaving|\s+departing|\s+return|\s+back|$)",
+        message,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        origin = match.group(1).strip(" ,.")
+        destination = match.group(2).strip(" ,.")
+        return {"origin": origin, "destination": destination}
+
+    match = re.search(
+        r"\b([A-Za-z .'-]{2,})\s+to\s+([A-Za-z .'-]{2,})(?:\s+on|\s+leaving|\s+departing|\s+return|\s+back|$)",
+        message,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        origin = match.group(1).strip(" ,.")
+        destination = match.group(2).strip(" ,.")
+        return {"origin": origin, "destination": destination}
+
+    return {"origin": None, "destination": None}
+
+
+def _extract_location(message: str) -> Optional[str]:
+    if not message:
+        return None
+    match = re.search(
+        r"\b(in|at)\s+([A-Za-z .'-]{2,})(?:\s+for|\s+on|\s+from|\s+to|$)",
+        message,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        return match.group(2).strip(" ,.")
+    return None
+
+
+def _extract_nights(message: str) -> Optional[int]:
+    if not message:
+        return None
+    lowered = message.lower()
+    match = re.search(r"\b(\d{1,2})\s+nights?\b", lowered)
+    if match:
+        try:
+            return int(match.group(1))
+        except ValueError:
+            return None
+    return None
+
+
+def _missing_param_message(param: str) -> str:
+    prompts = {
+        "departure_date": "What departure date should I use? (YYYY-MM-DD)",
+        "travel_date": "What travel date should I use? (YYYY-MM-DD)",
+        "check_in_date": "What is the check-in date? (YYYY-MM-DD)",
+        "check_out_date": "What is the check-out date? (YYYY-MM-DD)",
+        "origin": "What is the origin city or airport code?",
+        "destination": "What is the destination city or airport code?",
+        "location": "Which city should I search in?",
+    }
+    return prompts.get(param, f"I need the {param} to proceed.")
+
+
+def _friendly_validation_error(error: str) -> str:
+    if not error:
+        return "I need a bit more detail to proceed."
+    match = re.search(r"Missing param '([^']+)'", error)
+    if match:
+        return _missing_param_message(match.group(1))
+    if "Unknown service" in error:
+        return "I couldn't map one of the services. Please rephrase with an explicit action like 'search flights' or 'send email'."
+    if "Invalid action" in error:
+        return "I couldn't map one of the actions. Please rephrase the request with explicit steps."
+    if "Params for step" in error:
+        return "I need a bit more detail for one of the steps. Please share the missing details."
+    return f"I need a bit more detail to run that: {error}"
 
 
 def _normalize_travel_step(step: Dict[str, Any]) -> Dict[str, Any]:
@@ -121,7 +322,16 @@ def _normalize_travel_step(step: Dict[str, Any]) -> Dict[str, Any]:
     return step
 
 
-def _normalize_steps(steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _normalize_steps(steps: List[Dict[str, Any]], message: str) -> List[Dict[str, Any]]:
+    extracted_dates = _extract_dates_from_text(message)
+    origin_dest = _extract_origin_destination(message)
+    location = _extract_location(message)
+    passengers = _extract_passengers(message)
+    email = _extract_first_email(message)
+    phone = _extract_first_phone(message)
+    item_id = _extract_item_id(message)
+    nights = _extract_nights(message)
+    lowered = message.lower()
     normalized = []
     for idx, step in enumerate(steps or []):
         if not isinstance(step, dict):
@@ -134,7 +344,61 @@ def _normalize_steps(steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             cleaned["action"] = str(cleaned["action"]).lower()
         if not isinstance(cleaned.get("params"), dict):
             cleaned["params"] = {}
-        normalized.append(_normalize_travel_step(cleaned))
+        normalized_step = _normalize_travel_step(cleaned)
+
+        action = normalized_step.get("action")
+        params = normalized_step.get("params") or {}
+        if action in ("search_flights", "search_buses", "search_transfers"):
+            if not params.get("origin") and origin_dest.get("origin"):
+                params.setdefault("origin", origin_dest["origin"])
+            if not params.get("destination") and origin_dest.get("destination"):
+                params.setdefault("destination", origin_dest["destination"])
+        if action == "search_flights":
+            if extracted_dates:
+                params.setdefault("departure_date", extracted_dates[0])
+            if len(extracted_dates) > 1 and ("return" in lowered or "back" in lowered):
+                params.setdefault("return_date", extracted_dates[1])
+            if passengers and not params.get("passengers"):
+                params.setdefault("passengers", passengers)
+        if action in ("search_flights", "search_buses", "search_transfers") and not params.get("departure_date") and not params.get("travel_date"):
+            if extracted_dates:
+                if action == "search_flights":
+                    params.setdefault("departure_date", extracted_dates[0])
+                else:
+                    params.setdefault("travel_date", extracted_dates[0])
+        if action == "search_hotels":
+            if not params.get("location") and location:
+                params.setdefault("location", location)
+            if extracted_dates and not params.get("check_in_date"):
+                params.setdefault("check_in_date", extracted_dates[0])
+            if len(extracted_dates) > 1 and not params.get("check_out_date"):
+                params.setdefault("check_out_date", extracted_dates[1])
+            if nights and params.get("check_in_date") and not params.get("check_out_date"):
+                try:
+                    check_in = date.fromisoformat(params["check_in_date"])
+                    params.setdefault("check_out_date", (check_in + timedelta(days=nights)).isoformat())
+                except Exception:
+                    pass
+
+        if action in ("book_travel_item", "add_to_itinerary") and not params.get("item_id") and item_id:
+            params.setdefault("item_id", item_id)
+
+        if action == "send_email":
+            if "text" not in params and params.get("body"):
+                params["text"] = params.get("body")
+            if "text" not in params and params.get("message"):
+                params["text"] = params.get("message")
+            if "to" not in params and email:
+                params.setdefault("to", email)
+
+        if action == "send_message":
+            if "message" not in params and params.get("text"):
+                params["message"] = params.get("text")
+            if "phone_number" not in params and phone:
+                params.setdefault("phone_number", phone)
+
+        normalized_step["params"] = params
+        normalized.append(normalized_step)
     return normalized
 
 
@@ -215,7 +479,7 @@ async def plan_user_request(message: str, history_text: str = "") -> Dict[str, A
         if not isinstance(steps, list):
             return {"mode": "single", "assistant_message": "", "workflow_definition": None}
 
-        normalized_steps = _normalize_steps(steps)
+        normalized_steps = _normalize_steps(steps, message)
         if len(normalized_steps) < MIN_ADHOC_STEPS:
             return {"mode": "single", "assistant_message": "", "workflow_definition": None}
 
@@ -245,7 +509,7 @@ async def plan_user_request(message: str, history_text: str = "") -> Dict[str, A
             logger.warning("Invalid ad-hoc workflow definition: %s", error)
             return {
                 "mode": "needs_clarification",
-                "assistant_message": f"I need a bit more detail to run that: {error}",
+                "assistant_message": _friendly_validation_error(error),
                 "workflow_definition": None,
             }
 
@@ -350,6 +614,18 @@ async def execute_adhoc_workflow(
         }
 
     workflow_obj = await _create_adhoc_workflow(user_id, room_id, definition)
+
+    if settings.TEMPORAL_DISABLED:
+        logger.info("Temporal disabled; using inline execution.")
+        result = await _run_inline(definition, user_id, trigger_data)
+        cache.set(idempotency_key, {"status": "completed"}, IDEMPOTENCY_TTL_SECONDS)
+        return {
+            "status": "completed",
+            "mode": "inline",
+            "workflow": workflow_obj,
+            "execution": None,
+            "result": result,
+        }
 
     try:
         execution = await start_workflow_execution(workflow_obj, trigger_data, "manual")

@@ -95,6 +95,26 @@
     color: hsl(var(--accent-foreground));
 }
 
+[data-theme="dark"] .context-panel-toggle,
+.dark-mode .context-panel-toggle {
+    background: rgba(255, 255, 255, 0.08);
+    color: #e8eaed;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+[data-theme="dark"] .context-panel-toggle:hover,
+.dark-mode .context-panel-toggle:hover {
+    background: rgba(255, 255, 255, 0.16);
+    border-color: rgba(255, 255, 255, 0.22);
+}
+
+[data-theme="dark"] .context-panel-toggle.active,
+.dark-mode .context-panel-toggle.active {
+    background: rgba(58, 110, 165, 0.28);
+    border-color: rgba(58, 110, 165, 0.45);
+    color: #e8eaed;
+}
+
 /* Small screens: make context panel slide up from bottom as a sheet (only on chat page) */
 @media (max-width: 768px) {
     .chat-page .context-panel {

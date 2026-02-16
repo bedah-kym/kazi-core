@@ -203,6 +203,7 @@ CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', REDIS_URL)
 TEMPORAL_HOST = os.environ.get('TEMPORAL_HOST', 'localhost:7233')
 TEMPORAL_NAMESPACE = os.environ.get('TEMPORAL_NAMESPACE', 'default')
 TEMPORAL_TASK_QUEUE = os.environ.get('TEMPORAL_TASK_QUEUE', 'user-workflows')
+TEMPORAL_DISABLED = os.environ.get('TEMPORAL_DISABLED', 'False').lower() in ('1', 'true', 'yes')
 
 # Workflow safety limits
 WORKFLOW_WITHDRAW_MAX = Decimal(os.environ.get('WORKFLOW_WITHDRAW_MAX', '10000'))

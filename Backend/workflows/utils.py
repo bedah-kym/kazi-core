@@ -110,3 +110,34 @@ def safe_eval_condition(expr: str, context: Dict[str, Any]) -> bool:
         return bool(eval(compile(tree, '<condition>', 'eval'), {"__builtins__": {}}, eval_context))
     except Exception:
         return False
+
+
+def compact_context(
+    context: Dict[str, Any],
+    max_items: int = 5,
+    max_chars: int = 2000,
+    max_keys: int = 50,
+    max_depth: int = 4,
+) -> Dict[str, Any]:
+    """
+    Reduce workflow context size for storage/LLM summarization.
+    Keeps execution-time context intact; use only after workflow completes.
+    """
+    def _compact(value: Any, depth: int = 0) -> Any:
+        if depth >= max_depth:
+            return "[truncated]"
+        if isinstance(value, dict):
+            compacted = {}
+            for idx, (key, val) in enumerate(value.items()):
+                if idx >= max_keys:
+                    compacted["_truncated_keys"] = len(value) - max_keys
+                    break
+                compacted[key] = _compact(val, depth + 1)
+            return compacted
+        if isinstance(value, list):
+            return [_compact(v, depth + 1) for v in value[:max_items]]
+        if isinstance(value, str) and len(value) > max_chars:
+            return value[:max_chars] + "...[truncated]"
+        return value
+
+    return _compact(context, 0) if isinstance(context, dict) else {}

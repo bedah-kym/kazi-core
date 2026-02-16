@@ -13,7 +13,7 @@ from temporalio.client import Client, Schedule, ScheduleActionStartWorkflow, Sch
 from temporalio.common import RetryPolicy
 
 from .activity_executors import execute_workflow_step
-from .utils import safe_eval_condition
+from .utils import safe_eval_condition, compact_context
 from .models import WorkflowExecution
 
 
@@ -97,31 +97,40 @@ class DynamicUserWorkflow:
                 if condition and not safe_eval_condition(condition, context):
                     continue
 
-                result = await workflow.execute_activity(
-                    run_step_activity,
-                    args=[step, context],
-                    schedule_to_close_timeout=timedelta(minutes=5),
-                    retry_policy=RetryPolicy(
-                        initial_interval=timedelta(seconds=2),
-                        maximum_interval=timedelta(seconds=30),
-                        maximum_attempts=3,
-                    ),
-                )
-
                 step_id = step.get('id') or step.get('action') or f"step_{len(context)}"
-                context[step_id] = result
+                on_error = str(step.get('on_error') or 'stop').lower()
 
+                try:
+                    result = await workflow.execute_activity(
+                        run_step_activity,
+                        args=[step, context],
+                        schedule_to_close_timeout=timedelta(minutes=5),
+                        retry_policy=RetryPolicy(
+                            initial_interval=timedelta(seconds=2),
+                            maximum_interval=timedelta(seconds=30),
+                            maximum_attempts=3,
+                        ),
+                    )
+                    context[step_id] = result
+                except Exception as exc:
+                    context[step_id] = {"status": "error", "error": str(exc)}
+                    if on_error == 'continue':
+                        continue
+                    raise
+
+            stored_context = compact_context(context)
             await workflow.execute_activity(
                 update_execution_record,
-                args=[execution_id, 'completed', context, None],
+                args=[execution_id, 'completed', stored_context, None],
                 schedule_to_close_timeout=timedelta(seconds=30),
             )
             return context
 
         except Exception as exc:
+            stored_context = compact_context(context)
             await workflow.execute_activity(
                 update_execution_record,
-                args=[execution_id, 'failed', context, str(exc)],
+                args=[execution_id, 'failed', stored_context, str(exc)],
                 schedule_to_close_timeout=timedelta(seconds=30),
             )
             raise

@@ -29,6 +29,9 @@ class TravelTransfersConnector(BaseTravelConnector):
         luggage = int(parameters.get('luggage', 1) or 1)
         service_type = parameters.get('service_type', 'economy').lower()
 
+        origin_norm = self._normalize_location(origin)
+        destination_norm = self._normalize_location(destination)
+
         if not all([origin, destination, travel_date]):
             return {
                 'results': [],
@@ -57,8 +60,8 @@ class TravelTransfersConnector(BaseTravelConnector):
             }
 
         offers = await self._search_amadeus_transfers(
-            origin,
-            destination,
+            origin_norm,
+            destination_norm,
             travel_date,
             travel_time,
             passengers,
@@ -224,3 +227,27 @@ class TravelTransfersConnector(BaseTravelConnector):
             })
 
         return results
+
+    def _normalize_location(self, value: str) -> str:
+        """
+        Map common free-text locations to IATA codes for Amadeus searches.
+        """
+        if not value:
+            return value
+        clean = value.strip().lower()
+        mapping = {
+            'nairobi airport': 'NBO',
+            'jomo kenyatta': 'NBO',
+            'jkia': 'NBO',
+            'wilson': 'WIL',
+            'serena hotel': 'NBO',
+            'nairobi cbd': 'NBO',
+            'nairobi': 'NBO',
+            'mombasa airport': 'MBA',
+            'moi international': 'MBA',
+            'mombasa': 'MBA',
+        }
+        for key, code in mapping.items():
+            if key in clean:
+                return code
+        return value

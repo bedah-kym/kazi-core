@@ -56,12 +56,24 @@ class TravelHotelsConnector(BaseTravelConnector):
 
         city_code = await self._resolve_city_code(location)
         if not city_code:
-            return {
-                'results': [],
-                'metadata': {
-                    'error': f'Could not resolve city code for {location}'
+            if settings.TRAVEL_ALLOW_FALLBACK:
+                results = self._get_fallback_hotels(location)
+                return {
+                    'results': results,
+                    'metadata': {
+                        'location': location,
+                        'provider': self.PROVIDER_NAME,
+                        'fallback': True,
+                        'error': f'Could not resolve city code for {location}'
+                    }
                 }
-            }
+            else:
+                return {
+                    'results': [],
+                    'metadata': {
+                        'error': f'Could not resolve city code for {location}'
+                    }
+                }
 
         results = await self._search_amadeus_hotels(city_code, check_in, check_out, guests, rooms)
 
@@ -120,18 +132,26 @@ class TravelHotelsConnector(BaseTravelConnector):
         if len(location) == 3:
             return location.upper()
 
-        city_map = {
-            'nairobi': 'NBO',
-            'mombasa': 'MBA',
-            'kisumu': 'KIS',
-            'eldoret': 'EDL',
-            'london': 'LON',
-            'paris': 'PAR',
-            'dubai': 'DXB',
-            'kampala': 'EBB',
-            'dar es salaam': 'DAR',
-        }
-        mapped = city_map.get(location.lower())
+        city_map = [
+            ('nairobi', 'NBO'),
+            ('nairobi cbd', 'NBO'),
+            ('nairobi city', 'NBO'),
+            ('mombasa', 'MBA'),
+            ('kisumu', 'KIS'),
+            ('eldoret', 'EDL'),
+            ('london', 'LON'),
+            ('paris', 'PAR'),
+            ('dubai', 'DXB'),
+            ('kampala', 'EBB'),
+            ('dar es salaam', 'DAR'),
+        ]
+
+        location_lower = location.lower()
+        mapped = None
+        for key, code in city_map:
+            if key in location_lower:
+                mapped = code
+                break
         if mapped:
             return mapped
 

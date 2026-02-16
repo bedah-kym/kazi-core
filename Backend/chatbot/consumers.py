@@ -684,16 +684,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
                         # Fetch history for conversation context
                         history_text = await self.get_history_as_text(room_id)
                         
-                        # Step 1: Parse intent
-                        intent = await parse_intent(ai_query, {
-                            "user_id": member_user.id,
-                            "username": member_username,
-                            "room_id": room_id,
-                            "history": history_text
-                        })
-                        
-                        logger.info(f"Intent: {intent}")
-                        
                         # Helper to broadcast chunks (Buffered)
                         # We use a mutable container for closure state
                         # Helper to broadcast chunks (Buffered & Whitespace Filtered)
@@ -733,50 +723,91 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                     stream_state['buffer'] = []
                                     stream_state['last_send'] = current_time
                         
-                        if intent["action"] == "create_workflow" and intent["confidence"] > 0.6:
+                        from orchestration.workflow_planner import (
+                            plan_user_request,
+                            execute_adhoc_workflow,
+                            synthesize_workflow_response_stream,
+                        )
+
+                        plan = await plan_user_request(ai_query, history_text)
+
+                        if plan["mode"] == "automation_request":
                             from workflows.workflow_agent import handle_workflow_message
                             response_text = await handle_workflow_message(member_user.id, room_id, ai_query, history_text)
                             await broadcast_chunk(response_text)
-                        elif intent["confidence"] > 0.7 and intent["action"] != "general_chat":
-                            # Route through MCP
-                            result = await route_intent(intent, {
-                                "user_id": member_user.id,
-                                "room_id": room_id,
-                                "username": member_username
-                            })
-                            
-                            logger.info(f"MCP result: {result['status']}")
-                            
-                            if result["status"] == "success":
-                                # Step 3: Synthesize natural language response (STREAMING)
-                                from orchestration.data_synthesizer import synthesize_response_stream
-                                
-                                async for chunk in synthesize_response_stream(
-                                    intent, 
-                                    result, 
-                                    use_llm=True
-                                ):
-                                    await broadcast_chunk(chunk)
-                                    
-                            else:
-                                await broadcast_chunk(f"❌ {result['message']}")
-                        else:
-                            # Fallback to LLM for general chat or low confidence (STREAMING)
-                            from orchestration.llm_client import get_llm_client
-                            llm_client = get_llm_client()
-                            
-                            # Prepend history to query if available
-                            full_query = ai_query
-                            if history_text:
-                                full_query = f"CONVERSATION HISTORY:\n{history_text}\n\nUSER message: {ai_query}"
-                            
-                            async for chunk in llm_client.stream_text(
-                                system_prompt="You are Mathia, a helpful AI assistant. Be concise and friendly.",
-                                user_prompt=full_query,
-                                temperature=0.7,
-                                max_tokens=500
+                        elif plan["mode"] == "needs_clarification":
+                            await broadcast_chunk(plan.get("assistant_message") or "I need a bit more detail to proceed.")
+                        elif plan["mode"] == "adhoc_workflow":
+                            workflow_definition = plan.get("workflow_definition") or {}
+                            execution = await execute_adhoc_workflow(
+                                workflow_definition,
+                                member_user.id,
+                                room_id,
+                                trigger_data={"message": ai_query},
+                            )
+                            async for chunk in synthesize_workflow_response_stream(
+                                ai_query,
+                                workflow_definition,
+                                execution.get("result") or {},
+                                execution.get("status") or "running",
+                                execution.get("error") or execution.get("message"),
                             ):
                                 await broadcast_chunk(chunk)
+                        else:
+                            # Step 1: Parse intent
+                            intent = await parse_intent(ai_query, {
+                                "user_id": member_user.id,
+                                "username": member_username,
+                                "room_id": room_id,
+                                "history": history_text
+                            })
+
+                            logger.info(f"Intent: {intent}")
+
+                            if intent["action"] == "create_workflow" and intent["confidence"] > 0.6:
+                                from workflows.workflow_agent import handle_workflow_message
+                                response_text = await handle_workflow_message(member_user.id, room_id, ai_query, history_text)
+                                await broadcast_chunk(response_text)
+                            elif intent["confidence"] > 0.7 and intent["action"] != "general_chat":
+                                # Route through MCP
+                                result = await route_intent(intent, {
+                                    "user_id": member_user.id,
+                                    "room_id": room_id,
+                                    "username": member_username
+                                })
+
+                                logger.info(f"MCP result: {result['status']}")
+
+                                if result["status"] == "success":
+                                    # Step 3: Synthesize natural language response (STREAMING)
+                                    from orchestration.data_synthesizer import synthesize_response_stream
+
+                                    async for chunk in synthesize_response_stream(
+                                        intent,
+                                        result,
+                                        use_llm=True
+                                    ):
+                                        await broadcast_chunk(chunk)
+
+                                else:
+                                    await broadcast_chunk(f"Error: {result['message']}")
+                            else:
+                                # Fallback to LLM for general chat or low confidence (STREAMING)
+                                from orchestration.llm_client import get_llm_client
+                                llm_client = get_llm_client()
+
+                                # Prepend history to query if available
+                                full_query = ai_query
+                                if history_text:
+                                    full_query = f"CONVERSATION HISTORY:\n{history_text}\n\nUSER message: {ai_query}"
+
+                                async for chunk in llm_client.stream_text(
+                                    system_prompt="You are Mathia, a helpful AI assistant. Be concise and friendly.",
+                                    user_prompt=full_query,
+                                    temperature=0.7,
+                                    max_tokens=500
+                                ):
+                                    await broadcast_chunk(chunk)
                         
                         # End stream
                         await broadcast_chunk("", is_final=True)

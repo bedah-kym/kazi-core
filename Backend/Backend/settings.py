@@ -274,6 +274,10 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'users.tasks.send_trial_summary_task',
         'schedule': crontab(hour=7, minute=0),  # every day at 07:00
     },
+    'replay-deferred-workflows': {
+        'task': 'workflows.tasks.replay_deferred_workflows',
+        'schedule': 60.0,  # Every minute
+    },
 }
 
 # AI Moderation Settings

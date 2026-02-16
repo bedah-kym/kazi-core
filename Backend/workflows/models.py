@@ -137,3 +137,45 @@ class WorkflowExecution(models.Model):
 
     def __str__(self):
         return f"Execution {self.id} - {self.status}"
+
+
+class DeferredWorkflowExecution(models.Model):
+    """Queue ad-hoc workflows when Temporal is unavailable."""
+
+    STATUS_CHOICES = [
+        ('queued', 'Queued'),
+        ('processing', 'Processing'),
+        ('started', 'Started'),
+        ('failed', 'Failed'),
+        ('abandoned', 'Abandoned'),
+    ]
+
+    workflow = models.ForeignKey(UserWorkflow, on_delete=models.CASCADE, related_name='deferred_executions')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='deferred_workflows')
+    room_id = models.IntegerField(null=True, blank=True)
+    trigger_data = models.JSONField(default=dict)
+
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='queued')
+    attempts = models.IntegerField(default=0)
+    next_attempt_at = models.DateTimeField(null=True, blank=True)
+    last_attempt_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.TextField(null=True, blank=True)
+    execution = models.ForeignKey(
+        WorkflowExecution,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='deferred_source',
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['status', 'next_attempt_at']),
+        ]
+
+    def __str__(self):
+        return f"Deferred {self.id} ({self.status})"

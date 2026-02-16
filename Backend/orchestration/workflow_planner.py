@@ -35,6 +35,25 @@ _CONFIRM_WORDS = {
 _HIGH_RISK_ACTIONS = {
     ("payments", "withdraw"),
 }
+_TRAVEL_SERVICE_ALIASES = {
+    "flight": "flight",
+    "flights": "flight",
+    "hotel": "hotel",
+    "hotels": "hotel",
+    "bus": "bus",
+    "buses": "bus",
+    "transfer": "transfer",
+    "transfers": "transfer",
+    "event": "event",
+    "events": "event",
+}
+_TRAVEL_ACTION_PLURALS = {
+    "flight": "flights",
+    "hotel": "hotels",
+    "bus": "buses",
+    "transfer": "transfers",
+    "event": "events",
+}
 
 _AUTOMATION_HINTS = (
     "workflow",
@@ -66,6 +85,42 @@ def _has_high_risk_step(steps: List[Dict[str, Any]]) -> bool:
     return False
 
 
+def _normalize_travel_step(step: Dict[str, Any]) -> Dict[str, Any]:
+    service = str(step.get("service") or "").lower()
+    action = str(step.get("action") or "").lower()
+    params = step.get("params") or {}
+    item_type = None
+
+    if service in _TRAVEL_SERVICE_ALIASES:
+        item_type = _TRAVEL_SERVICE_ALIASES[service]
+        step["service"] = "travel"
+    elif service == "travel" and action in _TRAVEL_SERVICE_ALIASES:
+        item_type = _TRAVEL_SERVICE_ALIASES[action]
+        action = ""
+
+    if item_type:
+        plural = _TRAVEL_ACTION_PLURALS[item_type]
+        if action in ("", "search", "find"):
+            step["action"] = f"search_{plural}"
+        elif action in ("book", "reserve", "booking", f"book_{item_type}", f"book_{plural}"):
+            step["action"] = "book_travel_item"
+            params.setdefault("item_type", item_type)
+        elif action in ("add", "add_to_itinerary"):
+            step["action"] = "add_to_itinerary"
+            params.setdefault("item_type", item_type)
+        elif action.startswith("search_"):
+            step["action"] = action
+        elif action.startswith("book_"):
+            step["action"] = "book_travel_item"
+            params.setdefault("item_type", item_type)
+
+    if step.get("action") == "book_travel_item":
+        params.setdefault("item_type", params.get("item_type") or item_type)
+
+    step["params"] = params
+    return step
+
+
 def _normalize_steps(steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     normalized = []
     for idx, step in enumerate(steps or []):
@@ -79,7 +134,7 @@ def _normalize_steps(steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             cleaned["action"] = str(cleaned["action"]).lower()
         if not isinstance(cleaned.get("params"), dict):
             cleaned["params"] = {}
-        normalized.append(cleaned)
+        normalized.append(_normalize_travel_step(cleaned))
     return normalized
 
 
@@ -114,6 +169,7 @@ async def plan_user_request(message: str, history_text: str = "") -> Dict[str, A
         "If it is a single action, return mode 'single'.",
         "If the user is asking to automate or create an ongoing workflow, return mode 'automation_request'.",
         "If required parameters are missing, return mode 'needs_clarification' with a helpful message.",
+        "Use service='travel' for flights/hotels/buses/transfers/events and the specific search_* actions.",
         "Only use the services/actions listed below.",
         "",
         "Available Integrations:",

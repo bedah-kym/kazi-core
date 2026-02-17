@@ -8,7 +8,7 @@ import logging
 import re
 import time
 from datetime import date, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from asgiref.sync import sync_to_async
 from django.core.cache import cache
@@ -38,6 +38,141 @@ _CONFIRM_WORDS = {
 _HIGH_RISK_ACTIONS = {
     ("payments", "withdraw"),
 }
+_SERVICE_ALIASES = {
+    "email": "mailgun",
+    "mail": "mailgun",
+    "gmail": "mailgun",
+    "mailgun": "mailgun",
+    "whatsapp": "whatsapp",
+    "wa": "whatsapp",
+    "sms": "whatsapp",
+    "text": "whatsapp",
+    "payment": "payments",
+    "payments": "payments",
+    "wallet": "payments",
+    "calendar": "calendly",
+    "calendly": "calendly",
+    "meeting": "calendly",
+    "schedule": "calendly",
+    "reminder": "reminder",
+    "reminders": "reminder",
+    "quota": "quota",
+    "quotas": "quota",
+    "usage": "quota",
+    "job": "jobs",
+    "jobs": "jobs",
+    "upwork": "jobs",
+    "search": "search",
+    "web": "search",
+    "google": "search",
+    "weather": "weather",
+    "forecast": "weather",
+    "gif": "gif",
+    "gifs": "gif",
+    "currency": "currency",
+    "fx": "currency",
+    "exchange": "currency",
+    "convert": "currency",
+    "travel": "travel",
+    "trip": "travel",
+    "amadeus": "travel",
+}
+_ACTION_ALIASES = {
+    "mailgun": {
+        "email": "send_email",
+        "send": "send_email",
+        "send_mail": "send_email",
+        "send_email": "send_email",
+    },
+    "whatsapp": {
+        "whatsapp": "send_message",
+        "send": "send_message",
+        "send_whatsapp": "send_message",
+        "send_message": "send_message",
+        "message": "send_message",
+        "send_sms": "send_message",
+        "send_text": "send_message",
+    },
+    "payments": {
+        "balance": "check_balance",
+        "check_balance": "check_balance",
+        "transactions": "list_transactions",
+        "list_transactions": "list_transactions",
+        "check_payments": "check_payments",
+        "payments": "check_payments",
+        "payment_status": "check_status",
+        "check_status": "check_status",
+        "invoice_status": "check_invoice_status",
+        "check_invoice_status": "check_invoice_status",
+        "create_payment_link": "create_payment_link",
+        "payment_link": "create_payment_link",
+        "withdraw": "withdraw",
+    },
+    "calendly": {
+        "availability": "check_availability",
+        "check_availability": "check_availability",
+        "schedule": "schedule_meeting",
+        "schedule_meeting": "schedule_meeting",
+        "book_meeting": "schedule_meeting",
+    },
+    "jobs": {
+        "find_jobs": "find_jobs",
+        "search_jobs": "find_jobs",
+        "jobs": "find_jobs",
+    },
+    "search": {
+        "search_info": "search_info",
+        "search": "search_info",
+        "lookup": "search_info",
+        "research": "search_info",
+    },
+    "weather": {
+        "get_weather": "get_weather",
+        "weather": "get_weather",
+        "forecast": "get_weather",
+    },
+    "gif": {
+        "search_gif": "search_gif",
+        "gif": "search_gif",
+        "search": "search_gif",
+    },
+    "currency": {
+        "convert_currency": "convert_currency",
+        "convert": "convert_currency",
+        "exchange": "convert_currency",
+    },
+    "reminder": {
+        "set_reminder": "set_reminder",
+        "remind": "set_reminder",
+    },
+    "quota": {
+        "check_quotas": "check_quotas",
+        "quotas": "check_quotas",
+        "usage": "check_quotas",
+    },
+}
+_ACTION_SERVICE_FALLBACK = {
+    "send_email": "mailgun",
+    "send_whatsapp": "whatsapp",
+    "send_message": "whatsapp",
+    "check_balance": "payments",
+    "list_transactions": "payments",
+    "check_invoice_status": "payments",
+    "check_payments": "payments",
+    "create_payment_link": "payments",
+    "withdraw": "payments",
+    "check_status": "payments",
+    "check_availability": "calendly",
+    "schedule_meeting": "calendly",
+    "find_jobs": "jobs",
+    "search_info": "search",
+    "get_weather": "weather",
+    "search_gif": "gif",
+    "convert_currency": "currency",
+    "set_reminder": "reminder",
+    "check_quotas": "quota",
+}
+_STEP_SPLIT_RE = re.compile(r"\b(?:then|and then|after that|afterwards|next)\b", re.IGNORECASE)
 _TRAVEL_SERVICE_ALIASES = {
     "flight": "flight",
     "flights": "flight",
@@ -104,69 +239,156 @@ def _has_high_risk_step(steps: List[Dict[str, Any]]) -> bool:
     return False
 
 
+def _normalize_service_action(step: Dict[str, Any]) -> Dict[str, Any]:
+    service = str(step.get("service") or "").lower()
+    action = str(step.get("action") or "").lower()
+
+    if service in _SERVICE_ALIASES:
+        service = _SERVICE_ALIASES[service]
+
+    if not service and action in _ACTION_SERVICE_FALLBACK:
+        service = _ACTION_SERVICE_FALLBACK[action]
+
+    if service and action in _ACTION_ALIASES.get(service, {}):
+        action = _ACTION_ALIASES[service][action]
+
+    if not service and action in _ACTION_SERVICE_FALLBACK:
+        service = _ACTION_SERVICE_FALLBACK[action]
+
+    if service:
+        step["service"] = service
+    if action:
+        step["action"] = action
+    return step
+
+
+def _split_step_phrases(message: str) -> List[str]:
+    if not message:
+        return []
+    parts = _STEP_SPLIT_RE.split(message)
+    return [part.strip(" ,.;") for part in parts if part.strip()]
+
+
+def _coerce_year(year_str: str) -> Optional[int]:
+    if not year_str:
+        return None
+    try:
+        year = int(year_str)
+    except ValueError:
+        return None
+    if year < 100:
+        return 2000 + year
+    return year
+
+
+def _safe_date(year: int, month: int, day: int) -> Optional[str]:
+    try:
+        return date(year, month, day).isoformat()
+    except ValueError:
+        return None
+
+
+def _parse_numeric_date(day_str: str, month_str: str, year_str: str, dayfirst_default: bool = True) -> Optional[str]:
+    year = _coerce_year(year_str)
+    if year is None:
+        return None
+    try:
+        day = int(day_str)
+        month = int(month_str)
+    except ValueError:
+        return None
+
+    if day > 12 and month <= 12:
+        return _safe_date(year, month, day)
+    if month > 12 and day <= 12:
+        return _safe_date(year, day, month)
+
+    if dayfirst_default:
+        return _safe_date(year, month, day)
+    return _safe_date(year, day, month)
+
+
 def _extract_dates_from_text(message: str) -> List[str]:
     if not message:
         return []
 
-    dates: List[str] = []
     lowered = message.lower()
     today = timezone.localdate()
+    found: List[Tuple[int, str]] = []
 
-    if "today" in lowered:
-        dates.append(today.isoformat())
-    if "tomorrow" in lowered:
-        dates.append((today + timedelta(days=1)).isoformat())
+    for match in re.finditer(r"\btoday\b", lowered):
+        found.append((match.start(), today.isoformat()))
+    for match in re.finditer(r"\btomorrow\b", lowered):
+        found.append((match.start(), (today + timedelta(days=1)).isoformat()))
 
     for match in re.finditer(r"\b(20\d{2})-(\d{2})-(\d{2})\b", message):
-        dates.append(match.group(0))
+        found.append((match.start(), match.group(0)))
+
+    for match in re.finditer(r"\b(20\d{2})[/-](\d{1,2})[/-](\d{1,2})\b", message):
+        iso = _safe_date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+        if iso:
+            found.append((match.start(), iso))
+
+    for match in re.finditer(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})\b", message):
+        iso = _parse_numeric_date(match.group(1), match.group(2), match.group(3), dayfirst_default=True)
+        if iso:
+            found.append((match.start(), iso))
 
     for match in re.finditer(
-        r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s*(\d{1,2})(?:st|nd|rd|th)?\s*(20\d{2})\b",
+        r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s*(\d{1,2})(?:st|nd|rd|th)?(?:,)?\s*(\d{2,4})\b",
         lowered,
     ):
         month = _MONTHS.get(match.group(1)[:3])
-        day = int(match.group(2))
-        year = int(match.group(3))
-        if month:
-            try:
-                dates.append(date(year, month, day).isoformat())
-            except ValueError:
-                continue
+        year = _coerce_year(match.group(3))
+        if month and year:
+            iso = _safe_date(year, month, int(match.group(2)))
+            if iso:
+                found.append((match.start(), iso))
 
     for match in re.finditer(
-        r"\b(\d{1,2})(?:st|nd|rd|th)?\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s*(20\d{2})\b",
+        r"\b(\d{1,2})(?:st|nd|rd|th)?\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s*(\d{2,4})\b",
         lowered,
     ):
-        day = int(match.group(1))
         month = _MONTHS.get(match.group(2)[:3])
-        year = int(match.group(3))
-        if month:
-            try:
-                dates.append(date(year, month, day).isoformat())
-            except ValueError:
-                continue
+        year = _coerce_year(match.group(3))
+        if month and year:
+            iso = _safe_date(year, month, int(match.group(1)))
+            if iso:
+                found.append((match.start(), iso))
 
     for match in re.finditer(
-        r"\b(\d{1,2})(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)(20\d{2})\b",
+        r"\b(\d{1,2})(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)(\d{2,4})\b",
         lowered,
     ):
-        day = int(match.group(1))
         month = _MONTHS.get(match.group(2))
-        year = int(match.group(3))
-        if month:
-            try:
-                dates.append(date(year, month, day).isoformat())
-            except ValueError:
-                continue
+        year = _coerce_year(match.group(3))
+        if month and year:
+            iso = _safe_date(year, month, int(match.group(1)))
+            if iso:
+                found.append((match.start(), iso))
 
-    # De-duplicate while preserving order
+    found.sort(key=lambda item: item[0])
     seen = set()
-    unique = []
-    for d in dates:
-        if d not in seen:
-            seen.add(d)
-            unique.append(d)
-    return unique
+    ordered: List[str] = []
+    for _, iso in found:
+        if iso not in seen:
+            seen.add(iso)
+            ordered.append(iso)
+    return ordered
+
+
+def _normalize_date_value(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    if isinstance(value, str):
+        trimmed = value.strip()
+        if re.match(r"\b20\d{2}-\d{2}-\d{2}\b", trimmed):
+            return trimmed
+        extracted = _extract_dates_from_text(trimmed)
+        if extracted:
+            return extracted[0]
+        return trimmed
+    return value
 
 
 def _extract_first_email(message: str) -> Optional[str]:
@@ -181,6 +403,127 @@ def _extract_first_phone(message: str) -> Optional[str]:
         return None
     match = _PHONE_RE.search(message.replace(" ", ""))
     return match.group(0) if match else None
+
+
+def _extract_guests(message: str) -> Optional[int]:
+    if not message:
+        return None
+    lowered = message.lower()
+    match = re.search(r"\b(\d{1,2})\s*(guests?|people|persons?|adults?|pax)\b", lowered)
+    if match:
+        try:
+            return int(match.group(1))
+        except ValueError:
+            return None
+    return None
+
+
+def _extract_rooms(message: str) -> Optional[int]:
+    if not message:
+        return None
+    lowered = message.lower()
+    match = re.search(r"\b(\d{1,2})\s*rooms?\b", lowered)
+    if match:
+        try:
+            return int(match.group(1))
+        except ValueError:
+            return None
+    return None
+
+
+def _extract_budget_ksh(message: str) -> Optional[float]:
+    if not message:
+        return None
+    lowered = message.lower()
+    if not any(token in lowered for token in ("budget", "ksh", "kes", "shilling", "per night", "night")):
+        return None
+    match = re.search(r"(?:budget|under|below|less than)\s*([0-9][0-9,\.]*)\s*(k|ksh|kes)?", lowered)
+    if not match:
+        match = re.search(r"\b([0-9][0-9,\.]*)\s*(ksh|kes)\b", lowered)
+    if not match:
+        match = re.search(r"\b([0-9]+(?:\.\d+)?)\s*k\b", lowered)
+    if not match:
+        return None
+    raw = match.group(1).replace(",", "")
+    try:
+        amount = float(raw)
+    except ValueError:
+        return None
+    suffix = match.group(2) if len(match.groups()) >= 2 else None
+    if suffix == "k":
+        amount *= 1000
+    return amount
+
+
+def _extract_invoice_id(message: str) -> Optional[str]:
+    if not message:
+        return None
+    match = re.search(r"\binvoice\s*#?\s*([A-Za-z0-9_-]+)\b", message, flags=re.IGNORECASE)
+    return match.group(1) if match else None
+
+
+def _extract_currency_conversion(message: str) -> Dict[str, Optional[str]]:
+    if not message:
+        return {"amount": None, "from_currency": None, "to_currency": None}
+    match = re.search(
+        r"\b([0-9][0-9,\.]*)\s*([A-Za-z]{3})\s*(?:to|in)\s*([A-Za-z]{3})\b",
+        message,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return {"amount": None, "from_currency": None, "to_currency": None}
+    amount = match.group(1).replace(",", "")
+    return {
+        "amount": amount,
+        "from_currency": match.group(2).upper(),
+        "to_currency": match.group(3).upper(),
+    }
+
+
+def _extract_amount_with_currency(message: str) -> Dict[str, Optional[str]]:
+    if not message:
+        return {"amount": None, "currency": None}
+    match = re.search(r"\b([A-Za-z]{3})\s*([0-9][0-9,\.]*)\b", message, flags=re.IGNORECASE)
+    if match:
+        return {"amount": match.group(2).replace(",", ""), "currency": match.group(1).upper()}
+    match = re.search(r"\b([0-9][0-9,\.]*)\s*([A-Za-z]{3})\b", message, flags=re.IGNORECASE)
+    if match:
+        return {"amount": match.group(1).replace(",", ""), "currency": match.group(2).upper()}
+    match = re.search(r"\b([0-9][0-9,\.]*)\b", message)
+    if match:
+        return {"amount": match.group(1).replace(",", ""), "currency": None}
+    return {"amount": None, "currency": None}
+
+
+def _extract_message_text(message: str) -> Optional[str]:
+    if not message:
+        return None
+    match = re.search(r'\b(?:saying|message|msg|text|body)\b[:\-]?\s*"?(.+)', message, flags=re.IGNORECASE)
+    if match:
+        return match.group(1).strip().strip('"').strip()
+    match = re.search(r'"([^"\n]+)"', message)
+    if match:
+        return match.group(1).strip()
+    return None
+
+
+def _extract_subject_text(message: str) -> Optional[str]:
+    if not message:
+        return None
+    match = re.search(r'\bsubject\b[:\-]?\s*"?([^"\n]+)', message, flags=re.IGNORECASE)
+    if match:
+        return match.group(1).strip().strip('"').strip()
+    return None
+
+
+def _default_subject_from_text(text: Optional[str]) -> Optional[str]:
+    if not text:
+        return None
+    words = text.split()
+    if not words:
+        return None
+    subject = " ".join(words[:6])
+    return subject[:80]
 
 
 def _extract_passengers(message: str) -> Optional[int]:
@@ -258,6 +601,26 @@ def _extract_nights(message: str) -> Optional[int]:
     return None
 
 
+def _extract_time_string(message: str) -> Optional[str]:
+    if not message:
+        return None
+    match = re.search(r"\b([01]?\d|2[0-3]):([0-5]\d)\b", message)
+    if match:
+        hour = int(match.group(1))
+        minute = match.group(2)
+        return f"{hour:02d}:{minute}"
+    match = re.search(r"\b([1-9]|1[0-2])\s*(am|pm)\b", message, flags=re.IGNORECASE)
+    if match:
+        hour = int(match.group(1))
+        meridiem = match.group(2).lower()
+        if meridiem == "pm" and hour != 12:
+            hour += 12
+        if meridiem == "am" and hour == 12:
+            hour = 0
+        return f"{hour:02d}:00"
+    return None
+
+
 def _missing_param_message(param: str) -> str:
     prompts = {
         "departure_date": "What departure date should I use? (YYYY-MM-DD)",
@@ -322,15 +685,45 @@ def _normalize_travel_step(step: Dict[str, Any]) -> Dict[str, Any]:
     return step
 
 
+def _infer_item_type_from_steps(previous_steps: List[Dict[str, Any]]) -> Optional[str]:
+    search_map = {
+        "search_flights": "flight",
+        "search_hotels": "hotel",
+        "search_buses": "bus",
+        "search_transfers": "transfer",
+        "search_events": "event",
+    }
+    for prev in reversed(previous_steps):
+        params = prev.get("params") or {}
+        item_type = params.get("item_type")
+        if item_type:
+            return item_type
+        action = prev.get("action")
+        if action in search_map:
+            return search_map[action]
+    return None
+
+
 def _normalize_steps(steps: List[Dict[str, Any]], message: str) -> List[Dict[str, Any]]:
     extracted_dates = _extract_dates_from_text(message)
     origin_dest = _extract_origin_destination(message)
     location = _extract_location(message)
     passengers = _extract_passengers(message)
+    guests = _extract_guests(message)
+    rooms = _extract_rooms(message)
+    budget_ksh = _extract_budget_ksh(message)
     email = _extract_first_email(message)
     phone = _extract_first_phone(message)
     item_id = _extract_item_id(message)
+    invoice_id = _extract_invoice_id(message)
     nights = _extract_nights(message)
+    travel_time = _extract_time_string(message)
+    currency_conversion = _extract_currency_conversion(message)
+    amount_currency = _extract_amount_with_currency(message)
+    message_text = _extract_message_text(message)
+    subject_text = _extract_subject_text(message)
+    if message_text:
+        message_text = _STEP_SPLIT_RE.split(message_text)[0].strip()
     lowered = message.lower()
     normalized = []
     for idx, step in enumerate(steps or []):
@@ -344,16 +737,29 @@ def _normalize_steps(steps: List[Dict[str, Any]], message: str) -> List[Dict[str
             cleaned["action"] = str(cleaned["action"]).lower()
         if not isinstance(cleaned.get("params"), dict):
             cleaned["params"] = {}
-        normalized_step = _normalize_travel_step(cleaned)
+        normalized_step = _normalize_service_action(cleaned)
+        normalized_step = _normalize_travel_step(normalized_step)
 
         action = normalized_step.get("action")
         params = normalized_step.get("params") or {}
+        if action in ("add_to_itinerary", "book_travel_item") and not params.get("item_type"):
+            inferred_item_type = _infer_item_type_from_steps(normalized)
+            if inferred_item_type:
+                params.setdefault("item_type", inferred_item_type)
         if action in ("search_flights", "search_buses", "search_transfers"):
             if not params.get("origin") and origin_dest.get("origin"):
                 params.setdefault("origin", origin_dest["origin"])
             if not params.get("destination") and origin_dest.get("destination"):
                 params.setdefault("destination", origin_dest["destination"])
         if action == "search_flights":
+            if params.get("departure_date"):
+                normalized = _normalize_date_value(str(params.get("departure_date")))
+                if normalized:
+                    params["departure_date"] = normalized
+            if params.get("return_date"):
+                normalized = _normalize_date_value(str(params.get("return_date")))
+                if normalized:
+                    params["return_date"] = normalized
             if extracted_dates:
                 params.setdefault("departure_date", extracted_dates[0])
             if len(extracted_dates) > 1 and ("return" in lowered or "back" in lowered):
@@ -366,9 +772,23 @@ def _normalize_steps(steps: List[Dict[str, Any]], message: str) -> List[Dict[str
                     params.setdefault("departure_date", extracted_dates[0])
                 else:
                     params.setdefault("travel_date", extracted_dates[0])
+        if action in ("search_buses", "search_transfers") and passengers and not params.get("passengers"):
+            params.setdefault("passengers", passengers)
+        if action == "search_buses" and budget_ksh and not params.get("budget_ksh"):
+            params.setdefault("budget_ksh", budget_ksh)
+        if action == "search_transfers" and travel_time and not params.get("travel_time"):
+            params.setdefault("travel_time", travel_time)
         if action == "search_hotels":
             if not params.get("location") and location:
                 params.setdefault("location", location)
+            if params.get("check_in_date"):
+                normalized = _normalize_date_value(str(params.get("check_in_date")))
+                if normalized:
+                    params["check_in_date"] = normalized
+            if params.get("check_out_date"):
+                normalized = _normalize_date_value(str(params.get("check_out_date")))
+                if normalized:
+                    params["check_out_date"] = normalized
             if extracted_dates and not params.get("check_in_date"):
                 params.setdefault("check_in_date", extracted_dates[0])
             if len(extracted_dates) > 1 and not params.get("check_out_date"):
@@ -379,6 +799,29 @@ def _normalize_steps(steps: List[Dict[str, Any]], message: str) -> List[Dict[str
                     params.setdefault("check_out_date", (check_in + timedelta(days=nights)).isoformat())
                 except Exception:
                     pass
+            if guests and not params.get("guests"):
+                params.setdefault("guests", guests)
+            if rooms and not params.get("rooms"):
+                params.setdefault("rooms", rooms)
+            if budget_ksh and not params.get("budget_ksh"):
+                params.setdefault("budget_ksh", budget_ksh)
+        if action in ("search_buses", "search_transfers") and params.get("travel_date"):
+            normalized = _normalize_date_value(str(params.get("travel_date")))
+            if normalized:
+                params["travel_date"] = normalized
+        if action == "search_events" and params.get("event_date"):
+            normalized = _normalize_date_value(str(params.get("event_date")))
+            if normalized:
+                params["event_date"] = normalized
+        if action == "create_itinerary":
+            if params.get("start_date"):
+                normalized = _normalize_date_value(str(params.get("start_date")))
+                if normalized:
+                    params["start_date"] = normalized
+            if params.get("end_date"):
+                normalized = _normalize_date_value(str(params.get("end_date")))
+                if normalized:
+                    params["end_date"] = normalized
 
         if action in ("book_travel_item", "add_to_itinerary") and not params.get("item_id") and item_id:
             params.setdefault("item_id", item_id)
@@ -388,12 +831,53 @@ def _normalize_steps(steps: List[Dict[str, Any]], message: str) -> List[Dict[str
                 params["text"] = params.get("body")
             if "text" not in params and params.get("message"):
                 params["text"] = params.get("message")
+            if "text" not in params and message_text:
+                params.setdefault("text", message_text)
+            if "subject" not in params and subject_text:
+                params.setdefault("subject", subject_text)
+            if "subject" not in params:
+                default_subject = _default_subject_from_text(params.get("text"))
+                if default_subject:
+                    params.setdefault("subject", default_subject)
             if "to" not in params and email:
                 params.setdefault("to", email)
 
         if action == "send_message":
             if "message" not in params and params.get("text"):
                 params["message"] = params.get("text")
+            if "message" not in params and message_text:
+                params.setdefault("message", message_text)
+            if "phone_number" not in params and phone:
+                params.setdefault("phone_number", phone)
+
+        if action == "convert_currency":
+            if not params.get("amount") and currency_conversion.get("amount"):
+                params.setdefault("amount", currency_conversion["amount"])
+            if not params.get("from_currency") and currency_conversion.get("from_currency"):
+                params.setdefault("from_currency", currency_conversion["from_currency"])
+            if not params.get("to_currency") and currency_conversion.get("to_currency"):
+                params.setdefault("to_currency", currency_conversion["to_currency"])
+
+        if action in ("search_info", "search_gif", "find_jobs") and not params.get("query"):
+            params.setdefault("query", message.strip())
+
+        if action == "get_weather" and not params.get("city") and location:
+            params.setdefault("city", location)
+
+        if action in ("check_invoice_status", "check_status") and not params.get("invoice_id") and invoice_id:
+            params.setdefault("invoice_id", invoice_id)
+
+        if action == "create_payment_link":
+            if not params.get("amount") and amount_currency.get("amount"):
+                params.setdefault("amount", amount_currency["amount"])
+            if not params.get("currency") and amount_currency.get("currency"):
+                params.setdefault("currency", amount_currency["currency"])
+            if not params.get("description"):
+                params.setdefault("description", "Payment request")
+
+        if action == "withdraw":
+            if not params.get("amount") and amount_currency.get("amount"):
+                params.setdefault("amount", amount_currency["amount"])
             if "phone_number" not in params and phone:
                 params.setdefault("phone_number", phone)
 
@@ -410,6 +894,41 @@ def _build_definition(steps: List[Dict[str, Any]], message: str) -> Dict[str, An
         "steps": steps,
         "metadata": {"adhoc": True},
     }
+
+
+async def _fallback_steps_from_intent(message: str, history_text: str) -> List[Dict[str, Any]]:
+    parts = _split_step_phrases(message)
+    if len(parts) < MIN_ADHOC_STEPS:
+        return []
+    try:
+        from orchestration.intent_parser import parse_intent
+    except Exception:
+        return []
+
+    steps: List[Dict[str, Any]] = []
+    for idx, part in enumerate(parts):
+        if not part:
+            continue
+        intent = await parse_intent(part, {"history": history_text} if history_text else None)
+        if not intent:
+            continue
+        action = intent.get("action")
+        if not action or action in ("general_chat", "create_workflow"):
+            continue
+        if intent.get("confidence") is not None:
+            try:
+                if float(intent.get("confidence")) < 0.35:
+                    continue
+            except (TypeError, ValueError):
+                pass
+        steps.append({
+            "id": f"step_{len(steps) + 1}",
+            "service": intent.get("service") or "",
+            "action": action,
+            "params": intent.get("parameters") or {},
+        })
+
+    return steps
 
 
 async def plan_user_request(message: str, history_text: str = "") -> Dict[str, Any]:
@@ -434,6 +953,8 @@ async def plan_user_request(message: str, history_text: str = "") -> Dict[str, A
         "If the user is asking to automate or create an ongoing workflow, return mode 'automation_request'.",
         "If required parameters are missing, return mode 'needs_clarification' with a helpful message.",
         "Use service='travel' for flights/hotels/buses/transfers/events and the specific search_* actions.",
+        "Normalize dates to YYYY-MM-DD; accept DD/MM/YYYY and DD-MM-YYYY inputs from users.",
+        "Map emails to service='mailgun' action='send_email', WhatsApp to service='whatsapp' action='send_message'.",
         "Only use the services/actions listed below.",
         "",
         "Available Integrations:",
@@ -507,6 +1028,19 @@ async def plan_user_request(message: str, history_text: str = "") -> Dict[str, A
         valid, error = validate_workflow_definition(definition)
         if not valid:
             logger.warning("Invalid ad-hoc workflow definition: %s", error)
+            fallback_steps = await _fallback_steps_from_intent(message, history_text)
+            if fallback_steps:
+                fallback_normalized = _normalize_steps(fallback_steps, message)
+                if len(fallback_normalized) >= MIN_ADHOC_STEPS:
+                    fallback_def = _build_definition(fallback_normalized, message)
+                    fallback_valid, fallback_error = validate_workflow_definition(fallback_def)
+                    if fallback_valid:
+                        return {
+                            "mode": "adhoc_workflow",
+                            "assistant_message": assistant_message,
+                            "workflow_definition": fallback_def,
+                        }
+                    error = fallback_error or error
             return {
                 "mode": "needs_clarification",
                 "assistant_message": _friendly_validation_error(error),
@@ -520,6 +1054,20 @@ async def plan_user_request(message: str, history_text: str = "") -> Dict[str, A
         }
 
     if mode == "needs_clarification":
+        fallback_steps = await _fallback_steps_from_intent(message, history_text)
+        if fallback_steps:
+            fallback_normalized = _normalize_steps(fallback_steps, message)
+            if len(fallback_normalized) >= MIN_ADHOC_STEPS:
+                fallback_def = _build_definition(fallback_normalized, message)
+                fallback_valid, fallback_error = validate_workflow_definition(fallback_def)
+                if fallback_valid:
+                    return {
+                        "mode": "adhoc_workflow",
+                        "assistant_message": assistant_message,
+                        "workflow_definition": fallback_def,
+                    }
+                if fallback_error:
+                    assistant_message = _friendly_validation_error(fallback_error)
         return {
             "mode": "needs_clarification",
             "assistant_message": assistant_message or "I need a bit more detail to proceed.",

@@ -184,6 +184,17 @@
     border-radius: calc(var(--radius) - 2px);
 }
 
+[data-theme="dark"] .context-panel-close,
+.dark-mode .context-panel-close {
+    color: rgba(232, 234, 237, 0.85);
+}
+
+[data-theme="dark"] .context-panel-close:hover,
+.dark-mode .context-panel-close:hover {
+    color: #ffffff;
+    background: rgba(255, 255, 255, 0.12);
+}
+
 /* Panel Content */
 .context-panel-content {
     flex: 1;

@@ -536,8 +536,10 @@ class BookingOrchestrator:
                 'status': booking_ref.status,
                 'confirmation_code': booking_ref.confirmation_code or booking_ref.provider_booking_id,
                 'booking_reference': booking_ref.booking_reference or booking_ref.provider_booking_id,
-                'booked_at': booking_ref.created_at.isoformat(),
-                'expires_at': (booking_ref.created_at + timedelta(days=30)).isoformat()
+                'booked_at': booking_ref.booked_at.isoformat() if booking_ref.booked_at else None,
+                'expires_at': (
+                    booking_ref.booked_at + timedelta(days=30)
+                ).isoformat() if booking_ref.booked_at else None
             }
         except BookingReference.DoesNotExist:
             return {

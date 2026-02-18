@@ -63,6 +63,20 @@ class ItineraryBuilder:
         start = timezone.make_aware(start) if timezone.is_naive(start) else start
         end = timezone.make_aware(end) if timezone.is_naive(end) else end
         
+        def _coerce_item_datetime(value: Optional[str], fallback: datetime) -> datetime:
+            if not value:
+                return fallback
+            raw = str(value).strip()
+            try:
+                if len(raw) == 10:
+                    dt = datetime.strptime(raw, '%Y-%m-%d')
+                    dt = dt.replace(hour=fallback.hour, minute=fallback.minute)
+                else:
+                    dt = datetime.fromisoformat(raw)
+            except Exception:
+                return fallback
+            return timezone.make_aware(dt) if timezone.is_naive(dt) else dt
+
         # Create itinerary
         itinerary = await sync_to_async(Itinerary.objects.create)(
             user=user,
@@ -70,7 +84,8 @@ class ItineraryBuilder:
             description=f"Trip from {origin} to {destination}",
             start_date=start,
             end_date=end,
-            status='draft'
+            status='draft',
+            metadata={'origin': origin, 'destination': destination}
         )
         
         # Integrate LLM Composer
@@ -109,21 +124,25 @@ class ItineraryBuilder:
                     # Create Item
                     title = item_data.get('title') or item_data.get('name') or item_data.get('company') or f"{item_type.title()} Option"
                     
-                    # Append reasoning to notes
                     notes = item_data.get('ai_reasoning', '')
-                    
+                    start_dt = _coerce_item_datetime(
+                        item_data.get('start_datetime') or item_data.get('date'),
+                        start,
+                    )
+
                     await sync_to_async(ItineraryItem.objects.create)(
                         itinerary=itinerary,
                         item_type=item_type,
                         title=title,
                         description=json.dumps(item_data),
+                        start_datetime=start_dt,
                         price_ksh=item_data.get('price_ksh', 0),
-                        status='suggested',
-                        notes=f"AI Recommendation: {notes}",
+                        status='planned',
                         metadata={
                             'provider': item_data.get('provider', 'unknown'), 
                             'booking_url': item_data.get('booking_url'),
-                            'ai_selected': True
+                            'ai_selected': True,
+                            'ai_reasoning': notes,
                         }
                     )
                     items_added += 1
@@ -140,13 +159,15 @@ class ItineraryBuilder:
             
             # Add buses
             for bus in search_results.get('buses', [])[:3]:  # Add top 3 buses
+                start_dt = _coerce_item_datetime(bus.get('departure_datetime'), start)
                 item = await sync_to_async(ItineraryItem.objects.create)(
                     itinerary=itinerary,
                     item_type='bus',
                     title=f"{bus.get('company', 'Bus')} - {bus.get('departure_time')} to {bus.get('arrival_time')}",
                     description=json.dumps(bus),
+                    start_datetime=start_dt,
                     price_ksh=bus.get('price_ksh', 0),
-                    status='suggested',
+                    status='planned',
                     metadata={'provider': 'buupass', 'booking_url': bus.get('booking_url')}
                 )
                 items_added += 1
@@ -161,47 +182,55 @@ class ItineraryBuilder:
                     item_type='hotel',
                     title=f"{hotel.get('name', 'Hotel')} - {nights} nights",
                     description=json.dumps(hotel),
+                    start_datetime=start,
+                    end_datetime=end,
                     price_ksh=total_price,
-                    status='suggested',
+                    status='planned',
                     metadata={'provider': 'booking', 'booking_url': hotel.get('booking_url'), 'nights': nights}
                 )
                 items_added += 1
             
             # Add flights if available
             for flight in search_results.get('flights', [])[:1]:  # Add top flight
+                start_dt = _coerce_item_datetime(flight.get('departure_datetime'), start)
                 item = await sync_to_async(ItineraryItem.objects.create)(
                     itinerary=itinerary,
                     item_type='flight',
                     title=f"{flight.get('airline', 'Flight')} {flight.get('flight_number', '')} - {flight.get('departure_time')}",
                     description=json.dumps(flight),
+                    start_datetime=start_dt,
                     price_ksh=flight.get('price_ksh', 0),
-                    status='suggested',
+                    status='planned',
                     metadata={'provider': 'duffel', 'booking_url': flight.get('booking_url')}
                 )
                 items_added += 1
             
             # Add transfers
             for transfer in search_results.get('transfers', [])[:1]:  # Add top transfer
+                start_dt = _coerce_item_datetime(transfer.get('travel_datetime'), start)
                 item = await sync_to_async(ItineraryItem.objects.create)(
                     itinerary=itinerary,
                     item_type='transfer',
                     title=f"{transfer.get('provider', 'Transfer')} - {transfer.get('vehicle_type', 'Vehicle')}",
                     description=json.dumps(transfer),
+                    start_datetime=start_dt,
                     price_ksh=transfer.get('price_ksh', 0),
-                    status='suggested',
+                    status='planned',
                     metadata={'provider': 'karibu', 'booking_url': transfer.get('booking_url')}
                 )
                 items_added += 1
             
             # Add events
             for event in search_results.get('events', [])[:3]:  # Add top 3 events
+                start_dt = _coerce_item_datetime(event.get('start_datetime'), start)
                 item = await sync_to_async(ItineraryItem.objects.create)(
                     itinerary=itinerary,
                     item_type='event',
                     title=event.get('title', 'Event'),
                     description=json.dumps(event),
+                    start_datetime=start_dt,
                     price_ksh=event.get('price_ksh', 0),
-                    status='suggested',
+                    status='planned',
                     metadata={'provider': 'eventbrite', 'booking_url': event.get('ticket_url')}
                 )
                 items_added += 1
@@ -235,7 +264,12 @@ class ItineraryBuilder:
         """
         
         try:
-            summary = await sync_to_async(self.llm_client.generate_text)(prompt)
+            summary = await self.llm_client.generate_text(
+                system_prompt="You are a helpful travel assistant.",
+                user_prompt=prompt,
+                temperature=0.4,
+                max_tokens=400,
+            )
             return summary
         except Exception as e:
             logger.error(f"Error generating summary: {str(e)}")
@@ -248,17 +282,26 @@ class ItineraryBuilder:
         from travel.recommendation_service import RecommendationService
         
         itinerary = await sync_to_async(Itinerary.objects.get)(id=itinerary_id)
-        items = await sync_to_async(lambda: list(itinerary.items.values('title', 'item_type', 'date_of_event')))()
+        items = await sync_to_async(lambda: list(itinerary.items.values('title', 'item_type', 'start_datetime')))()
+        context_items = []
+        for item in items:
+            context_items.append({
+                'title': item.get('title'),
+                'time': item.get('start_datetime').isoformat() if item.get('start_datetime') else 'Anytime',
+            })
+
+        meta = itinerary.metadata if isinstance(itinerary.metadata, dict) else {}
+        destination = meta.get('destination') or itinerary.title or "Unknown"
         
         service = RecommendationService()
         
         if category == 'dining':
-            return await service.recommend_dining(itinerary.destination or "Unknown")
+            return await service.recommend_dining(destination)
         elif category == 'hidden_gems':
-            return await service.get_hidden_gems(itinerary.destination or "Unknown")
+            return await service.get_hidden_gems(destination)
         else:
             # Default to context-aware activity suggestions
-            return await service.recommend_activities(itinerary.destination or "Unknown", context_items)
+            return await service.recommend_activities(destination, context_items)
 
     async def add_practical_info(self, itinerary_id: int, user_passport_code: str = 'US'):
         """
@@ -276,7 +319,8 @@ class ItineraryBuilder:
         
         # 2. Weather
         weather_service = WeatherService()
-        weather = await weather_service.get_trip_forecast(itinerary.destination or "Nairobi")
+        destination = (itinerary.metadata or {}).get('destination') or itinerary.title or "Nairobi"
+        weather = await weather_service.get_trip_forecast(destination)
         
         # Update Metadata
         meta = itinerary.metadata or {}
@@ -314,14 +358,14 @@ class ExportService:
                 {
                     'title': item.title,
                     'type': item.item_type,
-                    'date': item.date_of_event.isoformat() if item.date_of_event else None,
-                    'price_ksh': float(item.price_ksh),
+                    'date': item.start_datetime.isoformat() if item.start_datetime else None,
+                    'price_ksh': float(item.price_ksh or 0),
                     'status': item.status,
-                    'notes': item.notes
+                    'notes': item.description or ''
                 }
                 for item in items
             ],
-            'total_cost': float(sum(item.price_ksh for item in items)),
+            'total_cost': float(sum(item.price_ksh or 0 for item in items)),
             'created_at': itinerary.created_at.isoformat(),
             'updated_at': itinerary.updated_at.isoformat()
         }
@@ -342,13 +386,13 @@ class ExportService:
         ]
         
         for item in items:
-            if item.date_of_event:
-                event_date = item.date_of_event.strftime('%Y%m%d')
+            if item.start_datetime:
+                event_date = item.start_datetime.strftime('%Y%m%d')
                 ical_lines.extend([
                     "BEGIN:VEVENT",
                     f"DTSTART:{event_date}",
                     f"SUMMARY:{item.title}",
-                    f"DESCRIPTION:{item.notes or ''}",
+                    f"DESCRIPTION:{item.description or ''}",
                     "END:VEVENT"
                 ])
         

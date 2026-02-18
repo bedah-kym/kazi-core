@@ -725,7 +725,7 @@ def _normalize_steps(steps: List[Dict[str, Any]], message: str) -> List[Dict[str
     if message_text:
         message_text = _STEP_SPLIT_RE.split(message_text)[0].strip()
     lowered = message.lower()
-    normalized = []
+    normalized_steps: List[Dict[str, Any]] = []
     for idx, step in enumerate(steps or []):
         if not isinstance(step, dict):
             continue
@@ -743,7 +743,7 @@ def _normalize_steps(steps: List[Dict[str, Any]], message: str) -> List[Dict[str
         action = normalized_step.get("action")
         params = normalized_step.get("params") or {}
         if action in ("add_to_itinerary", "book_travel_item") and not params.get("item_type"):
-            inferred_item_type = _infer_item_type_from_steps(normalized)
+            inferred_item_type = _infer_item_type_from_steps(normalized_steps)
             if inferred_item_type:
                 params.setdefault("item_type", inferred_item_type)
         if action in ("search_flights", "search_buses", "search_transfers"):
@@ -753,13 +753,13 @@ def _normalize_steps(steps: List[Dict[str, Any]], message: str) -> List[Dict[str
                 params.setdefault("destination", origin_dest["destination"])
         if action == "search_flights":
             if params.get("departure_date"):
-                normalized = _normalize_date_value(str(params.get("departure_date")))
-                if normalized:
-                    params["departure_date"] = normalized
+                normalized_date = _normalize_date_value(str(params.get("departure_date")))
+                if normalized_date:
+                    params["departure_date"] = normalized_date
             if params.get("return_date"):
-                normalized = _normalize_date_value(str(params.get("return_date")))
-                if normalized:
-                    params["return_date"] = normalized
+                normalized_date = _normalize_date_value(str(params.get("return_date")))
+                if normalized_date:
+                    params["return_date"] = normalized_date
             if extracted_dates:
                 params.setdefault("departure_date", extracted_dates[0])
             if len(extracted_dates) > 1 and ("return" in lowered or "back" in lowered):
@@ -782,13 +782,13 @@ def _normalize_steps(steps: List[Dict[str, Any]], message: str) -> List[Dict[str
             if not params.get("location") and location:
                 params.setdefault("location", location)
             if params.get("check_in_date"):
-                normalized = _normalize_date_value(str(params.get("check_in_date")))
-                if normalized:
-                    params["check_in_date"] = normalized
+                normalized_date = _normalize_date_value(str(params.get("check_in_date")))
+                if normalized_date:
+                    params["check_in_date"] = normalized_date
             if params.get("check_out_date"):
-                normalized = _normalize_date_value(str(params.get("check_out_date")))
-                if normalized:
-                    params["check_out_date"] = normalized
+                normalized_date = _normalize_date_value(str(params.get("check_out_date")))
+                if normalized_date:
+                    params["check_out_date"] = normalized_date
             if extracted_dates and not params.get("check_in_date"):
                 params.setdefault("check_in_date", extracted_dates[0])
             if len(extracted_dates) > 1 and not params.get("check_out_date"):
@@ -806,22 +806,22 @@ def _normalize_steps(steps: List[Dict[str, Any]], message: str) -> List[Dict[str
             if budget_ksh and not params.get("budget_ksh"):
                 params.setdefault("budget_ksh", budget_ksh)
         if action in ("search_buses", "search_transfers") and params.get("travel_date"):
-            normalized = _normalize_date_value(str(params.get("travel_date")))
-            if normalized:
-                params["travel_date"] = normalized
+            normalized_date = _normalize_date_value(str(params.get("travel_date")))
+            if normalized_date:
+                params["travel_date"] = normalized_date
         if action == "search_events" and params.get("event_date"):
-            normalized = _normalize_date_value(str(params.get("event_date")))
-            if normalized:
-                params["event_date"] = normalized
+            normalized_date = _normalize_date_value(str(params.get("event_date")))
+            if normalized_date:
+                params["event_date"] = normalized_date
         if action == "create_itinerary":
             if params.get("start_date"):
-                normalized = _normalize_date_value(str(params.get("start_date")))
-                if normalized:
-                    params["start_date"] = normalized
+                normalized_date = _normalize_date_value(str(params.get("start_date")))
+                if normalized_date:
+                    params["start_date"] = normalized_date
             if params.get("end_date"):
-                normalized = _normalize_date_value(str(params.get("end_date")))
-                if normalized:
-                    params["end_date"] = normalized
+                normalized_date = _normalize_date_value(str(params.get("end_date")))
+                if normalized_date:
+                    params["end_date"] = normalized_date
 
         if action in ("book_travel_item", "add_to_itinerary") and not params.get("item_id") and item_id:
             params.setdefault("item_id", item_id)
@@ -882,8 +882,8 @@ def _normalize_steps(steps: List[Dict[str, Any]], message: str) -> List[Dict[str
                 params.setdefault("phone_number", phone)
 
         normalized_step["params"] = params
-        normalized.append(normalized_step)
-    return normalized
+        normalized_steps.append(normalized_step)
+    return normalized_steps
 
 
 def _build_definition(steps: List[Dict[str, Any]], message: str) -> Dict[str, Any]:

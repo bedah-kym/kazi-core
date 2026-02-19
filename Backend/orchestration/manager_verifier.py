@@ -37,6 +37,7 @@ class ManagerVerifier:
             if not action_def:
                 return {
                     "verdict": "ask_user",
+                    "reason": "unknown_action",
                     "assistant_message": "I couldn't map one of the actions. Please rephrase with explicit steps.",
                     "steps": steps,
                     "missing_fields": [],
@@ -56,6 +57,7 @@ class ManagerVerifier:
             first_missing = missing[0][1]
             return {
                 "verdict": "ask_user",
+                "reason": "missing_param",
                 "assistant_message": self._missing_param_message(first_missing),
                 "steps": steps,
                 "missing_fields": missing,
@@ -63,6 +65,7 @@ class ManagerVerifier:
 
         return {
             "verdict": "approve",
+            "reason": "approved",
             "assistant_message": "",
             "steps": steps,
             "missing_fields": [],

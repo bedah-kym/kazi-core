@@ -180,3 +180,4 @@
 2. Injected manager review into ad-hoc planning fallback paths.
 3. Added idle proactive nudge scheduler with low-frequency defaults and cache gating.
 4. Wired nudge scheduling + room context summary refresh into chat message flow.
+5. Fixed CSRF cookie httpOnly in production so manual note/pin POSTs can read the token.

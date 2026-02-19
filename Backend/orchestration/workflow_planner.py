@@ -704,6 +704,95 @@ def _friendly_validation_error(error: str) -> str:
     return f"I need a bit more detail to run that: {error}"
 
 
+async def _llm_manager_review(message: str, steps: List[Dict[str, Any]]) -> Dict[str, Any]:
+    llm = get_llm_client()
+    system_prompt = "\n".join([
+        "You are a manager verifier for workflow steps.",
+        "Goal: map user intent to valid services/actions without inventing data.",
+        "Only use services/actions listed in SYSTEM_CAPABILITIES.",
+        "Do NOT create new steps unless they are clearly implied.",
+        "If required params are missing and not present in the user message, return verdict 'ask_user'.",
+        "Return JSON only with keys:",
+        "verdict: approve|ask_user",
+        "assistant_message: string",
+        "revised_steps: list of steps or empty list",
+        "missing_fields: list of param names or empty list",
+    ])
+
+    user_prompt = json.dumps({
+        "message": message,
+        "steps": steps,
+        "capabilities": SYSTEM_CAPABILITIES,
+    })
+
+    try:
+        response_text = await llm.generate_text(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=0.2,
+            max_tokens=700,
+            json_mode=True,
+        )
+    except Exception as exc:
+        logger.warning("LLM manager failed: %s", exc)
+        return {}
+
+    parsed = llm.extract_json(response_text) or {}
+    verdict = str(parsed.get("verdict") or "").lower()
+    revised_steps = parsed.get("revised_steps")
+    if not isinstance(revised_steps, list):
+        revised_steps = []
+    return {
+        "verdict": verdict,
+        "assistant_message": parsed.get("assistant_message") or "",
+        "revised_steps": revised_steps,
+        "missing_fields": parsed.get("missing_fields") or [],
+    }
+
+
+async def _review_steps_with_manager(steps: List[Dict[str, Any]], message: str, assistant_message: str) -> Dict[str, Any]:
+    try:
+        from orchestration.manager_verifier import ManagerVerifier
+        review = ManagerVerifier().review_steps(steps, message)
+    except Exception as exc:
+        logger.warning("Manager verifier failed: %s", exc)
+        return {
+            "verdict": "approve",
+            "assistant_message": "",
+            "steps": steps,
+        }
+
+    if review.get("verdict") == "ask_user":
+        if review.get("reason") == "unknown_action" and getattr(settings, "MANAGER_LLM_ENABLED", False):
+            llm_review = await _llm_manager_review(message, steps)
+            if llm_review.get("verdict") == "approve" and llm_review.get("revised_steps"):
+                revised_steps = _normalize_steps(llm_review["revised_steps"], message)
+                review = ManagerVerifier().review_steps(revised_steps, message)
+                if review.get("verdict") == "approve":
+                    return {
+                        "verdict": "approve",
+                        "assistant_message": "",
+                        "steps": review.get("steps") or revised_steps,
+                    }
+            if llm_review.get("assistant_message"):
+                return {
+                    "verdict": "ask_user",
+                    "assistant_message": llm_review["assistant_message"],
+                    "steps": steps,
+                }
+        return {
+            "verdict": "ask_user",
+            "assistant_message": review.get("assistant_message") or assistant_message,
+            "steps": steps,
+        }
+
+    return {
+        "verdict": "approve",
+        "assistant_message": "",
+        "steps": review.get("steps") or steps,
+    }
+
+
 def _normalize_travel_step(step: Dict[str, Any]) -> Dict[str, Any]:
     service = str(step.get("service") or "").lower()
     action = str(step.get("action") or "").lower()
@@ -739,6 +828,11 @@ def _normalize_travel_step(step: Dict[str, Any]) -> Dict[str, Any]:
             step["action"] = action
         elif action.startswith("book_"):
             step["action"] = "book_travel_item"
+            params.setdefault("item_type", item_type)
+
+    if action and "best" in action and step.get("service") in ("travel", ""):
+        step["action"] = "add_to_itinerary"
+        if item_type:
             params.setdefault("item_type", item_type)
 
     if step.get("action") == "book_travel_item":
@@ -1064,18 +1158,14 @@ async def plan_user_request(message: str, history_text: str = "") -> Dict[str, A
             return {"mode": "single", "assistant_message": "", "workflow_definition": None}
 
         normalized_steps = _normalize_steps(steps, message)
-        try:
-            from orchestration.manager_verifier import ManagerVerifier
-            review = ManagerVerifier().review_steps(normalized_steps, message)
-            if review.get("verdict") == "ask_user":
-                return {
-                    "mode": "needs_clarification",
-                    "assistant_message": review.get("assistant_message") or assistant_message,
-                    "workflow_definition": None,
-                }
-            normalized_steps = review.get("steps") or normalized_steps
-        except Exception as exc:
-            logger.warning("Manager verifier failed: %s", exc)
+        review = await _review_steps_with_manager(normalized_steps, message, assistant_message)
+        if review.get("verdict") == "ask_user":
+            return {
+                "mode": "needs_clarification",
+                "assistant_message": review.get("assistant_message") or assistant_message,
+                "workflow_definition": None,
+            }
+        normalized_steps = review.get("steps") or normalized_steps
         if len(normalized_steps) < MIN_ADHOC_STEPS:
             return {"mode": "single", "assistant_message": "", "workflow_definition": None}
 
@@ -1106,18 +1196,18 @@ async def plan_user_request(message: str, history_text: str = "") -> Dict[str, A
             fallback_steps = await _fallback_steps_from_intent(message, history_text)
             if fallback_steps:
                 fallback_normalized = _normalize_steps(fallback_steps, message)
-                try:
-                    from orchestration.manager_verifier import ManagerVerifier
-                    review = ManagerVerifier().review_steps(fallback_normalized, message)
-                    if review.get("verdict") == "ask_user":
-                        return {
-                            "mode": "needs_clarification",
-                            "assistant_message": review.get("assistant_message") or _friendly_validation_error(error),
-                            "workflow_definition": None,
-                        }
-                    fallback_normalized = review.get("steps") or fallback_normalized
-                except Exception as exc:
-                    logger.warning("Manager verifier failed: %s", exc)
+                review = await _review_steps_with_manager(
+                    fallback_normalized,
+                    message,
+                    _friendly_validation_error(error),
+                )
+                if review.get("verdict") == "ask_user":
+                    return {
+                        "mode": "needs_clarification",
+                        "assistant_message": review.get("assistant_message") or _friendly_validation_error(error),
+                        "workflow_definition": None,
+                    }
+                fallback_normalized = review.get("steps") or fallback_normalized
                 if len(fallback_normalized) >= MIN_ADHOC_STEPS:
                     fallback_def = _build_definition(fallback_normalized, message)
                     fallback_valid, fallback_error = validate_workflow_definition(fallback_def)
@@ -1144,18 +1234,14 @@ async def plan_user_request(message: str, history_text: str = "") -> Dict[str, A
         fallback_steps = await _fallback_steps_from_intent(message, history_text)
         if fallback_steps:
             fallback_normalized = _normalize_steps(fallback_steps, message)
-            try:
-                from orchestration.manager_verifier import ManagerVerifier
-                review = ManagerVerifier().review_steps(fallback_normalized, message)
-                if review.get("verdict") == "ask_user":
-                    return {
-                        "mode": "needs_clarification",
-                        "assistant_message": review.get("assistant_message") or assistant_message,
-                        "workflow_definition": None,
-                    }
-                fallback_normalized = review.get("steps") or fallback_normalized
-            except Exception as exc:
-                logger.warning("Manager verifier failed: %s", exc)
+            review = await _review_steps_with_manager(fallback_normalized, message, assistant_message)
+            if review.get("verdict") == "ask_user":
+                return {
+                    "mode": "needs_clarification",
+                    "assistant_message": review.get("assistant_message") or assistant_message,
+                    "workflow_definition": None,
+                }
+            fallback_normalized = review.get("steps") or fallback_normalized
             if len(fallback_normalized) >= MIN_ADHOC_STEPS:
                 fallback_def = _build_definition(fallback_normalized, message)
                 fallback_valid, fallback_error = validate_workflow_definition(fallback_def)

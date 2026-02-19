@@ -59,6 +59,23 @@
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
         }
 
+        .capability-card {
+            background: hsl(var(--card));
+            border: 1px solid hsl(var(--border));
+            border-radius: var(--radius);
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .capability-card .form-check-label {
+            font-weight: 500;
+        }
+
+        .capability-hint {
+            color: hsl(var(--muted-foreground));
+            font-size: 0.85rem;
+        }
+
         .integration-header {
             display: flex;
             align-items: center;
@@ -302,6 +319,134 @@
                     </div>
                 </div>
             </div>
+        </div>
+
+        <!-- Capability Controls -->
+        <div id="capabilities" class="mt-5">
+            <h3 class="mb-4">Capability Controls</h3>
+            <form method="post" class="capability-card">
+                {% csrf_token %}
+                <div class="mb-4">
+                    <h6 class="text-muted text-uppercase fw-bold mb-2">Mode</h6>
+                    <p class="capability-hint mb-3">Pick a mode to conserve costs or unlock everything. Choose "Custom" to fine-tune below.</p>
+                    <div class="row g-3">
+                        <div class="col-md-3">
+                            <div class="form-check">
+                                <input class="form-check-input" type="radio" name="capability_mode" id="modeCustom" value="custom"
+                                    {% if capability_prefs.capability_mode == 'custom' %}checked{% endif %}>
+                                <label class="form-check-label" for="modeCustom">Custom</label>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="form-check">
+                                <input class="form-check-input" type="radio" name="capability_mode" id="modeConserve" value="conserve"
+                                    {% if capability_prefs.capability_mode == 'conserve' %}checked{% endif %}>
+                                <label class="form-check-label" for="modeConserve">Conserve</label>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="form-check">
+                                <input class="form-check-input" type="radio" name="capability_mode" id="modeBalanced" value="balanced"
+                                    {% if capability_prefs.capability_mode == 'balanced' %}checked{% endif %}>
+                                <label class="form-check-label" for="modeBalanced">Balanced</label>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="form-check">
+                                <input class="form-check-input" type="radio" name="capability_mode" id="modeMax" value="max"
+                                    {% if capability_prefs.capability_mode == 'max' %}checked{% endif %}>
+                                <label class="form-check-label" for="modeMax">Max</label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mb-4">
+                    <h6 class="text-muted text-uppercase fw-bold mb-2">Assistant Behavior</h6>
+                    <div class="form-check form-switch mb-2">
+                        <input class="form-check-input" type="checkbox" id="proactiveToggle" name="proactive_assistant_enabled"
+                            {% if capability_prefs.proactive_assistant_enabled %}checked{% endif %}>
+                        <label class="form-check-label" for="proactiveToggle">Proactive suggestions</label>
+                    </div>
+                    <div class="form-check form-switch mb-2">
+                        <input class="form-check-input" type="checkbox" id="voiceToggle" name="ai_voice_enabled"
+                            {% if capability_prefs.ai_voice_enabled %}checked{% endif %}>
+                        <label class="form-check-label" for="voiceToggle">AI voice replies</label>
+                    </div>
+                    <div class="form-check form-switch mb-2">
+                        <input class="form-check-input" type="checkbox" id="managerToggle" name="manager_llm_enabled"
+                            {% if capability_prefs.manager_llm_enabled %}checked{% endif %}>
+                        <label class="form-check-label" for="managerToggle">Manager LLM fallback</label>
+                    </div>
+                    <div class="mt-2">
+                        <label class="form-label small text-muted">Nudge frequency</label>
+                        <select class="form-select form-select-sm" name="nudge_frequency">
+                            <option value="low" {% if capability_prefs.nudge_frequency == 'low' %}selected{% endif %}>Low</option>
+                            <option value="medium" {% if capability_prefs.nudge_frequency == 'medium' %}selected{% endif %}>Medium</option>
+                            <option value="high" {% if capability_prefs.nudge_frequency == 'high' %}selected{% endif %}>High</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="mb-4">
+                    <h6 class="text-muted text-uppercase fw-bold mb-2">Tool Access</h6>
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="travelToggle" name="allow_travel"
+                                    {% if capability_prefs.allow_travel %}checked{% endif %}>
+                                <label class="form-check-label" for="travelToggle">Travel & bookings</label>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="paymentsToggle" name="allow_payments"
+                                    {% if capability_prefs.allow_payments %}checked{% endif %}>
+                                <label class="form-check-label" for="paymentsToggle">Payments & invoices</label>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="remindersToggle" name="allow_reminders"
+                                    {% if capability_prefs.allow_reminders %}checked{% endif %}>
+                                <label class="form-check-label" for="remindersToggle">Reminders</label>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="searchToggle" name="allow_web_search"
+                                    {% if capability_prefs.allow_web_search %}checked{% endif %}>
+                                <label class="form-check-label" for="searchToggle">Search & research</label>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="emailToggle" name="allow_email"
+                                    {% if capability_prefs.allow_email %}checked{% endif %}>
+                                <label class="form-check-label" for="emailToggle">Send email</label>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="whatsappToggle" name="allow_whatsapp"
+                                    {% if capability_prefs.allow_whatsapp %}checked{% endif %}>
+                                <label class="form-check-label" for="whatsappToggle">Send WhatsApp</label>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="calendarToggle" name="allow_calendar"
+                                    {% if capability_prefs.allow_calendar %}checked{% endif %}>
+                                <label class="form-check-label" for="calendarToggle">Scheduling</label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <button type="submit" class="btn btn-primary">
+                    <i class="fas fa-save me-2"></i>Save Capability Settings
+                </button>
+            </form>
         </div>
     </div>
 

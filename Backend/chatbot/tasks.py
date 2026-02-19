@@ -403,9 +403,20 @@ def generate_voice_response(self, message_id):
         if message.timestamp and (timezone.now() - message.timestamp) > timedelta(hours=1):
             return {"status": "skipped", "reason": "stale"}
 
+        room = message.chatroom_set.first()
+        if room:
+            participants = list(room.participants.select_related('User__profile'))
+            if participants:
+                prefs = []
+                for member in participants:
+                    profile = getattr(member.User, "profile", None) if member else None
+                    settings_json = profile.notification_preferences if profile and profile.notification_preferences else {}
+                    prefs.append(bool(settings_json.get("ai_voice_enabled", True)))
+                if prefs and not any(prefs):
+                    return {"status": "skipped", "reason": "disabled_by_users"}
+
         text = message.content
         if isinstance(text, str) and '"data"' in text and '"nonce"' in text:
-            room = message.chatroom_set.first()
             cipher = _get_room_cipher(room) if room else None
             text = _decrypt_message_content(message, cipher) or ""
 

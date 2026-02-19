@@ -750,7 +750,75 @@ async def _llm_manager_review(message: str, steps: List[Dict[str, Any]]) -> Dict
     }
 
 
-async def _review_steps_with_manager(steps: List[Dict[str, Any]], message: str, assistant_message: str) -> Dict[str, Any]:
+async def _manager_llm_enabled_for_user(user_id: Optional[int]) -> bool:
+    if not getattr(settings, "MANAGER_LLM_ENABLED", False):
+        return False
+    if not user_id:
+        return True
+    try:
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        user = await sync_to_async(User.objects.get)(pk=user_id)
+        profile = await sync_to_async(lambda: getattr(user, "profile", None))()
+        prefs = profile.notification_preferences if profile and profile.notification_preferences else {}
+        mode = str(prefs.get("capability_mode") or "custom").lower()
+        if mode == "conserve":
+            return False
+        return bool(prefs.get("manager_llm_enabled", True))
+    except Exception:
+        return True
+
+
+async def _get_user_capability_prefs(user_id: Optional[int]) -> Dict[str, Any]:
+    defaults = {
+        "capability_mode": "custom",
+        "allow_web_search": True,
+        "allow_travel": True,
+        "allow_payments": True,
+        "allow_reminders": True,
+        "allow_whatsapp": True,
+        "allow_email": True,
+        "allow_calendar": True,
+    }
+    if not user_id:
+        return defaults
+    try:
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        user = await sync_to_async(User.objects.get)(pk=user_id)
+        profile = await sync_to_async(lambda: getattr(user, "profile", None))()
+        prefs = profile.notification_preferences if profile and profile.notification_preferences else {}
+        merged = dict(defaults)
+        merged.update(prefs)
+        return merged
+    except Exception:
+        return defaults
+
+
+async def _steps_allowed_for_user(steps: List[Dict[str, Any]], user_id: Optional[int]) -> Optional[str]:
+    prefs = await _get_user_capability_prefs(user_id)
+    for step in steps:
+        service = str(step.get("service") or "").lower()
+        action = str(step.get("action") or "").lower()
+        if service == "travel" or action.startswith("search_") or action == "book_travel_item":
+            if not prefs.get("allow_travel", True):
+                return "Travel actions are disabled in your settings."
+        if action == "send_email" and not prefs.get("allow_email", True):
+            return "Email sending is disabled in your settings."
+        if action == "send_message" and not prefs.get("allow_whatsapp", True):
+            return "WhatsApp sending is disabled in your settings."
+        if action == "set_reminder" and not prefs.get("allow_reminders", True):
+            return "Reminders are disabled in your settings."
+        if action in ("search_info", "search_gif", "get_weather", "convert_currency") and not prefs.get("allow_web_search", True):
+            return "Search and research actions are disabled in your settings."
+        if action in ("check_balance", "list_transactions", "check_invoice_status", "check_payments", "create_payment_link", "withdraw", "check_status") and not prefs.get("allow_payments", True):
+            return "Payments actions are disabled in your settings."
+        if action in ("schedule_meeting", "check_availability") and not prefs.get("allow_calendar", True):
+            return "Scheduling actions are disabled in your settings."
+    return None
+
+
+async def _review_steps_with_manager(steps: List[Dict[str, Any]], message: str, assistant_message: str, user_id: Optional[int]) -> Dict[str, Any]:
     try:
         from orchestration.manager_verifier import ManagerVerifier
         review = ManagerVerifier().review_steps(steps, message)
@@ -763,7 +831,7 @@ async def _review_steps_with_manager(steps: List[Dict[str, Any]], message: str, 
         }
 
     if review.get("verdict") == "ask_user":
-        if review.get("reason") == "unknown_action" and getattr(settings, "MANAGER_LLM_ENABLED", False):
+        if review.get("reason") == "unknown_action" and await _manager_llm_enabled_for_user(user_id):
             llm_review = await _llm_manager_review(message, steps)
             if llm_review.get("verdict") == "approve" and llm_review.get("revised_steps"):
                 revised_steps = _normalize_steps(llm_review["revised_steps"], message)
@@ -783,6 +851,14 @@ async def _review_steps_with_manager(steps: List[Dict[str, Any]], message: str, 
         return {
             "verdict": "ask_user",
             "assistant_message": review.get("assistant_message") or assistant_message,
+            "steps": steps,
+        }
+
+    disabled_message = await _steps_allowed_for_user(review.get("steps") or steps, user_id)
+    if disabled_message:
+        return {
+            "verdict": "ask_user",
+            "assistant_message": disabled_message,
             "steps": steps,
         }
 
@@ -1088,7 +1164,7 @@ async def _fallback_steps_from_intent(message: str, history_text: str) -> List[D
     return steps
 
 
-async def plan_user_request(message: str, history_text: str = "") -> Dict[str, Any]:
+async def plan_user_request(message: str, history_text: str = "", user_id: Optional[int] = None) -> Dict[str, Any]:
     """
     Decide whether to run a multi-step ad-hoc workflow, ask for clarification,
     or fall back to single-action routing.
@@ -1158,7 +1234,7 @@ async def plan_user_request(message: str, history_text: str = "") -> Dict[str, A
             return {"mode": "single", "assistant_message": "", "workflow_definition": None}
 
         normalized_steps = _normalize_steps(steps, message)
-        review = await _review_steps_with_manager(normalized_steps, message, assistant_message)
+        review = await _review_steps_with_manager(normalized_steps, message, assistant_message, user_id)
         if review.get("verdict") == "ask_user":
             return {
                 "mode": "needs_clarification",
@@ -1200,6 +1276,7 @@ async def plan_user_request(message: str, history_text: str = "") -> Dict[str, A
                     fallback_normalized,
                     message,
                     _friendly_validation_error(error),
+                    user_id,
                 )
                 if review.get("verdict") == "ask_user":
                     return {
@@ -1234,7 +1311,7 @@ async def plan_user_request(message: str, history_text: str = "") -> Dict[str, A
         fallback_steps = await _fallback_steps_from_intent(message, history_text)
         if fallback_steps:
             fallback_normalized = _normalize_steps(fallback_steps, message)
-            review = await _review_steps_with_manager(fallback_normalized, message, assistant_message)
+            review = await _review_steps_with_manager(fallback_normalized, message, assistant_message, user_id)
             if review.get("verdict") == "ask_user":
                 return {
                     "mode": "needs_clarification",

@@ -11,6 +11,7 @@ from django_redis import get_redis_connection
 from asgiref.sync import sync_to_async
 import httpx
 from users.encryption import TokenEncryption
+from django.contrib.auth import get_user_model
 from .base_connector import BaseConnector
 from .connectors.whatsapp_connector import WhatsAppConnector
 from .connectors.intersend_connector import IntersendPayConnector
@@ -39,6 +40,34 @@ class MCPRouter:
         "search_transfers", "search_events",
         "create_itinerary", "add_to_itinerary", "view_itinerary",
         "book_travel_item",
+    }
+    ACTION_GATES = {
+        "send_email": "allow_email",
+        "send_whatsapp": "allow_whatsapp",
+        "set_reminder": "allow_reminders",
+        "search_info": "allow_web_search",
+        "search_gif": "allow_web_search",
+        "get_weather": "allow_web_search",
+        "convert_currency": "allow_web_search",
+        "schedule_meeting": "allow_calendar",
+        "check_availability": "allow_calendar",
+        "check_balance": "allow_payments",
+        "list_transactions": "allow_payments",
+        "check_invoice_status": "allow_payments",
+        "check_payments": "allow_payments",
+        "create_payment_link": "allow_payments",
+        "withdraw": "allow_payments",
+        "check_status": "allow_payments",
+    }
+    DEFAULT_CAPABILITY_PREFS = {
+        "capability_mode": "custom",
+        "allow_web_search": True,
+        "allow_travel": True,
+        "allow_payments": True,
+        "allow_reminders": True,
+        "allow_whatsapp": True,
+        "allow_email": True,
+        "allow_calendar": True,
     }
     
     def __init__(self):
@@ -241,8 +270,37 @@ class MCPRouter:
             }
         
         cache.set(cache_key, current + 1, 3600)  # 1 hour TTL
-        
+        prefs = await self._get_user_prefs(user_id)
+        if not self._is_action_allowed(intent.get("action"), prefs):
+            return {
+                "valid": False,
+                "reason": "This action is disabled in your settings. You can enable it in Settings > Integrations.",
+            }
         return {"valid": True, "reason": None}
+
+    async def _get_user_prefs(self, user_id: Optional[int]) -> Dict[str, Any]:
+        if not user_id:
+            return dict(self.DEFAULT_CAPABILITY_PREFS)
+        User = get_user_model()
+        try:
+            user = await sync_to_async(User.objects.get)(pk=user_id)
+        except User.DoesNotExist:
+            return dict(self.DEFAULT_CAPABILITY_PREFS)
+        profile = await sync_to_async(lambda: getattr(user, "profile", None))()
+        prefs = dict(self.DEFAULT_CAPABILITY_PREFS)
+        if profile and profile.notification_preferences:
+            prefs.update(profile.notification_preferences)
+        return prefs
+
+    def _is_action_allowed(self, action: Optional[str], prefs: Dict[str, Any]) -> bool:
+        if not action:
+            return True
+        gate_key = self.ACTION_GATES.get(action)
+        if gate_key:
+            return bool(prefs.get(gate_key, True))
+        if action in self.TRAVEL_ACTIONS:
+            return bool(prefs.get("allow_travel", True))
+        return True
     
     async def _cache_result(self, intent: Dict, context: Dict, result: Any):
         """Cache results in Redis for quick retrieval"""

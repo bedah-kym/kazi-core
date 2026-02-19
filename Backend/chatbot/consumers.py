@@ -748,7 +748,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             synthesize_workflow_response_stream,
                         )
 
-                        plan = await plan_user_request(ai_query, history_text)
+                        plan = await plan_user_request(ai_query, history_text, user_id=member_user.id)
 
                         if plan["mode"] == "automation_request":
                             from workflows.workflow_agent import handle_workflow_message

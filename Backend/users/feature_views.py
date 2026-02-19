@@ -42,6 +42,91 @@ def settings(request):
     Settings and integrations page
     """
     workspace = request.user.workspace
+    profile = request.user.profile
+    prefs = profile.notification_preferences or {}
+
+    capability_defaults = {
+        "capability_mode": "custom",
+        "proactive_assistant_enabled": True,
+        "nudge_frequency": "low",
+        "ai_voice_enabled": True,
+        "manager_llm_enabled": True,
+        "allow_web_search": True,
+        "allow_travel": True,
+        "allow_payments": True,
+        "allow_reminders": True,
+        "allow_whatsapp": True,
+        "allow_email": True,
+        "allow_calendar": True,
+    }
+
+    capability_presets = {
+        "conserve": {
+            "proactive_assistant_enabled": False,
+            "nudge_frequency": "low",
+            "ai_voice_enabled": False,
+            "manager_llm_enabled": False,
+            "allow_web_search": False,
+            "allow_travel": True,
+            "allow_payments": True,
+            "allow_reminders": True,
+            "allow_whatsapp": True,
+            "allow_email": True,
+            "allow_calendar": True,
+        },
+        "balanced": {
+            "proactive_assistant_enabled": True,
+            "nudge_frequency": "low",
+            "ai_voice_enabled": False,
+            "manager_llm_enabled": True,
+            "allow_web_search": True,
+            "allow_travel": True,
+            "allow_payments": True,
+            "allow_reminders": True,
+            "allow_whatsapp": True,
+            "allow_email": True,
+            "allow_calendar": True,
+        },
+        "max": {
+            "proactive_assistant_enabled": True,
+            "nudge_frequency": "high",
+            "ai_voice_enabled": True,
+            "manager_llm_enabled": True,
+            "allow_web_search": True,
+            "allow_travel": True,
+            "allow_payments": True,
+            "allow_reminders": True,
+            "allow_whatsapp": True,
+            "allow_email": True,
+            "allow_calendar": True,
+        },
+    }
+
+    if request.method == 'POST':
+        mode = request.POST.get('capability_mode', prefs.get('capability_mode', 'custom'))
+        mode = mode if mode in capability_presets or mode == 'custom' else 'custom'
+        prefs.update(capability_defaults)
+        prefs["capability_mode"] = mode
+
+        if mode in capability_presets:
+            prefs.update(capability_presets[mode])
+        else:
+            prefs["proactive_assistant_enabled"] = request.POST.get('proactive_assistant_enabled') == 'on'
+            prefs["ai_voice_enabled"] = request.POST.get('ai_voice_enabled') == 'on'
+            prefs["manager_llm_enabled"] = request.POST.get('manager_llm_enabled') == 'on'
+            prefs["allow_web_search"] = request.POST.get('allow_web_search') == 'on'
+            prefs["allow_travel"] = request.POST.get('allow_travel') == 'on'
+            prefs["allow_payments"] = request.POST.get('allow_payments') == 'on'
+            prefs["allow_reminders"] = request.POST.get('allow_reminders') == 'on'
+            prefs["allow_whatsapp"] = request.POST.get('allow_whatsapp') == 'on'
+            prefs["allow_email"] = request.POST.get('allow_email') == 'on'
+            prefs["allow_calendar"] = request.POST.get('allow_calendar') == 'on'
+            prefs["nudge_frequency"] = request.POST.get('nudge_frequency', prefs.get('nudge_frequency', 'low'))
+
+        profile.notification_preferences = prefs
+        profile.save(update_fields=['notification_preferences'])
+        messages.success(request, 'Capability settings updated.')
+        return redirect('users:settings')
     
     # Get integration status
     from .models import UserIntegration, CalendlyProfile
@@ -62,6 +147,7 @@ def settings(request):
         'whatsapp_connected': 'whatsapp' in integrations,
         'intasend_connected': 'intasend' in integrations,
         'mailgun_connected': 'mailgun' in integrations,
+        'capability_prefs': {**capability_defaults, **prefs},
     }
     
     return render(request, 'users/settings.html', context)

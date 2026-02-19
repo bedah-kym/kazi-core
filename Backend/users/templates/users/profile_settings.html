@@ -99,6 +99,9 @@
                     href="{% url 'users:settings' %}"><i class="fas fa-plug me-2"></i>Integrations</a>
             </li>
             <li class="nav-item">
+                <a class="nav-link" href="{% url 'users:settings' %}#capabilities"><i class="fas fa-sliders-h me-2"></i>Capabilities</a>
+            </li>
+            <li class="nav-item">
                 <a class="nav-link {% if active_tab == 'profile' %}active{% endif %}"
                     href="{% url 'users:profile_settings' %}"><i class="fas fa-user me-2"></i>Profile</a>
             </li>

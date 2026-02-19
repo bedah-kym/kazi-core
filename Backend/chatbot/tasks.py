@@ -3,8 +3,28 @@ from django.utils import timezone
 from django.core.cache import cache
 import logging
 import json
-from .models import Message, Chatroom, ModerationBatch, UserModerationStatus, AIConversation, Reminder, DocumentUpload
+from datetime import datetime, timedelta
+from base64 import b64decode
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.exceptions import InvalidKey
+from asgiref.sync import async_to_sync
+from typing import Optional, Dict, Any
+from .models import (
+    Message,
+    Chatroom,
+    ModerationBatch,
+    UserModerationStatus,
+    AIConversation,
+    Reminder,
+    DocumentUpload,
+    RoomContext,
+    RoomNote,
+    DailySummary,
+    Member,
+)
 from .context_manager import ContextManager
+from orchestration.llm_client import get_llm_client, extract_json
+from users.encryption import TokenEncryption
 import pypdf
 from PIL import Image
 from django.contrib.auth import get_user_model
@@ -648,3 +668,448 @@ def extract_text_from_image(file_path):
     except Exception as e:
         logger.error(f"Image extraction error: {e}")
         return f"Image extraction failed: {str(e)}", {}
+
+
+def _normalize_base64(value):
+    if not isinstance(value, str):
+        return None
+    value = value.strip().replace(" ", "+")
+    padding = 4 - (len(value) % 4)
+    if padding < 4:
+        value += "=" * padding
+    return value
+
+
+def _get_room_cipher(chatroom):
+    key = chatroom.encryption_key
+    if key and key.startswith("enc:"):
+        key = TokenEncryption.safe_decrypt(key[4:], default=None)
+    if not key:
+        return None
+    try:
+        session_key = b64decode(key.encode("utf-8"))
+        return AESGCM(session_key)
+    except Exception as exc:
+        logger.warning(f"Context summary: failed to init AESGCM ({exc})")
+        return None
+
+
+def _decrypt_message_content(message, cipher):
+    raw_content = message.content
+    try:
+        parsed_payload = json.loads(raw_content)
+    except (json.JSONDecodeError, TypeError):
+        return raw_content if isinstance(raw_content, str) else ""
+
+    if not isinstance(parsed_payload, dict) or "data" not in parsed_payload or "nonce" not in parsed_payload:
+        return raw_content if isinstance(raw_content, str) else ""
+
+    if cipher is None:
+        return ""
+
+    data = _normalize_base64(parsed_payload.get("data"))
+    nonce = _normalize_base64(parsed_payload.get("nonce"))
+    if not data or not nonce:
+        return ""
+
+    try:
+        decrypted = cipher.decrypt(b64decode(nonce), b64decode(data), None)
+        payload = json.loads(decrypted.decode("utf-8"))
+        if isinstance(payload, dict):
+            return payload.get("content", "")
+        return ""
+    except InvalidKey:
+        logger.warning("Context summary: invalid decryption key.")
+        return ""
+    except Exception as exc:
+        logger.warning(f"Context summary: decrypt failed ({exc})")
+        return ""
+
+
+def _coerce_list(value):
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    return []
+
+
+@shared_task(bind=True, max_retries=2, default_retry_delay=60)
+def refresh_room_context_summary(self, room_id, message_id=None):
+    """
+    Update RoomContext summary/topics/notes with lightweight throttling.
+    """
+    try:
+        room = Chatroom.objects.get(id=room_id)
+        context, _ = RoomContext.objects.get_or_create(chatroom=room)
+        now = timezone.now()
+
+        min_messages = getattr(settings, "CONTEXT_SUMMARY_MIN_MESSAGES", 6)
+        min_minutes = getattr(settings, "CONTEXT_SUMMARY_MIN_MINUTES", 10)
+        max_minutes = getattr(settings, "CONTEXT_SUMMARY_MAX_MINUTES", 120)
+        max_messages = getattr(settings, "CONTEXT_SUMMARY_MAX_MESSAGES", 40)
+
+        context.message_count = (context.message_count or 0) + 1
+        minutes_since = None
+        if context.last_compressed_at:
+            minutes_since = (now - context.last_compressed_at).total_seconds() / 60.0
+
+        should_summarize = False
+        if context.message_count >= min_messages and (minutes_since is None or minutes_since >= min_minutes):
+            should_summarize = True
+        elif minutes_since is not None and minutes_since >= max_minutes:
+            should_summarize = True
+
+        if not should_summarize:
+            context.save(update_fields=["message_count", "updated_at"])
+            return {"status": "skipped", "reason": "throttled"}
+
+        messages = list(
+            room.chats.select_related("member__User").order_by("-timestamp")[:max_messages]
+        )
+        messages.reverse()
+
+        cipher = _get_room_cipher(room)
+        lines = []
+        for msg in messages:
+            content = _decrypt_message_content(msg, cipher)
+            if not content:
+                continue
+            member_name = "Unknown"
+            if msg.member and getattr(msg.member, "User", None):
+                member_name = msg.member.User.username
+            content = content.strip()
+            if not content:
+                continue
+            if len(content) > 600:
+                content = content[:600] + "..."
+            lines.append(f"{member_name}: {content}")
+
+        if not lines:
+            context.save(update_fields=["message_count", "updated_at"])
+            return {"status": "skipped", "reason": "no_content"}
+
+        system_prompt = "\n".join([
+            "You summarize chatroom context for an AI assistant.",
+            "Return JSON only with keys:",
+            "summary: 2-4 sentence summary.",
+            "active_topics: list of up to 5 short topics.",
+            "notes: list of objects {type, content, priority}.",
+            "highlights: list of up to 5 short strings.",
+            "Valid note types: decision, action_item, insight, reminder, reference.",
+            "Valid priorities: low, medium, high.",
+        ])
+
+        user_prompt = "\n".join([
+            f"Existing summary: {context.summary or ''}",
+            "",
+            "Conversation (most recent last):",
+            "\n".join(lines),
+            "",
+            "Return JSON only.",
+        ])
+
+        llm = get_llm_client()
+        response_text = async_to_sync(llm.generate_text)(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=0.2,
+            max_tokens=700,
+            json_mode=True,
+        )
+        payload = extract_json(response_text) or {}
+
+        summary_text = str(payload.get("summary") or "").strip()
+        active_topics = _coerce_list(payload.get("active_topics"))[:5]
+        notes = payload.get("notes") if isinstance(payload.get("notes"), list) else []
+        highlights = _coerce_list(payload.get("highlights"))[:5]
+
+        if summary_text:
+            context.summary = summary_text
+        if active_topics:
+            context.active_topics = active_topics
+
+        context.last_compressed_at = now
+        context.message_count = 0
+        context.save(update_fields=[
+            "summary",
+            "active_topics",
+            "last_compressed_at",
+            "message_count",
+            "updated_at",
+        ])
+
+        created_notes = 0
+        allowed_types = {"decision", "action_item", "insight", "reminder", "reference"}
+        allowed_priorities = {"low", "medium", "high"}
+        for note in notes[:8]:
+            if not isinstance(note, dict):
+                continue
+            note_type = str(note.get("type") or "insight").strip()
+            if note_type not in allowed_types:
+                note_type = "insight"
+            content = str(note.get("content") or "").strip()
+            if not content:
+                continue
+            priority = str(note.get("priority") or "medium").strip()
+            if priority not in allowed_priorities:
+                priority = "medium"
+            if RoomNote.objects.filter(
+                room_context=context,
+                content=content,
+                note_type=note_type,
+                created_at__gte=now - timedelta(days=7)
+            ).exists():
+                continue
+            RoomNote.objects.create(
+                room_context=context,
+                note_type=note_type,
+                content=content,
+                created_by=None,
+                is_ai_generated=True,
+                priority=priority,
+                tags=note.get("tags") if isinstance(note.get("tags"), list) else [],
+            )
+            created_notes += 1
+
+        daily_summary, created = DailySummary.objects.get_or_create(
+            room_context=context,
+            date=now.date(),
+            defaults={
+                "summary": summary_text or context.summary or "",
+                "highlights": highlights,
+                "message_count": len(messages),
+                "participant_count": room.participants.count(),
+                "notes_created": created_notes,
+            },
+        )
+        if not created:
+            if summary_text:
+                daily_summary.summary = summary_text
+            if highlights:
+                daily_summary.highlights = highlights
+            daily_summary.message_count = len(messages)
+            daily_summary.participant_count = room.participants.count()
+            daily_summary.notes_created = daily_summary.notes_created + created_notes
+            daily_summary.save(update_fields=[
+                "summary",
+                "highlights",
+                "message_count",
+                "participant_count",
+                "notes_created",
+            ])
+
+        return {"status": "success", "notes_created": created_notes}
+
+    except Chatroom.DoesNotExist:
+        logger.warning(f"Context summary: room {room_id} not found")
+        return {"status": "skipped", "reason": "room_not_found"}
+    except Exception as exc:
+        logger.error(f"Context summary failed: {exc}")
+        logger.error(traceback.format_exc())
+        return {"status": "error", "reason": str(exc)}
+
+
+def _encode_base64(data: bytes) -> str:
+    return b64encode(data).decode("utf-8").rstrip("=") + "=" * (-len(data) % 4)
+
+
+def _encrypt_message_for_room(room: Chatroom, content: str) -> Optional[Dict[str, str]]:
+    cipher = _get_room_cipher(room)
+    if cipher is None:
+        return None
+    nonce = os.urandom(12)
+    payload = json.dumps({
+        "content": content,
+        "timestamp": str(timezone.now()),
+    }).encode("utf-8")
+    encrypted = cipher.encrypt(nonce, payload, None)
+    return {
+        "data": _encode_base64(encrypted),
+        "nonce": _encode_base64(nonce),
+    }
+
+
+def _get_proactive_settings(user) -> Dict[str, Any]:
+    prefs = {}
+    if hasattr(user, "profile") and user.profile:
+        prefs = user.profile.notification_preferences or {}
+    return {
+        "enabled": prefs.get("proactive_assistant_enabled", True),
+        "nudge_frequency": prefs.get("nudge_frequency", "low"),
+    }
+
+
+def _proactive_allowed(user) -> bool:
+    settings_flag = getattr(settings, "PROACTIVE_ASSISTANT_ENABLED", True)
+    if not settings_flag:
+        return False
+    prefs = _get_proactive_settings(user)
+    if not prefs.get("enabled", True):
+        return False
+    try:
+        goal_profile = getattr(user.workspace, "goals", None)
+        if goal_profile and not goal_profile.ai_personalization_enabled:
+            return False
+    except Exception:
+        pass
+    return True
+
+
+def _nudge_gap_minutes(frequency: str) -> int:
+    mapping = {
+        "low": 360,
+        "medium": 120,
+        "high": 30,
+    }
+    return mapping.get(str(frequency).lower(), 360)
+
+
+def _build_nudge_message(user, room: Chatroom) -> Optional[str]:
+    try:
+        from payments.models import PaymentRequest
+        from workflows.models import UserWorkflow
+    except Exception:
+        PaymentRequest = None
+        UserWorkflow = None
+
+    has_workflow = UserWorkflow.objects.filter(user=user).exists() if UserWorkflow else False
+    has_invoice = PaymentRequest.objects.filter(issuer=user).exists() if PaymentRequest else False
+    has_reminder = Reminder.objects.filter(user=user).exists()
+
+    if not has_workflow:
+        return "Want me to set up a simple workflow for you? I can draft one based on what you're working on."
+    if not has_invoice:
+        return "Need to get paid faster? I can create a quick invoice link you can share."
+    if not has_reminder:
+        return "Want me to set a reminder so nothing slips through the cracks?"
+
+    context = getattr(room, "context", None)
+    if context and context.summary:
+        return "Want me to turn this room summary into next steps or a checklist?"
+    return None
+
+
+@shared_task
+def schedule_idle_nudge(room_id: int, user_id: int):
+    try:
+        user = User.objects.filter(id=user_id).first()
+        room = Chatroom.objects.filter(id=room_id).first()
+        if not user or not room:
+            return {"status": "skipped", "reason": "missing_user_or_room"}
+        if not _proactive_allowed(user):
+            return {"status": "skipped", "reason": "disabled"}
+
+        now = timezone.now()
+        last_activity_key = f"proactive:last_activity:{room_id}:{user_id}"
+        cache.set(last_activity_key, now.isoformat(), timeout=60 * 60 * 24)
+
+        idle_minutes = getattr(settings, "PROACTIVE_IDLE_MINUTES", 10)
+        pending_key = f"proactive:pending:{room_id}:{user_id}"
+        pending_until = cache.get(pending_key)
+        if pending_until:
+            return {"status": "skipped", "reason": "pending_exists"}
+
+        scheduled_at = now + timedelta(minutes=idle_minutes)
+        cache.set(pending_key, scheduled_at.isoformat(), timeout=(idle_minutes * 60) + 60)
+        send_idle_nudge.apply_async(
+            (room_id, user_id, scheduled_at.isoformat()),
+            countdown=idle_minutes * 60,
+        )
+        return {"status": "scheduled", "run_at": scheduled_at.isoformat()}
+    except Exception as exc:
+        logger.error(f"Idle nudge schedule failed: {exc}")
+        logger.error(traceback.format_exc())
+        return {"status": "error", "reason": str(exc)}
+
+
+@shared_task(bind=True, max_retries=1, default_retry_delay=60)
+def send_idle_nudge(self, room_id: int, user_id: int, scheduled_at_iso: str):
+    try:
+        user = User.objects.filter(id=user_id).first()
+        room = Chatroom.objects.filter(id=room_id).first()
+        if not user or not room:
+            return {"status": "skipped", "reason": "missing_user_or_room"}
+        if not _proactive_allowed(user):
+            return {"status": "skipped", "reason": "disabled"}
+
+        last_activity_key = f"proactive:last_activity:{room_id}:{user_id}"
+        last_activity_iso = cache.get(last_activity_key)
+        if last_activity_iso:
+            last_activity = datetime.fromisoformat(last_activity_iso)
+            scheduled_at = datetime.fromisoformat(scheduled_at_iso)
+            if last_activity > scheduled_at:
+                cache.delete(f"proactive:pending:{room_id}:{user_id}")
+                return {"status": "skipped", "reason": "recent_activity"}
+
+        prefs = _get_proactive_settings(user)
+        gap_minutes = _nudge_gap_minutes(prefs.get("nudge_frequency", "low"))
+        last_nudge_key = f"proactive:last_nudge:{room_id}:{user_id}"
+        last_nudge_iso = cache.get(last_nudge_key)
+        if last_nudge_iso:
+            last_nudge = timezone.datetime.fromisoformat(last_nudge_iso)
+            if (timezone.now() - last_nudge).total_seconds() < gap_minutes * 60:
+                cache.delete(f"proactive:pending:{room_id}:{user_id}")
+                return {"status": "skipped", "reason": "rate_limited"}
+
+        message_text = _build_nudge_message(user, room)
+        if not message_text:
+            cache.delete(f"proactive:pending:{room_id}:{user_id}")
+            return {"status": "skipped", "reason": "no_message"}
+
+        encrypted_payload = _encrypt_message_for_room(room, message_text)
+        if not encrypted_payload:
+            cache.delete(f"proactive:pending:{room_id}:{user_id}")
+            return {"status": "skipped", "reason": "encryption_failed"}
+
+        def _create_ai_message():
+            ai_user, _ = User.objects.get_or_create(
+                username='mathia',
+                defaults={
+                    'first_name': 'Mathia',
+                    'last_name': 'AI',
+                    'is_active': True,
+                    'email': 'mathia@kwikchat.ai'
+                }
+            )
+            ai_member = Member.objects.filter(User=ai_user).first()
+            if not ai_member:
+                ai_member = Member.objects.create(User=ai_user)
+            payload = json.dumps({
+                "data": encrypted_payload["data"],
+                "nonce": encrypted_payload["nonce"],
+            })
+            return Message.objects.create(
+                member=ai_member,
+                content=payload,
+                timestamp=timezone.now()
+            )
+
+        ai_message = _create_ai_message()
+        room.chats.add(ai_message)
+        room.save()
+
+        from channels.layers import get_channel_layer
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            f"chat_{room_id}",
+            {
+                "type": "ai_message_saved",
+                "message": {
+                    "id": ai_message.id,
+                    "member": "mathia",
+                    "content": message_text,
+                    "timestamp": str(ai_message.timestamp),
+                    "parent_id": ai_message.parent_id,
+                }
+            }
+        )
+
+        cache.set(last_nudge_key, timezone.now().isoformat(), timeout=60 * 60 * 24)
+        cache.delete(f"proactive:pending:{room_id}:{user_id}")
+        return {"status": "sent"}
+    except Exception as exc:
+        logger.error(f"Idle nudge failed: {exc}")
+        logger.error(traceback.format_exc())
+        cache.delete(f"proactive:pending:{room_id}:{user_id}")
+        return {"status": "error", "reason": str(exc)}

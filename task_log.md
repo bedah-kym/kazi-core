@@ -163,3 +163,20 @@
 - **Trial enforcement**: middleware downgrades expired trials to Free and prompts upgrade; workspace tracks trial start/end dates.
 - **Ops & reporting**: admin screens for TrialApplications/Invites; daily Celery beat job emails a batched summary to superusers and `bedankimani860@gmail.com`.
 - **Mobile/UX fixes**: chat typing indicator gap removed; mobile header actions now accessible via dropdown; landing page mobile nav added.
+`n## Current Session: 2026-02-18 - GPT-5
+**Objective:** Define implementation plan for Manager Agent + Proactive Assistant, align user personas, and evaluate build vs adopt.
+
+### Completed
+1. Wrote user persona and pain-point doc to anchor product decisions.
+2. Created phased implementation plan with overlaps, build-vs-buy, and risks.
+3. Documented unified components (validation, policy, telemetry) for both features.
+
+### Notes
+- Manager Agent should be deterministic first, optional LLM gate later.
+- Proactive Assistant should be opt-in with strict frequency caps.
+
+### Implemented (2026-02-18)
+1. Added deterministic ManagerVerifier with pre-checks and post-execution error gating.
+2. Injected manager review into ad-hoc planning fallback paths.
+3. Added idle proactive nudge scheduler with low-frequency defaults and cache gating.
+4. Wired nudge scheduling + room context summary refresh into chat message flow.

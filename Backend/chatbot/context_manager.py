@@ -42,6 +42,10 @@ class ContextManager:
                 "recent_notes": [ContextManager._format_note(n) for n in local_notes],
                 "latest_daily_summary": ""
             }
+
+            latest_summary = context_obj.daily_summaries.order_by('-date').first()
+            if latest_summary:
+                context_data["latest_daily_summary"] = latest_summary.summary
             
             # 3. GLOBAL/CROSS-ROOM CONTEXT (The "Memory" across rooms)
             # Find high-priority or 'insight' notes from other rooms involving these participants
@@ -114,6 +118,9 @@ class ContextManager:
                 prompt_parts.append("IMPORTANT NOTES:")
                 for note in data['recent_notes']:
                     prompt_parts.append(f"- [{note['type'].upper()}] {note['content']}")
+
+            if data.get('latest_daily_summary'):
+                prompt_parts.append(f"DAILY SUMMARY:\n{data['latest_daily_summary']}")
             
             # Add Global/Cross-Room Notes
             if data.get('global_notes'):

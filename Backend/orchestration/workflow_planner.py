@@ -391,6 +391,58 @@ def _normalize_date_value(value: Optional[str]) -> Optional[str]:
     return value
 
 
+def _normalize_param_aliases(params: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(params, dict):
+        return {}
+    normalized = dict(params)
+    alias_map = {
+        "from": "origin",
+        "from_city": "origin",
+        "origin_city": "origin",
+        "depart_from": "origin",
+        "to": "destination",
+        "to_city": "destination",
+        "destination_city": "destination",
+        "arrive_to": "destination",
+        "checkin": "check_in_date",
+        "check_in": "check_in_date",
+        "checkin_date": "check_in_date",
+        "checkout": "check_out_date",
+        "check_out": "check_out_date",
+        "checkout_date": "check_out_date",
+        "depart_date": "departure_date",
+        "departure": "departure_date",
+        "return": "return_date",
+        "traveldate": "travel_date",
+        "eventdate": "event_date",
+        "guest_count": "guests",
+        "room_count": "rooms",
+        "pax": "passengers",
+        "passenger": "passengers",
+        "num_passengers": "passengers",
+        "city": "location",
+        "email": "to",
+        "recipient": "to",
+        "phone": "phone_number",
+        "phone_number": "phone_number",
+        "flight_id": "item_id",
+        "hotel_id": "item_id",
+        "bus_id": "item_id",
+        "transfer_id": "item_id",
+        "event_id": "item_id",
+        "option": "item_id",
+        "option_id": "item_id",
+    }
+
+    for source, target in alias_map.items():
+        if source in normalized and target not in normalized:
+            value = normalized.get(source)
+            if value is not None and value != "":
+                normalized[target] = value
+
+    return normalized
+
+
 def _extract_first_email(message: str) -> Optional[str]:
     if not message:
         return None
@@ -630,6 +682,9 @@ def _missing_param_message(param: str) -> str:
         "origin": "What is the origin city or airport code?",
         "destination": "What is the destination city or airport code?",
         "location": "Which city should I search in?",
+        "item_id": "Which option should I book? You can say things like 'book flight 1'.",
+        "to": "Which email address should I send this to?",
+        "phone_number": "Which phone number should I use?",
     }
     return prompts.get(param, f"I need the {param} to proceed.")
 
@@ -661,6 +716,14 @@ def _normalize_travel_step(step: Dict[str, Any]) -> Dict[str, Any]:
     elif service == "travel" and action in _TRAVEL_SERVICE_ALIASES:
         item_type = _TRAVEL_SERVICE_ALIASES[action]
         action = ""
+    elif not item_type and action:
+        for prefix in ("search_", "book_"):
+            if action.startswith(prefix):
+                suffix = action[len(prefix):]
+                if suffix in _TRAVEL_SERVICE_ALIASES:
+                    item_type = _TRAVEL_SERVICE_ALIASES[suffix]
+                    step["service"] = "travel"
+                    break
 
     if item_type:
         plural = _TRAVEL_ACTION_PLURALS[item_type]
@@ -741,7 +804,7 @@ def _normalize_steps(steps: List[Dict[str, Any]], message: str) -> List[Dict[str
         normalized_step = _normalize_travel_step(normalized_step)
 
         action = normalized_step.get("action")
-        params = normalized_step.get("params") or {}
+        params = _normalize_param_aliases(normalized_step.get("params") or {})
         if action in ("add_to_itinerary", "book_travel_item") and not params.get("item_type"):
             inferred_item_type = _infer_item_type_from_steps(normalized_steps)
             if inferred_item_type:
@@ -1001,6 +1064,18 @@ async def plan_user_request(message: str, history_text: str = "") -> Dict[str, A
             return {"mode": "single", "assistant_message": "", "workflow_definition": None}
 
         normalized_steps = _normalize_steps(steps, message)
+        try:
+            from orchestration.manager_verifier import ManagerVerifier
+            review = ManagerVerifier().review_steps(normalized_steps, message)
+            if review.get("verdict") == "ask_user":
+                return {
+                    "mode": "needs_clarification",
+                    "assistant_message": review.get("assistant_message") or assistant_message,
+                    "workflow_definition": None,
+                }
+            normalized_steps = review.get("steps") or normalized_steps
+        except Exception as exc:
+            logger.warning("Manager verifier failed: %s", exc)
         if len(normalized_steps) < MIN_ADHOC_STEPS:
             return {"mode": "single", "assistant_message": "", "workflow_definition": None}
 
@@ -1031,6 +1106,18 @@ async def plan_user_request(message: str, history_text: str = "") -> Dict[str, A
             fallback_steps = await _fallback_steps_from_intent(message, history_text)
             if fallback_steps:
                 fallback_normalized = _normalize_steps(fallback_steps, message)
+                try:
+                    from orchestration.manager_verifier import ManagerVerifier
+                    review = ManagerVerifier().review_steps(fallback_normalized, message)
+                    if review.get("verdict") == "ask_user":
+                        return {
+                            "mode": "needs_clarification",
+                            "assistant_message": review.get("assistant_message") or _friendly_validation_error(error),
+                            "workflow_definition": None,
+                        }
+                    fallback_normalized = review.get("steps") or fallback_normalized
+                except Exception as exc:
+                    logger.warning("Manager verifier failed: %s", exc)
                 if len(fallback_normalized) >= MIN_ADHOC_STEPS:
                     fallback_def = _build_definition(fallback_normalized, message)
                     fallback_valid, fallback_error = validate_workflow_definition(fallback_def)
@@ -1057,6 +1144,18 @@ async def plan_user_request(message: str, history_text: str = "") -> Dict[str, A
         fallback_steps = await _fallback_steps_from_intent(message, history_text)
         if fallback_steps:
             fallback_normalized = _normalize_steps(fallback_steps, message)
+            try:
+                from orchestration.manager_verifier import ManagerVerifier
+                review = ManagerVerifier().review_steps(fallback_normalized, message)
+                if review.get("verdict") == "ask_user":
+                    return {
+                        "mode": "needs_clarification",
+                        "assistant_message": review.get("assistant_message") or assistant_message,
+                        "workflow_definition": None,
+                    }
+                fallback_normalized = review.get("steps") or fallback_normalized
+            except Exception as exc:
+                logger.warning("Manager verifier failed: %s", exc)
             if len(fallback_normalized) >= MIN_ADHOC_STEPS:
                 fallback_def = _build_definition(fallback_normalized, message)
                 fallback_valid, fallback_error = validate_workflow_definition(fallback_def)
@@ -1303,6 +1402,15 @@ async def synthesize_workflow_response_stream(
             "I'll share the results once it completes."
         )
         return
+
+    try:
+        from orchestration.manager_verifier import ManagerVerifier
+        manager_message = ManagerVerifier().review_execution_result(execution_result)
+        if manager_message:
+            yield manager_message
+            return
+    except Exception as exc:
+        logger.warning("Manager verifier post-check failed: %s", exc)
 
     llm = get_llm_client()
     system_prompt = (

@@ -670,6 +670,18 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 await self.send_chat_message(content)
                 logger.info("=== NEW MESSAGE SUCCESS ===")
 
+                # Queue room context refresh for summary/notes
+                try:
+                    from .tasks import refresh_room_context_summary
+                    refresh_room_context_summary.delay(room_id, message.id)
+                except Exception as e:
+                    logger.warning(f"Context summary refresh skipped: {e}")
+                try:
+                    from .tasks import schedule_idle_nudge
+                    schedule_idle_nudge.delay(room_id, member_user.id)
+                except Exception as e:
+                    logger.warning(f"Idle nudge schedule skipped: {e}")
+
                 # === ORCHESTRATION: Full pipeline ===
                 if message_content.lower().startswith('@mathia'):
                     logger.info(f"Step 16: @mathia detected! Starting orchestration...")
@@ -683,6 +695,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     if ai_query:
                         # Fetch history for conversation context
                         history_text = await self.get_history_as_text(room_id)
+                        try:
+                            from .context_manager import ContextManager
+                            context_prompt = await sync_to_async(ContextManager.get_context_prompt)(room_id)
+                            if context_prompt:
+                                history_text = "\n\n".join([history_text, context_prompt]).strip()
+                        except Exception as e:
+                            logger.warning(f"Context prompt load failed: {e}")
                         
                         # Helper to broadcast chunks (Buffered)
                         # We use a mutable container for closure state
@@ -873,6 +892,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                             "message": message_json
                                         }
                                     )
+                                    
+                                    try:
+                                        from .tasks import refresh_room_context_summary
+                                        refresh_room_context_summary.delay(room_id, ai_message.id)
+                                    except Exception as e:
+                                        logger.warning(f"Context summary refresh skipped: {e}")
 
             else:
                 await self.send_chat_message({
@@ -1282,6 +1307,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
             if current_chat:
                 await sync_to_async(current_chat.chats.add)(message)
                 await sync_to_async(current_chat.save)()
+                try:
+                    from .tasks import refresh_room_context_summary
+                    refresh_room_context_summary.delay(room_id, message.id)
+                except Exception as e:
+                    logger.warning(f"Context summary refresh skipped: {e}")
             
             # Send to clients with correct command
             message_json = await self.message_to_json(message)

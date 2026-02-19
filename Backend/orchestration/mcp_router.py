@@ -709,6 +709,11 @@ class ReminderConnector(BaseConnector):
                 priority=priority,
                 status='pending'
             )
+            try:
+                from chatbot.tasks import schedule_reminder_delivery
+                await sync_to_async(schedule_reminder_delivery)(reminder.id, scheduled_time)
+            except Exception as e:
+                logger.warning(f"Reminder scheduling skipped: {e}")
             
             # Format friendly time display
             local_time = scheduled_time.strftime("%I:%M %p")

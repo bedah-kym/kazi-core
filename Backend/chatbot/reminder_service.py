@@ -61,6 +61,12 @@ class ReminderService:
                 scheduled_time=scheduled_time,
                 status='pending'
             )
+
+            try:
+                from chatbot.tasks import schedule_reminder_delivery
+                schedule_reminder_delivery(reminder.id, scheduled_time)
+            except Exception as e:
+                logger.warning(f"Reminder scheduling skipped: {e}")
             
             # Schedule Celery task (Mock for now if Celery not fully set up)
             # send_reminder_task.apply_async((reminder.id,), eta=scheduled_time)

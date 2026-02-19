@@ -42,7 +42,7 @@ def create_reminder(request):
             scheduled_time = datetime.fromisoformat(scheduled_time_str)
             
             # Create reminder
-            Reminder.objects.create(
+            reminder = Reminder.objects.create(
                 user=request.user,
                 content=content,
                 scheduled_time=scheduled_time,
@@ -50,6 +50,11 @@ def create_reminder(request):
                 via_whatsapp=via_whatsapp,
                 status='pending'
             )
+            try:
+                from chatbot.tasks import schedule_reminder_delivery
+                schedule_reminder_delivery(reminder.id, scheduled_time)
+            except Exception as e:
+                messages.warning(request, f'Reminder saved but not scheduled: {e}')
             
             messages.success(request, 'Reminder created successfully!')
         except Exception as e:

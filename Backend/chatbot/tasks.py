@@ -4,7 +4,7 @@ from django.core.cache import cache
 import logging
 import json
 from datetime import datetime, timedelta
-from base64 import b64decode
+from base64 import b64decode, b64encode
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.exceptions import InvalidKey
 from asgiref.sync import async_to_sync
@@ -36,6 +36,7 @@ from pydub import AudioSegment
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
+OpenAIError = getattr(openai, "OpenAIError", Exception)
 
 # HF API imports (install: pip install huggingface_hub)
 try:
@@ -388,12 +389,29 @@ def transcribe_voice_note(self, message_id):
         logger.error(f"Transcription error: {e}")
         raise self.retry(exc=e)
 
-@shared_task(bind=True, max_retries=3)
+@shared_task(bind=True, max_retries=1, default_retry_delay=300)
 def generate_voice_response(self, message_id):
     """Generate audio for AI response using OpenAI TTS"""
     try:
+        if not getattr(settings, "AI_VOICE_ENABLED", True):
+            return {"status": "skipped", "reason": "disabled"}
+
         message = Message.objects.get(id=message_id)
+        if message.has_ai_voice:
+            return {"status": "skipped", "reason": "already_generated"}
+
+        if message.timestamp and (timezone.now() - message.timestamp) > timedelta(hours=1):
+            return {"status": "skipped", "reason": "stale"}
+
         text = message.content
+        if isinstance(text, str) and '"data"' in text and '"nonce"' in text:
+            room = message.chatroom_set.first()
+            cipher = _get_room_cipher(room) if room else None
+            text = _decrypt_message_content(message, cipher) or ""
+
+        text = (text or "").strip()
+        if not text:
+            return {"status": "skipped", "reason": "empty_text"}
         
         # OpenAI TTS
         client = openai.OpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
@@ -431,6 +449,12 @@ def generate_voice_response(self, message_id):
         )
         
         return message.audio_url
+    except OpenAIError as e:
+        error_text = str(e)
+        logger.error(f"TTS error: {error_text}")
+        if "insufficient_quota" in error_text or "Error code: 429" in error_text:
+            return {"status": "skipped", "reason": "quota_exceeded"}
+        raise self.retry(exc=e)
     except Exception as e:
         logger.error(f"TTS error: {e}")
         raise self.retry(exc=e)
@@ -491,89 +515,126 @@ def check_due_reminders():
     due_reminders = Reminder.objects.filter(
         status='pending',
         scheduled_time__lte=now
-    )
+    ).select_related('user')
     
     count = 0
     for reminder in due_reminders:
         try:
-            logger.info(f"Sending reminder {reminder.id}: {reminder.content}")
-
-            # Rate limit: max 10 sends per user per 12h
-            rl_key = f"reminder_send_count:{reminder.user_id}"
-            sends = cache.get(rl_key, 0)
-            if sends >= 10:
-                reminder.status = 'failed'
-                reminder.error_log = "Rate limit exceeded (10/12h)"
-                reminder.save(update_fields=['status', 'error_log'])
-                logger.warning(f"Reminder {reminder.id} blocked by rate limit for user {reminder.user_id}")
-                continue
-
-            # Choose channels based on flags; try primary then fallback
-            channels = []
-            if reminder.via_whatsapp:
-                channels.append('whatsapp')
-            if reminder.via_email:
-                channels.append('email')
-            if not channels:
-                channels = ['email']  # default fallback
-
-            sent = False
-            errors = []
-
-            for ch in channels:
-                if ch == 'whatsapp':
-                    try:
-                        from orchestration.connectors.whatsapp_connector import WhatsAppConnector
-                        wa = WhatsAppConnector()
-                        resp = wa.send_message(
-                            to=getattr(reminder.user, 'phone_number', None) or "",
-                            body=f"Reminder: {reminder.content}"
-                        )
-                        if resp.get("status") == "sent":
-                            sent = True
-                            break
-                        errors.append(str(resp))
-                    except Exception as e:
-                        errors.append(str(e))
-                elif ch == 'email':
-                    try:
-                        from orchestration.connectors.mailgun_connector import MailgunConnector
-                        mg = MailgunConnector()
-                        resp = mg.execute({
-                            "action": "send_email",
-                            "to": getattr(reminder.user, 'email', None),
-                            "subject": "Reminder",
-                            "body": reminder.content
-                        }, {"user_id": reminder.user_id})
-                        if resp.get("status") == "sent":
-                            sent = True
-                            break
-                        errors.append(str(resp))
-                    except Exception as e:
-                        errors.append(str(e))
-
-            if sent:
-                count += 1
-                reminder.status = 'sent'
-                reminder.error_log = ''
-                reminder.save(update_fields=['status', 'error_log'])
-                if sends == 0:
-                    cache.set(rl_key, 1, 60 * 60 * 12)
-                else:
-                    cache.incr(rl_key)
-                    cache.expire(rl_key, 60 * 60 * 12)
-            else:
-                reminder.status = 'failed'
-                reminder.error_log = "; ".join(errors)[:500]
-                reminder.save(update_fields=['status', 'error_log'])
-                logger.error(f"Reminder {reminder.id} failed: {reminder.error_log}")
-            
+            send_reminder.delay(reminder.id)
+            count += 1
         except Exception as e:
-            logger.error(f"Error sending reminder {reminder.id}: {e}")
-            reminder.status = 'failed'
-            reminder.save()
+            logger.error(f"Error queueing reminder {reminder.id}: {e}")
             
     return {"processed": count}
+
+
+def schedule_reminder_delivery(reminder_id: int, scheduled_time):
+    if not scheduled_time:
+        return
+    if timezone.is_naive(scheduled_time):
+        scheduled_time = timezone.make_aware(scheduled_time)
+    send_reminder.apply_async((reminder_id,), eta=scheduled_time)
+
+
+def _deliver_reminder(reminder: Reminder) -> bool:
+    logger.info(f"Sending reminder {reminder.id}: {reminder.content}")
+
+    # Rate limit: max 10 sends per user per 12h
+    rl_key = f"reminder_send_count:{reminder.user_id}"
+    sends = cache.get(rl_key, 0)
+    if sends >= 10:
+        reminder.status = 'failed'
+        reminder.error_log = "Rate limit exceeded (10/12h)"
+        reminder.save(update_fields=['status', 'error_log'])
+        logger.warning(f"Reminder {reminder.id} blocked by rate limit for user {reminder.user_id}")
+        return False
+
+    channels = []
+    if reminder.via_whatsapp:
+        channels.append('whatsapp')
+    if reminder.via_email:
+        channels.append('email')
+    if not channels:
+        channels = ['email']
+
+    sent = False
+    errors = []
+
+    for ch in channels:
+        if ch == 'whatsapp':
+            try:
+                from orchestration.connectors.whatsapp_connector import WhatsAppConnector
+                wa = WhatsAppConnector()
+                resp = wa.send_message(
+                    to=getattr(reminder.user, 'phone_number', None) or "",
+                    body=f"Reminder: {reminder.content}"
+                )
+                if resp.get("status") == "sent":
+                    sent = True
+                    break
+                errors.append(str(resp))
+            except Exception as e:
+                errors.append(str(e))
+        elif ch == 'email':
+            try:
+                from orchestration.connectors.mailgun_connector import MailgunConnector
+                mg = MailgunConnector()
+                resp = mg.execute({
+                    "action": "send_email",
+                    "to": getattr(reminder.user, 'email', None),
+                    "subject": "Reminder",
+                    "body": reminder.content
+                }, {"user_id": reminder.user_id})
+                if resp.get("status") == "sent":
+                    sent = True
+                    break
+                errors.append(str(resp))
+            except Exception as e:
+                errors.append(str(e))
+
+    if sent:
+        reminder.status = 'sent'
+        reminder.error_log = ''
+        reminder.save(update_fields=['status', 'error_log'])
+        if sends == 0:
+            cache.set(rl_key, 1, 60 * 60 * 12)
+        else:
+            cache.incr(rl_key)
+            cache.expire(rl_key, 60 * 60 * 12)
+        return True
+
+    reminder.status = 'failed'
+    reminder.error_log = "; ".join(errors)[:500]
+    reminder.save(update_fields=['status', 'error_log'])
+    logger.error(f"Reminder {reminder.id} failed: {reminder.error_log}")
+    return False
+
+
+@shared_task
+def send_reminder(reminder_id: int):
+    reminder = Reminder.objects.filter(id=reminder_id).select_related('user').first()
+    if not reminder:
+        return {"status": "skipped", "reason": "not_found"}
+    if reminder.status != 'pending':
+        return {"status": "skipped", "reason": "not_pending"}
+
+    now = timezone.now()
+    scheduled_time = reminder.scheduled_time
+    if timezone.is_naive(scheduled_time):
+        scheduled_time = timezone.make_aware(scheduled_time)
+
+    if scheduled_time > now + timedelta(minutes=1):
+        schedule_reminder_delivery(reminder_id, scheduled_time)
+        return {"status": "rescheduled", "run_at": scheduled_time.isoformat()}
+
+    try:
+        _deliver_reminder(reminder)
+        return {"status": "sent"}
+    except Exception as e:
+        logger.error(f"Error sending reminder {reminder.id}: {e}")
+        reminder.status = 'failed'
+        reminder.save(update_fields=['status'])
+        return {"status": "error", "reason": str(e)}
 
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=30)

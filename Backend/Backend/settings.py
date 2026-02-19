@@ -269,7 +269,7 @@ CELERY_BEAT_SCHEDULE = {
     },
     'check-due-reminders': {
         'task': 'chatbot.tasks.check_due_reminders',
-        'schedule': 60.0,  # Every minute
+        'schedule': 3600.0,  # Hourly safety sweep
     },
     'send-trial-summary': {
         'task': 'users.tasks.send_trial_summary_task',

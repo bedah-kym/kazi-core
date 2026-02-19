@@ -47,7 +47,7 @@ except ImportError:
     logger.warning("huggingface_hub not installed. AI features disabled.")
 
 
-@shared_task(bind=True, max_retries=3, default_retry_delay=60)
+@shared_task(bind=True, max_retries=3, default_retry_delay=60, ignore_result=True)
 def moderate_message_batch(self, batch_id):
     """
     Process a batch of messages for moderation using HF API
@@ -169,7 +169,7 @@ def moderate_message_batch(self, batch_id):
         raise self.retry(exc=e)
 
 
-@shared_task
+@shared_task(ignore_result=True)
 def process_pending_batches():
     """
     Periodic task to process batches that haven't been processed
@@ -193,7 +193,7 @@ def process_pending_batches():
     return {"queued": count}
 
 
-@shared_task(bind=True, max_retries=3, default_retry_delay=30)
+@shared_task(bind=True, max_retries=3, default_retry_delay=30, ignore_result=True)
 def generate_ai_response(self, room_id, user_id, user_message):
     """
     Generate AI assistant response with streaming support
@@ -346,7 +346,7 @@ def generate_ai_response(self, room_id, user_id, user_message):
         logger.error(f"Error generating AI response: {e}")
         raise self.retry(exc=e)
 
-@shared_task(bind=True, max_retries=3)
+@shared_task(bind=True, max_retries=3, ignore_result=True)
 def transcribe_voice_note(self, message_id):
     """Transcribe user voice note using OpenAI Whisper"""
     try:
@@ -389,7 +389,7 @@ def transcribe_voice_note(self, message_id):
         logger.error(f"Transcription error: {e}")
         raise self.retry(exc=e)
 
-@shared_task(bind=True, max_retries=1, default_retry_delay=300)
+@shared_task(bind=True, max_retries=1, default_retry_delay=300, ignore_result=True)
 def generate_voice_response(self, message_id):
     """Generate audio for AI response using OpenAI TTS"""
     try:
@@ -471,7 +471,7 @@ def generate_voice_response(self, message_id):
         raise self.retry(exc=e)
 
 
-@shared_task
+@shared_task(ignore_result=True)
 def moderate_text_realtime(text_content):
     """
     Real-time text moderation using HF (optional, for suspicious content)
@@ -502,7 +502,7 @@ def moderate_text_realtime(text_content):
         return {"error": str(e)}
 
 
-@shared_task
+@shared_task(ignore_result=True)
 def cleanup_old_moderation_batches():
     """
     Cleanup processed batches older than 30 days
@@ -517,7 +517,7 @@ def cleanup_old_moderation_batches():
     return {"deleted": deleted[0]}
 
 
-@shared_task
+@shared_task(ignore_result=True)
 def check_due_reminders():
     """
     Periodic task to check for due reminders and send notifications
@@ -621,7 +621,7 @@ def _deliver_reminder(reminder: Reminder) -> bool:
     return False
 
 
-@shared_task
+@shared_task(ignore_result=True)
 def send_reminder(reminder_id: int):
     reminder = Reminder.objects.filter(id=reminder_id).select_related('user').first()
     if not reminder:
@@ -648,7 +648,7 @@ def send_reminder(reminder_id: int):
         return {"status": "error", "reason": str(e)}
 
 
-@shared_task(bind=True, max_retries=2, default_retry_delay=30)
+@shared_task(bind=True, max_retries=2, default_retry_delay=30, ignore_result=True)
 def process_document_task(self, document_id):
     """
     Extract text and metadata from uploaded documents
@@ -806,7 +806,7 @@ def _coerce_list(value):
     return []
 
 
-@shared_task(bind=True, max_retries=2, default_retry_delay=60)
+@shared_task(bind=True, max_retries=2, default_retry_delay=60, ignore_result=True)
 def refresh_room_context_summary(self, room_id, message_id=None):
     """
     Update RoomContext summary/topics/notes with lightweight throttling.
@@ -1062,7 +1062,7 @@ def _build_nudge_message(user, room: Chatroom) -> Optional[str]:
     return None
 
 
-@shared_task
+@shared_task(ignore_result=True)
 def schedule_idle_nudge(room_id: int, user_id: int):
     try:
         user = User.objects.filter(id=user_id).first()
@@ -1095,7 +1095,7 @@ def schedule_idle_nudge(room_id: int, user_id: int):
         return {"status": "error", "reason": str(exc)}
 
 
-@shared_task(bind=True, max_retries=1, default_retry_delay=60)
+@shared_task(bind=True, max_retries=1, default_retry_delay=60, ignore_result=True)
 def send_idle_nudge(self, room_id: int, user_id: int, scheduled_at_iso: str):
     try:
         user = User.objects.filter(id=user_id).first()

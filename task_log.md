@@ -183,5 +183,6 @@
 5. Fixed CSRF cookie httpOnly in production so manual note/pin POSTs can read the token.
 6. Fixed idle nudge base64 encoding, added TTS retry/skip guards, and moved reminders to ETA scheduling with hourly sweep.
 7. Added capability controls in Settings and enforced user-level action gates in orchestration.
+8. Added Celery memory safeguards (max memory per child, result expiry) and disabled result storage for non-critical tasks.
 6. Fixed proactive nudge base64 encoding import and added voice TTS retry/drop safeguards.
 7. Switched reminders to ETA-based scheduling with hourly safety sweep.

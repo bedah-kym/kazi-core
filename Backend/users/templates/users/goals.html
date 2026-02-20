@@ -89,8 +89,8 @@
 
         <div class="wallet-header">
             <div>
-                <h1 class="dashboard-title"><i class="fas fa-bullseye me-2"></i>Goals & AI Personalization</h1>
-                <p class="dashboard-subtitle">Teach AI about your business goals</p>
+                <h1 class="dashboard-title"><i class="fas fa-bullseye me-2"></i>Goals & AI</h1>
+                <p class="dashboard-subtitle">Help Mathia tailor guidance, workflows, and reminders to your business.</p>
             </div>
             <a href="{% url 'users:dashboard' %}" class="btn btn-outline-secondary">
                 <i class="fas fa-arrow-left me-2"></i>Back
@@ -120,9 +120,13 @@
         </ul>
 
         <div class="alert alert-info mb-4">
-            <i class="fas fa-info-circle me-2"></i>
-            <strong>How this works:</strong> Mathia uses this information to personalize advice, prioritize tasks, and
-            give you business-specific insights.
+            <div class="d-flex gap-2">
+                <i class="fas fa-info-circle mt-1"></i>
+                <div>
+                    <strong>Why this matters:</strong>
+                    <div>We use this to prioritize the right workflows, tune recommendations, and avoid noisy suggestions.</div>
+                </div>
+            </div>
         </div>
 
         <form method="post">
@@ -137,7 +141,7 @@
             </div>
 
             <div class="form-section">
-                <h3 class="mb-4">Skills & Expertise</h3>
+                <h3 class="mb-4">About Your Work</h3>
                 <div class="row mb-3">
                     <div class="col-md-6">
                         <label class="form-label">Industry</label>
@@ -149,14 +153,32 @@
                     </div>
                 </div>
                 <div class="mb-3">
-                    <label class="form-label">Skills (JSON)</label>
+                    <label class="form-label">Skills & Expertise</label>
                     {{ form.skills }}
-                    <div class="form-text">List your key skills, e.g. ["Marketing", "Python", "Design"]</div>
+                    <div class="form-text">One per line or separated by commas (e.g. Brand strategy, SEO, Python)</div>
                 </div>
             </div>
 
             <div class="form-section">
-                <h3 class="mb-4">Goals & Roadmap</h3>
+                <h3 class="mb-4">Where You Want Help</h3>
+                <div class="mb-3">
+                    <label class="form-label">Primary needs</label>
+                    {{ form.needs }}
+                    <div class="form-text">e.g. Lead generation, Client follow-ups, Weekly reporting</div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Any extra context</label>
+                    {{ form.custom_needs }}
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Use cases</label>
+                    {{ form.use_cases }}
+                    <div class="form-text">e.g. Travel planning, Invoicing, Calendar scheduling</div>
+                </div>
+            </div>
+
+            <div class="form-section">
+                <h3 class="mb-4">Goals & Targets</h3>
                 <div class="row mb-3">
                     <div class="col-md-6">
                         <label class="form-label">Target Revenue</label>
@@ -170,22 +192,32 @@
                         {{ form.target_followers }}
                     </div>
                 </div>
-
-                <div class="mb-3">
-                    <label class="form-label">Professional Goals (JSON)</label>
-                    {{ form.goals }}
-                    <div class="form-text">e.g. ["grow_audience", "increase_revenue"]</div>
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <label class="form-label">Target Clients</label>
+                        {{ form.target_clients }}
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Target Email Subscribers</label>
+                        {{ form.target_email_subscribers }}
+                    </div>
                 </div>
 
                 <div class="mb-3">
-                    <label class="form-label">Custom Goals</label>
+                    <label class="form-label">Professional Goals</label>
+                    {{ form.goals }}
+                    <div class="form-text">One per line or separated by commas (e.g. Increase revenue, Launch a new offer)</div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">Additional context</label>
                     {{ form.custom_goals }}
                 </div>
 
                 <div class="mb-3">
-                    <label class="form-label">Brand Roadmap (JSON)</label>
+                    <label class="form-label">Roadmap (optional)</label>
                     {{ form.roadmap }}
-                    <div class="form-text">Timeline of your goals per quarter</div>
+                    <div class="form-text">One line per timeframe (e.g. Q1 2026: Launch newsletter, Hire a VA)</div>
                 </div>
             </div>
 

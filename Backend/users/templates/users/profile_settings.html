@@ -85,7 +85,7 @@
         <div class="wallet-header">
             <div>
                 <h1 class="dashboard-title"><i class="fas fa-user-cog me-2"></i>Profile Settings</h1>
-                <p class="dashboard-subtitle">Manage your personal brand profile</p>
+                <p class="dashboard-subtitle">Keep your workspace accurate so Mathia can personalize your experience.</p>
             </div>
             <a href="{% url 'users:dashboard' %}" class="btn btn-outline-secondary">
                 <i class="fas fa-arrow-left me-2"></i>Back
@@ -187,20 +187,41 @@
 
             <div class="form-section">
                 <h3 class="mb-4">Social & Preferences</h3>
-                <div class="mb-3">
-                    <label class="form-label">Social Links (JSON)</label>
-                    {{ profile_form.social_links }}
-                    <div class="form-text">e.g. {"twitter": "@mathia", "linkedin": "https://linkedin.com/in/..."}</div>
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <label class="form-label">Twitter / X</label>
+                        {{ profile_form.twitter_handle }}
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">LinkedIn</label>
+                        {{ profile_form.linkedin_url }}
+                    </div>
                 </div>
                 <div class="row mb-3">
+                    <div class="col-md-6">
+                        <label class="form-label">GitHub</label>
+                        {{ profile_form.github_url }}
+                    </div>
                     <div class="col-md-6">
                         <label class="form-label">Theme</label>
                         {{ profile_form.theme_preference }}
                     </div>
-                    <div class="col-md-6">
-                        <label class="form-label">Notification Prefs (JSON)</label>
-                        {{ profile_form.notification_preferences }}
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Notifications</label>
+                    <div class="form-check">
+                        {{ profile_form.email_notifications }}
+                        <label class="form-check-label" for="{{ profile_form.email_notifications.id_for_label }}">Email updates</label>
                     </div>
+                    <div class="form-check">
+                        {{ profile_form.push_notifications }}
+                        <label class="form-check-label" for="{{ profile_form.push_notifications.id_for_label }}">Push notifications</label>
+                    </div>
+                    <div class="mt-2">
+                        <label class="form-label">Digest frequency</label>
+                        {{ profile_form.digest_frequency }}
+                    </div>
+                    <div class="form-text">Capability controls live in the Capabilities tab.</div>
                 </div>
             </div>
 

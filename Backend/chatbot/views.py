@@ -2,7 +2,7 @@ from django.shortcuts import render,redirect,get_object_or_404
 from django.urls import reverse
 from django.contrib.auth.decorators import login_required
 from django.utils.safestring import mark_safe
-from .models import Chatroom, Message, Member
+from .models import Chatroom, Message, Member, RoomReadState, Reminder
 import json 
 from django.http import JsonResponse
 from django.contrib.auth import get_user_model
@@ -12,6 +12,8 @@ from django.utils import timezone
 
 from django.conf import settings
 import os
+from django.views.decorators.http import require_GET, require_POST
+from .notification_utils import get_unread_room_count
 
 
 
@@ -104,12 +106,13 @@ def home(request, room_name):
         current_room_name = "General (AI)"
 
     return render(
-        request,"chatbot/chatbase.html",
+        request, "chatbot/chatbase.html",
         {
-        "room_name":mark_safe(json.dumps(room_name)),
-        "username":mark_safe(json.dumps(request.user.username)),
-        "chatrooms":chatrooms_data, # Passing processed data
-        "room_member":current_room_name, 
+            "room_name": mark_safe(json.dumps(room_name)),
+            "room_id": room.id,
+            "username": mark_safe(json.dumps(request.user.username)),
+            "chatrooms": chatrooms_data,  # Passing processed data
+            "room_member": current_room_name,
         }
     )
 
@@ -318,6 +321,37 @@ def invite_user(request):
     except Exception as e:
         logger.error(f"Error inviting user: {str(e)}")
         return JsonResponse({'status': 'error', 'message': 'An error occurred'}, status=500)
+
+
+@login_required
+@require_GET
+def notification_status(request):
+    exclude_room_id = request.GET.get('exclude_room_id')
+    try:
+        exclude_room_id = int(exclude_room_id) if exclude_room_id else None
+    except (TypeError, ValueError):
+        exclude_room_id = None
+
+    unread_rooms = get_unread_room_count(request.user, exclude_room_id=exclude_room_id)
+    pending_reminders = Reminder.objects.filter(user=request.user, status='pending').count()
+
+    return JsonResponse({
+        "unread_rooms": unread_rooms,
+        "pending_reminders": pending_reminders,
+    })
+
+
+@login_required
+@require_POST
+def mark_room_read(request, room_id):
+    room = get_object_or_404(Chatroom, id=room_id, participants__User=request.user)
+    now = timezone.now()
+    RoomReadState.objects.update_or_create(
+        user=request.user,
+        room=room,
+        defaults={"last_read_at": now},
+    )
+    return JsonResponse({"status": "ok", "last_read_at": now.isoformat()})
 
 
 def get_last_10messages(chatid):

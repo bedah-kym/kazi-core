@@ -17,7 +17,7 @@ from cryptography.exceptions import InvalidKey
 from users.encryption import TokenEncryption
 import logging
 import asyncio
-from .models import Message, Member, Chatroom, UserModerationStatus, ModerationBatch
+from .models import Message, Member, Chatroom, UserModerationStatus, ModerationBatch, RoomReadState
 from .tasks import moderate_message_batch, generate_ai_response, generate_voice_response
 from orchestration.intent_parser import parse_intent
 from django.conf import settings
@@ -426,6 +426,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 'has_more': result['has_more'],
                 'oldest_id': result['oldest_id']
             })
+            try:
+                await sync_to_async(RoomReadState.objects.update_or_create)(
+                    user=self.scope["user"],
+                    room_id=chatid,
+                    defaults={"last_read_at": timezone.now()},
+                )
+            except Exception as e:
+                logger.warning(f"Read state update skipped: {e}")
         except Exception as e:
             logger.error(f"Error in fetch_messages: {str(e)}")
             await self.send_message({

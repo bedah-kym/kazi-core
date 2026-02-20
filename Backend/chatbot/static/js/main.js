@@ -161,6 +161,10 @@ function activateRoomUI(roomId) {
     if (window.contextPanel) {
         window.contextPanel.updateRoom(roomId);
     }
+
+    if (window.notificationCenter && typeof window.notificationCenter.markRoomRead === 'function') {
+        window.notificationCenter.markRoomRead(roomId);
+    }
 }
 
 function connectToChat(roomId) {
@@ -464,6 +468,12 @@ function createMessage(data, roomId, prepend = false) {
     msgDivTag.appendChild(msgSpanTag);
     msgSpanTag.appendChild(msgTextTag);
     msgTextTag.appendChild(msgdivtag);
+
+    if (targetRoomId === window.currentRoomId &&
+        window.notificationCenter &&
+        typeof window.notificationCenter.markRoomRead === 'function') {
+        window.notificationCenter.markRoomRead(targetRoomId);
+    }
 
     // Syntax Highlighting & Copy Buttons
     if (typeof hljs !== 'undefined') {

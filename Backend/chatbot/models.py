@@ -50,6 +50,26 @@ class Chatroom(models.Model):
         return "{}".format(self.pk)
 
 
+class RoomReadState(models.Model):
+    """
+    Track last-read position per user per room for unread counts.
+    """
+    user = models.ForeignKey(user, on_delete=models.CASCADE, related_name='room_reads')
+    room = models.ForeignKey(Chatroom, on_delete=models.CASCADE, related_name='read_states')
+    last_read_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ['user', 'room']
+        indexes = [
+            models.Index(fields=['user', 'room']),
+            models.Index(fields=['user', 'last_read_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.user.username} read {self.room.id} @ {self.last_read_at}"
+
+
 class ModerationBatch(models.Model):
     """Batch of messages queued for moderation"""
     STATUS_CHOICES = [

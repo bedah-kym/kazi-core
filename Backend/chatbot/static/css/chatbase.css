@@ -910,6 +910,75 @@ em-emoji-picker {
     margin: 0 auto;
 }
 
+.notification-dropdown .notification-btn {
+    padding: 0.35rem 0.5rem;
+}
+
+.notification-badge {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    background: #e74c3c;
+    color: #fff;
+    font-size: 0.65rem;
+    font-weight: 700;
+    min-width: 18px;
+    height: 18px;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 5px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+
+.notification-badge.is-hidden {
+    display: none;
+}
+
+.notification-menu {
+    min-width: 220px;
+    padding: 0.5rem 0.75rem;
+}
+
+.notification-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.35rem 0.25rem;
+}
+
+.notification-label {
+    font-size: 0.9rem;
+    color: #4b5563;
+}
+
+.notification-chip {
+    background: rgba(99, 102, 241, 0.12);
+    color: #4f46e5;
+    font-weight: 600;
+}
+
+[data-theme="dark"] .notification-label {
+    color: rgba(255, 255, 255, 0.7);
+}
+
+[data-theme="dark"] .notification-chip {
+    background: rgba(99, 102, 241, 0.2);
+    color: #c7d2fe;
+}
+
+[data-theme="dark"] .notification-menu {
+    background: #1f2937;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+[data-theme="dark"] .notification-menu .dropdown-header,
+[data-theme="dark"] .notification-menu .dropdown-item {
+    color: rgba(255, 255, 255, 0.85);
+}
+
 .search-input {
     border: 2px solid var(--border-color);
     border-radius: 12px;

@@ -1,5 +1,6 @@
 {% load static %}
 {% load humanize %}
+{% load notification_tags %}
 <!DOCTYPE html>
 <html lang="en">
 
@@ -280,6 +281,19 @@
                     </div>
                 </div>
                 <div class="stat-value">{{ active_rooms|default:0 }}</div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-card-header">
+                    <span class="stat-label">Unread Rooms</span>
+                    <div class="stat-icon stat-icon-primary">
+                        <i class="fas fa-circle-dot"></i>
+                    </div>
+                </div>
+                <div class="stat-value">{% unread_rooms_count %}</div>
+                <div class="stat-change">
+                    <span class="text-muted">Rooms with new messages</span>
+                </div>
             </div>
 
             <div class="stat-card">

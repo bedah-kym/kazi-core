@@ -1,5 +1,6 @@
 {% load static %}
 {% load humanize %}
+{% load notification_tags %}
 <!DOCTYPE html>
 <html lang="en">
 
@@ -287,6 +288,9 @@
 
             <div class="col-md-8 col-lg-9 chat-container">
                 <div class="chat-header">
+                    {% unread_rooms_count room_id as unread_rooms %}
+                    {% pending_reminders_count as pending_reminders %}
+                    {% with total_notifications=unread_rooms|add:pending_reminders %}
                     <div class="row align-items-center">
                         <div class="col-8">
                             <div class="d-flex align-items-center">
@@ -325,8 +329,14 @@
                                                 class="fas fa-home me-2"></i>Dashboard</a></li>
                                     <li><a class="dropdown-item" href="{% url 'payments:wallet_dashboard' %}"><i
                                                 class="fas fa-wallet me-2"></i>Wallet</a></li>
-                                    <li><a class="dropdown-item" href="{% url 'users:reminders' %}"><i
-                                                class="fas fa-bell me-2"></i>Reminders</a></li>
+                                    <li class="dropdown-item d-flex align-items-center justify-content-between">
+                                        <span><i class="fas fa-bell me-2"></i>Unread rooms</span>
+                                        <span class="badge bg-primary" id="unreadRoomsBadgeMobile">{{ unread_rooms }}</span>
+                                    </li>
+                                    <li class="dropdown-item d-flex align-items-center justify-content-between">
+                                        <span><i class="fas fa-clock me-2"></i>Reminders</span>
+                                        <span class="badge bg-secondary" id="pendingRemindersBadgeMobile">{{ pending_reminders }}</span>
+                                    </li>
                                     <li><a class="dropdown-item" href="{% url 'users:settings' %}"><i
                                                 class="fas fa-cog me-2"></i>Settings</a></li>
                                     <li>
@@ -356,10 +366,29 @@
                                     title="Wallet">
                                     <i class="fas fa-wallet"></i>
                                 </a>
-                                <a href="{% url 'users:reminders' %}" class="btn btn-link text-muted me-1"
-                                    title="Reminders">
-                                    <i class="fas fa-bell"></i>
-                                </a>
+                                <div class="dropdown notification-dropdown me-1">
+                                    <button class="btn btn-link text-muted position-relative notification-btn"
+                                        id="notificationMenuButton" data-bs-toggle="dropdown" aria-expanded="false"
+                                        data-unread="{{ unread_rooms }}" data-reminders="{{ pending_reminders }}">
+                                        <i class="fas fa-bell"></i>
+                                        <span class="notification-badge" id="notificationTotalBadge">{{ total_notifications }}</span>
+                                    </button>
+                                    <div class="dropdown-menu dropdown-menu-end notification-menu shadow-sm">
+                                        <div class="dropdown-header">Notifications</div>
+                                        <div class="notification-item">
+                                            <span class="notification-label">Unread rooms</span>
+                                            <span class="badge notification-chip" id="unreadRoomsBadge">{{ unread_rooms }}</span>
+                                        </div>
+                                        <div class="notification-item">
+                                            <span class="notification-label">Reminders</span>
+                                            <span class="badge notification-chip" id="pendingRemindersBadge">{{ pending_reminders }}</span>
+                                        </div>
+                                        <div class="dropdown-divider"></div>
+                                        <a class="dropdown-item" href="{% url 'users:reminders' %}">
+                                            <i class="fas fa-bell me-2"></i>Open Reminders
+                                        </a>
+                                    </div>
+                                </div>
                                 <a href="{% url 'users:settings' %}" class="btn btn-link text-muted" title="Settings">
                                     <i class="fas fa-cog"></i>
                                 </a>
@@ -380,6 +409,7 @@
                             <input type="file" id="fileInput" class="d-none" accept="image/*, .pdf, .doc, .docx, .txt">
                         </div>
                     </div>
+                    {% endwith %}
                 </div>
 
                 <!-- Search Panel -->
@@ -711,6 +741,7 @@
     </script>
 
     <script src="{% static 'js/main.js'%}"></script>
+    <script src="{% static 'js/notifications.js'%}"></script>
     <script src="{% static 'js/message-actions.js'%}"></script>
     <script src="{% static 'js/ai-assistant.js' %}"></script>
     <script src="{% static 'js/calendar.js' %}"></script>

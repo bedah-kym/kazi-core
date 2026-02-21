@@ -1524,13 +1524,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
             # Add to room
             room_id = event.get('room_id')
             current_chat = await self.get_current_chatroom(room_id)
-                if current_chat:
-                    await sync_to_async(current_chat.chats.add)(message)
-                    await sync_to_async(current_chat.save)()
-                    try:
-                        await self.schedule_context_summary(room_id, message.id)
-                    except Exception as e:
-                        logger.warning(f"Context summary refresh skipped: {e}")
+            if current_chat:
+                await sync_to_async(current_chat.chats.add)(message)
+                await sync_to_async(current_chat.save)()
+                try:
+                    await self.schedule_context_summary(room_id, message.id)
+                except Exception as e:
+                    logger.warning(f"Context summary refresh skipped: {e}")
             
             # Send to clients with correct command
             message_json = await self.message_to_json(message)

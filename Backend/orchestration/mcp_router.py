@@ -15,7 +15,7 @@ from django.contrib.auth import get_user_model
 from .base_connector import BaseConnector
 from .connectors.whatsapp_connector import WhatsAppConnector
 from .connectors.intersend_connector import IntersendPayConnector
-from .connectors.mailgun_connector import MailgunConnector
+from .connectors.gmail_connector import GmailConnector
 from .connectors.quota_connector import QuotaConnector
 from .connectors.payment_connector import ReadOnlyPaymentConnector
 from .connectors.invoice_connector import InvoiceConnector
@@ -90,7 +90,7 @@ class MCPRouter:
             "convert_currency": CurrencyConnector(),
             "send_whatsapp": WhatsAppConnector(),
             "payment_action": IntersendPayConnector(),
-            "send_email": MailgunConnector(),
+            "send_email": GmailConnector(),
             "set_reminder": ReminderConnector(),
             "check_quotas": QuotaConnector(),
             "check_balance": ReadOnlyPaymentConnector(),

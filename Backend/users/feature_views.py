@@ -139,6 +139,12 @@ def settings(request):
 
     # Check other integrations
     integrations = UserIntegration.objects.filter(user=request.user, is_connected=True).values_list('integration_type', flat=True)
+    gmail_integration = UserIntegration.objects.filter(
+        user=request.user,
+        integration_type='gmail',
+        is_connected=True
+    ).first()
+    gmail_address = (gmail_integration.metadata or {}).get('gmail_address') if gmail_integration else None
     
     context = {
         'workspace': workspace,
@@ -146,7 +152,8 @@ def settings(request):
         'calendly_connected': calendly_connected,
         'whatsapp_connected': 'whatsapp' in integrations,
         'intasend_connected': 'intasend' in integrations,
-        'mailgun_connected': 'mailgun' in integrations,
+        'gmail_connected': 'gmail' in integrations,
+        'gmail_address': gmail_address,
         'capability_prefs': {**capability_defaults, **prefs},
     }
     

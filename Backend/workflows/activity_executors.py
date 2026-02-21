@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Dict, Any
 from django.conf import settings
 
-from orchestration.connectors.mailgun_connector import MailgunConnector
+from orchestration.connectors.gmail_connector import GmailConnector
 from orchestration.connectors.whatsapp_connector import WhatsAppConnector
 from orchestration.connectors.payment_connector import ReadOnlyPaymentConnector
 from orchestration.connectors.intersend_connector import IntersendPayConnector
@@ -97,8 +97,8 @@ async def execute_workflow_step(step: Dict[str, Any], context: Dict[str, Any]) -
         if error:
             return {"status": "error", "error": error}
 
-    if service == 'mailgun':
-        connector = MailgunConnector()
+    if service in ('gmail', 'mailgun'):
+        connector = GmailConnector()
         params.setdefault('action', 'send_email')
         return await connector.execute(params, context)
 

@@ -56,7 +56,7 @@ Supported actions:
 - search_gif: User wants a GIF
 - convert_currency: User wants currency conversion
 - set_reminder: User wants to set a reminder (extract content, time, priority)
-- send_email: User wants to send an email via system Mailgun account
+- send_email: User wants to send an email via their connected Gmail account
   Examples: "email alex@example.com saying hi", "send an email to ops with subject X", "mail me the report"
 - send_whatsapp: User wants to send a WhatsApp message via system account
   Examples: "send a whatsapp to +2547xxxx saying hello", "whatsapp my team the update"

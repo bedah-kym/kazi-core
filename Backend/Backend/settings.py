@@ -294,6 +294,10 @@ HF_MONTHLY_LIMIT = 10000  # e.g., 10,000 tokens per month
 OPENWEATHER_API_KEY = os.environ.get('OPENWEATHER_API_KEY', '')
 GIPHY_API_KEY = os.environ.get('GIPHY_API_KEY', '')
 EXCHANGE_RATE_API_KEY = os.environ.get('EXCHANGE_RATE_API_KEY', '')
+GMAIL_OAUTH_CLIENT_ID = os.environ.get('GMAIL_OAUTH_CLIENT_ID') or os.environ.get('GOOGLE_CLIENT_ID')
+GMAIL_OAUTH_CLIENT_SECRET = os.environ.get('GMAIL_OAUTH_CLIENT_SECRET') or os.environ.get('GOOGLE_CLIENT_SECRET')
+GMAIL_OAUTH_REDIRECT_URI = os.environ.get('GMAIL_OAUTH_REDIRECT_URI', '')
+GMAIL_SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send'
 
 # LLM cost guards
 LLM_MAX_TOKENS = int(os.environ.get('LLM_MAX_TOKENS', 700))  # hard ceiling per call

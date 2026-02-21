@@ -5,8 +5,26 @@ from typing import Dict, Tuple
 SYSTEM_CAPABILITIES = {
     "integrations": [
         {
+            "service": "gmail",
+            "description": "Send emails from a user's connected Gmail account (send-only).",
+            "actions": [
+                {
+                    "name": "send_email",
+                    "description": "Send an email",
+                    "params": {
+                        "to": {"type": "string", "required": True},
+                        "subject": {"type": "string", "required": True},
+                        "text": {"type": "string", "required": True},
+                        "html": {"type": "string", "required": False},
+                        "from": {"type": "string", "required": False}
+                    }
+                }
+            ],
+            "triggers": []
+        },
+        {
             "service": "mailgun",
-            "description": "Send emails using the system Mailgun account (no user API keys).",
+            "description": "Legacy alias for Gmail send-only (Mailgun is reserved for platform emails).",
             "actions": [
                 {
                     "name": "send_email",
@@ -277,7 +295,7 @@ def get_capabilities_prompt() -> str:
     lines = [
         "You are a workflow automation assistant.",
         "Only use the services/actions listed below.",
-        "Mailgun and WhatsApp are system-owned (no user API keys).",
+        "Gmail is user-connected (send-only). WhatsApp is system-owned.",
         "Webhooks are service-specific only.",
         "If a workflow includes withdrawals, require a safety policy with allowed_phone_numbers and max_withdraw_amount.",
         "",

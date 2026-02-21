@@ -39,10 +39,10 @@ _HIGH_RISK_ACTIONS = {
     ("payments", "withdraw"),
 }
 _SERVICE_ALIASES = {
-    "email": "mailgun",
-    "mail": "mailgun",
-    "gmail": "mailgun",
-    "mailgun": "mailgun",
+    "email": "gmail",
+    "mail": "gmail",
+    "gmail": "gmail",
+    "mailgun": "gmail",
     "whatsapp": "whatsapp",
     "wa": "whatsapp",
     "sms": "whatsapp",
@@ -78,6 +78,12 @@ _SERVICE_ALIASES = {
     "amadeus": "travel",
 }
 _ACTION_ALIASES = {
+    "gmail": {
+        "email": "send_email",
+        "send": "send_email",
+        "send_mail": "send_email",
+        "send_email": "send_email",
+    },
     "mailgun": {
         "email": "send_email",
         "send": "send_email",
@@ -152,7 +158,7 @@ _ACTION_ALIASES = {
     },
 }
 _ACTION_SERVICE_FALLBACK = {
-    "send_email": "mailgun",
+    "send_email": "gmail",
     "send_whatsapp": "whatsapp",
     "send_message": "whatsapp",
     "check_balance": "payments",
@@ -1187,7 +1193,7 @@ async def plan_user_request(message: str, history_text: str = "", user_id: Optio
         "If required parameters are missing, return mode 'needs_clarification' with a helpful message.",
         "Use service='travel' for flights/hotels/buses/transfers/events and the specific search_* actions.",
         "Normalize dates to YYYY-MM-DD; accept DD/MM/YYYY and DD-MM-YYYY inputs from users.",
-        "Map emails to service='mailgun' action='send_email', WhatsApp to service='whatsapp' action='send_message'.",
+        "Map emails to service='gmail' action='send_email', WhatsApp to service='whatsapp' action='send_message'.",
         "Only use the services/actions listed below.",
         "",
         "Available Integrations:",

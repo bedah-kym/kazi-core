@@ -28,6 +28,9 @@ urlpatterns = [
     path('integrations/whatsapp/connect/', integrations_views.connect_whatsapp, name='connect_whatsapp'),
     path('integrations/mailgun/connect/', integrations_views.connect_mailgun, name='connect_mailgun'),
     path('integrations/intasend/connect/', integrations_views.connect_intasend, name='connect_intasend'),
+    path('integrations/gmail/connect/', integrations_views.connect_gmail, name='connect_gmail'),
+    path('integrations/gmail/callback/', integrations_views.gmail_callback, name='gmail_callback'),
+    path('integrations/gmail/disconnect/', integrations_views.disconnect_gmail, name='disconnect_gmail'),
     path('integrations/disconnect/<str:integration_type>/', integrations_views.disconnect_integration, name='disconnect_integration'),
 
     # Marketing / value pages

@@ -588,15 +588,16 @@ def _deliver_reminder(reminder: Reminder) -> bool:
                 errors.append(str(e))
         elif ch == 'email':
             try:
-                from orchestration.connectors.mailgun_connector import MailgunConnector
-                mg = MailgunConnector()
-                resp = mg.execute({
+                from asgiref.sync import async_to_sync
+                from orchestration.connectors.gmail_connector import GmailConnector
+                gmail = GmailConnector()
+                resp = async_to_sync(gmail.execute)({
                     "action": "send_email",
                     "to": getattr(reminder.user, 'email', None),
                     "subject": "Reminder",
-                    "body": reminder.content
+                    "text": reminder.content
                 }, {"user_id": reminder.user_id})
-                if resp.get("status") == "sent":
+                if resp.get("status") in ("sent", "success"):
                     sent = True
                     break
                 errors.append(str(resp))

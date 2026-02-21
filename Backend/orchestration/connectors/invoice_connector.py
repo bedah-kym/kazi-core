@@ -4,7 +4,7 @@ Invoice connector that lets Mathia create an invoice (IntaSend sandbox) and opti
 import logging
 from decimal import Decimal, InvalidOperation
 from orchestration.base_connector import BaseConnector
-from orchestration.connectors.mailgun_connector import MailgunConnector
+from orchestration.connectors.gmail_connector import GmailConnector
 
 logger = logging.getLogger(__name__)
 
@@ -64,12 +64,12 @@ class InvoiceConnector(BaseConnector):
         # Optionally email the invoice link
         email_status = None
         if payer_email:
-            mailer = MailgunConnector()
+            mailer = GmailConnector()
             email_status = await mailer.execute({
                 "action": "send_email",
                 "to": payer_email,
                 "subject": f"Invoice {invoice.reference_id}",
-                "body": f"Hello,\n\nHere is your invoice for {amount} {currency}.\nDescription: {description}\nPay securely: {payment_link}\n\nThank you."
+                "text": f"Hello,\n\nHere is your invoice for {amount} {currency}.\nDescription: {description}\nPay securely: {payment_link}\n\nThank you."
             }, context)
 
         return {

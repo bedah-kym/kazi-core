@@ -205,6 +205,7 @@
 4. Manager verifier hardening: step IDs normalization, alias mapping for messaging params, and post-execution missing-step check.
 5. Proactive expansion: signal cache, pattern-based nudge reasons, snooze controls, and dismiss support.
 6. Celery efficiency: batched context summary scheduling with message deltas and idle-nudge scheduling gate.
+7. Follow-up fixes: deterministic email/phone extraction for single-action sends + reorder delivery steps after result steps.
 
 ### In Progress
 - Milestone 4 refinement: monitor Celery load and tune thresholds if needed.

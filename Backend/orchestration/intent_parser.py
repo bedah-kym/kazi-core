@@ -223,6 +223,18 @@ Rules:
             "parameters": params,
             "raw_query": message,
         }
+
+    def _extract_first_email(self, message: str) -> Optional[str]:
+        if not message:
+            return None
+        match = re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", message)
+        return match.group(0) if match else None
+
+    def _extract_first_phone(self, message: str) -> Optional[str]:
+        if not message:
+            return None
+        match = re.search(r"\+?\d{7,15}", message.replace(" ", ""))
+        return match.group(0) if match else None
         
     async def parse(self, message: str, user_context: Optional[Dict] = None) -> Dict:
         """
@@ -340,16 +352,42 @@ Rules:
                 "clarifying_question": "",
                 "raw_query": "",
             }
-        missing_slots = intent.get("missing_slots")
-        if not isinstance(missing_slots, list):
-            missing_slots = []
-        clarifying_question = str(intent.get("clarifying_question") or "").strip()
+        params = intent.get("parameters")
+        if not isinstance(params, dict):
+            params = {}
+
+        raw_query = str(intent.get("raw_query") or "")
+        action = intent.get("action")
+
+        if action == "send_email":
+            rule_based = self._rule_based_email_intent(raw_query)
+            if rule_based:
+                rb_params = rule_based.get("parameters") or {}
+                for key in ("to", "subject", "text"):
+                    if rb_params.get(key) and not params.get(key):
+                        params[key] = rb_params.get(key)
+            if not params.get("to"):
+                extracted_email = self._extract_first_email(raw_query)
+                if extracted_email:
+                    params["to"] = extracted_email
+            if params.get("body") and not params.get("text"):
+                params["text"] = params.get("body")
+            if params.get("text") and not params.get("subject"):
+                params["subject"] = " ".join(str(params.get("text")).split()[:6])[:80]
+
+        if action == "send_whatsapp":
+            if not params.get("phone_number"):
+                extracted_phone = self._extract_first_phone(raw_query)
+                if extracted_phone:
+                    params["phone_number"] = extracted_phone
+            if params.get("text") and not params.get("message"):
+                params["message"] = params.get("text")
+
+        intent["parameters"] = params
 
         computed = self._compute_missing_slots(intent)
-        if not missing_slots:
-            missing_slots = computed.get("missing_slots") or []
-        if not clarifying_question and missing_slots:
-            clarifying_question = computed.get("clarifying_question") or ""
+        missing_slots = computed.get("missing_slots") or []
+        clarifying_question = computed.get("clarifying_question") or ""
 
         intent["missing_slots"] = missing_slots
         intent["clarifying_question"] = clarifying_question

@@ -6,6 +6,8 @@ import copy
 
 from workflows.capabilities import SYSTEM_CAPABILITIES
 
+_AUTO_EMAIL_SUMMARY_TOKEN = "__AUTO_SUMMARY__"
+
 
 class ManagerVerifier:
     """
@@ -28,6 +30,7 @@ class ManagerVerifier:
 
         steps = copy.deepcopy(steps)
         steps = self._reorder_booking_steps(steps)
+        steps = self._reorder_delivery_steps(steps)
         steps = self._ensure_step_ids(steps)
 
         missing: List[Tuple[str, str]] = []
@@ -142,6 +145,42 @@ class ManagerVerifier:
             step["id"] = step_id
             seen.add(step_id)
         return steps
+
+    def _reorder_delivery_steps(self, steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if len(steps) < 2:
+            return steps
+
+        delivery_actions = {"send_email", "send_message"}
+
+        def _needs_results(step: Dict[str, Any]) -> bool:
+            action = step.get("action")
+            params = step.get("params") or {}
+            if action == "send_email":
+                text = params.get("text") or ""
+                if not text or text == _AUTO_EMAIL_SUMMARY_TOKEN:
+                    return True
+                lowered = str(text).lower()
+                return any(token in lowered for token in ("results", "summary", "options", "details"))
+            if action == "send_message":
+                message = params.get("message") or ""
+                if not message:
+                    return True
+                lowered = str(message).lower()
+                return any(token in lowered for token in ("results", "summary", "options", "details"))
+            return False
+
+        delayed = []
+        ordered = []
+        for step in steps:
+            action = step.get("action")
+            if action in delivery_actions and _needs_results(step):
+                delayed.append(step)
+            else:
+                ordered.append(step)
+
+        if not delayed:
+            return steps
+        return ordered + delayed
 
     def _coerce_param_types(self, params: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, Any]:
         normalized = dict(params)

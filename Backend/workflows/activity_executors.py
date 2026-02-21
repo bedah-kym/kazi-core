@@ -1,8 +1,10 @@
 """Activity executors for workflow steps."""
+import json
 from decimal import Decimal
 from typing import Dict, Any
 from django.conf import settings
 
+from orchestration.llm_client import get_llm_client
 from orchestration.connectors.gmail_connector import GmailConnector
 from orchestration.connectors.whatsapp_connector import WhatsAppConnector
 from orchestration.connectors.payment_connector import ReadOnlyPaymentConnector
@@ -55,6 +57,101 @@ _MISC_ACTIONS = {
     'check_availability': CalendarConnector(),
 }
 
+_AUTO_EMAIL_SUMMARY_TOKEN = "__AUTO_SUMMARY__"
+
+
+def _format_result_item(item: Dict[str, Any]) -> str:
+    if "flight_number" in item:
+        return (
+            f"{item.get('flight_number')} {item.get('departure_time')}→{item.get('arrival_time')} "
+            f"KES {item.get('price_ksh')} ({item.get('stops', 0)} stops)"
+        )
+    if "name" in item and "price_ksh" in item:
+        return f"{item.get('name')} KES {item.get('price_ksh')} rating {item.get('rating', 'N/A')}"
+    if "company" in item and "departure_time" in item:
+        return (
+            f"{item.get('company')} {item.get('departure_time')}→{item.get('arrival_time')} "
+            f"KES {item.get('price_ksh')}"
+        )
+    if "vehicle_type" in item:
+        return (
+            f"{item.get('vehicle_type')} {item.get('capacity', '')} seats "
+            f"KES {item.get('price_ksh')}"
+        )
+    if "title" in item:
+        return str(item.get("title"))
+    return str(item)
+
+
+def _collect_summary_payload(context: Dict[str, Any]) -> Dict[str, Any]:
+    payload = {"steps": []}
+    for key, value in context.items():
+        if key in ("trigger", "workflow", "user_id"):
+            continue
+        if not isinstance(value, dict):
+            continue
+        results = value.get("results")
+        metadata = value.get("metadata") or {}
+        if isinstance(results, list):
+            compact_results = results[:5]
+            payload["steps"].append({
+                "step": key,
+                "metadata": metadata,
+                "results": compact_results,
+            })
+        elif value.get("status") or value.get("message"):
+            payload["steps"].append({
+                "step": key,
+                "status": value.get("status"),
+                "message": value.get("message"),
+            })
+    return payload
+
+
+def _fallback_summary_text(payload: Dict[str, Any]) -> str:
+    lines = []
+    for step in payload.get("steps", []):
+        step_name = step.get("step", "step")
+        lines.append(f"{step_name}:")
+        results = step.get("results") or []
+        if results:
+            for item in results[:5]:
+                if isinstance(item, dict):
+                    lines.append(f"- {_format_result_item(item)}")
+                else:
+                    lines.append(f"- {item}")
+        else:
+            status = step.get("status") or "completed"
+            message = step.get("message") or ""
+            lines.append(f"- {status} {message}".strip())
+    if not lines:
+        return "Here are the results you requested. (No structured results were returned.)"
+    return "\n".join(lines)
+
+
+async def _build_email_summary(context: Dict[str, Any]) -> str:
+    payload = _collect_summary_payload(context)
+    if not payload.get("steps"):
+        return "Here are the results you requested. (No structured results were returned.)"
+
+    llm = get_llm_client()
+    system_prompt = (
+        "You are writing a short plain-text email to a user summarizing workflow results. "
+        "Be concise, friendly, and keep it under 200 words. Use bullet points for results."
+    )
+    user_prompt = json.dumps(payload)
+    try:
+        summary = await llm.generate_text(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=0.3,
+            max_tokens=300,
+        )
+        summary = (summary or "").strip()
+        return summary or _fallback_summary_text(payload)
+    except Exception:
+        return _fallback_summary_text(payload)
+
 
 def _enforce_withdraw_policy(params: Dict[str, Any], context: Dict[str, Any]) -> str:
     policy = (context.get('workflow') or {}).get('policy') or {}
@@ -98,6 +195,8 @@ async def execute_workflow_step(step: Dict[str, Any], context: Dict[str, Any]) -
             return {"status": "error", "error": error}
 
     if service in ('gmail', 'mailgun'):
+        if params.get('text') == _AUTO_EMAIL_SUMMARY_TOKEN:
+            params['text'] = await _build_email_summary(context)
         connector = GmailConnector()
         params.setdefault('action', 'send_email')
         return await connector.execute(params, context)

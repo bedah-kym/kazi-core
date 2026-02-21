@@ -151,6 +151,7 @@ class ManagerVerifier:
             "location": "Which city should I search in?",
             "item_id": "Which option should I book? You can say things like 'book flight 1'.",
             "to": "Which email address should I send this to?",
+            "text": "What should the email say?",
             "phone_number": "Which phone number should I use?",
         }
         return prompts.get(param, f"I need the {param} to proceed.")

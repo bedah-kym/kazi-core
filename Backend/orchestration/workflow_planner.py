@@ -214,6 +214,7 @@ _MONTHS = {
 }
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _PHONE_RE = re.compile(r"\+?\d{7,15}")
+_AUTO_EMAIL_SUMMARY_TOKEN = "__AUTO_SUMMARY__"
 
 _AUTOMATION_HINTS = (
     "workflow",
@@ -711,6 +712,15 @@ def _friendly_validation_error(error: str) -> str:
     return f"I need a bit more detail to run that: {error}"
 
 
+def _should_email_results(message: str) -> bool:
+    if not message:
+        return False
+    lowered = message.lower()
+    if "email" not in lowered and "mail" not in lowered and "send" not in lowered:
+        return False
+    return bool(re.search(r"\b(results?|options?|summary|details)\b", lowered))
+
+
 def _quick_email_decision(message: str) -> Optional[Dict[str, Any]]:
     if not message:
         return None
@@ -730,6 +740,8 @@ def _quick_email_decision(message: str) -> Optional[Dict[str, Any]]:
         }
     message_text = _extract_message_text(message)
     if not message_text:
+        if _should_email_results(message):
+            return {"mode": "single", "assistant_message": "", "workflow_definition": None}
         return {
             "mode": "needs_clarification",
             "assistant_message": _missing_param_message("text"),
@@ -1100,6 +1112,8 @@ def _normalize_steps(steps: List[Dict[str, Any]], message: str) -> List[Dict[str
                 params["text"] = params.get("message")
             if "text" not in params and message_text:
                 params.setdefault("text", message_text)
+            if "text" not in params and _should_email_results(message):
+                params["text"] = _AUTO_EMAIL_SUMMARY_TOKEN
             if "subject" not in params and subject_text:
                 params.setdefault("subject", subject_text)
             if "subject" not in params:

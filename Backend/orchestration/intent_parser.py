@@ -5,9 +5,16 @@ Converts natural language commands into structured JSON intents
 import json
 import logging
 import re
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
+
+from workflows.capabilities import SYSTEM_CAPABILITIES
 
 logger = logging.getLogger(__name__)
+
+_LOW_CONFIDENCE_THRESHOLD = 0.45
+_ACTION_SCHEMA_ALIASES = {
+    "send_whatsapp": "send_message",
+}
 
 
 class IntentParser:
@@ -104,21 +111,81 @@ Return ONLY valid JSON in this format:
     "check_out_date": "2025-12-28",
     "guests": 2
   },
+  "missing_slots": [],
+  "clarifying_question": "",
   "raw_query": "original user message"
 }
 
 Rules:
-- Always include "action", "confidence" (0-1), "parameters", "raw_query"
+- Always include "action", "confidence" (0-1), "parameters", "missing_slots", "clarifying_question", "raw_query"
 - Extract relevant parameters from the message
 - If unclear, use "general_chat" with low confidence
 - For travel searches: extract location/origin/destination, dates, passengers/guests, budget if mentioned
 - Dates should be extracted as YYYY-MM-DD format if possible, or raw string if user said "tomorrow", "next week", etc.
+- If required details are missing, list the param names in "missing_slots" and ask for only one missing detail in "clarifying_question"
 - Be concise. No explanations outside JSON.
 """
 
     def __init__(self):
         from .llm_client import get_llm_client
         self.llm = get_llm_client()
+        self._action_index = self._build_action_index(SYSTEM_CAPABILITIES)
+
+    def _build_action_index(self, capabilities: Dict) -> Dict[str, Dict[str, Dict]]:
+        index: Dict[str, Dict[str, Dict]] = {}
+        for service in capabilities.get("integrations", []):
+            service_name = service.get("service")
+            if not service_name:
+                continue
+            for action in service.get("actions", []):
+                action_name = action.get("name")
+                if not action_name:
+                    continue
+                if action_name not in index:
+                    index[action_name] = {
+                        "service": service_name,
+                        "params": action.get("params") or {},
+                    }
+        return index
+
+    def _missing_param_message(self, param: str) -> str:
+        prompts = {
+            "departure_date": "What departure date should I use? (YYYY-MM-DD)",
+            "travel_date": "What travel date should I use? (YYYY-MM-DD)",
+            "check_in_date": "What is the check-in date? (YYYY-MM-DD)",
+            "check_out_date": "What is the check-out date? (YYYY-MM-DD)",
+            "origin": "What is the origin city or airport code?",
+            "destination": "What is the destination city or airport code?",
+            "location": "Which city should I search in?",
+            "item_id": "Which option should I book? You can say things like 'book flight 1'.",
+            "to": "Which email address should I send this to?",
+            "text": "What should the email say?",
+            "message": "What should the message say?",
+            "content": "What should the reminder say?",
+            "time": "When should I set the reminder?",
+            "phone_number": "Which phone number should I use?",
+        }
+        return prompts.get(param, f"I need the {param} to proceed.")
+
+    def _compute_missing_slots(self, intent: Dict) -> Dict[str, Any]:
+        action = str(intent.get("action") or "").strip()
+        if not action or action == "general_chat":
+            return {"missing_slots": [], "clarifying_question": ""}
+        lookup_action = _ACTION_SCHEMA_ALIASES.get(action, action)
+        action_def = self._action_index.get(lookup_action)
+        if not action_def:
+            return {"missing_slots": [], "clarifying_question": ""}
+        params = intent.get("parameters") or {}
+        if not isinstance(params, dict):
+            params = {}
+        missing = []
+        for param_name, spec in (action_def.get("params") or {}).items():
+            if spec.get("required") and not params.get(param_name):
+                missing.append(param_name)
+        if not missing:
+            return {"missing_slots": [], "clarifying_question": ""}
+        question = self._missing_param_message(str(missing[0]))
+        return {"missing_slots": missing, "clarifying_question": question}
 
     def _rule_based_email_intent(self, message: str) -> Optional[Dict]:
         if not message:
@@ -162,9 +229,6 @@ Rules:
         Parse a natural language message into structured intent
         """
         try:
-            rule_based = self._rule_based_email_intent(message)
-            if rule_based:
-                return rule_based
             # Build context-aware prompt
             user_prompt = self._build_user_prompt(message, user_context)
             
@@ -180,15 +244,27 @@ Rules:
             intent = self.llm.extract_json(response_text)
             
             # Validate and return
-            return self._validate_intent(intent, message)
+            intent = self._validate_intent(intent, message)
+            intent = self._postprocess_intent(intent)
+
+            if intent.get("confidence", 0.0) < _LOW_CONFIDENCE_THRESHOLD or intent.get("action") == "general_chat":
+                rule_based = self._rule_based_email_intent(message)
+                if rule_based:
+                    intent = self._postprocess_intent(rule_based)
+            return intent
             
         except Exception as e:
             logger.error(f"Intent parsing failed: {e}")
+            rule_based = self._rule_based_email_intent(message)
+            if rule_based:
+                return self._postprocess_intent(rule_based)
             # Fallback to general chat
             return {
                 "action": "general_chat",
                 "confidence": 0.3,
                 "parameters": {},
+                "missing_slots": [],
+                "clarifying_question": "",
                 "raw_query": message,
                 "error": str(e)
             }
@@ -218,6 +294,8 @@ Rules:
                 "action": "general_chat",
                 "confidence": 0.0,
                 "parameters": {},
+                "missing_slots": [],
+                "clarifying_question": "",
                 "raw_query": original_message
             }
         
@@ -229,12 +307,20 @@ Rules:
             
         if "raw_query" not in intent:
             intent["raw_query"] = original_message
+
+        if "missing_slots" not in intent:
+            intent["missing_slots"] = []
+        if "clarifying_question" not in intent:
+            intent["clarifying_question"] = ""
         
         # Clamp confidence
         try:
             intent["confidence"] = max(0.0, min(1.0, float(intent["confidence"])))
         except (ValueError, TypeError):
             intent["confidence"] = 0.5
+
+        if intent.get("action") == "send_message":
+            intent["action"] = "send_whatsapp"
         
         # Validate action is supported
         if intent["action"] not in self.SUPPORTED_ACTIONS:
@@ -242,6 +328,31 @@ Rules:
             intent["action"] = "general_chat"
             intent["confidence"] *= 0.5
         
+        return intent
+
+    def _postprocess_intent(self, intent: Dict) -> Dict:
+        if not isinstance(intent, dict):
+            return {
+                "action": "general_chat",
+                "confidence": 0.0,
+                "parameters": {},
+                "missing_slots": [],
+                "clarifying_question": "",
+                "raw_query": "",
+            }
+        missing_slots = intent.get("missing_slots")
+        if not isinstance(missing_slots, list):
+            missing_slots = []
+        clarifying_question = str(intent.get("clarifying_question") or "").strip()
+
+        computed = self._compute_missing_slots(intent)
+        if not missing_slots:
+            missing_slots = computed.get("missing_slots") or []
+        if not clarifying_question and missing_slots:
+            clarifying_question = computed.get("clarifying_question") or ""
+
+        intent["missing_slots"] = missing_slots
+        intent["clarifying_question"] = clarifying_question
         return intent
 
 

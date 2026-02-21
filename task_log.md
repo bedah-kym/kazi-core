@@ -186,3 +186,25 @@
 8. Added Celery memory safeguards (max memory per child, result expiry) and disabled result storage for non-critical tasks.
 6. Fixed proactive nudge base64 encoding import and added voice TTS retry/drop safeguards.
 7. Switched reminders to ETA-based scheduling with hourly safety sweep.
+
+---
+
+## Current Session: 2026-02-21 - GPT-5
+**Objective:** Ship LLM-first orchestration + manager hardening + proactive expansion in milestones, while reducing Celery cost without performance loss.
+
+### Milestones (Order 1-2-3-4)
+1. LLM-first planner/intent contract + confidence gating + single-slot clarifications.
+2. Manager Agent hardening (pre/post checks, intent alignment, safer normalization).
+3. Proactive Assistant expansion (signals + milestone/pattern nudges, snooze/dismiss, explainable nudges).
+4. Celery efficiency + observability (throttles/jitter, cost trims, structured metrics, minimal tests/docs).
+
+### Completed
+1. LLM-first planner contract: added confidence/missing_slots/clarifying_question and confirmation mode in orchestration.
+2. LLM-first intent parsing: missing_slots + clarifying question support with low-confidence fallback.
+3. Chat orchestration: pending-confirm cache, single-slot clarification flow, and "send it" summary binding via last-result cache.
+4. Manager verifier hardening: step IDs normalization, alias mapping for messaging params, and post-execution missing-step check.
+5. Proactive expansion: signal cache, pattern-based nudge reasons, snooze controls, and dismiss support.
+6. Celery efficiency: batched context summary scheduling with message deltas and idle-nudge scheduling gate.
+
+### In Progress
+- Milestone 4 refinement: monitor Celery load and tune thresholds if needed.

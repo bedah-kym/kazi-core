@@ -26,6 +26,8 @@ MIN_ADHOC_STEPS = 2
 MAX_WAIT_SECONDS = 20
 IDEMPOTENCY_TTL_SECONDS = 90
 IDEMPOTENCY_CACHE_PREFIX = "adhoc_workflow"
+LLM_CONFIDENCE_EXECUTE = 0.75
+LLM_CONFIDENCE_CONFIRM = 0.45
 _CONFIRM_WORDS = {
     "yes",
     "approve",
@@ -235,6 +237,19 @@ def _looks_like_automation(message: str) -> bool:
 def _looks_like_confirmation(message: str) -> bool:
     lowered = message.strip().lower()
     return any(word in lowered for word in _CONFIRM_WORDS)
+
+
+def looks_like_confirmation(message: str) -> bool:
+    return _looks_like_confirmation(message)
+
+
+def _clamp_confidence(value: Optional[Any], default: float = 0.5) -> float:
+    if value is None:
+        return default
+    try:
+        return max(0.0, min(1.0, float(value)))
+    except (TypeError, ValueError):
+        return default
 
 
 def _has_high_risk_step(steps: List[Dict[str, Any]]) -> bool:
@@ -710,6 +725,23 @@ def _friendly_validation_error(error: str) -> str:
     if "Params for step" in error:
         return "I need a bit more detail for one of the steps. Please share the missing details."
     return f"I need a bit more detail to run that: {error}"
+
+
+def _format_confirmation_message(steps: List[Dict[str, Any]], assistant_message: str = "") -> str:
+    lines = []
+    if assistant_message:
+        lines.append(assistant_message.strip())
+    lines.append("Please confirm I should proceed with:")
+    for idx, step in enumerate(steps, start=1):
+        service = str(step.get("service") or "").strip()
+        action = str(step.get("action") or "").strip().replace("_", " ")
+        if service and service != "travel":
+            label = f"{service} {action}".strip()
+        else:
+            label = action or service or "step"
+        lines.append(f"{idx}. {label}")
+    lines.append("Reply 'yes' to proceed or tell me what to change.")
+    return "\n".join([line for line in lines if line])
 
 
 def _should_email_results(message: str) -> bool:
@@ -1241,6 +1273,8 @@ async def plan_user_request(message: str, history_text: str = "", user_id: Optio
         "Normalize dates to YYYY-MM-DD; accept DD/MM/YYYY and DD-MM-YYYY inputs from users.",
         "Map emails to service='gmail' action='send_email', WhatsApp to service='whatsapp' action='send_message'.",
         "Only use the services/actions listed below.",
+        "Include missing_slots and clarifying_question if any required detail is missing.",
+        "Provide a confidence score between 0 and 1.",
         "",
         "Available Integrations:",
         capabilities_json,
@@ -1249,6 +1283,9 @@ async def plan_user_request(message: str, history_text: str = "", user_id: Optio
         "{",
         '  "mode": "single|adhoc_workflow|automation_request|needs_clarification",',
         '  "assistant_message": "...",',
+        '  "confidence": 0.0,',
+        '  "missing_slots": ["param_name"],',
+        '  "clarifying_question": "...",',
         '  "steps": [',
         '    {"id": "step_1", "service": "...", "action": "...", "params": {...}}',
         '  ] or null',
@@ -1280,8 +1317,55 @@ async def plan_user_request(message: str, history_text: str = "", user_id: Optio
     mode = parsed.get("mode") or "single"
     assistant_message = parsed.get("assistant_message") or ""
     steps = parsed.get("steps")
+    missing_slots = parsed.get("missing_slots")
+    if not isinstance(missing_slots, list):
+        missing_slots = []
+    clarifying_question = str(parsed.get("clarifying_question") or "").strip()
+    confidence = _clamp_confidence(parsed.get("confidence"), default=0.55)
+
+    if missing_slots:
+        question = clarifying_question or _missing_param_message(str(missing_slots[0]))
+        return {
+            "mode": "needs_clarification",
+            "assistant_message": question,
+            "workflow_definition": None,
+            "confidence": confidence,
+            "missing_slots": missing_slots,
+        }
 
     if mode == "adhoc_workflow":
+        if confidence < LLM_CONFIDENCE_CONFIRM:
+            fallback_steps = await _fallback_steps_from_intent(message, history_text)
+            if fallback_steps:
+                fallback_normalized = _normalize_steps(fallback_steps, message)
+                review = await _review_steps_with_manager(fallback_normalized, message, assistant_message, user_id)
+                if review.get("verdict") == "ask_user":
+                    return {
+                        "mode": "needs_clarification",
+                        "assistant_message": review.get("assistant_message") or assistant_message,
+                        "workflow_definition": None,
+                        "confidence": confidence,
+                    }
+                fallback_normalized = review.get("steps") or fallback_normalized
+                if len(fallback_normalized) >= MIN_ADHOC_STEPS:
+                    fallback_def = _build_definition(fallback_normalized, message)
+                    fallback_valid, fallback_error = validate_workflow_definition(fallback_def)
+                    if fallback_valid:
+                        return {
+                            "mode": "adhoc_workflow",
+                            "assistant_message": assistant_message,
+                            "workflow_definition": fallback_def,
+                            "confidence": confidence,
+                        }
+                    if fallback_error:
+                        assistant_message = _friendly_validation_error(fallback_error)
+            return {
+                "mode": "single",
+                "assistant_message": "",
+                "workflow_definition": None,
+                "confidence": confidence,
+            }
+
         if not isinstance(steps, list):
             return {"mode": "single", "assistant_message": "", "workflow_definition": None}
 
@@ -1315,9 +1399,18 @@ async def plan_user_request(message: str, history_text: str = "", user_id: Optio
                     "if you want me to proceed."
                 ),
                 "workflow_definition": None,
+                "confidence": confidence,
             }
 
         definition = _build_definition(normalized_steps, message)
+        if LLM_CONFIDENCE_CONFIRM <= confidence < LLM_CONFIDENCE_EXECUTE:
+            return {
+                "mode": "needs_confirmation",
+                "assistant_message": _format_confirmation_message(normalized_steps, assistant_message),
+                "workflow_definition": definition,
+                "confidence": confidence,
+            }
+
         valid, error = validate_workflow_definition(definition)
         if not valid:
             logger.warning("Invalid ad-hoc workflow definition: %s", error)
@@ -1351,15 +1444,19 @@ async def plan_user_request(message: str, history_text: str = "", user_id: Optio
                 "mode": "needs_clarification",
                 "assistant_message": _friendly_validation_error(error),
                 "workflow_definition": None,
+                "confidence": confidence,
             }
 
         return {
             "mode": "adhoc_workflow",
             "assistant_message": assistant_message,
             "workflow_definition": definition,
+            "confidence": confidence,
         }
 
     if mode == "needs_clarification":
+        if clarifying_question:
+            assistant_message = clarifying_question
         fallback_steps = await _fallback_steps_from_intent(message, history_text)
         if fallback_steps:
             fallback_normalized = _normalize_steps(fallback_steps, message)
@@ -1386,6 +1483,7 @@ async def plan_user_request(message: str, history_text: str = "", user_id: Optio
             "mode": "needs_clarification",
             "assistant_message": assistant_message or "I need a bit more detail to proceed.",
             "workflow_definition": None,
+            "confidence": confidence,
         }
 
     if mode == "automation_request":
@@ -1393,9 +1491,10 @@ async def plan_user_request(message: str, history_text: str = "", user_id: Optio
             "mode": "automation_request",
             "assistant_message": assistant_message or "I can turn that into a workflow.",
             "workflow_definition": None,
+            "confidence": confidence,
         }
 
-    return {"mode": "single", "assistant_message": "", "workflow_definition": None}
+    return {"mode": "single", "assistant_message": "", "workflow_definition": None, "confidence": confidence}
 
 
 def _idempotency_key(user_id: int, definition: Dict[str, Any], trigger_data: Dict[str, Any]) -> str:
@@ -1620,7 +1719,10 @@ async def synthesize_workflow_response_stream(
 
     try:
         from orchestration.manager_verifier import ManagerVerifier
-        manager_message = ManagerVerifier().review_execution_result(execution_result)
+        manager_message = ManagerVerifier().review_execution_result(
+            execution_result,
+            workflow_definition=workflow_definition,
+        )
         if manager_message:
             yield manager_message
             return

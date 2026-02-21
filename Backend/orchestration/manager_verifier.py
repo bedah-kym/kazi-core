@@ -28,6 +28,7 @@ class ManagerVerifier:
 
         steps = copy.deepcopy(steps)
         steps = self._reorder_booking_steps(steps)
+        steps = self._ensure_step_ids(steps)
 
         missing: List[Tuple[str, str]] = []
         for step in steps:
@@ -46,6 +47,7 @@ class ManagerVerifier:
             params = step.get("params") or {}
             if not isinstance(params, dict):
                 params = {}
+            params = self._normalize_param_aliases(params, action)
             params = self._coerce_param_types(params, action_def.get("params") or {})
             step["params"] = params
 
@@ -71,7 +73,11 @@ class ManagerVerifier:
             "missing_fields": [],
         }
 
-    def review_execution_result(self, execution_result: Dict[str, Any]) -> Optional[str]:
+    def review_execution_result(
+        self,
+        execution_result: Dict[str, Any],
+        workflow_definition: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
         if not isinstance(execution_result, dict):
             return None
         errors = []
@@ -84,6 +90,22 @@ class ManagerVerifier:
         if errors:
             joined = "; ".join(errors[:3])
             return f"I hit a snag while running the workflow. {joined}"
+
+        if isinstance(workflow_definition, dict):
+            expected_steps = []
+            for step in workflow_definition.get("steps", []):
+                if not isinstance(step, dict):
+                    continue
+                step_id = step.get("id") or step.get("action")
+                if step_id:
+                    expected_steps.append(step_id)
+            missing = [step_id for step_id in expected_steps if step_id not in execution_result]
+            if missing:
+                joined = ", ".join(missing[:3])
+                return (
+                    "I could not confirm results for every step. "
+                    f"Missing results for: {joined}. Want me to retry or adjust?"
+                )
         return None
 
     def _reorder_booking_steps(self, steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -108,6 +130,19 @@ class ManagerVerifier:
                     break
         return steps
 
+    def _ensure_step_ids(self, steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        seen = set()
+        for idx, step in enumerate(steps, start=1):
+            step_id = step.get("id") or f"step_{idx}"
+            base = step_id
+            counter = 1
+            while step_id in seen:
+                counter += 1
+                step_id = f"{base}_{counter}"
+            step["id"] = step_id
+            seen.add(step_id)
+        return steps
+
     def _coerce_param_types(self, params: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, Any]:
         normalized = dict(params)
         for key, spec in schema.items():
@@ -124,6 +159,28 @@ class ManagerVerifier:
                         normalized[key] = float(value)
                     except ValueError:
                         pass
+        return normalized
+
+    def _normalize_param_aliases(self, params: Dict[str, Any], action: Optional[str]) -> Dict[str, Any]:
+        normalized = dict(params)
+        alias_map = {}
+        if action == "send_email":
+            alias_map = {
+                "body": "text",
+                "message": "text",
+                "recipient": "to",
+                "email": "to",
+            }
+        elif action == "send_message":
+            alias_map = {
+                "text": "message",
+                "phone": "phone_number",
+            }
+        for source, target in alias_map.items():
+            if source in normalized and target not in normalized:
+                value = normalized.get(source)
+                if value is not None and value != "":
+                    normalized[target] = value
         return normalized
 
     def _build_cap_index(self, capabilities: Dict[str, Any]) -> Dict[str, Dict[str, Dict[str, Any]]]:

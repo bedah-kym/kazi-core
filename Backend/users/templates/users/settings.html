@@ -391,6 +391,19 @@
                             <option value="high" {% if capability_prefs.nudge_frequency == 'high' %}selected{% endif %}>High</option>
                         </select>
                     </div>
+                    <div class="mt-2">
+                        <label class="form-label small text-muted">Snooze nudges</label>
+                        <select class="form-select form-select-sm" name="proactive_snooze_hours">
+                            <option value="0">Not snoozed</option>
+                            <option value="1">1 hour</option>
+                            <option value="8">8 hours</option>
+                            <option value="24">24 hours</option>
+                            <option value="72">3 days</option>
+                        </select>
+                        {% if capability_prefs.proactive_snooze_until %}
+                            <div class="form-text">Snoozed until {{ capability_prefs.proactive_snooze_until }}</div>
+                        {% endif %}
+                    </div>
                 </div>
 
                 <div class="mb-4">

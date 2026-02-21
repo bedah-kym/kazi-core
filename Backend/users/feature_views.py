@@ -3,6 +3,7 @@ Wallet, Reminders, and Settings views with workspace guards
 """
 from django.shortcuts import render
 from django.contrib.auth.decorators import login_required
+from django.utils import timezone
 from users.decorators import workspace_required
 from users.models import Wallet
 from chatbot.models import Reminder
@@ -33,6 +34,7 @@ def reminders(request):
 
 from django.contrib import messages
 from django.shortcuts import redirect
+from datetime import timedelta
 from users.forms import UserForm, UserProfileForm, GoalProfileForm
 from users.models import GoalProfile
 
@@ -49,6 +51,7 @@ def settings(request):
         "capability_mode": "custom",
         "proactive_assistant_enabled": True,
         "nudge_frequency": "low",
+        "proactive_snooze_until": None,
         "ai_voice_enabled": True,
         "manager_llm_enabled": True,
         "allow_web_search": True,
@@ -64,6 +67,7 @@ def settings(request):
         "conserve": {
             "proactive_assistant_enabled": False,
             "nudge_frequency": "low",
+            "proactive_snooze_until": None,
             "ai_voice_enabled": False,
             "manager_llm_enabled": False,
             "allow_web_search": False,
@@ -77,6 +81,7 @@ def settings(request):
         "balanced": {
             "proactive_assistant_enabled": True,
             "nudge_frequency": "low",
+            "proactive_snooze_until": None,
             "ai_voice_enabled": False,
             "manager_llm_enabled": True,
             "allow_web_search": True,
@@ -90,6 +95,7 @@ def settings(request):
         "max": {
             "proactive_assistant_enabled": True,
             "nudge_frequency": "high",
+            "proactive_snooze_until": None,
             "ai_voice_enabled": True,
             "manager_llm_enabled": True,
             "allow_web_search": True,
@@ -122,6 +128,16 @@ def settings(request):
             prefs["allow_email"] = request.POST.get('allow_email') == 'on'
             prefs["allow_calendar"] = request.POST.get('allow_calendar') == 'on'
             prefs["nudge_frequency"] = request.POST.get('nudge_frequency', prefs.get('nudge_frequency', 'low'))
+
+        snooze_hours_raw = request.POST.get('proactive_snooze_hours', '0')
+        try:
+            snooze_hours = int(snooze_hours_raw)
+        except (TypeError, ValueError):
+            snooze_hours = 0
+        if snooze_hours > 0:
+            prefs["proactive_snooze_until"] = (timezone.now() + timedelta(hours=snooze_hours)).isoformat()
+        else:
+            prefs.pop("proactive_snooze_until", None)
 
         profile.notification_preferences = prefs
         profile.save(update_fields=['notification_preferences'])

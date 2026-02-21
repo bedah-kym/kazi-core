@@ -8,7 +8,7 @@ from base64 import b64decode, b64encode
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.exceptions import InvalidKey
 from asgiref.sync import async_to_sync
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 from .models import (
     Message,
     Chatroom,
@@ -808,7 +808,7 @@ def _coerce_list(value):
 
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=60, ignore_result=True)
-def refresh_room_context_summary(self, room_id, message_id=None):
+def refresh_room_context_summary(self, room_id, message_id=None, message_delta=1):
     """
     Update RoomContext summary/topics/notes with lightweight throttling.
     """
@@ -822,7 +822,13 @@ def refresh_room_context_summary(self, room_id, message_id=None):
         max_minutes = getattr(settings, "CONTEXT_SUMMARY_MAX_MINUTES", 120)
         max_messages = getattr(settings, "CONTEXT_SUMMARY_MAX_MESSAGES", 40)
 
-        context.message_count = (context.message_count or 0) + 1
+        try:
+            delta = int(message_delta)
+        except (TypeError, ValueError):
+            delta = 1
+        if delta < 1:
+            delta = 1
+        context.message_count = (context.message_count or 0) + delta
         minutes_since = None
         if context.last_compressed_at:
             minutes_since = (now - context.last_compressed_at).total_seconds() / 60.0
@@ -1003,6 +1009,52 @@ def _encrypt_message_for_room(room: Chatroom, content: str) -> Optional[Dict[str
     }
 
 
+_SIGNAL_TTL_SECONDS = 60 * 60 * 48
+_SIGNAL_CATEGORY_MAP = {
+    "search_flights": "travel",
+    "search_hotels": "travel",
+    "search_buses": "travel",
+    "search_transfers": "travel",
+    "search_events": "travel",
+    "create_itinerary": "travel",
+    "send_email": "communication",
+    "send_whatsapp": "communication",
+    "set_reminder": "productivity",
+    "find_jobs": "jobs",
+    "search_info": "research",
+    "workflow_run": "automation",
+}
+
+
+def _signal_cache_key(room_id: int, user_id: int) -> str:
+    return f"proactive:signals:{room_id}:{user_id}"
+
+
+def get_proactive_signals(room_id: int, user_id: int) -> Dict[str, Any]:
+    return cache.get(_signal_cache_key(room_id, user_id)) or {}
+
+
+def update_proactive_signals(room_id: int, user_id: int, action: str) -> Dict[str, Any]:
+    if not room_id or not user_id or not action:
+        return {}
+    key = _signal_cache_key(room_id, user_id)
+    signals = cache.get(key) or {}
+    counts = signals.get("counts", {})
+    categories = signals.get("categories", {})
+    counts[action] = counts.get(action, 0) + 1
+    category = _SIGNAL_CATEGORY_MAP.get(action)
+    if category:
+        categories[category] = categories.get(category, 0) + 1
+    signals.update({
+        "counts": counts,
+        "categories": categories,
+        "last_action": action,
+        "last_action_at": timezone.now().isoformat(),
+    })
+    cache.set(key, signals, timeout=_SIGNAL_TTL_SECONDS)
+    return signals
+
+
 def _get_proactive_settings(user) -> Dict[str, Any]:
     prefs = {}
     if hasattr(user, "profile") and user.profile:
@@ -1010,6 +1062,7 @@ def _get_proactive_settings(user) -> Dict[str, Any]:
     return {
         "enabled": prefs.get("proactive_assistant_enabled", True),
         "nudge_frequency": prefs.get("nudge_frequency", "low"),
+        "snoozed_until": prefs.get("proactive_snooze_until"),
     }
 
 
@@ -1020,6 +1073,16 @@ def _proactive_allowed(user) -> bool:
     prefs = _get_proactive_settings(user)
     if not prefs.get("enabled", True):
         return False
+    snoozed_until = prefs.get("snoozed_until")
+    if snoozed_until:
+        try:
+            until = datetime.fromisoformat(str(snoozed_until))
+            if until.tzinfo is None:
+                until = timezone.make_aware(until)
+            if timezone.now() < until:
+                return False
+        except Exception:
+            pass
     try:
         goal_profile = getattr(user.workspace, "goals", None)
         if goal_profile and not goal_profile.ai_personalization_enabled:
@@ -1038,7 +1101,18 @@ def _nudge_gap_minutes(frequency: str) -> int:
     return mapping.get(str(frequency).lower(), 360)
 
 
-def _build_nudge_message(user, room: Chatroom) -> Optional[str]:
+def _build_nudge_message(user, room: Chatroom, signals: Optional[Dict[str, Any]] = None) -> Tuple[Optional[str], Optional[str]]:
+    signals = signals or get_proactive_signals(room.id, user.id)
+    counts = signals.get("counts", {})
+    categories = signals.get("categories", {})
+
+    if categories.get("travel", 0) >= 3 and counts.get("create_itinerary", 0) == 0:
+        return "Based on your recent travel searches, want me to build an itinerary for you?", "travel_itinerary"
+    if categories.get("communication", 0) >= 3 and counts.get("workflow_run", 0) == 0:
+        return "Based on your recent updates, want me to automate those messages as a workflow?", "communication_automation"
+    if counts.get("set_reminder", 0) >= 3:
+        return "You have been setting reminders lately. Want a recurring workflow instead?", "recurring_reminders"
+
     try:
         from payments.models import PaymentRequest
         from workflows.models import UserWorkflow
@@ -1051,16 +1125,16 @@ def _build_nudge_message(user, room: Chatroom) -> Optional[str]:
     has_reminder = Reminder.objects.filter(user=user).exists()
 
     if not has_workflow:
-        return "Want me to set up a simple workflow for you? I can draft one based on what you're working on."
+        return "Want me to set up a simple workflow for you? I can draft one based on what you're working on.", "no_workflow"
     if not has_invoice:
-        return "Need to get paid faster? I can create a quick invoice link you can share."
+        return "Need to get paid faster? I can create a quick invoice link you can share.", "no_invoice"
     if not has_reminder:
-        return "Want me to set a reminder so nothing slips through the cracks?"
+        return "Want me to set a reminder so nothing slips through the cracks?", "no_reminder"
 
     context = getattr(room, "context", None)
     if context and context.summary:
-        return "Want me to turn this room summary into next steps or a checklist?"
-    return None
+        return "Want me to turn this room summary into next steps or a checklist?", "summary_checklist"
+    return None, None
 
 
 @shared_task(ignore_result=True)
@@ -1125,10 +1199,17 @@ def send_idle_nudge(self, room_id: int, user_id: int, scheduled_at_iso: str):
                 cache.delete(f"proactive:pending:{room_id}:{user_id}")
                 return {"status": "skipped", "reason": "rate_limited"}
 
-        message_text = _build_nudge_message(user, room)
+        signals = get_proactive_signals(room_id, user_id)
+        message_text, reason = _build_nudge_message(user, room, signals=signals)
         if not message_text:
             cache.delete(f"proactive:pending:{room_id}:{user_id}")
             return {"status": "skipped", "reason": "no_message"}
+
+        dismissed_key = f"proactive:dismissed:{room_id}:{user_id}"
+        dismissed = cache.get(dismissed_key) or []
+        if reason and reason in dismissed:
+            cache.delete(f"proactive:pending:{room_id}:{user_id}")
+            return {"status": "skipped", "reason": "dismissed"}
 
         encrypted_payload = _encrypt_message_for_room(room, message_text)
         if not encrypted_payload:
@@ -1179,6 +1260,12 @@ def send_idle_nudge(self, room_id: int, user_id: int, scheduled_at_iso: str):
         )
 
         cache.set(last_nudge_key, timezone.now().isoformat(), timeout=60 * 60 * 24)
+        if reason:
+            cache.set(
+                f"proactive:last_reason:{room_id}:{user_id}",
+                reason,
+                timeout=60 * 60 * 24,
+            )
         cache.delete(f"proactive:pending:{room_id}:{user_id}")
         return {"status": "sent"}
     except Exception as exc:

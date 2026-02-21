@@ -1,5 +1,6 @@
 import json
 import traceback
+import re
 from asgiref.sync import sync_to_async
 from django.utils import timezone
 from channels.generic.websocket import AsyncWebsocketConsumer
@@ -24,6 +25,8 @@ from django.conf import settings
 from django.utils.text import get_valid_filename
 logger = logging.getLogger(__name__)
 User = get_user_model()
+PENDING_CONFIRM_TTL_SECONDS = 600
+LAST_SUMMARY_TTL_SECONDS = 60 * 60
 
 class ChatConsumer(AsyncWebsocketConsumer):
     # Define constants for key rotation
@@ -78,6 +81,45 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
         # 7. Accept connection
         await self.accept()
+
+    async def schedule_context_summary(self, room_id, message_id):
+        min_messages = getattr(settings, "CONTEXT_SUMMARY_MIN_MESSAGES", 6)
+        min_minutes = getattr(settings, "CONTEXT_SUMMARY_MIN_MINUTES", 10)
+        counter_key = f"context_summary:count:{room_id}"
+        last_key = f"context_summary:last:{room_id}"
+        now = timezone.now()
+
+        count = (cache.get(counter_key) or 0) + 1
+        cache.set(counter_key, count, timeout=60 * 60)
+
+        should_schedule = count >= min_messages
+        if not should_schedule:
+            last_iso = cache.get(last_key)
+            if last_iso:
+                try:
+                    last_seen = timezone.datetime.fromisoformat(last_iso)
+                    if (now - last_seen).total_seconds() >= min_minutes * 60:
+                        should_schedule = True
+                except Exception:
+                    pass
+
+        if not should_schedule:
+            return
+
+        cache.set(last_key, now.isoformat(), timeout=60 * 60 * 6)
+        cache.delete(counter_key)
+
+        from .tasks import refresh_room_context_summary
+        refresh_room_context_summary.delay(room_id, message_id, count)
+
+    async def schedule_idle_nudge_if_needed(self, room_id, user_id):
+        last_activity_key = f"proactive:last_activity:{room_id}:{user_id}"
+        cache.set(last_activity_key, timezone.now().isoformat(), timeout=60 * 60 * 24)
+        pending_key = f"proactive:pending:{room_id}:{user_id}"
+        if cache.get(pending_key):
+            return
+        from .tasks import schedule_idle_nudge
+        schedule_idle_nudge.delay(room_id, user_id)
 
         # 8. Broadcast online status to ALL other users
         await self.channel_layer.group_send(
@@ -680,13 +722,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
                 # Queue room context refresh for summary/notes
                 try:
-                    from .tasks import refresh_room_context_summary
-                    refresh_room_context_summary.delay(room_id, message.id)
+                    await self.schedule_context_summary(room_id, message.id)
                 except Exception as e:
                     logger.warning(f"Context summary refresh skipped: {e}")
                 try:
-                    from .tasks import schedule_idle_nudge
-                    schedule_idle_nudge.delay(room_id, member_user.id)
+                    await self.schedule_idle_nudge_if_needed(room_id, member_user.id)
                 except Exception as e:
                     logger.warning(f"Idle nudge schedule skipped: {e}")
 
@@ -754,94 +794,267 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             plan_user_request,
                             execute_adhoc_workflow,
                             synthesize_workflow_response_stream,
+                            looks_like_confirmation,
+                            LLM_CONFIDENCE_EXECUTE,
+                            LLM_CONFIDENCE_CONFIRM,
                         )
 
-                        plan = await plan_user_request(ai_query, history_text, user_id=member_user.id)
+                        pending_key = f"orchestration:pending:{room_id}:{member_user.id}"
+                        last_summary_key = f"orchestration:last_summary:{room_id}:{member_user.id}"
+                        summary_text_for_cache = None
+                        should_cache_summary = False
 
-                        if plan["mode"] == "automation_request":
-                            from workflows.workflow_agent import handle_workflow_message
-                            response_text = await handle_workflow_message(member_user.id, room_id, ai_query, history_text)
-                            await broadcast_chunk(response_text)
-                        elif plan["mode"] == "needs_clarification":
-                            await broadcast_chunk(plan.get("assistant_message") or "I need a bit more detail to proceed.")
-                        elif plan["mode"] == "adhoc_workflow":
-                            workflow_definition = plan.get("workflow_definition") or {}
-                            execution = await execute_adhoc_workflow(
-                                workflow_definition,
-                                member_user.id,
-                                room_id,
-                                trigger_data={"message": ai_query},
-                            )
-                            async for chunk in synthesize_workflow_response_stream(
-                                ai_query,
-                                workflow_definition,
-                                execution.get("result") or {},
-                                execution.get("status") or "running",
-                                execution.get("error") or execution.get("message"),
-                            ):
-                                await broadcast_chunk(chunk)
-                        else:
-                            # Step 1: Parse intent
-                            intent = await parse_intent(ai_query, {
-                                "user_id": member_user.id,
-                                "username": member_username,
-                                "room_id": room_id,
-                                "history": history_text
-                            })
+                        def _bump_signals(actions):
+                            try:
+                                from .tasks import update_proactive_signals
+                                for action in actions:
+                                    if action:
+                                        update_proactive_signals(room_id, member_user.id, action)
+                            except Exception as exc:
+                                logger.warning(f"Proactive signal update skipped: {exc}")
 
-                            logger.info(f"Intent: {intent}")
+                        def _is_dismiss_request(query: str) -> bool:
+                            lowered = query.lower()
+                            if not re.search(r"\b(dismiss|stop|no thanks)\b", lowered):
+                                return False
+                            return bool(re.search(r"\b(nudge|suggestion|proactive)\b", lowered))
 
-                            if intent["action"] == "create_workflow" and intent["confidence"] > 0.6:
+                        handled_directive = False
+                        if _is_dismiss_request(ai_query):
+                            last_reason_key = f"proactive:last_reason:{room_id}:{member_user.id}"
+                            dismissed_key = f"proactive:dismissed:{room_id}:{member_user.id}"
+                            last_reason = cache.get(last_reason_key)
+                            if last_reason:
+                                dismissed = cache.get(dismissed_key) or []
+                                if last_reason not in dismissed:
+                                    dismissed.append(last_reason)
+                                    cache.set(dismissed_key, dismissed, timeout=60 * 60 * 24 * 14)
+                            cache.delete(pending_key)
+                            await broadcast_chunk("Got it. I will stop showing that kind of suggestion here.")
+                            handled_directive = True
+
+                        pending = cache.get(pending_key)
+                        pending_handled = handled_directive
+                        if pending and not pending_handled:
+                            if looks_like_confirmation(ai_query):
+                                pending_kind = pending.get("kind")
+                                cache.delete(pending_key)
+                                if pending_kind == "workflow":
+                                    pending_handled = True
+                                    workflow_definition = pending.get("workflow_definition") or {}
+                                    pending_message = pending.get("user_message") or ai_query
+                                    execution = await execute_adhoc_workflow(
+                                        workflow_definition,
+                                        member_user.id,
+                                        room_id,
+                                        trigger_data={"message": pending_message},
+                                    )
+                                    async for chunk in synthesize_workflow_response_stream(
+                                        pending_message,
+                                        workflow_definition,
+                                        execution.get("result") or {},
+                                        execution.get("status") or "running",
+                                        execution.get("error") or execution.get("message"),
+                                    ):
+                                        await broadcast_chunk(chunk)
+                                    should_cache_summary = True
+                                    if execution.get("status") == "completed":
+                                        step_actions = [
+                                            step.get("action")
+                                            for step in workflow_definition.get("steps", [])
+                                            if isinstance(step, dict)
+                                        ]
+                                        _bump_signals(step_actions + ["workflow_run"])
+                                elif pending_kind == "intent":
+                                    pending_handled = True
+                                    intent = pending.get("intent") or {}
+                                    result = await route_intent(intent, {
+                                        "user_id": member_user.id,
+                                        "room_id": room_id,
+                                        "username": member_username
+                                    })
+
+                                    logger.info(f"MCP result: {result['status']}")
+
+                                    if result["status"] == "success":
+                                        from orchestration.data_synthesizer import synthesize_response_stream
+                                        summary_text_for_cache = await synthesize_response(intent, result, use_llm=False)
+
+                                        async for chunk in synthesize_response_stream(
+                                            intent,
+                                            result,
+                                            use_llm=True
+                                        ):
+                                            await broadcast_chunk(chunk)
+                                        should_cache_summary = True
+                                        _bump_signals([intent.get("action")])
+                                    else:
+                                        await broadcast_chunk(f"Error: {result['message']}")
+                            else:
+                                cache.delete(pending_key)
+
+                        if not pending_handled:
+                            plan = await plan_user_request(ai_query, history_text, user_id=member_user.id)
+
+                            if plan["mode"] == "automation_request":
                                 from workflows.workflow_agent import handle_workflow_message
                                 response_text = await handle_workflow_message(member_user.id, room_id, ai_query, history_text)
                                 await broadcast_chunk(response_text)
-                            elif intent["confidence"] > 0.7 and intent["action"] != "general_chat":
-                                # Route through MCP
-                                result = await route_intent(intent, {
-                                    "user_id": member_user.id,
-                                    "room_id": room_id,
-                                    "username": member_username
-                                })
-
-                                logger.info(f"MCP result: {result['status']}")
-
-                                if result["status"] == "success":
-                                    # Step 3: Synthesize natural language response (STREAMING)
-                                    from orchestration.data_synthesizer import synthesize_response_stream
-
-                                    async for chunk in synthesize_response_stream(
-                                        intent,
-                                        result,
-                                        use_llm=True
-                                    ):
-                                        await broadcast_chunk(chunk)
-
-                                else:
-                                    await broadcast_chunk(f"Error: {result['message']}")
-                            else:
-                                # Fallback to LLM for general chat or low confidence (STREAMING)
-                                from orchestration.llm_client import get_llm_client
-                                llm_client = get_llm_client()
-
-                                # Prepend history to query if available
-                                full_query = ai_query
-                                if history_text:
-                                    full_query = f"CONVERSATION HISTORY:\n{history_text}\n\nUSER message: {ai_query}"
-
-                                async for chunk in llm_client.stream_text(
-                                    system_prompt="You are Mathia, a helpful AI assistant. Be concise and friendly.",
-                                    user_prompt=full_query,
-                                    temperature=0.7,
-                                    max_tokens=500
+                            elif plan["mode"] == "needs_clarification":
+                                await broadcast_chunk(plan.get("assistant_message") or "I need a bit more detail to proceed.")
+                            elif plan["mode"] == "needs_confirmation":
+                                workflow_definition = plan.get("workflow_definition") or {}
+                                cache.set(
+                                    pending_key,
+                                    {
+                                        "kind": "workflow",
+                                        "workflow_definition": workflow_definition,
+                                        "user_message": ai_query,
+                                    },
+                                    timeout=PENDING_CONFIRM_TTL_SECONDS,
+                                )
+                                await broadcast_chunk(plan.get("assistant_message") or "Please confirm to proceed.")
+                            elif plan["mode"] == "adhoc_workflow":
+                                workflow_definition = plan.get("workflow_definition") or {}
+                                execution = await execute_adhoc_workflow(
+                                    workflow_definition,
+                                    member_user.id,
+                                    room_id,
+                                    trigger_data={"message": ai_query},
+                                )
+                                async for chunk in synthesize_workflow_response_stream(
+                                    ai_query,
+                                    workflow_definition,
+                                    execution.get("result") or {},
+                                    execution.get("status") or "running",
+                                    execution.get("error") or execution.get("message"),
                                 ):
                                     await broadcast_chunk(chunk)
+                                should_cache_summary = True
+                                if execution.get("status") == "completed":
+                                    step_actions = [
+                                        step.get("action")
+                                        for step in workflow_definition.get("steps", [])
+                                        if isinstance(step, dict)
+                                    ]
+                                    _bump_signals(step_actions + ["workflow_run"])
+                            else:
+                                # Step 1: Parse intent
+                                intent = await parse_intent(ai_query, {
+                                    "user_id": member_user.id,
+                                    "username": member_username,
+                                    "room_id": room_id,
+                                    "history": history_text
+                                })
+
+                                logger.info(f"Intent: {intent}")
+
+                                def _wants_summary_text(query: str) -> bool:
+                                    lowered = query.lower()
+                                    if "send" not in lowered and "email" not in lowered and "mail" not in lowered:
+                                        return False
+                                    return bool(re.search(r"\b(send|email|mail)\b.*\b(it|that|them|results?|summary|details)\b", lowered))
+
+                                def _strip_missing(missing, name):
+                                    if not isinstance(missing, list):
+                                        return []
+                                    return [item for item in missing if item != name]
+
+                                action = intent.get("action")
+                                params = intent.get("parameters") if isinstance(intent.get("parameters"), dict) else {}
+                                wants_summary = _wants_summary_text(ai_query)
+
+                                if action == "send_email":
+                                    if params.get("body") and not params.get("text"):
+                                        params["text"] = params.get("body")
+                                    if wants_summary and not params.get("text"):
+                                        cached_summary = cache.get(last_summary_key)
+                                        if cached_summary:
+                                            params["text"] = cached_summary
+                                            intent["missing_slots"] = _strip_missing(intent.get("missing_slots"), "text")
+                                    if params.get("text") and not params.get("subject"):
+                                        params["subject"] = " ".join(params["text"].split()[:6])[:80]
+                                        intent["missing_slots"] = _strip_missing(intent.get("missing_slots"), "subject")
+                                    intent["parameters"] = params
+                                elif action == "send_whatsapp":
+                                    if wants_summary and not params.get("message"):
+                                        cached_summary = cache.get(last_summary_key)
+                                        if cached_summary:
+                                            params["message"] = cached_summary
+                                            intent["missing_slots"] = _strip_missing(intent.get("missing_slots"), "message")
+                                    intent["parameters"] = params
+
+                                if action == "create_workflow" and intent.get("confidence", 0) > 0.6:
+                                    from workflows.workflow_agent import handle_workflow_message
+                                    response_text = await handle_workflow_message(member_user.id, room_id, ai_query, history_text)
+                                    await broadcast_chunk(response_text)
+                                elif intent.get("missing_slots"):
+                                    question = intent.get("clarifying_question") or "I need a bit more detail to proceed."
+                                    await broadcast_chunk(question)
+                                elif intent.get("confidence", 0) >= LLM_CONFIDENCE_EXECUTE and action != "general_chat":
+                                    # Route through MCP
+                                    result = await route_intent(intent, {
+                                        "user_id": member_user.id,
+                                        "room_id": room_id,
+                                        "username": member_username
+                                    })
+
+                                    logger.info(f"MCP result: {result['status']}")
+
+                                    if result["status"] == "success":
+                                        from orchestration.data_synthesizer import synthesize_response_stream
+                                        summary_text_for_cache = await synthesize_response(intent, result, use_llm=False)
+
+                                        async for chunk in synthesize_response_stream(
+                                            intent,
+                                            result,
+                                            use_llm=True
+                                        ):
+                                            await broadcast_chunk(chunk)
+                                        should_cache_summary = True
+                                        _bump_signals([intent.get("action")])
+
+                                    else:
+                                        await broadcast_chunk(f"Error: {result['message']}")
+                                elif intent.get("confidence", 0) >= LLM_CONFIDENCE_CONFIRM and action != "general_chat":
+                                    cache.set(
+                                        pending_key,
+                                        {"kind": "intent", "intent": intent},
+                                        timeout=PENDING_CONFIRM_TTL_SECONDS,
+                                    )
+                                    action_label = str(action or "that").replace("_", " ")
+                                    await broadcast_chunk(
+                                        f"I think you want me to {action_label}. Reply 'yes' to proceed or clarify."
+                                    )
+                                else:
+                                    # Fallback to LLM for general chat or low confidence (STREAMING)
+                                    from orchestration.llm_client import get_llm_client
+                                    llm_client = get_llm_client()
+
+                                    # Prepend history to query if available
+                                    full_query = ai_query
+                                    if history_text:
+                                        full_query = f"CONVERSATION HISTORY:\n{history_text}\n\nUSER message: {ai_query}"
+
+                                    async for chunk in llm_client.stream_text(
+                                        system_prompt="You are Mathia, a helpful AI assistant. Be concise and friendly.",
+                                        user_prompt=full_query,
+                                        temperature=0.7,
+                                        max_tokens=500
+                                    ):
+                                        await broadcast_chunk(chunk)
                         
                         # End stream
                         await broadcast_chunk("", is_final=True)
                         
                         # === NEW: Save complete AI message to database ===
                         full_response_text = "".join(stream_state['full_response'])
-                        
+
+                        if should_cache_summary:
+                            summary_value = (summary_text_for_cache or full_response_text).strip()
+                            if summary_value:
+                                cache.set(last_summary_key, summary_value, timeout=LAST_SUMMARY_TTL_SECONDS)
+
                         if full_response_text.strip():
                             logger.info(f"Saving AI message to database: {full_response_text[:100]}...")
                             
@@ -902,8 +1115,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                     )
                                     
                                     try:
-                                        from .tasks import refresh_room_context_summary
-                                        refresh_room_context_summary.delay(room_id, ai_message.id)
+                                        await self.schedule_context_summary(room_id, ai_message.id)
                                     except Exception as e:
                                         logger.warning(f"Context summary refresh skipped: {e}")
 
@@ -1312,14 +1524,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
             # Add to room
             room_id = event.get('room_id')
             current_chat = await self.get_current_chatroom(room_id)
-            if current_chat:
-                await sync_to_async(current_chat.chats.add)(message)
-                await sync_to_async(current_chat.save)()
-                try:
-                    from .tasks import refresh_room_context_summary
-                    refresh_room_context_summary.delay(room_id, message.id)
-                except Exception as e:
-                    logger.warning(f"Context summary refresh skipped: {e}")
+                if current_chat:
+                    await sync_to_async(current_chat.chats.add)(message)
+                    await sync_to_async(current_chat.save)()
+                    try:
+                        await self.schedule_context_summary(room_id, message.id)
+                    except Exception as e:
+                        logger.warning(f"Context summary refresh skipped: {e}")
             
             # Send to clients with correct command
             message_json = await self.message_to_json(message)

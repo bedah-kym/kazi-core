@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Chat Export</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 24px;
+        color: #1d1d1f;
+      }
+      .container {
+        max-width: 720px;
+      }
+      .card {
+        border: 1px solid #e2e2e2;
+        border-radius: 10px;
+        padding: 20px;
+      }
+      .row {
+        display: flex;
+        gap: 16px;
+        flex-wrap: wrap;
+      }
+      label {
+        display: block;
+        margin-bottom: 6px;
+        font-weight: 600;
+      }
+      input[type="date"] {
+        padding: 8px;
+        border-radius: 6px;
+        border: 1px solid #c9c9c9;
+        width: 100%;
+      }
+      .actions {
+        margin-top: 20px;
+        display: flex;
+        gap: 12px;
+        align-items: center;
+      }
+      .btn {
+        background: #111827;
+        color: #fff;
+        border: none;
+        border-radius: 8px;
+        padding: 10px 16px;
+        cursor: pointer;
+      }
+      .btn-secondary {
+        background: #f3f4f6;
+        color: #111827;
+        border: 1px solid #d1d5db;
+        text-decoration: none;
+        padding: 10px 16px;
+        border-radius: 8px;
+      }
+      .error {
+        color: #b91c1c;
+        margin-bottom: 12px;
+      }
+      .hint {
+        color: #6b7280;
+        margin-top: 6px;
+        font-size: 0.9rem;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>Export Chat</h1>
+      <p>Room ID: {{ room.id }}</p>
+      <div class="card">
+        {% if error %}
+          <div class="error">{{ error }}</div>
+        {% endif %}
+        <form method="post">
+          {% csrf_token %}
+          <div>
+            <label>Export Range</label>
+            <label>
+              <input type="radio" name="range" value="all" {% if range != 'custom' %}checked{% endif %}>
+              All history
+            </label>
+            <label>
+              <input type="radio" name="range" value="custom" {% if range == 'custom' %}checked{% endif %}>
+              Custom date range
+            </label>
+            <div class="hint">Choose custom range to export a specific date window.</div>
+          </div>
+          <div class="row" style="margin-top: 16px;">
+            <div style="flex: 1;">
+              <label for="start_date">Start date</label>
+              <input type="date" id="start_date" name="start_date" value="{{ start_date }}">
+            </div>
+            <div style="flex: 1;">
+              <label for="end_date">End date</label>
+              <input type="date" id="end_date" name="end_date" value="{{ end_date }}">
+            </div>
+          </div>
+          <div class="actions">
+            <button type="submit" class="btn">Download export</button>
+            <a href="{% url 'chatbot:bot-home' room.id %}" class="btn-secondary">Back to chat</a>
+          </div>
+        </form>
+      </div>
+    </div>
+  </body>
+</html>

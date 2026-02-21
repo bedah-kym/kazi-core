@@ -351,6 +351,8 @@
                                     <li><button class="dropdown-item" type="button"
                                             onclick="document.getElementById('searchToggle').click();"><i
                                                 class="fas fa-search me-2"></i>Search</button></li>
+                                    <li><a class="dropdown-item" href="{% url 'chatbot:export-chat' room_id %}"><i
+                                                class="fas fa-file-export me-2"></i>Export chat</a></li>
                                     <li><button class="dropdown-item" type="button"
                                             onclick="document.getElementById('upload').click();"><i
                                                 class="fas fa-upload me-2"></i>Upload</button></li>
@@ -365,6 +367,10 @@
                                 <a href="{% url 'payments:wallet_dashboard' %}" class="btn btn-link text-muted me-1"
                                     title="Wallet">
                                     <i class="fas fa-wallet"></i>
+                                </a>
+                                <a href="{% url 'chatbot:export-chat' room_id %}" class="btn btn-link text-muted me-1"
+                                    title="Export chat">
+                                    <i class="fas fa-file-export"></i>
                                 </a>
                                 <div class="dropdown notification-dropdown me-1">
                                     <button class="btn btn-link text-muted position-relative notification-btn"
@@ -402,6 +408,10 @@
                                 <button class="btn btn-light me-2" id="searchToggle" title="Search in chat">
                                     <i class="fas fa-search"></i>
                                 </button>
+                                <a class="btn btn-light me-2" href="{% url 'chatbot:export-chat' room_id %}"
+                                    title="Export chat">
+                                    <i class="fas fa-file-export"></i>
+                                </a>
                                 <button class="btn btn-light me-2" id="upload">
                                     <i class="fas fa-upload"></i>
                                 </button>

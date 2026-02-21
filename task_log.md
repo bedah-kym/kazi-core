@@ -206,6 +206,7 @@
 5. Proactive expansion: signal cache, pattern-based nudge reasons, snooze controls, and dismiss support.
 6. Celery efficiency: batched context summary scheduling with message deltas and idle-nudge scheduling gate.
 7. Follow-up fixes: deterministic email/phone extraction for single-action sends + reorder delivery steps after result steps.
+8. Chat export: per-room export with date range/all history, grouped by day in a Markdown download with a UI entry point.
 
 ### In Progress
 - Milestone 4 refinement: monitor Celery load and tune thresholds if needed.

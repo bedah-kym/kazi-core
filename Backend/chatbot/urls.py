@@ -13,6 +13,7 @@ urlpatterns = [
     path('invite/', views.invite_user, name='invite_user'),
     path('api/notifications/status/', views.notification_status, name='notification-status'),
     path('api/rooms/<int:room_id>/read/', views.mark_room_read, name='mark-room-read'),
+    path('rooms/<int:room_id>/export/', views.export_chat, name='export-chat'),
     
     # Context API
     path('api/rooms/<int:room_id>/context/', context_api.get_room_context, name='room-context'),

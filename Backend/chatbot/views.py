@@ -4,15 +4,17 @@ from django.contrib.auth.decorators import login_required
 from django.utils.safestring import mark_safe
 from .models import Chatroom, Message, Member, RoomReadState, Reminder
 import json 
-from django.http import JsonResponse
+from django.http import JsonResponse, StreamingHttpResponse
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.core.cache import cache
 from django.utils import timezone
+from django.utils.dateparse import parse_date
+from datetime import datetime, time
 
 from django.conf import settings
 import os
-from django.views.decorators.http import require_GET, require_POST
+from django.views.decorators.http import require_GET, require_POST, require_http_methods
 from .notification_utils import get_unread_room_count
 
 
@@ -352,6 +354,141 @@ def mark_room_read(request, room_id):
         defaults={"last_read_at": now},
     )
     return JsonResponse({"status": "ok", "last_read_at": now.isoformat()})
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def export_chat(request, room_id):
+    room = get_object_or_404(Chatroom, id=room_id, participants__User=request.user)
+
+    range_mode = request.POST.get("range") or request.GET.get("range") or "all"
+    start_raw = request.POST.get("start_date") or request.GET.get("start_date") or ""
+    end_raw = request.POST.get("end_date") or request.GET.get("end_date") or ""
+    wants_download = request.method == "POST" or request.GET.get("download") == "1"
+
+    if not wants_download:
+        return render(
+            request,
+            "chatbot/chat_export.html",
+            {
+                "room": room,
+                "range": range_mode,
+                "start_date": start_raw,
+                "end_date": end_raw,
+                "error": "",
+            },
+        )
+
+    start_date = parse_date(start_raw) if start_raw else None
+    end_date = parse_date(end_raw) if end_raw else None
+    if range_mode == "custom":
+        if not start_date or not end_date:
+            return render(
+                request,
+                "chatbot/chat_export.html",
+                {
+                    "room": room,
+                    "range": range_mode,
+                    "start_date": start_raw,
+                    "end_date": end_raw,
+                    "error": "Please provide both start and end dates.",
+                },
+            )
+        if end_date < start_date:
+            return render(
+                request,
+                "chatbot/chat_export.html",
+                {
+                    "room": room,
+                    "range": range_mode,
+                    "start_date": start_raw,
+                    "end_date": end_raw,
+                    "error": "End date must be on or after the start date.",
+                },
+            )
+
+    messages = room.chats.select_related("member", "member__User").order_by("timestamp")
+    tz = timezone.get_current_timezone()
+    if range_mode == "custom" and start_date and end_date:
+        start_dt = timezone.make_aware(datetime.combine(start_date, time.min), tz)
+        end_dt = timezone.make_aware(datetime.combine(end_date, time.max), tz)
+        messages = messages.filter(timestamp__gte=start_dt, timestamp__lte=end_dt)
+
+    try:
+        from .tasks import _get_room_cipher, _decrypt_message_content
+    except Exception:
+        _get_room_cipher = None
+        _decrypt_message_content = None
+
+    cipher = _get_room_cipher(room) if _get_room_cipher else None
+
+    if range_mode == "custom" and start_date and end_date:
+        range_label = f"{start_date.isoformat()} to {end_date.isoformat()}"
+    else:
+        range_label = "all history"
+
+    export_date = timezone.now().date().isoformat()
+    filename = f"chat-room-{room.id}-{export_date}.md"
+
+    def _extract_plain_content(raw_content):
+        if not raw_content or not isinstance(raw_content, str):
+            return ""
+        try:
+            parsed = json.loads(raw_content)
+        except (json.JSONDecodeError, TypeError):
+            return raw_content
+        if isinstance(parsed, dict):
+            if "data" in parsed and "nonce" in parsed:
+                return ""
+            content = parsed.get("content")
+            if isinstance(content, str):
+                return content
+        return raw_content
+
+    def _stream_lines():
+        yield "# Chat Export\n"
+        yield f"Room ID: {room.id}\n"
+        yield f"Exported by: {request.user.username}\n"
+        yield f"Range: {range_label}\n"
+        yield f"Timezone: {timezone.get_current_timezone_name()}\n"
+        yield f"Generated: {timezone.now().isoformat()}\n\n"
+
+        current_day = None
+        for msg in messages.iterator(chunk_size=2000):
+            ts = timezone.localtime(msg.timestamp, tz)
+            day_label = ts.date().isoformat()
+            if day_label != current_day:
+                current_day = day_label
+                yield f"\n## {day_label}\n"
+
+            sender = "Unknown"
+            if msg.member and getattr(msg.member, "User", None):
+                sender = msg.member.User.username
+
+            content = ""
+            if _decrypt_message_content:
+                content = _decrypt_message_content(msg, cipher) or ""
+            if not content and msg.voice_transcript:
+                content = msg.voice_transcript
+            if not content:
+                content = _extract_plain_content(msg.content)
+
+            content = (content or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+            time_label = ts.strftime("%H:%M:%S")
+            if not content:
+                yield f"[{time_label}] {sender}: [empty]\n"
+                continue
+
+            if "\n" in content:
+                yield f"[{time_label}] {sender}:\n"
+                for line in content.split("\n"):
+                    yield f"  {line}\n"
+            else:
+                yield f"[{time_label}] {sender}: {content}\n"
+
+    response = StreamingHttpResponse(_stream_lines(), content_type="text/markdown; charset=utf-8")
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return response
 
 
 def get_last_10messages(chatid):

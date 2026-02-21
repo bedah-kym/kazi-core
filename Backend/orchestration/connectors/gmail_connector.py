@@ -54,6 +54,8 @@ class GmailConnector(BaseConnector):
             return {"status": "error", "message": "Missing user context for Gmail send"}
         if not to:
             return {"status": "error", "message": "Recipient 'to' is required for send_email"}
+        if not subject and text:
+            subject = " ".join(text.split()[:6])[:80]
         if not subject:
             return {"status": "error", "message": "Subject is required for send_email"}
         if not text and not html:

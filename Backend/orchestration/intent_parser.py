@@ -4,6 +4,7 @@ Converts natural language commands into structured JSON intents
 """
 import json
 import logging
+import re
 from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
@@ -118,12 +119,52 @@ Rules:
     def __init__(self):
         from .llm_client import get_llm_client
         self.llm = get_llm_client()
+
+    def _rule_based_email_intent(self, message: str) -> Optional[Dict]:
+        if not message:
+            return None
+        if not re.search(r"\b(send|email|mail)\b", message, flags=re.IGNORECASE):
+            return None
+        email_match = re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", message)
+        if not email_match:
+            return None
+        to_email = email_match.group(0)
+
+        subject = None
+        subject_match = re.search(r'\bsubject\b[:\-]?\s*"?([^"\n]+)', message, flags=re.IGNORECASE)
+        if subject_match:
+            subject = subject_match.group(1).strip().strip('"').strip()
+
+        body = None
+        body_match = re.search(r'\b(?:saying|message|msg|text|body)\b[:\-]?\s*"?(.+)', message, flags=re.IGNORECASE)
+        if body_match:
+            body = body_match.group(1).strip().strip('"').strip()
+        if not body:
+            quoted = re.search(r'"([^"\n]+)"', message)
+            if quoted:
+                body = quoted.group(1).strip()
+
+        params = {"to": to_email}
+        if subject:
+            params["subject"] = subject
+        if body:
+            params["text"] = body
+
+        return {
+            "action": "send_email",
+            "confidence": 0.85,
+            "parameters": params,
+            "raw_query": message,
+        }
         
     async def parse(self, message: str, user_context: Optional[Dict] = None) -> Dict:
         """
         Parse a natural language message into structured intent
         """
         try:
+            rule_based = self._rule_based_email_intent(message)
+            if rule_based:
+                return rule_based
             # Build context-aware prompt
             user_prompt = self._build_user_prompt(message, user_context)
             

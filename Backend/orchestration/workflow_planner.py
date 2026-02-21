@@ -690,6 +690,7 @@ def _missing_param_message(param: str) -> str:
         "location": "Which city should I search in?",
         "item_id": "Which option should I book? You can say things like 'book flight 1'.",
         "to": "Which email address should I send this to?",
+        "text": "What should the email say?",
         "phone_number": "Which phone number should I use?",
     }
     return prompts.get(param, f"I need the {param} to proceed.")
@@ -708,6 +709,33 @@ def _friendly_validation_error(error: str) -> str:
     if "Params for step" in error:
         return "I need a bit more detail for one of the steps. Please share the missing details."
     return f"I need a bit more detail to run that: {error}"
+
+
+def _quick_email_decision(message: str) -> Optional[Dict[str, Any]]:
+    if not message:
+        return None
+    if len(_split_step_phrases(message)) >= MIN_ADHOC_STEPS:
+        return None
+    if not re.search(r"\b(send|email|mail)\b", message, flags=re.IGNORECASE):
+        return None
+    email = _extract_first_email(message)
+    recipient_hint = email or re.search(r"\b(to|me|my)\b", message, flags=re.IGNORECASE)
+    if not recipient_hint:
+        return None
+    if not email:
+        return {
+            "mode": "needs_clarification",
+            "assistant_message": _missing_param_message("to"),
+            "workflow_definition": None,
+        }
+    message_text = _extract_message_text(message)
+    if not message_text:
+        return {
+            "mode": "needs_clarification",
+            "assistant_message": _missing_param_message("text"),
+            "workflow_definition": None,
+        }
+    return {"mode": "single", "assistant_message": "", "workflow_definition": None}
 
 
 async def _llm_manager_review(message: str, steps: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -1181,6 +1209,10 @@ async def plan_user_request(message: str, history_text: str = "", user_id: Optio
             "assistant_message": "Got it. I can build a reusable workflow for that.",
             "workflow_definition": None,
         }
+
+    quick_email = _quick_email_decision(message)
+    if quick_email:
+        return quick_email
 
     llm = get_llm_client()
     capabilities_json = json.dumps(SYSTEM_CAPABILITIES, indent=2)

@@ -237,17 +237,10 @@ class ManagerVerifier:
         return index
 
     def _missing_param_message(self, param: str) -> str:
-        prompts = {
-            "departure_date": "What departure date should I use? (YYYY-MM-DD)",
-            "travel_date": "What travel date should I use? (YYYY-MM-DD)",
-            "check_in_date": "What is the check-in date? (YYYY-MM-DD)",
-            "check_out_date": "What is the check-out date? (YYYY-MM-DD)",
-            "origin": "What is the origin city or airport code?",
-            "destination": "What is the destination city or airport code?",
-            "location": "Which city should I search in?",
-            "item_id": "Which option should I book? You can say things like 'book flight 1'.",
-            "to": "Which email address should I send this to?",
-            "text": "What should the email say?",
-            "phone_number": "Which phone number should I use?",
-        }
-        return prompts.get(param, f"I need the {param} to proceed.")
+        label = param.replace("_", " ")
+        suffix = ""
+        if "date" in param:
+            suffix = " (YYYY-MM-DD)"
+        elif "time" in param:
+            suffix = " (e.g., 15:00)"
+        return f"I still need {label}{suffix} to proceed."

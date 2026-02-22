@@ -148,24 +148,15 @@ Rules:
                     }
         return index
 
-    def _missing_param_message(self, param: str) -> str:
-        prompts = {
-            "departure_date": "What departure date should I use? (YYYY-MM-DD)",
-            "travel_date": "What travel date should I use? (YYYY-MM-DD)",
-            "check_in_date": "What is the check-in date? (YYYY-MM-DD)",
-            "check_out_date": "What is the check-out date? (YYYY-MM-DD)",
-            "origin": "What is the origin city or airport code?",
-            "destination": "What is the destination city or airport code?",
-            "location": "Which city should I search in?",
-            "item_id": "Which option should I book? You can say things like 'book flight 1'.",
-            "to": "Which email address should I send this to?",
-            "text": "What should the email say?",
-            "message": "What should the message say?",
-            "content": "What should the reminder say?",
-            "time": "When should I set the reminder?",
-            "phone_number": "Which phone number should I use?",
-        }
-        return prompts.get(param, f"I need the {param} to proceed.")
+    def _missing_param_message(self, param: str, action: Optional[str] = None) -> str:
+        label = param.replace("_", " ")
+        suffix = ""
+        if "date" in param:
+            suffix = " (YYYY-MM-DD)"
+        elif "time" in param:
+            suffix = " (e.g., 15:00)"
+        action_label = action.replace("_", " ") if action else "this request"
+        return f"For {action_label}, I still need {label}{suffix}."
 
     def _compute_missing_slots(self, intent: Dict) -> Dict[str, Any]:
         action = str(intent.get("action") or "").strip()
@@ -184,7 +175,7 @@ Rules:
                 missing.append(param_name)
         if not missing:
             return {"missing_slots": [], "clarifying_question": ""}
-        question = self._missing_param_message(str(missing[0]))
+        question = self._missing_param_message(str(missing[0]), action=action)
         return {"missing_slots": missing, "clarifying_question": question}
 
     def _rule_based_email_intent(self, message: str) -> Optional[Dict]:
@@ -293,6 +284,12 @@ Rules:
         prompt += f'User message: "{message}"'
         
         if context:
+            expected_action = context.get("expected_action") if isinstance(context, dict) else None
+            expected_slots = context.get("expected_slots") if isinstance(context, dict) else None
+            if expected_action:
+                prompt += f"\nExpected action: {expected_action}"
+            if expected_slots:
+                prompt += f"\nMissing slots to fill: {expected_slots}"
             prompt += f'\n\nUser context: {json.dumps(context)}'
             
         return prompt

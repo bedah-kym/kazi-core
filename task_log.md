@@ -207,6 +207,8 @@
 6. Celery efficiency: batched context summary scheduling with message deltas and idle-nudge scheduling gate.
 7. Follow-up fixes: deterministic email/phone extraction for single-action sends + reorder delivery steps after result steps.
 8. Chat export: per-room export with date range/all history, grouped by day in a Markdown download with a UI entry point.
+9. Adaptive orchestration foundation: action registry + cache-backed task state with dynamic missing-slot prompts and summary auto-fill.
+10. Option selection gating: block booking by option number when no prior results (workflow + chat), and suppress nudges during active tasks.
 
 ### In Progress
 - Milestone 4 refinement: monitor Celery load and tune thresholds if needed.

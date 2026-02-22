@@ -21,6 +21,19 @@ import asyncio
 from .models import Message, Member, Chatroom, UserModerationStatus, ModerationBatch, RoomReadState
 from .tasks import moderate_message_batch, generate_ai_response, generate_voice_response
 from orchestration.intent_parser import parse_intent
+from orchestration.adaptive_task import (
+    load_task_state,
+    save_task_state,
+    clear_task_state,
+    init_task_state,
+    update_task_state,
+    get_action_definition,
+    format_missing_prompt,
+    apply_summary_defaults,
+    should_use_summary,
+    store_result_set,
+    needs_option_context,
+)
 from django.conf import settings
 from django.utils.text import get_valid_filename
 logger = logging.getLogger(__name__)
@@ -115,6 +128,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
     async def schedule_idle_nudge_if_needed(self, room_id, user_id):
         last_activity_key = f"proactive:last_activity:{room_id}:{user_id}"
         cache.set(last_activity_key, timezone.now().isoformat(), timeout=60 * 60 * 24)
+        pending_key = f"orchestration:pending:{room_id}:{user_id}"
+        if cache.get(pending_key):
+            return
+        adaptive_state = await load_task_state({"user_id": user_id, "room_id": room_id})
+        if adaptive_state and adaptive_state.get("status") in ("awaiting_slots", "ready"):
+            return
         pending_key = f"proactive:pending:{room_id}:{user_id}"
         if cache.get(pending_key):
             return
@@ -801,6 +820,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
                         pending_key = f"orchestration:pending:{room_id}:{member_user.id}"
                         last_summary_key = f"orchestration:last_summary:{room_id}:{member_user.id}"
+                        adaptive_context = {
+                            "user_id": member_user.id,
+                            "room_id": room_id,
+                            "username": member_username,
+                        }
                         summary_text_for_cache = None
                         should_cache_summary = False
 
@@ -812,6 +836,55 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                         update_proactive_signals(room_id, member_user.id, action)
                             except Exception as exc:
                                 logger.warning(f"Proactive signal update skipped: {exc}")
+
+                        async def _execute_intent(intent):
+                            nonlocal summary_text_for_cache, should_cache_summary
+                            prompt = await needs_option_context(
+                                adaptive_context,
+                                intent.get("action"),
+                                intent.get("parameters"),
+                                get_action_definition(intent.get("action")),
+                            )
+                            if prompt:
+                                task_state = init_task_state(intent)
+                                task_state["status"] = "awaiting_slots"
+                                task_state["missing_slots"] = task_state.get("missing_slots") or ["option_context"]
+                                task_state["last_prompt"] = prompt
+                                await save_task_state(adaptive_context, task_state)
+                                await broadcast_chunk(prompt)
+                                return {"status": "needs_input", "message": prompt}
+                            result = await route_intent(intent, {
+                                "user_id": member_user.id,
+                                "room_id": room_id,
+                                "username": member_username
+                            })
+
+                            logger.info(f"MCP result: {result['status']}")
+
+                            if result["status"] == "success":
+                                data_payload = result.get("data") if isinstance(result.get("data"), dict) else {}
+                                results = data_payload.get("results") if isinstance(data_payload, dict) else None
+                                if isinstance(results, list):
+                                    await store_result_set(
+                                        adaptive_context,
+                                        intent.get("action"),
+                                        results,
+                                        metadata=data_payload.get("metadata") if isinstance(data_payload, dict) else None,
+                                    )
+                                from orchestration.data_synthesizer import synthesize_response_stream
+                                summary_text_for_cache = await synthesize_response(intent, result, use_llm=False)
+
+                                async for chunk in synthesize_response_stream(
+                                    intent,
+                                    result,
+                                    use_llm=True
+                                ):
+                                    await broadcast_chunk(chunk)
+                                should_cache_summary = True
+                                _bump_signals([intent.get("action")])
+                            else:
+                                await broadcast_chunk(f"Error: {result['message']}")
+                            return result
 
                         def _is_dismiss_request(query: str) -> bool:
                             lowered = query.lower()
@@ -868,30 +941,81 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                 elif pending_kind == "intent":
                                     pending_handled = True
                                     intent = pending.get("intent") or {}
-                                    result = await route_intent(intent, {
-                                        "user_id": member_user.id,
-                                        "room_id": room_id,
-                                        "username": member_username
-                                    })
-
-                                    logger.info(f"MCP result: {result['status']}")
-
-                                    if result["status"] == "success":
-                                        from orchestration.data_synthesizer import synthesize_response_stream
-                                        summary_text_for_cache = await synthesize_response(intent, result, use_llm=False)
-
-                                        async for chunk in synthesize_response_stream(
-                                            intent,
-                                            result,
-                                            use_llm=True
-                                        ):
-                                            await broadcast_chunk(chunk)
-                                        should_cache_summary = True
-                                        _bump_signals([intent.get("action")])
-                                    else:
-                                        await broadcast_chunk(f"Error: {result['message']}")
+                                    await _execute_intent(intent)
                             else:
                                 cache.delete(pending_key)
+
+                        if not pending_handled:
+                            adaptive_state = await load_task_state(adaptive_context)
+                            if adaptive_state and adaptive_state.get("status") == "awaiting_slots":
+                                expected_action = adaptive_state.get("action")
+                                followup_intent = await parse_intent(ai_query, {
+                                    "user_id": member_user.id,
+                                    "username": member_username,
+                                    "room_id": room_id,
+                                    "history": history_text,
+                                    "expected_action": expected_action,
+                                    "expected_slots": adaptive_state.get("missing_slots") or [],
+                                })
+                                if (
+                                    followup_intent.get("action")
+                                    and followup_intent.get("action") != expected_action
+                                    and followup_intent.get("confidence", 0) >= LLM_CONFIDENCE_CONFIRM
+                                ):
+                                    await clear_task_state(adaptive_context)
+                                else:
+                                    updated_state = update_task_state(
+                                        adaptive_state,
+                                        followup_intent.get("parameters") or {},
+                                    )
+                                    action_def = get_action_definition(updated_state.get("action"))
+                                    if updated_state.get("status") == "awaiting_slots":
+                                        prompt = format_missing_prompt(
+                                            updated_state.get("action"),
+                                            updated_state.get("missing_slots") or [],
+                                            action_def,
+                                        )
+                                        if not prompt:
+                                            prompt = followup_intent.get("clarifying_question") or "I need a bit more detail to proceed."
+                                        updated_state["last_prompt"] = prompt
+                                        await save_task_state(adaptive_context, updated_state)
+                                        await broadcast_chunk(prompt)
+                                        pending_handled = True
+                                    else:
+                                        summary_text = None
+                                        if should_use_summary(ai_query):
+                                            summary_text = cache.get(last_summary_key)
+                                        params = apply_summary_defaults(
+                                            updated_state.get("action"),
+                                            updated_state.get("parameters"),
+                                            summary_text,
+                                        )
+                                        updated_state["parameters"] = params
+                                        action_def = get_action_definition(updated_state.get("action"))
+                                        prompt = await needs_option_context(
+                                            adaptive_context,
+                                            updated_state.get("action"),
+                                            params,
+                                            action_def,
+                                        )
+                                        if prompt:
+                                            updated_state["status"] = "awaiting_slots"
+                                            updated_state["missing_slots"] = updated_state.get("missing_slots") or ["option_context"]
+                                            updated_state["last_prompt"] = prompt
+                                            await save_task_state(adaptive_context, updated_state)
+                                            await broadcast_chunk(prompt)
+                                            pending_handled = True
+                                        else:
+                                            await save_task_state(adaptive_context, updated_state)
+                                            intent = {
+                                                "action": updated_state.get("action"),
+                                                "parameters": params,
+                                                "confidence": 1.0,
+                                            }
+                                            result = await _execute_intent(intent)
+                                            if result.get("status") == "success":
+                                                await clear_task_state(adaptive_context)
+                                            pending_handled = True
 
                         if not pending_handled:
                             plan = await plan_user_request(ai_query, history_text, user_id=member_user.id)
@@ -948,80 +1072,42 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                 })
 
                                 logger.info(f"Intent: {intent}")
-
-                                def _wants_summary_text(query: str) -> bool:
-                                    lowered = query.lower()
-                                    if "send" not in lowered and "email" not in lowered and "mail" not in lowered:
-                                        return False
-                                    return bool(re.search(r"\b(send|email|mail)\b.*\b(it|that|them|results?|summary|details)\b", lowered))
-
-                                def _strip_missing(missing, name):
-                                    if not isinstance(missing, list):
-                                        return []
-                                    return [item for item in missing if item != name]
-
                                 action = intent.get("action")
                                 params = intent.get("parameters") if isinstance(intent.get("parameters"), dict) else {}
-                                wants_summary = _wants_summary_text(ai_query)
+                                if should_use_summary(ai_query):
+                                    params = apply_summary_defaults(action, params, cache.get(last_summary_key))
+                                intent["parameters"] = params
 
-                                if action == "send_email":
-                                    if params.get("body") and not params.get("text"):
-                                        params["text"] = params.get("body")
-                                    if wants_summary and not params.get("text"):
-                                        cached_summary = cache.get(last_summary_key)
-                                        if cached_summary:
-                                            params["text"] = cached_summary
-                                            intent["missing_slots"] = _strip_missing(intent.get("missing_slots"), "text")
-                                    if params.get("text") and not params.get("subject"):
-                                        params["subject"] = " ".join(params["text"].split()[:6])[:80]
-                                        intent["missing_slots"] = _strip_missing(intent.get("missing_slots"), "subject")
-                                    intent["parameters"] = params
-                                elif action == "send_whatsapp":
-                                    if wants_summary and not params.get("message"):
-                                        cached_summary = cache.get(last_summary_key)
-                                        if cached_summary:
-                                            params["message"] = cached_summary
-                                            intent["missing_slots"] = _strip_missing(intent.get("missing_slots"), "message")
-                                    intent["parameters"] = params
+                                task_state = init_task_state(intent)
 
                                 if action == "create_workflow" and intent.get("confidence", 0) > 0.6:
                                     from workflows.workflow_agent import handle_workflow_message
                                     response_text = await handle_workflow_message(member_user.id, room_id, ai_query, history_text)
                                     await broadcast_chunk(response_text)
-                                elif intent.get("missing_slots"):
-                                    question = intent.get("clarifying_question") or "I need a bit more detail to proceed."
+                                elif task_state.get("status") == "awaiting_slots" and action != "general_chat":
+                                    action_def = get_action_definition(action)
+                                    question = format_missing_prompt(
+                                        action,
+                                        task_state.get("missing_slots") or [],
+                                        action_def,
+                                    )
+                                    if not question:
+                                        question = intent.get("clarifying_question") or "I need a bit more detail to proceed."
+                                    task_state["last_prompt"] = question
+                                    await save_task_state(adaptive_context, task_state)
                                     await broadcast_chunk(question)
                                 elif intent.get("confidence", 0) >= LLM_CONFIDENCE_EXECUTE and action != "general_chat":
                                     # Route through MCP
-                                    result = await route_intent(intent, {
-                                        "user_id": member_user.id,
-                                        "room_id": room_id,
-                                        "username": member_username
-                                    })
-
-                                    logger.info(f"MCP result: {result['status']}")
-
-                                    if result["status"] == "success":
-                                        from orchestration.data_synthesizer import synthesize_response_stream
-                                        summary_text_for_cache = await synthesize_response(intent, result, use_llm=False)
-
-                                        async for chunk in synthesize_response_stream(
-                                            intent,
-                                            result,
-                                            use_llm=True
-                                        ):
-                                            await broadcast_chunk(chunk)
-                                        should_cache_summary = True
-                                        _bump_signals([intent.get("action")])
-
-                                    else:
-                                        await broadcast_chunk(f"Error: {result['message']}")
+                                    result = await _execute_intent(intent)
+                                    if result.get("status") == "success":
+                                        await clear_task_state(adaptive_context)
                                 elif intent.get("confidence", 0) >= LLM_CONFIDENCE_CONFIRM and action != "general_chat":
                                     cache.set(
                                         pending_key,
                                         {"kind": "intent", "intent": intent},
                                         timeout=PENDING_CONFIRM_TTL_SECONDS,
                                     )
+                                    await clear_task_state(adaptive_context)
                                     action_label = str(action or "that").replace("_", " ")
                                     await broadcast_chunk(
                                         f"I think you want me to {action_label}. Reply 'yes' to proceed or clarify."

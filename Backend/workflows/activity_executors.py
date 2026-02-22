@@ -58,6 +58,29 @@ _MISC_ACTIONS = {
 }
 
 _AUTO_EMAIL_SUMMARY_TOKEN = "__AUTO_SUMMARY__"
+_OPTION_PARAM_HINTS = ("item_id", "option", "selection")
+
+
+def _has_prior_results(context: Dict[str, Any]) -> bool:
+    for key, value in context.items():
+        if key in ("trigger", "workflow", "user_id"):
+            continue
+        if not isinstance(value, dict):
+            continue
+        results = value.get("results")
+        if isinstance(results, list) and results:
+            return True
+    return False
+
+
+def _needs_option_context(params: Dict[str, Any]) -> bool:
+    for key, value in (params or {}).items():
+        if key in _OPTION_PARAM_HINTS or key.endswith("_id"):
+            if isinstance(value, int):
+                return True
+            if isinstance(value, str) and value.strip().isdigit():
+                return True
+    return False
 
 
 def _format_result_item(item: Dict[str, Any]) -> str:
@@ -188,6 +211,15 @@ async def execute_workflow_step(step: Dict[str, Any], context: Dict[str, Any]) -
     service = (step.get('service') or '').lower()
     action = step.get('action')
     params = resolve_parameters(step.get('params', {}), context)
+
+    if _needs_option_context(params) and not _has_prior_results(context):
+        return {
+            "status": "error",
+            "error": (
+                "I need a recent list of options before I can pick an option number. "
+                "Please run a search first."
+            ),
+        }
 
     if service == 'payments' and action == 'withdraw':
         error = _enforce_withdraw_policy(params, context)

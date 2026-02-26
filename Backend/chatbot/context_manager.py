@@ -5,6 +5,7 @@ Supports Cross-Room context sharing for high-priority notes.
 """
 import logging
 import json
+from datetime import datetime, date, timedelta
 from django.utils import timezone
 from .models import RoomContext, RoomNote, AIConversation, DocumentUpload
 
@@ -25,6 +26,7 @@ class ContextManager:
         1. Room Summary & Active Topics
         2. Recent Notes (Decisions, Action Items)
         3. Cross-Room Logic (High Priority notes from other rooms for this user/workspace)
+        4. Layered Memory (facts, preferences, episodes)
         """
         try:
             # 1. Get Local Room Context
@@ -40,12 +42,44 @@ class ContextManager:
                 "summary": context_obj.summary or "",
                 "active_topics": context_obj.active_topics or [],
                 "recent_notes": [ContextManager._format_note(n) for n in local_notes],
-                "latest_daily_summary": ""
+                "latest_daily_summary": "",
+                "memory_facts": [],
+                "memory_preferences": [],
+                "memory_episodes": [],
+                "memory_updated_at": None,
             }
 
             latest_summary = context_obj.daily_summaries.order_by('-date').first()
             if latest_summary:
                 context_data["latest_daily_summary"] = latest_summary.summary
+
+            memory_facts = ContextManager._filter_memory_entries(
+                context_obj.memory_facts,
+                max_items=6,
+                max_age_days=365,
+                min_confidence=0.45,
+            )
+            memory_preferences = ContextManager._filter_memory_entries(
+                context_obj.memory_preferences,
+                max_items=6,
+                max_age_days=365,
+                min_confidence=0.35,
+            )
+            memory_episodes = ContextManager._filter_memory_entries(
+                context_obj.memory_episodes,
+                max_items=4,
+                max_age_days=365,
+                min_confidence=None,
+            )
+            context_data.update({
+                "memory_facts": memory_facts,
+                "memory_preferences": memory_preferences,
+                "memory_episodes": memory_episodes,
+                "memory_updated_at": (
+                    context_obj.memory_updated_at.isoformat()
+                    if context_obj.memory_updated_at else None
+                ),
+            })
             
             # 3. GLOBAL/CROSS-ROOM CONTEXT (The "Memory" across rooms)
             # Find high-priority or 'insight' notes from other rooms involving these participants
@@ -112,6 +146,62 @@ class ContextManager:
             # Add Active Topics
             if data['active_topics']:
                 prompt_parts.append(f"TOPICS: {', '.join(data['active_topics'])}")
+
+            # Add Memory (facts, preferences, episodes)
+            fact_lines = []
+            for item in data.get("memory_facts") or []:
+                if not isinstance(item, dict):
+                    continue
+                key = str(item.get("key") or "").strip()
+                value = str(item.get("value") or "").strip()
+                if not key or not value:
+                    continue
+                line = f"- {key}: {value}"
+                confidence = item.get("confidence")
+                if confidence is not None:
+                    try:
+                        line = f"{line} (confidence {float(confidence):.2f})"
+                    except (TypeError, ValueError):
+                        pass
+                fact_lines.append(line)
+            if fact_lines:
+                prompt_parts.append("KNOWN FACTS:")
+                prompt_parts.extend(fact_lines)
+
+            pref_lines = []
+            for item in data.get("memory_preferences") or []:
+                if not isinstance(item, dict):
+                    continue
+                key = str(item.get("key") or "").strip()
+                value = str(item.get("value") or "").strip()
+                if not key or not value:
+                    continue
+                pref_lines.append(f"- {key}: {value}")
+            if pref_lines:
+                prompt_parts.append("PREFERENCES:")
+                prompt_parts.extend(pref_lines)
+
+            episode_lines = []
+            for item in data.get("memory_episodes") or []:
+                if not isinstance(item, dict):
+                    continue
+                summary = str(item.get("summary") or "").strip()
+                if not summary:
+                    continue
+                details = []
+                date_value = str(item.get("date") or "").strip()
+                if date_value:
+                    details.append(date_value)
+                importance = str(item.get("importance") or "").strip()
+                if importance:
+                    details.append(f"importance {importance}")
+                if details:
+                    episode_lines.append(f"- {summary} ({', '.join(details)})")
+                else:
+                    episode_lines.append(f"- {summary}")
+            if episode_lines:
+                prompt_parts.append("EPISODIC MEMORY:")
+                prompt_parts.extend(episode_lines)
             
             # Add Local Notes
             if data['recent_notes']:
@@ -161,6 +251,78 @@ class ContextManager:
             priority=priority
         )
         return note
+
+    @staticmethod
+    def _parse_entry_datetime(value):
+        if not value:
+            return None
+        if isinstance(value, datetime):
+            dt_value = value
+        elif isinstance(value, date):
+            dt_value = datetime.combine(value, datetime.min.time())
+        elif isinstance(value, str):
+            try:
+                dt_value = datetime.fromisoformat(value)
+            except ValueError:
+                try:
+                    dt_value = datetime.strptime(value, "%Y-%m-%d")
+                except ValueError:
+                    return None
+        else:
+            return None
+        if timezone.is_naive(dt_value):
+            dt_value = timezone.make_aware(dt_value)
+        return dt_value
+
+    @staticmethod
+    def _entry_timestamp(entry):
+        if not isinstance(entry, dict):
+            return None
+        for field in ("updated_at", "date", "created_at"):
+            dt_value = ContextManager._parse_entry_datetime(entry.get(field))
+            if dt_value:
+                return dt_value
+        return None
+
+    @staticmethod
+    def _memory_sort_key(entry):
+        entry_ts = ContextManager._entry_timestamp(entry)
+        ts_value = entry_ts.timestamp() if entry_ts else 0
+        importance_weight = 0
+        confidence = 0.0
+        if isinstance(entry, dict):
+            importance = str(entry.get("importance") or "").lower()
+            importance_weight = {"high": 2, "medium": 1, "low": 0}.get(importance, 0)
+            confidence_value = entry.get("confidence")
+            try:
+                confidence = float(confidence_value)
+            except (TypeError, ValueError):
+                confidence = 0.0
+        return (importance_weight, confidence, ts_value)
+
+    @staticmethod
+    def _filter_memory_entries(entries, max_items=6, max_age_days=365, min_confidence=None):
+        if not entries:
+            return []
+        cutoff = None
+        if max_age_days:
+            cutoff = timezone.now() - timedelta(days=max_age_days)
+        filtered = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            if min_confidence is not None and entry.get("confidence") is not None:
+                try:
+                    if float(entry.get("confidence")) < float(min_confidence):
+                        continue
+                except (TypeError, ValueError):
+                    pass
+            entry_ts = ContextManager._entry_timestamp(entry)
+            if cutoff and entry_ts and entry_ts < cutoff:
+                continue
+            filtered.append(entry)
+        filtered.sort(key=ContextManager._memory_sort_key, reverse=True)
+        return filtered[:max_items]
 
     @staticmethod
     def _format_note(note):

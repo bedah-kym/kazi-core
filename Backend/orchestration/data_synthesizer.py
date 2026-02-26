@@ -9,6 +9,8 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+from orchestration.user_preferences import format_style_prompt
+
 
 class DataSynthesizer:
     """
@@ -71,26 +73,39 @@ class DataSynthesizer:
         """Basic template-based formatting"""
         action = intent.get("action")
         data = result.get("data", {})
+        receipt = result.get("receipt") if isinstance(result, dict) else None
+        params = intent.get("parameters") or {}
+
+        def _with_receipt(text: str) -> str:
+            if isinstance(receipt, dict) and receipt.get("summary"):
+                receipt_line = f"Receipt: {receipt.get('summary')}"
+                undo_hint = receipt.get("undo_hint") or ""
+                if undo_hint:
+                    receipt_line = f"{receipt_line}\n{undo_hint}"
+                if text:
+                    return f"{text}\n\n{receipt_line}"
+                return receipt_line
+            return text
         
         if action == "find_jobs":
             jobs = data.get("jobs", [])
             count = data.get("total", 0)
-            return f"Found {count} jobs for '{data.get('query')}'. Top result: {jobs[0]['title'] if jobs else 'None'}"
+            return _with_receipt(f"Found {count} jobs for '{data.get('query')}'. Top result: {jobs[0]['title'] if jobs else 'None'}")
             
         elif action == "check_payments":
-            return f"Current balance: {data.get('currency')} {data.get('balance')}"
+            return _with_receipt(f"Current balance: {data.get('currency')} {data.get('balance')}")
             
         elif action == "schedule_meeting":
             slots = data.get("slots", [])
-            return f"Found {len(slots)} available slots. First available: {slots[0]['start'] if slots else 'None'}"
+            return _with_receipt(f"Found {len(slots)} available slots. First available: {slots[0]['start'] if slots else 'None'}")
             
         elif action == "search_info":
-            return data.get("summary", "Here is what I found.")
+            return _with_receipt(data.get("summary", "Here is what I found."))
 
         elif action == "check_quotas":
             summary = "Your current usage limits:\n"
             if not isinstance(data, dict):
-                return f"Error: Quota data not correctly formatted. Received: {type(data)}"
+                return _with_receipt(f"Error: Quota data not correctly formatted. Received: {type(data)}")
                 
             for key, q in data.items():
                 if isinstance(q, dict):
@@ -102,15 +117,42 @@ class DataSynthesizer:
                     summary += f"- {name}: {used}/{limit} {unit} (Status: {status})\n"
                 else:
                     summary += f"- {key}: {str(q)}\n"
-            return summary
+            return _with_receipt(summary)
+
+        elif action in ("send_email",):
+            to_addr = params.get("to") or "recipient"
+            subject = params.get("subject")
+            if subject:
+                return _with_receipt(f"Email sent to {to_addr} (subject: {subject}).")
+            return _with_receipt(f"Email sent to {to_addr}.")
+
+        elif action in ("send_whatsapp", "send_message"):
+            phone = params.get("phone_number") or "recipient"
+            status = data.get("status") or data.get("message") or "sent"
+            return _with_receipt(f"WhatsApp {status} to {phone}.")
+
+        elif action == "set_reminder":
+            return _with_receipt(data.get("message", "Reminder set."))
+
+        elif action == "create_payment_link":
+            link = data.get("payment_link")
+            if link:
+                return _with_receipt(f"Payment link ready: {link}")
+            return _with_receipt(data.get("message", "Payment link created."))
+
+        elif action == "withdraw":
+            return _with_receipt(data.get("message", "Withdrawal initiated."))
+
+        elif action == "book_travel_item":
+            return _with_receipt(data.get("message", "Booking initiated."))
          
         # NEW: Handle GIF with message AND full URL
         elif action == "search_gif":
             url = data.get("url", "")
             message = data.get("message", "Here's a GIF!")
-            return f"{message}\n![GIF]({url})"
+            return _with_receipt(f"{message}\n![GIF]({url})")
             
-        return str(data)
+        return _with_receipt(str(data))
 
     async def _enhance_with_llm(self, intent: Dict, result: Dict, basic_response: str) -> str:
         """Use LLM to make the response conversational"""
@@ -120,6 +162,9 @@ Convert the provided structured data into a natural, friendly response.
 Keep it concise but informative.
 Do not make up facts not present in the data.
 If the data indicates an error, explain it clearly."""
+            style_prompt = format_style_prompt(intent.get("preferences") if isinstance(intent, dict) else None)
+            if style_prompt:
+                system_prompt = f"{system_prompt}\n{style_prompt}"
 
             user_prompt = f"""
 User Intent: {json.dumps(intent)}
@@ -148,6 +193,9 @@ Convert the provided structured data into a natural, friendly response.
 Keep it concise but informative.
 Do not make up facts not present in the data.
 If the data indicates an error, explain it clearly."""
+            style_prompt = format_style_prompt(intent.get("preferences") if isinstance(intent, dict) else None)
+            if style_prompt:
+                system_prompt = f"{system_prompt}\n{style_prompt}"
 
             user_prompt = f"""
 User Intent: {json.dumps(intent)}

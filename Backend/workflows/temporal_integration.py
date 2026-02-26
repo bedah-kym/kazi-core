@@ -83,6 +83,8 @@ class DynamicUserWorkflow:
             },
             'user_id': user_id,
         }
+        if isinstance(trigger_data, dict) and trigger_data.get("room_id"):
+            context["room_id"] = trigger_data.get("room_id")
 
         if not execution_id:
             execution_id = await workflow.execute_activity(

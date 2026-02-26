@@ -13,6 +13,58 @@ from django.core.files.storage import default_storage
 from django.core.files.base import ContentFile
 from chatbot.models import Chatroom, Message, RoomContext, RoomNote, DocumentUpload
 from chatbot.context_manager import ContextManager
+from orchestration.models import ActionReceipt
+from orchestration.action_receipts import format_receipt_summary
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_action_receipts(request, room_id):
+    """
+    GET /api/rooms/<room_id>/actions/
+
+    Return recent action receipts for this room.
+    """
+    try:
+        chatroom = get_object_or_404(Chatroom, id=room_id)
+
+        # Verify user has access
+        if not Chatroom.objects.filter(id=room_id, participants__User=request.user).exists():
+            return Response(
+                {"error": "You don't have access to this room"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        try:
+            limit = int(request.GET.get('limit', 5))
+        except (TypeError, ValueError):
+            limit = 5
+        limit = max(1, min(limit, 10))
+
+        receipts = ActionReceipt.objects.filter(
+            user=request.user,
+            room_id=room_id,
+        ).order_by('-created_at')[:limit]
+
+        payload = []
+        for receipt in receipts:
+            payload.append({
+                "id": receipt.id,
+                "action": receipt.action,
+                "service": receipt.service,
+                "summary": format_receipt_summary(receipt),
+                "status": receipt.status,
+                "reversible": receipt.reversible,
+                "created_at": receipt.created_at.isoformat(),
+            })
+
+        return Response({"receipts": payload}, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        return Response(
+            {"error": str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 
 @api_view(['POST'])

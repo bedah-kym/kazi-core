@@ -5,8 +5,11 @@ from typing import Any, Dict, List, Optional, Tuple
 import copy
 
 from workflows.capabilities import SYSTEM_CAPABILITIES
+from orchestration.user_preferences import format_date_hint, format_time_hint
 
 _AUTO_EMAIL_SUMMARY_TOKEN = "__AUTO_SUMMARY__"
+_DELIVERY_ACTIONS = {"send_email", "send_message"}
+_OPTION_PARAM_HINTS = ("item_id", "option", "selection")
 
 
 class ManagerVerifier:
@@ -19,7 +22,12 @@ class ManagerVerifier:
         self.capabilities = capabilities or SYSTEM_CAPABILITIES
         self._cap_index = self._build_cap_index(self.capabilities)
 
-    def review_steps(self, steps: List[Dict[str, Any]], message: str) -> Dict[str, Any]:
+    def review_steps(
+        self,
+        steps: List[Dict[str, Any]],
+        message: str,
+        preferences: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         if not isinstance(steps, list) or not steps:
             return {
                 "verdict": "ask_user",
@@ -32,6 +40,11 @@ class ManagerVerifier:
         steps = self._reorder_booking_steps(steps)
         steps = self._reorder_delivery_steps(steps)
         steps = self._ensure_step_ids(steps)
+        dependency_check = self._apply_dependency_defaults(steps)
+        if dependency_check.get("verdict") == "ask_user":
+            return dependency_check
+        steps = dependency_check.get("steps") or steps
+        steps = self._reorder_by_dependencies(steps)
 
         missing: List[Tuple[str, str]] = []
         for step in steps:
@@ -51,6 +64,8 @@ class ManagerVerifier:
             if not isinstance(params, dict):
                 params = {}
             params = self._normalize_param_aliases(params, action)
+            if action == "send_email":
+                params = self._ensure_email_subject(params)
             params = self._coerce_param_types(params, action_def.get("params") or {})
             step["params"] = params
 
@@ -63,7 +78,7 @@ class ManagerVerifier:
             return {
                 "verdict": "ask_user",
                 "reason": "missing_param",
-                "assistant_message": self._missing_param_message(first_missing),
+                "assistant_message": self._missing_param_message(first_missing, preferences=preferences),
                 "steps": steps,
                 "missing_fields": missing,
             }
@@ -182,6 +197,136 @@ class ManagerVerifier:
             return steps
         return ordered + delayed
 
+    def _reorder_by_dependencies(self, steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if len(steps) < 2:
+            return steps
+        moved = True
+        max_passes = len(steps) * len(steps)
+        passes = 0
+        while moved and passes < max_passes:
+            passes += 1
+            moved = False
+            index_map = {step.get("id"): idx for idx, step in enumerate(steps)}
+            for idx, step in enumerate(list(steps)):
+                deps = step.get("depends_on") or []
+                if not deps:
+                    continue
+                max_dep_index = max(index_map.get(dep, -1) for dep in deps)
+                if max_dep_index >= idx:
+                    steps.pop(idx)
+                    insert_at = min(max_dep_index + 1, len(steps))
+                    steps.insert(insert_at, step)
+                    moved = True
+                    break
+        return steps
+
+    def _apply_dependency_defaults(self, steps: List[Dict[str, Any]]) -> Dict[str, Any]:
+        index_map = {step.get("id"): idx for idx, step in enumerate(steps)}
+        for idx, step in enumerate(steps):
+            depends_on = step.get("depends_on")
+            if isinstance(depends_on, str):
+                depends_on = [depends_on]
+            if depends_on is None:
+                depends_on = []
+            if not isinstance(depends_on, list):
+                return {
+                    "verdict": "ask_user",
+                    "assistant_message": "I couldn't understand the step dependencies. Please rephrase the request.",
+                    "steps": steps,
+                }
+            cleaned_deps = [d.strip() for d in depends_on if isinstance(d, str) and d.strip()]
+            unknown = [d for d in cleaned_deps if d not in index_map]
+            if unknown:
+                return {
+                    "verdict": "ask_user",
+                    "assistant_message": "One of the steps depended on a missing step. Please rephrase.",
+                    "steps": steps,
+                }
+            if step.get("id") in cleaned_deps:
+                return {
+                    "verdict": "ask_user",
+                    "assistant_message": "A step cannot depend on itself. Please rephrase the request.",
+                    "steps": steps,
+                }
+            if cleaned_deps:
+                step["depends_on"] = cleaned_deps
+            action = step.get("action")
+            params = step.get("params") or {}
+            if not isinstance(params, dict):
+                params = {}
+            params = self._normalize_param_aliases(params, action)
+            if action in ("book_travel_item", "add_to_itinerary") and self._needs_option_context(params):
+                if not cleaned_deps:
+                    search_id = self._find_last_search_step_id(steps, idx)
+                    if not search_id:
+                        return {
+                            "verdict": "ask_user",
+                            "assistant_message": (
+                                "I need to run a travel search first so you can pick an option. "
+                                "What should I search for?"
+                            ),
+                            "steps": steps,
+                        }
+                    step["depends_on"] = [search_id]
+            if self._needs_results_for_delivery(action, params) and not cleaned_deps:
+                result_id = self._find_last_result_step_id(steps, idx)
+                if not result_id:
+                    return {
+                        "verdict": "ask_user",
+                        "assistant_message": (
+                            "I can send the results, but I need to gather them first. "
+                            "What should I search for?"
+                        ),
+                        "steps": steps,
+                    }
+                step["depends_on"] = [result_id]
+            step["params"] = params
+
+        for step in steps:
+            if "depends_on" in step and not step["depends_on"]:
+                step.pop("depends_on", None)
+
+        return {"verdict": "approve", "steps": steps}
+
+    def _needs_results_for_delivery(self, action: Optional[str], params: Dict[str, Any]) -> bool:
+        if action == "send_email":
+            text = params.get("text") or ""
+            if not text or text == _AUTO_EMAIL_SUMMARY_TOKEN:
+                return True
+            lowered = str(text).lower()
+            return any(token in lowered for token in ("result", "option", "summary", "detail"))
+        if action == "send_message":
+            message = params.get("message") or ""
+            if not message:
+                return True
+            lowered = str(message).lower()
+            return any(token in lowered for token in ("result", "option", "summary", "detail"))
+        return False
+
+    def _needs_option_context(self, params: Dict[str, Any]) -> bool:
+        for key, value in params.items():
+            if key in _OPTION_PARAM_HINTS or key.endswith("_id"):
+                if isinstance(value, int):
+                    return True
+                if isinstance(value, str) and value.strip().isdigit():
+                    return True
+        return False
+
+    def _find_last_search_step_id(self, steps: List[Dict[str, Any]], idx: int) -> Optional[str]:
+        for prev in reversed(steps[:idx]):
+            action = str(prev.get("action") or "")
+            if action.startswith("search_"):
+                return prev.get("id")
+        return None
+
+    def _find_last_result_step_id(self, steps: List[Dict[str, Any]], idx: int) -> Optional[str]:
+        for prev in reversed(steps[:idx]):
+            action = prev.get("action")
+            if action in _DELIVERY_ACTIONS:
+                continue
+            return prev.get("id")
+        return None
+
     def _coerce_param_types(self, params: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, Any]:
         normalized = dict(params)
         for key, spec in schema.items():
@@ -222,6 +367,11 @@ class ManagerVerifier:
                     normalized[target] = value
         return normalized
 
+    def _ensure_email_subject(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        if params.get("text") == _AUTO_EMAIL_SUMMARY_TOKEN and not params.get("subject"):
+            params["subject"] = "Your results"
+        return params
+
     def _build_cap_index(self, capabilities: Dict[str, Any]) -> Dict[str, Dict[str, Dict[str, Any]]]:
         index: Dict[str, Dict[str, Dict[str, Any]]] = {}
         for service in capabilities.get("integrations", []):
@@ -236,11 +386,15 @@ class ManagerVerifier:
                 index[service_name][action_name] = action
         return index
 
-    def _missing_param_message(self, param: str) -> str:
+    def _missing_param_message(
+        self,
+        param: str,
+        preferences: Optional[Dict[str, Any]] = None,
+    ) -> str:
         label = param.replace("_", " ")
         suffix = ""
         if "date" in param:
-            suffix = " (YYYY-MM-DD)"
+            suffix = f" ({format_date_hint(preferences)})"
         elif "time" in param:
-            suffix = " (e.g., 15:00)"
+            suffix = f" (e.g., {format_time_hint(preferences)})"
         return f"I still need {label}{suffix} to proceed."

@@ -6,8 +6,10 @@ import os
 import json
 import logging
 import httpx
+import hashlib
 from typing import Dict, List, Optional, Any, Union
 from django.conf import settings
+from django.core.cache import cache
 
 logger = logging.getLogger(__name__)
 
@@ -43,18 +45,34 @@ class LLMClient:
         max_tokens = min(max_tokens, getattr(settings, 'LLM_MAX_TOKENS', 700))
         user_prompt = self._truncate(user_prompt)
         system_prompt = self._truncate(system_prompt, is_system=True)
+        cache_key = None
+        if self._should_cache(json_mode=json_mode, temperature=temperature):
+            cache_key = self._cache_key(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                json_mode=json_mode,
+            )
+            cached = cache.get(cache_key)
+            if cached:
+                return cached
 
         # Try Claude first
         if self.anthropic_key:
             try:
-                return await self._call_claude(system_prompt, user_prompt, temperature, max_tokens)
+                response = await self._call_claude(system_prompt, user_prompt, temperature, max_tokens)
+                self._store_cache(cache_key, response)
+                return response
             except Exception as e:
                 logger.warning(f"Claude API failed: {e}. Falling back to Hugging Face.")
         
         # Fallback to Hugging Face
         if self.hf_key:
             try:
-                return await self._call_huggingface(system_prompt, user_prompt, temperature, max_tokens, json_mode)
+                response = await self._call_huggingface(system_prompt, user_prompt, temperature, max_tokens, json_mode)
+                self._store_cache(cache_key, response)
+                return response
             except Exception as e:
                 logger.error(f"Hugging Face API failed: {e}")
                 raise Exception(f"All LLM providers failed. Last error: {e}")
@@ -318,6 +336,43 @@ class LLMClient:
             
         logger.error(f"Failed to extract JSON from: {text[:100]}...")
         return {}
+
+    def _should_cache(self, json_mode: bool, temperature: float) -> bool:
+        if not getattr(settings, "LLM_CACHE_ENABLED", True):
+            return False
+        min_temp = float(getattr(settings, "LLM_CACHE_MIN_TEMP", 0.3))
+        return json_mode or temperature <= min_temp
+
+    def _cache_key(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float,
+        max_tokens: int,
+        json_mode: bool,
+    ) -> str:
+        payload = json.dumps({
+            "system": system_prompt,
+            "user": user_prompt,
+            "temp": temperature,
+            "max_tokens": max_tokens,
+            "json_mode": json_mode,
+            "model": self.claude_model or self.hf_model,
+        }, sort_keys=True)
+        digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        return f"llm_cache:{digest}"
+
+    def _store_cache(self, cache_key: Optional[str], response: str) -> None:
+        if not cache_key:
+            return
+        ttl = int(getattr(settings, "LLM_CACHE_TTL_SECONDS", 600))
+        if ttl <= 0:
+            return
+        try:
+            cache.set(cache_key, response, ttl)
+        except Exception:
+            return
 
     def _truncate(self, prompt: str, is_system: bool = False) -> str:
         """

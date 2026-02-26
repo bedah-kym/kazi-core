@@ -232,6 +232,121 @@
     color: hsl(var(--foreground));
 }
 
+/* Assistant Controls */
+.assistant-controls-card,
+.assistant-receipts-card {
+    background: hsl(var(--card));
+    border: 1px solid hsl(var(--border));
+    border-radius: var(--radius);
+    padding: 1rem;
+    margin-bottom: 1rem;
+}
+
+.assistant-controls-help,
+.receipts-hint {
+    font-size: 0.8rem;
+    color: hsl(var(--muted-foreground));
+    margin-bottom: 0.75rem;
+}
+
+.mode-toggle-group {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.mode-pill {
+    border: 1px solid hsl(var(--border));
+    color: hsl(var(--foreground));
+    background: hsl(var(--background));
+    border-radius: 999px;
+    padding: 0.25rem 0.75rem;
+}
+
+.mode-pill.active {
+    background: hsl(var(--primary));
+    color: hsl(var(--primary-foreground));
+    border-color: hsl(var(--primary));
+}
+
+.assistant-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.receipt-item {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.75rem;
+    border: 1px solid hsl(var(--border));
+    border-radius: calc(var(--radius) - 2px);
+    margin-bottom: 0.5rem;
+    background: hsl(var(--background));
+}
+
+.receipt-item.receipt-success {
+    border-color: hsl(140, 60%, 70%);
+}
+
+.receipt-item.receipt-pending {
+    border-color: hsl(30, 90%, 70%);
+}
+
+.dark-mode .receipt-item.receipt-success {
+    border-color: hsl(140, 50%, 40%);
+}
+
+.dark-mode .receipt-item.receipt-pending {
+    border-color: hsl(30, 60%, 45%);
+}
+
+.dark-mode .receipt-item.receipt-error {
+    border-color: hsl(0, 50%, 45%);
+}
+
+.receipt-item.receipt-error {
+    border-color: hsl(var(--destructive));
+}
+
+.receipt-item.receipt-cancelled {
+    border-color: hsl(var(--muted-foreground));
+    opacity: 0.75;
+}
+
+.receipt-summary {
+    font-size: 0.85rem;
+    color: hsl(var(--foreground));
+    margin-bottom: 0.25rem;
+}
+
+.receipt-meta {
+    font-size: 0.75rem;
+    color: hsl(var(--muted-foreground));
+}
+
+.receipt-pill {
+    font-size: 0.7rem;
+    padding: 0.15rem 0.45rem;
+    border-radius: 999px;
+    background: hsl(var(--secondary));
+    color: hsl(var(--secondary-foreground));
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.receipts-empty {
+    font-size: 0.85rem;
+    color: hsl(var(--muted-foreground));
+    background: hsl(var(--background));
+    border: 1px dashed hsl(var(--border));
+    border-radius: calc(var(--radius) - 2px);
+    padding: 0.75rem;
+}
+
 /* Notes Section */
 .notes-section {
     margin-bottom: 1.5rem;

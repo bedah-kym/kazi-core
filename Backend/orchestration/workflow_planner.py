@@ -16,6 +16,14 @@ from django.utils import timezone
 from django.conf import settings
 
 from orchestration.llm_client import get_llm_client
+from orchestration.user_preferences import (
+    get_user_preferences,
+    dayfirst_default,
+    format_date_hint,
+    format_time_hint,
+    format_style_prompt,
+)
+from orchestration.action_receipts import requires_confirmation
 from workflows.capabilities import SYSTEM_CAPABILITIES, validate_workflow_definition
 from workflows.temporal_integration import start_workflow_execution
 
@@ -217,6 +225,8 @@ _MONTHS = {
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _PHONE_RE = re.compile(r"\+?\d{7,15}")
 _AUTO_EMAIL_SUMMARY_TOKEN = "__AUTO_SUMMARY__"
+_DELIVERY_ACTIONS = {"send_email", "send_message"}
+_RESULT_TEXT_RE = re.compile(r"\b(results?|options?|summary|details)\b", re.IGNORECASE)
 
 _AUTOMATION_HINTS = (
     "workflow",
@@ -257,6 +267,8 @@ def _has_high_risk_step(steps: List[Dict[str, Any]]) -> bool:
         service = str(step.get("service") or "").lower()
         action = str(step.get("action") or "").lower()
         if (service, action) in _HIGH_RISK_ACTIONS:
+            return True
+        if requires_confirmation(action):
             return True
     return False
 
@@ -330,7 +342,7 @@ def _parse_numeric_date(day_str: str, month_str: str, year_str: str, dayfirst_de
     return _safe_date(year, day, month)
 
 
-def _extract_dates_from_text(message: str) -> List[str]:
+def _extract_dates_from_text(message: str, dayfirst_default: bool = True) -> List[str]:
     if not message:
         return []
 
@@ -352,7 +364,7 @@ def _extract_dates_from_text(message: str) -> List[str]:
             found.append((match.start(), iso))
 
     for match in re.finditer(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})\b", message):
-        iso = _parse_numeric_date(match.group(1), match.group(2), match.group(3), dayfirst_default=True)
+        iso = _parse_numeric_date(match.group(1), match.group(2), match.group(3), dayfirst_default=dayfirst_default)
         if iso:
             found.append((match.start(), iso))
 
@@ -399,14 +411,14 @@ def _extract_dates_from_text(message: str) -> List[str]:
     return ordered
 
 
-def _normalize_date_value(value: Optional[str]) -> Optional[str]:
+def _normalize_date_value(value: Optional[str], dayfirst_default: bool = True) -> Optional[str]:
     if not value:
         return None
     if isinstance(value, str):
         trimmed = value.strip()
         if re.match(r"\b20\d{2}-\d{2}-\d{2}\b", trimmed):
             return trimmed
-        extracted = _extract_dates_from_text(trimmed)
+        extracted = _extract_dates_from_text(trimmed, dayfirst_default=dayfirst_default)
         if extracted:
             return extracted[0]
         return trimmed
@@ -557,6 +569,23 @@ def _extract_currency_conversion(message: str) -> Dict[str, Optional[str]]:
 def _extract_amount_with_currency(message: str) -> Dict[str, Optional[str]]:
     if not message:
         return {"amount": None, "currency": None}
+    symbol_map = {
+        "$": "USD",
+        "€": "EUR",
+        "£": "GBP",
+    }
+    match = re.search(r"([$€£])\s*([0-9][0-9,\.]*)\b", message)
+    if match:
+        return {
+            "amount": match.group(2).replace(",", ""),
+            "currency": symbol_map.get(match.group(1)),
+        }
+    match = re.search(r"\b([0-9][0-9,\.]*)\s*([$€£])\b", message)
+    if match:
+        return {
+            "amount": match.group(1).replace(",", ""),
+            "currency": symbol_map.get(match.group(2)),
+        }
     match = re.search(r"\b([A-Za-z]{3})\s*([0-9][0-9,\.]*)\b", message, flags=re.IGNORECASE)
     if match:
         return {"amount": match.group(2).replace(",", ""), "currency": match.group(1).upper()}
@@ -695,22 +724,32 @@ def _extract_time_string(message: str) -> Optional[str]:
     return None
 
 
-def _missing_param_message(param: str) -> str:
+def _missing_param_message(
+    param: str,
+    date_order: Optional[str] = None,
+    time_format: Optional[str] = None,
+) -> str:
     label = param.replace("_", " ")
     suffix = ""
     if "date" in param:
-        suffix = " (YYYY-MM-DD)"
+        prefs = {"date_order": date_order} if date_order else None
+        suffix = f" ({format_date_hint(prefs)})"
     elif "time" in param:
-        suffix = " (e.g., 15:00)"
+        prefs = {"time_format": time_format} if time_format else None
+        suffix = f" (e.g., {format_time_hint(prefs)})"
     return f"I still need {label}{suffix} to proceed."
 
 
-def _friendly_validation_error(error: str) -> str:
+def _friendly_validation_error(
+    error: str,
+    date_order: Optional[str] = None,
+    time_format: Optional[str] = None,
+) -> str:
     if not error:
         return "I need a bit more detail to proceed."
     match = re.search(r"Missing param '([^']+)'", error)
     if match:
-        return _missing_param_message(match.group(1))
+        return _missing_param_message(match.group(1), date_order=date_order, time_format=time_format)
     if "Unknown service" in error:
         return "I couldn't map one of the services. Please rephrase with an explicit action like 'search flights' or 'send email'."
     if "Invalid action" in error:
@@ -743,7 +782,99 @@ def _should_email_results(message: str) -> bool:
     lowered = message.lower()
     if "email" not in lowered and "mail" not in lowered and "send" not in lowered:
         return False
-    return bool(re.search(r"\b(results?|options?|summary|details)\b", lowered))
+    return bool(_RESULT_TEXT_RE.search(lowered))
+
+
+def _needs_results_for_delivery(action: Optional[str], params: Dict[str, Any]) -> bool:
+    if action == "send_email":
+        text = params.get("text") or ""
+        if not text or text == _AUTO_EMAIL_SUMMARY_TOKEN:
+            return True
+        return bool(_RESULT_TEXT_RE.search(str(text)))
+    if action == "send_message":
+        message = params.get("message") or ""
+        if not message:
+            return True
+        return bool(_RESULT_TEXT_RE.search(str(message)))
+    return False
+
+
+def _is_delivery_action(action: Optional[str]) -> bool:
+    return action in _DELIVERY_ACTIONS
+
+
+def _normalize_depends_on(value: Any) -> List[str]:
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if isinstance(value, list):
+        cleaned = []
+        for item in value:
+            if isinstance(item, str) and item.strip():
+                cleaned.append(item.strip())
+        return cleaned
+    return []
+
+
+def _fallback_execution_summary(execution_result: Dict[str, Any]) -> str:
+    if not isinstance(execution_result, dict) or not execution_result:
+        return "Workflow completed."
+    lines = ["Workflow completed. Summary:"]
+    for step_id, payload in execution_result.items():
+        if step_id in ("trigger", "workflow", "user_id", "room_id"):
+            continue
+        if not isinstance(payload, dict):
+            lines.append(f"- {step_id}: completed")
+            continue
+        status = payload.get("status") or "completed"
+        message = payload.get("message") or payload.get("error") or ""
+        if message:
+            lines.append(f"- {step_id}: {status} ({message})")
+        else:
+            lines.append(f"- {step_id}: {status}")
+        if len(lines) >= 6:
+            break
+    return "\n".join(lines)
+
+
+def _find_last_result_step(steps: List[Dict[str, Any]], idx: int) -> Optional[Dict[str, Any]]:
+    for prev in reversed(steps[:idx]):
+        action = prev.get("action")
+        if _is_delivery_action(action):
+            continue
+        return prev
+    return None
+
+
+def _find_last_search_step(steps: List[Dict[str, Any]], idx: int) -> Optional[Dict[str, Any]]:
+    for prev in reversed(steps[:idx]):
+        action = str(prev.get("action") or "")
+        if action.startswith("search_"):
+            return prev
+    return None
+
+
+def _apply_step_dependencies(steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    for idx, step in enumerate(steps):
+        depends_on = _normalize_depends_on(step.get("depends_on"))
+        if depends_on:
+            step["depends_on"] = depends_on
+        action = step.get("action")
+        params = step.get("params") or {}
+        if action in ("book_travel_item", "add_to_itinerary"):
+            item_id = params.get("item_id")
+            needs_option = bool(item_id and str(item_id).strip().isdigit())
+            if needs_option and not depends_on:
+                search_step = _find_last_search_step(steps, idx)
+                if search_step and search_step.get("id"):
+                    step["depends_on"] = [search_step["id"]]
+        if _needs_results_for_delivery(action, params) and not depends_on:
+            result_step = _find_last_result_step(steps, idx)
+            if result_step and result_step.get("id"):
+                step["depends_on"] = [result_step["id"]]
+    for step in steps:
+        if "depends_on" in step and not step["depends_on"]:
+            step.pop("depends_on", None)
+    return steps
 
 
 def _quick_email_decision(message: str) -> Optional[Dict[str, Any]]:
@@ -889,10 +1020,16 @@ async def _steps_allowed_for_user(steps: List[Dict[str, Any]], user_id: Optional
     return None
 
 
-async def _review_steps_with_manager(steps: List[Dict[str, Any]], message: str, assistant_message: str, user_id: Optional[int]) -> Dict[str, Any]:
+async def _review_steps_with_manager(
+    steps: List[Dict[str, Any]],
+    message: str,
+    assistant_message: str,
+    user_id: Optional[int],
+    preferences: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     try:
         from orchestration.manager_verifier import ManagerVerifier
-        review = ManagerVerifier().review_steps(steps, message)
+        review = ManagerVerifier().review_steps(steps, message, preferences=preferences)
     except Exception as exc:
         logger.warning("Manager verifier failed: %s", exc)
         return {
@@ -906,7 +1043,7 @@ async def _review_steps_with_manager(steps: List[Dict[str, Any]], message: str, 
             llm_review = await _llm_manager_review(message, steps)
             if llm_review.get("verdict") == "approve" and llm_review.get("revised_steps"):
                 revised_steps = _normalize_steps(llm_review["revised_steps"], message)
-                review = ManagerVerifier().review_steps(revised_steps, message)
+                review = ManagerVerifier().review_steps(revised_steps, message, preferences=preferences)
                 if review.get("verdict") == "approve":
                     return {
                         "verdict": "approve",
@@ -1008,8 +1145,13 @@ def _infer_item_type_from_steps(previous_steps: List[Dict[str, Any]]) -> Optiona
     return None
 
 
-def _normalize_steps(steps: List[Dict[str, Any]], message: str) -> List[Dict[str, Any]]:
-    extracted_dates = _extract_dates_from_text(message)
+def _normalize_steps(
+    steps: List[Dict[str, Any]],
+    message: str,
+    preferences: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    dayfirst = dayfirst_default(preferences)
+    extracted_dates = _extract_dates_from_text(message, dayfirst_default=dayfirst)
     origin_dest = _extract_origin_destination(message)
     location = _extract_location(message)
     passengers = _extract_passengers(message)
@@ -1024,6 +1166,7 @@ def _normalize_steps(steps: List[Dict[str, Any]], message: str) -> List[Dict[str
     travel_time = _extract_time_string(message)
     currency_conversion = _extract_currency_conversion(message)
     amount_currency = _extract_amount_with_currency(message)
+    default_currency = (preferences or {}).get("currency")
     message_text = _extract_message_text(message)
     subject_text = _extract_subject_text(message)
     if message_text:
@@ -1057,11 +1200,11 @@ def _normalize_steps(steps: List[Dict[str, Any]], message: str) -> List[Dict[str
                 params.setdefault("destination", origin_dest["destination"])
         if action == "search_flights":
             if params.get("departure_date"):
-                normalized_date = _normalize_date_value(str(params.get("departure_date")))
+                normalized_date = _normalize_date_value(str(params.get("departure_date")), dayfirst_default=dayfirst)
                 if normalized_date:
                     params["departure_date"] = normalized_date
             if params.get("return_date"):
-                normalized_date = _normalize_date_value(str(params.get("return_date")))
+                normalized_date = _normalize_date_value(str(params.get("return_date")), dayfirst_default=dayfirst)
                 if normalized_date:
                     params["return_date"] = normalized_date
             if extracted_dates:
@@ -1086,11 +1229,11 @@ def _normalize_steps(steps: List[Dict[str, Any]], message: str) -> List[Dict[str
             if not params.get("location") and location:
                 params.setdefault("location", location)
             if params.get("check_in_date"):
-                normalized_date = _normalize_date_value(str(params.get("check_in_date")))
+                normalized_date = _normalize_date_value(str(params.get("check_in_date")), dayfirst_default=dayfirst)
                 if normalized_date:
                     params["check_in_date"] = normalized_date
             if params.get("check_out_date"):
-                normalized_date = _normalize_date_value(str(params.get("check_out_date")))
+                normalized_date = _normalize_date_value(str(params.get("check_out_date")), dayfirst_default=dayfirst)
                 if normalized_date:
                     params["check_out_date"] = normalized_date
             if extracted_dates and not params.get("check_in_date"):
@@ -1110,20 +1253,20 @@ def _normalize_steps(steps: List[Dict[str, Any]], message: str) -> List[Dict[str
             if budget_ksh and not params.get("budget_ksh"):
                 params.setdefault("budget_ksh", budget_ksh)
         if action in ("search_buses", "search_transfers") and params.get("travel_date"):
-            normalized_date = _normalize_date_value(str(params.get("travel_date")))
+            normalized_date = _normalize_date_value(str(params.get("travel_date")), dayfirst_default=dayfirst)
             if normalized_date:
                 params["travel_date"] = normalized_date
         if action == "search_events" and params.get("event_date"):
-            normalized_date = _normalize_date_value(str(params.get("event_date")))
+            normalized_date = _normalize_date_value(str(params.get("event_date")), dayfirst_default=dayfirst)
             if normalized_date:
                 params["event_date"] = normalized_date
         if action == "create_itinerary":
             if params.get("start_date"):
-                normalized_date = _normalize_date_value(str(params.get("start_date")))
+                normalized_date = _normalize_date_value(str(params.get("start_date")), dayfirst_default=dayfirst)
                 if normalized_date:
                     params["start_date"] = normalized_date
             if params.get("end_date"):
-                normalized_date = _normalize_date_value(str(params.get("end_date")))
+                normalized_date = _normalize_date_value(str(params.get("end_date")), dayfirst_default=dayfirst)
                 if normalized_date:
                     params["end_date"] = normalized_date
 
@@ -1139,9 +1282,11 @@ def _normalize_steps(steps: List[Dict[str, Any]], message: str) -> List[Dict[str
                 params.setdefault("text", message_text)
             if "text" not in params and _should_email_results(message):
                 params["text"] = _AUTO_EMAIL_SUMMARY_TOKEN
+            if params.get("text") == _AUTO_EMAIL_SUMMARY_TOKEN and "subject" not in params:
+                params["subject"] = "Your results"
             if "subject" not in params and subject_text:
                 params.setdefault("subject", subject_text)
-            if "subject" not in params:
+            if "subject" not in params and params.get("text") != _AUTO_EMAIL_SUMMARY_TOKEN:
                 default_subject = _default_subject_from_text(params.get("text"))
                 if default_subject:
                     params.setdefault("subject", default_subject)
@@ -1176,8 +1321,11 @@ def _normalize_steps(steps: List[Dict[str, Any]], message: str) -> List[Dict[str
         if action == "create_payment_link":
             if not params.get("amount") and amount_currency.get("amount"):
                 params.setdefault("amount", amount_currency["amount"])
-            if not params.get("currency") and amount_currency.get("currency"):
-                params.setdefault("currency", amount_currency["currency"])
+            if not params.get("currency"):
+                if amount_currency.get("currency"):
+                    params.setdefault("currency", amount_currency["currency"])
+                elif default_currency:
+                    params.setdefault("currency", default_currency)
             if not params.get("description"):
                 params.setdefault("description", "Payment request")
 
@@ -1189,7 +1337,7 @@ def _normalize_steps(steps: List[Dict[str, Any]], message: str) -> List[Dict[str
 
         normalized_step["params"] = params
         normalized_steps.append(normalized_step)
-    return normalized_steps
+    return _apply_step_dependencies(normalized_steps)
 
 
 def _build_definition(steps: List[Dict[str, Any]], message: str) -> Dict[str, Any]:
@@ -1202,7 +1350,11 @@ def _build_definition(steps: List[Dict[str, Any]], message: str) -> Dict[str, An
     }
 
 
-async def _fallback_steps_from_intent(message: str, history_text: str) -> List[Dict[str, Any]]:
+async def _fallback_steps_from_intent(
+    message: str,
+    history_text: str,
+    preferences: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
     parts = _split_step_phrases(message)
     if len(parts) < MIN_ADHOC_STEPS:
         return []
@@ -1215,7 +1367,10 @@ async def _fallback_steps_from_intent(message: str, history_text: str) -> List[D
     for idx, part in enumerate(parts):
         if not part:
             continue
-        intent = await parse_intent(part, {"history": history_text} if history_text else None)
+        context = {"history": history_text} if history_text else {}
+        if preferences:
+            context["preferences"] = preferences
+        intent = await parse_intent(part, context or None)
         if not intent:
             continue
         action = intent.get("action")
@@ -1237,7 +1392,12 @@ async def _fallback_steps_from_intent(message: str, history_text: str) -> List[D
     return steps
 
 
-async def plan_user_request(message: str, history_text: str = "", user_id: Optional[int] = None) -> Dict[str, Any]:
+async def plan_user_request(
+    message: str,
+    history_text: str = "",
+    user_id: Optional[int] = None,
+    preferences: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """
     Decide whether to run a multi-step ad-hoc workflow, ask for clarification,
     or fall back to single-action routing.
@@ -1252,6 +1412,15 @@ async def plan_user_request(message: str, history_text: str = "", user_id: Optio
     quick_email = _quick_email_decision(message)
     if quick_email:
         return quick_email
+
+    if preferences is None and user_id:
+        try:
+            preferences = await sync_to_async(get_user_preferences)(user_id)
+        except Exception:
+            preferences = {}
+    preferences = preferences or {}
+    date_order = preferences.get("date_order")
+    time_format = preferences.get("time_format")
 
     llm = get_llm_client()
     capabilities_json = json.dumps(SYSTEM_CAPABILITIES, indent=2)
@@ -1268,6 +1437,9 @@ async def plan_user_request(message: str, history_text: str = "", user_id: Optio
         "Only use the services/actions listed below.",
         "Include missing_slots and clarifying_question if any required detail is missing.",
         "Provide a confidence score between 0 and 1.",
+        "Treat polite or indirect phrasing as intent when possible.",
+        "If locale preferences are provided in user context, honor date_order and time_format.",
+        "If a step depends on earlier results, include depends_on with step ids that appear before it.",
         "",
         "Available Integrations:",
         capabilities_json,
@@ -1280,19 +1452,24 @@ async def plan_user_request(message: str, history_text: str = "", user_id: Optio
         '  "missing_slots": ["param_name"],',
         '  "clarifying_question": "...",',
         '  "steps": [',
-        '    {"id": "step_1", "service": "...", "action": "...", "params": {...}}',
+        '    {"id": "step_1", "service": "...", "action": "...", "params": {...}, "depends_on": ["step_0"]}',
         '  ] or null',
         "}",
     ])
 
-    user_prompt = "\n".join([
+    user_prompt_parts = [
         "Conversation context (most recent last):",
         history_text or "",
         "",
         f"User message: {message}",
-        "",
-        "Return JSON only.",
-    ])
+    ]
+    if preferences:
+        user_prompt_parts.extend([
+            "",
+            f"User preferences: {json.dumps(preferences)}",
+        ])
+    user_prompt_parts.extend(["", "Return JSON only."])
+    user_prompt = "\n".join(user_prompt_parts)
 
     try:
         response_text = await llm.generate_text(
@@ -1317,7 +1494,11 @@ async def plan_user_request(message: str, history_text: str = "", user_id: Optio
     confidence = _clamp_confidence(parsed.get("confidence"), default=0.55)
 
     if missing_slots:
-        question = clarifying_question or _missing_param_message(str(missing_slots[0]))
+        question = clarifying_question or _missing_param_message(
+            str(missing_slots[0]),
+            date_order=date_order,
+            time_format=time_format,
+        )
         return {
             "mode": "needs_clarification",
             "assistant_message": question,
@@ -1328,10 +1509,16 @@ async def plan_user_request(message: str, history_text: str = "", user_id: Optio
 
     if mode == "adhoc_workflow":
         if confidence < LLM_CONFIDENCE_CONFIRM:
-            fallback_steps = await _fallback_steps_from_intent(message, history_text)
+            fallback_steps = await _fallback_steps_from_intent(message, history_text, preferences=preferences)
             if fallback_steps:
-                fallback_normalized = _normalize_steps(fallback_steps, message)
-                review = await _review_steps_with_manager(fallback_normalized, message, assistant_message, user_id)
+                fallback_normalized = _normalize_steps(fallback_steps, message, preferences=preferences)
+                review = await _review_steps_with_manager(
+                    fallback_normalized,
+                    message,
+                    assistant_message,
+                    user_id,
+                    preferences=preferences,
+                )
                 if review.get("verdict") == "ask_user":
                     return {
                         "mode": "needs_clarification",
@@ -1351,7 +1538,11 @@ async def plan_user_request(message: str, history_text: str = "", user_id: Optio
                             "confidence": confidence,
                         }
                     if fallback_error:
-                        assistant_message = _friendly_validation_error(fallback_error)
+                        assistant_message = _friendly_validation_error(
+                            fallback_error,
+                            date_order=date_order,
+                            time_format=time_format,
+                        )
             return {
                 "mode": "single",
                 "assistant_message": "",
@@ -1362,8 +1553,14 @@ async def plan_user_request(message: str, history_text: str = "", user_id: Optio
         if not isinstance(steps, list):
             return {"mode": "single", "assistant_message": "", "workflow_definition": None}
 
-        normalized_steps = _normalize_steps(steps, message)
-        review = await _review_steps_with_manager(normalized_steps, message, assistant_message, user_id)
+        normalized_steps = _normalize_steps(steps, message, preferences=preferences)
+        review = await _review_steps_with_manager(
+            normalized_steps,
+            message,
+            assistant_message,
+            user_id,
+            preferences=preferences,
+        )
         if review.get("verdict") == "ask_user":
             return {
                 "mode": "needs_clarification",
@@ -1385,13 +1582,14 @@ async def plan_user_request(message: str, history_text: str = "", user_id: Optio
             }
 
         if _has_high_risk_step(normalized_steps) and not _looks_like_confirmation(message):
+            definition = _build_definition(normalized_steps, message)
             return {
-                "mode": "needs_clarification",
-                "assistant_message": (
-                    "This includes a sensitive action. Please confirm explicitly "
-                    "if you want me to proceed."
+                "mode": "needs_confirmation",
+                "assistant_message": _format_confirmation_message(
+                    normalized_steps,
+                    "This includes sensitive actions.",
                 ),
-                "workflow_definition": None,
+                "workflow_definition": definition,
                 "confidence": confidence,
             }
 
@@ -1407,19 +1605,24 @@ async def plan_user_request(message: str, history_text: str = "", user_id: Optio
         valid, error = validate_workflow_definition(definition)
         if not valid:
             logger.warning("Invalid ad-hoc workflow definition: %s", error)
-            fallback_steps = await _fallback_steps_from_intent(message, history_text)
+            fallback_steps = await _fallback_steps_from_intent(message, history_text, preferences=preferences)
             if fallback_steps:
-                fallback_normalized = _normalize_steps(fallback_steps, message)
+                fallback_normalized = _normalize_steps(fallback_steps, message, preferences=preferences)
                 review = await _review_steps_with_manager(
                     fallback_normalized,
                     message,
-                    _friendly_validation_error(error),
+                    _friendly_validation_error(error, date_order=date_order, time_format=time_format),
                     user_id,
+                    preferences=preferences,
                 )
                 if review.get("verdict") == "ask_user":
                     return {
                         "mode": "needs_clarification",
-                        "assistant_message": review.get("assistant_message") or _friendly_validation_error(error),
+                    "assistant_message": review.get("assistant_message") or _friendly_validation_error(
+                        error,
+                        date_order=date_order,
+                        time_format=time_format,
+                    ),
                         "workflow_definition": None,
                     }
                 fallback_normalized = review.get("steps") or fallback_normalized
@@ -1435,7 +1638,11 @@ async def plan_user_request(message: str, history_text: str = "", user_id: Optio
                     error = fallback_error or error
             return {
                 "mode": "needs_clarification",
-                "assistant_message": _friendly_validation_error(error),
+                "assistant_message": _friendly_validation_error(
+                    error,
+                    date_order=date_order,
+                    time_format=time_format,
+                ),
                 "workflow_definition": None,
                 "confidence": confidence,
             }
@@ -1450,10 +1657,16 @@ async def plan_user_request(message: str, history_text: str = "", user_id: Optio
     if mode == "needs_clarification":
         if clarifying_question:
             assistant_message = clarifying_question
-        fallback_steps = await _fallback_steps_from_intent(message, history_text)
+        fallback_steps = await _fallback_steps_from_intent(message, history_text, preferences=preferences)
         if fallback_steps:
-            fallback_normalized = _normalize_steps(fallback_steps, message)
-            review = await _review_steps_with_manager(fallback_normalized, message, assistant_message, user_id)
+            fallback_normalized = _normalize_steps(fallback_steps, message, preferences=preferences)
+            review = await _review_steps_with_manager(
+                fallback_normalized,
+                message,
+                assistant_message,
+                user_id,
+                preferences=preferences,
+            )
             if review.get("verdict") == "ask_user":
                 return {
                     "mode": "needs_clarification",
@@ -1471,7 +1684,11 @@ async def plan_user_request(message: str, history_text: str = "", user_id: Optio
                         "workflow_definition": fallback_def,
                     }
                 if fallback_error:
-                    assistant_message = _friendly_validation_error(fallback_error)
+                    assistant_message = _friendly_validation_error(
+                        fallback_error,
+                        date_order=date_order,
+                        time_format=time_format,
+                    )
         return {
             "mode": "needs_clarification",
             "assistant_message": assistant_message or "I need a bit more detail to proceed.",
@@ -1661,6 +1878,8 @@ async def _run_inline(definition: Dict[str, Any], user_id: int, trigger_data: Di
         "workflow": {"id": 0, "policy": definition.get("policy") or {}},
         "user_id": user_id,
     }
+    if isinstance(trigger_data, dict) and trigger_data.get("room_id"):
+        context["room_id"] = trigger_data.get("room_id")
 
     for step in definition.get("steps", []):
         condition = step.get("condition")
@@ -1686,6 +1905,7 @@ async def synthesize_workflow_response_stream(
     execution_result: Dict[str, Any],
     status: str,
     error: Optional[str] = None,
+    preferences: Optional[Dict[str, Any]] = None,
 ):
     """
     Stream a natural language response summarizing a workflow run.
@@ -1710,6 +1930,10 @@ async def synthesize_workflow_response_stream(
         )
         return
 
+    if (preferences or {}).get("capability_mode") == "conserve":
+        yield _fallback_execution_summary(execution_result)
+        return
+
     try:
         from orchestration.manager_verifier import ManagerVerifier
         manager_message = ManagerVerifier().review_execution_result(
@@ -1723,11 +1947,14 @@ async def synthesize_workflow_response_stream(
         logger.warning("Manager verifier post-check failed: %s", exc)
 
     llm = get_llm_client()
+    style_prompt = format_style_prompt(preferences)
     system_prompt = (
         "You are Mathia, a helpful assistant. Summarize the results of a multi-step "
         "workflow execution. Be concise and list key outputs per step. "
         "Do not invent details not present in the data."
     )
+    if style_prompt:
+        system_prompt = f"{system_prompt}\n{style_prompt}"
     user_prompt = json.dumps({
         "user_message": user_message,
         "workflow": workflow_definition,

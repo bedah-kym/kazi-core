@@ -23,6 +23,7 @@ urlpatterns = [
     path('api/rooms/<int:room_id>/messages/<int:message_id>/pin/', message_actions.pin_message_to_notes, name='pin-message'),
     path('api/rooms/<int:room_id>/messages/<int:message_id>/reply/', message_actions.reply_to_message, name='reply-message'),
     path('api/rooms/<int:room_id>/messages/<int:message_id>/retry/', message_actions.retry_ai_message, name='retry-message'),
+    path('api/rooms/<int:room_id>/actions/', message_actions.get_action_receipts, name='action-receipts'),
     path('api/rooms/<int:room_id>/documents/upload/', message_actions.upload_document_to_ai, name='upload-document'),
     path('api/rooms/<int:room_id>/documents/quota/', message_actions.get_upload_quota, name='upload-quota'),
     

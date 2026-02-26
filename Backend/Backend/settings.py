@@ -302,6 +302,9 @@ GMAIL_SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send'
 # LLM cost guards
 LLM_MAX_TOKENS = int(os.environ.get('LLM_MAX_TOKENS', 700))  # hard ceiling per call
 LLM_PROMPT_CHAR_LIMIT = int(os.environ.get('LLM_PROMPT_CHAR_LIMIT', 4000))  # truncate user prompt to this many chars
+LLM_CACHE_ENABLED = os.environ.get('LLM_CACHE_ENABLED', 'True').lower() in ('1', 'true', 'yes')
+LLM_CACHE_TTL_SECONDS = int(os.environ.get('LLM_CACHE_TTL_SECONDS', 600))
+LLM_CACHE_MIN_TEMP = float(os.environ.get('LLM_CACHE_MIN_TEMP', 0.3))
 
 # Manager agent LLM fallback
 MANAGER_LLM_ENABLED = os.environ.get('MANAGER_LLM_ENABLED', 'True').lower() in ('1', 'true', 'yes')

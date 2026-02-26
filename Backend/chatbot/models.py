@@ -188,6 +188,12 @@ class RoomContext(models.Model):
     
     # Active topics/themes
     active_topics = models.JSONField(default=list)  # ["project_launch", "budget_discussion"]
+
+    # Layered memory (facts, preferences, episodes)
+    memory_facts = models.JSONField(default=list)  # [{"key": "...", "value": "...", "confidence": 0.7, "updated_at": "..."}]
+    memory_preferences = models.JSONField(default=list)  # [{"key": "...", "value": "...", "confidence": 0.7, "updated_at": "..."}]
+    memory_episodes = models.JSONField(default=list)  # [{"summary": "...", "date": "YYYY-MM-DD", "importance": "medium", "updated_at": "..."}]
+    memory_updated_at = models.DateTimeField(null=True, blank=True)
     
     # Link to related rooms (cross-room context)
     related_rooms = models.ManyToManyField('self', blank=True, symmetrical=False)

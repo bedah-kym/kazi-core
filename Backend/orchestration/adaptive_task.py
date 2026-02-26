@@ -1,7 +1,7 @@
 """Adaptive task state and action registry helpers."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 import logging
 import re
@@ -18,6 +18,16 @@ TASK_VERSION = 1
 SUMMARY_PARAM_CANDIDATES = ("text", "message", "content")
 RESULT_TTL_SECONDS = 60 * 60
 _OPTION_PARAM_HINTS = ("item_id", "option", "selection")
+MODE_TTL_SECONDS = 60 * 60 * 24 * 30
+DEFAULT_PAUSE_SECONDS = 60 * 10
+SOCIAL_PAUSE_SECONDS = 60 * 30
+_SMALL_TALK_RE = re.compile(
+    r"\b(hi|hello|hey|how are you|how've you|how have you|whats up|what's up|sup|good morning|good afternoon|good evening|thanks|thank you)\b",
+    re.IGNORECASE,
+)
+_CANCEL_RE = re.compile(r"\b(cancel|nevermind|never mind|stop|forget it|drop it|not now|pause)\b", re.IGNORECASE)
+_RESUME_RE = re.compile(r"\b(resume|continue|go ahead|proceed|let's finish|finish it|keep going)\b", re.IGNORECASE)
+_MODE_RE = re.compile(r"\b(mode)\b", re.IGNORECASE)
 
 
 def _build_action_registry(capabilities: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
@@ -44,6 +54,8 @@ _ACTION_REGISTRY = _build_action_registry(SYSTEM_CAPABILITIES)
 def get_action_definition(action: Optional[str]) -> Optional[Dict[str, Any]]:
     if not action:
         return None
+    if action == "send_whatsapp":
+        action = "send_message"
     return _ACTION_REGISTRY.get(action)
 
 
@@ -113,6 +125,18 @@ def format_missing_prompt(
     return f"To complete {action_label}, I still need: {', '.join(parts)}."
 
 
+def is_small_talk(message: str) -> bool:
+    if not message:
+        return False
+    return bool(_SMALL_TALK_RE.search(message))
+
+
+def is_cancel_request(message: str) -> bool:
+    if not message:
+        return False
+    return bool(_CANCEL_RE.search(message))
+
+
 def should_use_summary(message: str) -> bool:
     if not message:
         return False
@@ -145,6 +169,51 @@ def _task_cache_key(context: Dict[str, Any]) -> str:
     user_id = context.get("user_id") or "anon"
     room_id = context.get("room_id") or "room"
     return f"adaptive_task:{user_id}:{room_id}"
+
+
+def _mode_cache_key(context: Dict[str, Any]) -> str:
+    user_id = context.get("user_id") or "anon"
+    room_id = context.get("room_id") or "room"
+    return f"conversation:mode:{user_id}:{room_id}"
+
+
+async def get_conversation_mode(context: Dict[str, Any]) -> str:
+    key = _mode_cache_key(context)
+    try:
+        mode = await sync_to_async(cache.get)(key)
+    except Exception as exc:
+        logger.warning("Conversation mode read failed: %s", exc)
+        return "auto"
+    return mode or "auto"
+
+
+async def set_conversation_mode(context: Dict[str, Any], mode: str) -> None:
+    key = _mode_cache_key(context)
+    try:
+        await sync_to_async(cache.set)(key, mode, timeout=MODE_TTL_SECONDS)
+    except Exception as exc:
+        logger.warning("Conversation mode write failed: %s", exc)
+
+
+def detect_mode_command(message: str) -> Optional[str]:
+    if not message or not _MODE_RE.search(message):
+        return None
+    lowered = message.lower()
+    if "focus" in lowered or "task" in lowered:
+        return "focus"
+    if "social" in lowered or "chat" in lowered or "casual" in lowered:
+        return "social"
+    if "auto" in lowered or "default" in lowered:
+        return "auto"
+    return None
+
+
+def format_mode_ack(mode: str) -> str:
+    if mode == "focus":
+        return "Focus mode on. I'll prioritize tasks and keep prompts tight."
+    if mode == "social":
+        return "Social mode on. I'll keep things conversational and pause tasks unless you resume."
+    return "Auto mode on. I'll balance conversation with task progress."
 
 
 def _result_cache_key(context: Dict[str, Any], suffix: str) -> str:
@@ -275,6 +344,33 @@ async def clear_task_state(context: Dict[str, Any]) -> None:
         logger.warning("Adaptive task state delete failed: %s", exc)
 
 
+def is_task_paused(state: Optional[Dict[str, Any]]) -> bool:
+    if not state:
+        return False
+    paused_until = state.get("paused_until")
+    if not paused_until:
+        return False
+    try:
+        expires = datetime.fromisoformat(paused_until)
+    except Exception:
+        return False
+    return datetime.utcnow() < expires
+
+
+def clear_task_pause(state: Dict[str, Any]) -> Dict[str, Any]:
+    updated = dict(state)
+    updated.pop("paused_until", None)
+    updated.pop("paused_reason", None)
+    return updated
+
+
+def pause_task_state(state: Dict[str, Any], reason: str, seconds: int) -> Dict[str, Any]:
+    updated = dict(state)
+    updated["paused_until"] = (datetime.utcnow() + timedelta(seconds=seconds)).isoformat()
+    updated["paused_reason"] = reason
+    return updated
+
+
 def init_task_state(intent: Dict[str, Any]) -> Dict[str, Any]:
     action = intent.get("action")
     params = normalize_params(intent.get("parameters"))
@@ -289,6 +385,12 @@ def init_task_state(intent: Dict[str, Any]) -> Dict[str, Any]:
         "created_at": datetime.utcnow().isoformat(),
         "last_prompt": "",
     }
+
+
+def is_resume_request(message: str) -> bool:
+    if not message:
+        return False
+    return bool(_RESUME_RE.search(message))
 
 
 def update_task_state(state: Dict[str, Any], new_params: Dict[str, Any]) -> Dict[str, Any]:

@@ -8,6 +8,8 @@ class ContextPanel {
         this.isOpen = false;
         this.roomId = window.currentRoomId || null; // Use the global variable
         this.isAddingNote = false; // State for form visibility
+        this.activeMode = this.loadStoredMode();
+        this.receipts = [];
 
         this.init();
     }
@@ -32,6 +34,8 @@ class ContextPanel {
         if (this.roomId) {
             this.loadContext();
         }
+
+        this.panel.addEventListener('click', (e) => this.handlePanelClick(e));
 
         // Refresh context every 30 seconds
         setInterval(() => {
@@ -83,8 +87,12 @@ class ContextPanel {
                 throw new Error('Failed to fetch context');
             }
 
-            const data = await response.json();
-            this.renderContext(data);
+            const [data, receipts] = await Promise.all([
+                response.json(),
+                this.loadReceipts()
+            ]);
+            this.receipts = receipts;
+            this.renderContext(data, receipts);
             this.panel.dataset.loaded = 'true';
 
         } catch (error) {
@@ -93,9 +101,10 @@ class ContextPanel {
         }
     }
 
-    renderContext(context) {
+    renderContext(context, receipts) {
         const contentEl = document.getElementById('contextPanelContent');
         if (this.isAddingNote) return; // Don't overwrite if user is typing
+        const safeReceipts = receipts || [];
 
         contentEl.innerHTML = `
             <!-- Actions Header -->
@@ -103,6 +112,39 @@ class ContextPanel {
                 <button class="btn btn-sm btn-outline-primary w-100" onclick="window.contextPanel.showAddNoteForm()">
                     <i class="fas fa-plus me-1"></i> Add Manual Note
                 </button>
+            </div>
+
+            <div class="assistant-controls-card">
+                <div class="context-summary-label">
+                    <i class="fas fa-sliders-h me-1"></i> Assistant Controls
+                </div>
+                <div class="assistant-controls-help">
+                    Outcome: keep tasks moving while staying human.
+                </div>
+                <div class="mode-toggle-group" role="group" aria-label="Assistant mode">
+                    <button class="btn btn-sm mode-pill ${this.activeMode === 'auto' ? 'active' : ''}" data-mode="auto">Auto</button>
+                    <button class="btn btn-sm mode-pill ${this.activeMode === 'focus' ? 'active' : ''}" data-mode="focus">Focus</button>
+                    <button class="btn btn-sm mode-pill ${this.activeMode === 'social' ? 'active' : ''}" data-mode="social">Social</button>
+                </div>
+                <div class="assistant-actions">
+                    <button class="btn btn-sm btn-outline-secondary assistant-action-btn" data-quick-message="undo">Undo last</button>
+                    <button class="btn btn-sm btn-outline-secondary assistant-action-btn" data-quick-message="show actions">Show actions</button>
+                    <button class="btn btn-sm btn-outline-secondary assistant-action-btn" data-quick-message="stop for now">Pause tasks</button>
+                    <button class="btn btn-sm btn-outline-secondary assistant-action-btn" data-quick-message="resume">Resume</button>
+                </div>
+            </div>
+
+            <div class="assistant-receipts-card">
+                <div class="context-summary-label d-flex justify-content-between align-items-center">
+                    <span><i class="fas fa-receipt me-1"></i> Action Receipts</span>
+                    <button class="btn btn-sm btn-link receipt-refresh" type="button">Refresh</button>
+                </div>
+                <div class="assistant-controls-help">
+                    Receipts show what ran in this room. Undo where possible.
+                </div>
+                <div id="receiptList">
+                    ${this.renderReceipts(safeReceipts)}
+                </div>
             </div>
 
             <!-- AI Summary -->
@@ -141,6 +183,47 @@ class ContextPanel {
                 ${this.renderNotes(context.recent_notes)}
             </div>
         `;
+    }
+
+    async loadReceipts() {
+        if (!this.roomId) return [];
+        try {
+            const response = await fetch(`/chatbot/api/rooms/${this.roomId}/actions/?limit=3`);
+            if (!response.ok) {
+                return [];
+            }
+            const data = await response.json();
+            return data.receipts || [];
+        } catch (error) {
+            console.error('Receipt load error:', error);
+            return [];
+        }
+    }
+
+    renderReceipts(receipts) {
+        if (!receipts || receipts.length === 0) {
+            return `
+                <div class="receipts-empty">
+                    No action receipts yet. Use Mathia to run tasks.
+                    <div class="receipts-hint">Tip: say "show actions" for a fuller log.</div>
+                </div>
+            `;
+        }
+        return receipts.map(receipt => {
+            const summary = this.escapeHtml(receipt.summary || receipt.action || 'Action');
+            const timeLabel = this.formatTimestamp(receipt.created_at);
+            const status = receipt.status || 'success';
+            const reversible = receipt.reversible ? '<span class="receipt-pill">undo</span>' : '';
+            return `
+                <div class="receipt-item receipt-${status}">
+                    <div class="receipt-main">
+                        <div class="receipt-summary">${summary}</div>
+                        <div class="receipt-meta">${timeLabel} - ${status}</div>
+                    </div>
+                    ${reversible}
+                </div>
+            `;
+        }).join('');
     }
 
     showAddNoteForm() {
@@ -302,6 +385,102 @@ class ContextPanel {
         `;
     }
 
+    handlePanelClick(event) {
+        const modeBtn = event.target.closest('[data-mode]');
+        if (modeBtn) {
+            event.preventDefault();
+            const mode = modeBtn.dataset.mode;
+            this.setMode(mode);
+            return;
+        }
+
+        const quickBtn = event.target.closest('[data-quick-message]');
+        if (quickBtn) {
+            event.preventDefault();
+            const message = quickBtn.dataset.quickMessage;
+            this.sendQuickMessage(message);
+            return;
+        }
+
+        const refreshBtn = event.target.closest('.receipt-refresh');
+        if (refreshBtn) {
+            event.preventDefault();
+            this.refreshReceipts();
+        }
+    }
+
+    async refreshReceipts() {
+        const listEl = this.panel.querySelector('#receiptList');
+        if (!listEl) return;
+        const receipts = await this.loadReceipts();
+        listEl.innerHTML = this.renderReceipts(receipts);
+    }
+
+    setMode(mode) {
+        if (!mode) return;
+        this.activeMode = mode;
+        this.storeMode(mode);
+        this.updateModeButtons();
+        this.sendQuickMessage(`mode ${mode}`);
+    }
+
+    updateModeButtons() {
+        const buttons = this.panel.querySelectorAll('.mode-pill');
+        buttons.forEach(btn => {
+            const isActive = btn.dataset.mode === this.activeMode;
+            btn.classList.toggle('active', isActive);
+        });
+    }
+
+    modeStorageKey() {
+        if (this.roomId) {
+            return `assistant_mode_${this.roomId}`;
+        }
+        return 'assistant_mode_default';
+    }
+
+    loadStoredMode() {
+        try {
+            return localStorage.getItem(this.modeStorageKey()) || 'auto';
+        } catch (error) {
+            return 'auto';
+        }
+    }
+
+    storeMode(mode) {
+        try {
+            localStorage.setItem(this.modeStorageKey(), mode);
+        } catch (error) {
+            return;
+        }
+    }
+
+    sendQuickMessage(message) {
+        if (!message) return;
+        const socket = window.getCurrentSocket ? window.getCurrentSocket() : null;
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+            console.warn('Socket not ready for quick message');
+            return;
+        }
+        const payload = {
+            message: message,
+            from: window.usernameGlobal,
+            command: 'new_message',
+            chatid: window.currentRoomId,
+            reply_to: null
+        };
+        socket.send(JSON.stringify(payload));
+    }
+
+    formatTimestamp(value) {
+        if (!value) return 'just now';
+        try {
+            return new Date(value).toLocaleString();
+        } catch (error) {
+            return 'just now';
+        }
+    }
+
     escapeHtml(text) {
         const div = document.createElement('div');
         div.textContent = text;
@@ -327,6 +506,8 @@ class ContextPanel {
         if (!newRoomId || this.roomId === newRoomId) return;
         this.roomId = newRoomId;
         if (this.panel) this.panel.dataset.loaded = 'false';
+        this.activeMode = this.loadStoredMode();
+        this.updateModeButtons();
         if (this.isOpen) {
             this.loadContext();
         }

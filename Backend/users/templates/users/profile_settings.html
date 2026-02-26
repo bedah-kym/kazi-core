@@ -61,6 +61,28 @@
             background: hsl(var(--background));
             color: hsl(var(--foreground));
         }
+
+        .assistant-tooltip-panel {
+            display: flex;
+            align-items: flex-start;
+            gap: 0.75rem;
+            padding: 0.75rem 1rem;
+            border: 1px dashed hsl(var(--border));
+            border-radius: var(--radius);
+            background: hsl(var(--accent));
+            color: hsl(var(--foreground));
+            font-size: 0.9rem;
+        }
+
+        .assistant-tooltip-panel i {
+            color: hsl(var(--primary));
+            margin-top: 0.15rem;
+        }
+
+        .assistant-tooltip-panel .hint-title {
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+        }
     </style>
 </head>
 
@@ -225,6 +247,60 @@
                 </div>
             </div>
 
+            <div class="form-section">
+                <h3 class="mb-4">Assistant Preferences</h3>
+                <div class="assistant-tooltip-panel mb-3">
+                    <i class="fas fa-circle-info" aria-hidden="true"></i>
+                    <div>
+                        <div class="hint-title">How this helps</div>
+                        <div class="text-muted">
+                            These settings tune how Mathia speaks, interprets dates, and formats times/currency.
+                            Leave anything blank to let it auto-detect from your profile and locale.
+                        </div>
+                    </div>
+                    <span class="ms-auto text-muted" data-bs-toggle="tooltip"
+                        title="Only affects Mathia's responses, not your integrations.">
+                        <i class="fas fa-question-circle"></i>
+                    </span>
+                </div>
+                <div class="row mb-3">
+                    <div class="col-md-4">
+                        <label class="form-label">Tone</label>
+                        {{ profile_form.assistant_tone }}
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Verbosity</label>
+                        {{ profile_form.assistant_verbosity }}
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Directness</label>
+                        {{ profile_form.assistant_directness }}
+                    </div>
+                </div>
+                <div class="row mb-3">
+                    <div class="col-md-4">
+                        <label class="form-label">Locale</label>
+                        {{ profile_form.assistant_locale }}
+                        <div class="form-text">{{ profile_form.assistant_locale.help_text }}</div>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Date order</label>
+                        {{ profile_form.assistant_date_order }}
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Time format</label>
+                        {{ profile_form.assistant_time_format }}
+                    </div>
+                </div>
+                <div class="row mb-3">
+                    <div class="col-md-4">
+                        <label class="form-label">Currency</label>
+                        {{ profile_form.assistant_currency }}
+                        <div class="form-text">{{ profile_form.assistant_currency.help_text }}</div>
+                    </div>
+                </div>
+            </div>
+
             <button type="submit" class="btn btn-primary btn-lg">
                 <i class="fas fa-save me-2"></i>Save Changes
             </button>
@@ -234,6 +310,11 @@
     <script src="https://code.jquery.com/jquery-1.10.2.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="{% static 'js/main.js'%}"></script>
+    <script>
+        document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(function (el) {
+            new bootstrap.Tooltip(el);
+        });
+    </script>
 </body>
 
 </html>

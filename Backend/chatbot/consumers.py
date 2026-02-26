@@ -21,6 +21,21 @@ import asyncio
 from .models import Message, Member, Chatroom, UserModerationStatus, ModerationBatch, RoomReadState
 from .tasks import moderate_message_batch, generate_ai_response, generate_voice_response
 from orchestration.intent_parser import parse_intent
+from orchestration.user_preferences import get_user_preferences, format_style_prompt
+from orchestration.telemetry import record_event
+from orchestration.action_receipts import (
+    attach_receipt_to_result,
+    build_confirmation_prompt,
+    fetch_recent_receipts,
+    is_receipt_request,
+    is_undo_request,
+    record_action_receipt,
+    requires_confirmation,
+    should_include_receipt,
+    should_record_receipt,
+    undo_last_action,
+    format_receipt_list,
+)
 from orchestration.adaptive_task import (
     load_task_state,
     save_task_state,
@@ -33,6 +48,18 @@ from orchestration.adaptive_task import (
     should_use_summary,
     store_result_set,
     needs_option_context,
+    is_small_talk,
+    is_cancel_request,
+    is_resume_request,
+    get_conversation_mode,
+    set_conversation_mode,
+    detect_mode_command,
+    format_mode_ack,
+    is_task_paused,
+    pause_task_state,
+    clear_task_pause,
+    DEFAULT_PAUSE_SECONDS,
+    SOCIAL_PAUSE_SECONDS,
 )
 from django.conf import settings
 from django.utils.text import get_valid_filename
@@ -825,8 +852,28 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             "room_id": room_id,
                             "username": member_username,
                         }
+                        user_preferences = {}
+                        try:
+                            user_preferences = await sync_to_async(get_user_preferences)(member_user.id)
+                        except Exception as e:
+                            logger.warning(f"User preferences load failed: {e}")
+                            user_preferences = {}
+                        style_prompt = format_style_prompt(user_preferences)
+                        conversation_mode = await get_conversation_mode(adaptive_context)
+                        mode_handled = False
+                        mode_cmd = detect_mode_command(ai_query)
+                        if mode_cmd:
+                            await set_conversation_mode(adaptive_context, mode_cmd)
+                            conversation_mode = mode_cmd
+                            await broadcast_chunk(format_mode_ack(mode_cmd))
+                            mode_handled = True
                         summary_text_for_cache = None
                         should_cache_summary = False
+                        def _log_telemetry(event_type, payload=None):
+                            try:
+                                record_event(event_type, payload or {})
+                            except Exception:
+                                return
 
                         def _bump_signals(actions):
                             try:
@@ -839,6 +886,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
                         async def _execute_intent(intent):
                             nonlocal summary_text_for_cache, should_cache_summary
+                            _log_telemetry("intent_execute", {
+                                "user_id": member_user.id,
+                                "room_id": room_id,
+                                "action": intent.get("action"),
+                            })
                             prompt = await needs_option_context(
                                 adaptive_context,
                                 intent.get("action"),
@@ -853,15 +905,52 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                 await save_task_state(adaptive_context, task_state)
                                 await broadcast_chunk(prompt)
                                 return {"status": "needs_input", "message": prompt}
+                            if requires_confirmation(intent.get("action")) and not intent.get("confirmed"):
+                                confirm_prompt = build_confirmation_prompt(
+                                    intent.get("action") or "",
+                                    intent.get("parameters") or {},
+                                )
+                                cache.set(
+                                    pending_key,
+                                    {"kind": "intent", "intent": intent},
+                                    timeout=PENDING_CONFIRM_TTL_SECONDS,
+                                )
+                                await broadcast_chunk(confirm_prompt)
+                                return {"status": "needs_confirmation", "message": confirm_prompt}
                             result = await route_intent(intent, {
                                 "user_id": member_user.id,
                                 "room_id": room_id,
-                                "username": member_username
+                                "username": member_username,
+                                "preferences": user_preferences,
                             })
 
                             logger.info(f"MCP result: {result['status']}")
+                            receipt = None
+                            if should_record_receipt(intent.get("action")):
+                                action_def = get_action_definition(intent.get("action")) or {}
+                                if not action_def and intent.get("action") == "send_whatsapp":
+                                    action_def = get_action_definition("send_message") or {}
+                                status = "success" if result.get("status") == "success" else "error"
+                                reason = result.get("message") or result.get("error") or ""
+                                data_payload = result.get("data") if isinstance(result.get("data"), dict) else {}
+                                receipt = await record_action_receipt(
+                                    user_id=member_user.id,
+                                    room_id=room_id,
+                                    action=intent.get("action") or "",
+                                    service=action_def.get("service") or "",
+                                    params=intent.get("parameters") or {},
+                                    result=data_payload or {"message": reason},
+                                    status=status,
+                                    reason=reason,
+                                )
+                                result = attach_receipt_to_result(result, receipt)
 
                             if result["status"] == "success":
+                                _log_telemetry("intent_success", {
+                                    "user_id": member_user.id,
+                                    "room_id": room_id,
+                                    "action": intent.get("action"),
+                                })
                                 data_payload = result.get("data") if isinstance(result.get("data"), dict) else {}
                                 results = data_payload.get("results") if isinstance(data_payload, dict) else None
                                 if isinstance(results, list):
@@ -872,17 +961,32 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                         metadata=data_payload.get("metadata") if isinstance(data_payload, dict) else None,
                                     )
                                 from orchestration.data_synthesizer import synthesize_response_stream
-                                summary_text_for_cache = await synthesize_response(intent, result, use_llm=False)
-
-                                async for chunk in synthesize_response_stream(
-                                    intent,
+                                intent_for_synthesis = dict(intent)
+                                intent_for_synthesis["preferences"] = user_preferences
+                                summary_text_for_cache = await synthesize_response(
+                                    intent_for_synthesis,
                                     result,
-                                    use_llm=True
+                                    use_llm=False,
+                                )
+
+                                use_llm_stream = user_preferences.get("capability_mode") != "conserve"
+                                if should_include_receipt(intent.get("action")):
+                                    use_llm_stream = False
+                                async for chunk in synthesize_response_stream(
+                                    intent_for_synthesis,
+                                    result,
+                                    use_llm=use_llm_stream,
                                 ):
                                     await broadcast_chunk(chunk)
                                 should_cache_summary = True
                                 _bump_signals([intent.get("action")])
                             else:
+                                _log_telemetry("intent_error", {
+                                    "user_id": member_user.id,
+                                    "room_id": room_id,
+                                    "action": intent.get("action"),
+                                    "error": result.get("message"),
+                                })
                                 await broadcast_chunk(f"Error: {result['message']}")
                             return result
 
@@ -892,8 +996,31 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                 return False
                             return bool(re.search(r"\b(nudge|suggestion|proactive)\b", lowered))
 
-                        handled_directive = False
-                        if _is_dismiss_request(ai_query):
+                        async def _stream_general_chat(query: str, history: str):
+                            from orchestration.llm_client import get_llm_client
+                            llm_client = get_llm_client()
+                            full_query = query
+                            if history:
+                                full_query = f"CONVERSATION HISTORY:\n{history}\n\nUSER message: {query}"
+                            system_prompt = "You are Mathia, a helpful AI assistant."
+                            if style_prompt:
+                                system_prompt = f"{system_prompt}\n{style_prompt}"
+                            system_prompt = (
+                                f"{system_prompt}\nBe concise, culturally respectful, and match the user's tone."
+                            )
+                            max_tokens = 300
+                            if user_preferences.get("capability_mode") == "conserve":
+                                max_tokens = 180
+                            async for chunk in llm_client.stream_text(
+                                system_prompt=system_prompt,
+                                user_prompt=full_query,
+                                temperature=0.7,
+                                max_tokens=max_tokens,
+                            ):
+                                await broadcast_chunk(chunk)
+
+                        handled_directive = mode_handled
+                        if not handled_directive and _is_dismiss_request(ai_query):
                             last_reason_key = f"proactive:last_reason:{room_id}:{member_user.id}"
                             dismissed_key = f"proactive:dismissed:{room_id}:{member_user.id}"
                             last_reason = cache.get(last_reason_key)
@@ -905,11 +1032,34 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             cache.delete(pending_key)
                             await broadcast_chunk("Got it. I will stop showing that kind of suggestion here.")
                             handled_directive = True
+                        if not handled_directive and is_receipt_request(ai_query):
+                            receipts = await fetch_recent_receipts(
+                                user_id=member_user.id,
+                                room_id=room_id,
+                                limit=3,
+                            )
+                            await broadcast_chunk(format_receipt_list(receipts))
+                            handled_directive = True
+                        if not handled_directive and is_undo_request(ai_query):
+                            undo_result = await undo_last_action(
+                                user_id=member_user.id,
+                                room_id=room_id,
+                            )
+                            await broadcast_chunk(undo_result.get("message") or "Okay.")
+                            handled_directive = True
+                        if not handled_directive and re.search(r"\b(stop for now|pause for now|hold off)\b", ai_query, re.IGNORECASE):
+                            await set_conversation_mode(adaptive_context, "social")
+                            await broadcast_chunk("Okay, I will pause tasks for now. Say 'resume' when you are ready.")
+                            handled_directive = True
 
                         pending = cache.get(pending_key)
                         pending_handled = handled_directive
                         if pending and not pending_handled:
-                            if looks_like_confirmation(ai_query):
+                            if is_cancel_request(ai_query):
+                                cache.delete(pending_key)
+                                await broadcast_chunk("Okay, I cancelled the pending request.")
+                                pending_handled = True
+                            elif looks_like_confirmation(ai_query):
                                 pending_kind = pending.get("kind")
                                 cache.delete(pending_key)
                                 if pending_kind == "workflow":
@@ -920,14 +1070,22 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                         workflow_definition,
                                         member_user.id,
                                         room_id,
-                                        trigger_data={"message": pending_message},
+                                        trigger_data={"message": pending_message, "room_id": room_id},
                                     )
+                                    _log_telemetry("workflow_execution", {
+                                        "user_id": member_user.id,
+                                        "room_id": room_id,
+                                        "status": execution.get("status"),
+                                        "mode": execution.get("mode"),
+                                        "step_count": len(workflow_definition.get("steps", [])),
+                                    })
                                     async for chunk in synthesize_workflow_response_stream(
                                         pending_message,
                                         workflow_definition,
                                         execution.get("result") or {},
                                         execution.get("status") or "running",
                                         execution.get("error") or execution.get("message"),
+                                        preferences=user_preferences,
                                     ):
                                         await broadcast_chunk(chunk)
                                     should_cache_summary = True
@@ -941,90 +1099,145 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                 elif pending_kind == "intent":
                                     pending_handled = True
                                     intent = pending.get("intent") or {}
-                                    await _execute_intent(intent)
+                                    intent["confirmed"] = True
+                                    result = await _execute_intent(intent)
+                                    if result.get("status") == "success":
+                                        await clear_task_state(adaptive_context)
                             else:
                                 cache.delete(pending_key)
 
                         if not pending_handled:
                             adaptive_state = await load_task_state(adaptive_context)
                             if adaptive_state and adaptive_state.get("status") == "awaiting_slots":
-                                expected_action = adaptive_state.get("action")
-                                followup_intent = await parse_intent(ai_query, {
-                                    "user_id": member_user.id,
-                                    "username": member_username,
-                                    "room_id": room_id,
-                                    "history": history_text,
-                                    "expected_action": expected_action,
-                                    "expected_slots": adaptive_state.get("missing_slots") or [],
-                                })
-                                if (
-                                    followup_intent.get("action")
-                                    and followup_intent.get("action") != expected_action
-                                    and followup_intent.get("confidence", 0) >= LLM_CONFIDENCE_CONFIRM
-                                ):
+                                if is_cancel_request(ai_query):
                                     await clear_task_state(adaptive_context)
-                                else:
-                                    updated_state = update_task_state(
-                                        adaptive_state,
-                                        followup_intent.get("parameters") or {},
-                                    )
-                                    action_def = get_action_definition(updated_state.get("action"))
-                                    if updated_state.get("status") == "awaiting_slots":
-                                        prompt = format_missing_prompt(
-                                            updated_state.get("action"),
-                                            updated_state.get("missing_slots") or [],
-                                            action_def,
-                                        )
-                                        if not prompt:
-                                            prompt = followup_intent.get("clarifying_question") or "I need a bit more detail to proceed."
-                                        updated_state["last_prompt"] = prompt
-                                        await save_task_state(adaptive_context, updated_state)
-                                        await broadcast_chunk(prompt)
+                                    cache.delete(pending_key)
+                                    await broadcast_chunk("Okay, I paused that task. Let me know when you want to continue.")
+                                    pending_handled = True
+                                    adaptive_state = None
+                                if not pending_handled and adaptive_state:
+                                    if is_task_paused(adaptive_state):
+                                        if is_resume_request(ai_query):
+                                            adaptive_state = clear_task_pause(adaptive_state)
+                                            await save_task_state(adaptive_context, adaptive_state)
+                                        elif is_small_talk(ai_query):
+                                            await save_task_state(adaptive_context, adaptive_state)
+                                            await _stream_general_chat(ai_query, history_text)
+                                            pending_handled = True
+                                            adaptive_state = None
+                                    if not pending_handled and adaptive_state and is_small_talk(ai_query) and conversation_mode != "focus":
+                                        pause_seconds = SOCIAL_PAUSE_SECONDS if conversation_mode == "social" else DEFAULT_PAUSE_SECONDS
+                                        adaptive_state = pause_task_state(adaptive_state, "small_talk", pause_seconds)
+                                        await save_task_state(adaptive_context, adaptive_state)
+                                        await _stream_general_chat(ai_query, history_text)
                                         pending_handled = True
-                                    else:
-                                        summary_text = None
-                                        if should_use_summary(ai_query):
-                                            summary_text = cache.get(last_summary_key)
-                                        params = apply_summary_defaults(
-                                            updated_state.get("action"),
-                                            updated_state.get("parameters"),
-                                            summary_text,
-                                        )
-                                        updated_state["parameters"] = params
-                                        action_def = get_action_definition(updated_state.get("action"))
-                                        prompt = await needs_option_context(
-                                            adaptive_context,
-                                            updated_state.get("action"),
-                                            params,
-                                            action_def,
-                                        )
-                                        if prompt:
-                                            updated_state["status"] = "awaiting_slots"
-                                            updated_state["missing_slots"] = updated_state.get("missing_slots") or ["option_context"]
-                                            updated_state["last_prompt"] = prompt
-                                            await save_task_state(adaptive_context, updated_state)
-                                            await broadcast_chunk(prompt)
-                                            pending_handled = True
+                                        adaptive_state = None
+                                if not pending_handled and adaptive_state:
+                                    expected_action = adaptive_state.get("action")
+                                    followup_intent = await parse_intent(ai_query, {
+                                        "user_id": member_user.id,
+                                        "username": member_username,
+                                        "room_id": room_id,
+                                        "history": history_text,
+                                        "expected_action": expected_action,
+                                        "expected_slots": adaptive_state.get("missing_slots") or [],
+                                        "preferences": user_preferences,
+                                    })
+                                    if (
+                                        followup_intent.get("action") == "general_chat"
+                                        and not (followup_intent.get("parameters") or {})
+                                        and is_small_talk(ai_query)
+                                        and conversation_mode != "focus"
+                                    ):
+                                        await save_task_state(adaptive_context, adaptive_state)
+                                        await _stream_general_chat(ai_query, history_text)
+                                        pending_handled = True
+                                        adaptive_state = None
+                                    if not pending_handled:
+                                        if (
+                                            followup_intent.get("action")
+                                            and followup_intent.get("action") != expected_action
+                                            and followup_intent.get("confidence", 0) >= LLM_CONFIDENCE_CONFIRM
+                                        ):
+                                            await clear_task_state(adaptive_context)
                                         else:
-                                            await save_task_state(adaptive_context, updated_state)
-                                            intent = {
-                                                "action": updated_state.get("action"),
-                                                "parameters": params,
-                                                "confidence": 1.0,
-                                            }
-                                            result = await _execute_intent(intent)
-                                            if result.get("status") == "success":
-                                                await clear_task_state(adaptive_context)
-                                            pending_handled = True
+                                            updated_state = update_task_state(
+                                                adaptive_state,
+                                                followup_intent.get("parameters") or {},
+                                            )
+                                            action_def = get_action_definition(updated_state.get("action"))
+                                            if updated_state.get("status") == "awaiting_slots":
+                                                prompt = format_missing_prompt(
+                                                    updated_state.get("action"),
+                                                    updated_state.get("missing_slots") or [],
+                                                    action_def,
+                                                )
+                                                if not prompt:
+                                                    prompt = followup_intent.get("clarifying_question") or "I need a bit more detail to proceed."
+                                                updated_state["last_prompt"] = prompt
+                                                await save_task_state(adaptive_context, updated_state)
+                                                await broadcast_chunk(prompt)
+                                                pending_handled = True
+                                            else:
+                                                summary_text = None
+                                                if should_use_summary(ai_query):
+                                                    summary_text = cache.get(last_summary_key)
+                                                params = apply_summary_defaults(
+                                                    updated_state.get("action"),
+                                                    updated_state.get("parameters"),
+                                                    summary_text,
+                                                )
+                                                updated_state["parameters"] = params
+                                                action_def = get_action_definition(updated_state.get("action"))
+                                                prompt = await needs_option_context(
+                                                    adaptive_context,
+                                                    updated_state.get("action"),
+                                                    params,
+                                                    action_def,
+                                                )
+                                                if prompt:
+                                                    updated_state["status"] = "awaiting_slots"
+                                                    updated_state["missing_slots"] = updated_state.get("missing_slots") or ["option_context"]
+                                                    updated_state["last_prompt"] = prompt
+                                                    await save_task_state(adaptive_context, updated_state)
+                                                    await broadcast_chunk(prompt)
+                                                    pending_handled = True
+                                                else:
+                                                    await save_task_state(adaptive_context, updated_state)
+                                                    intent = {
+                                                        "action": updated_state.get("action"),
+                                                        "parameters": params,
+                                                        "confidence": 1.0,
+                                                    }
+                                                    result = await _execute_intent(intent)
+                                                    if result.get("status") == "success":
+                                                        await clear_task_state(adaptive_context)
+                                                    pending_handled = True
 
                         if not pending_handled:
-                            plan = await plan_user_request(ai_query, history_text, user_id=member_user.id)
+                            plan = await plan_user_request(
+                                ai_query,
+                                history_text,
+                                user_id=member_user.id,
+                                preferences=user_preferences,
+                            )
+                            _log_telemetry("plan_decision", {
+                                "user_id": member_user.id,
+                                "room_id": room_id,
+                                "mode": plan.get("mode"),
+                                "confidence": plan.get("confidence"),
+                            })
 
                             if plan["mode"] == "automation_request":
                                 from workflows.workflow_agent import handle_workflow_message
                                 response_text = await handle_workflow_message(member_user.id, room_id, ai_query, history_text)
                                 await broadcast_chunk(response_text)
                             elif plan["mode"] == "needs_clarification":
+                                _log_telemetry("clarification_requested", {
+                                    "user_id": member_user.id,
+                                    "room_id": room_id,
+                                    "source": "planner",
+                                })
                                 await broadcast_chunk(plan.get("assistant_message") or "I need a bit more detail to proceed.")
                             elif plan["mode"] == "needs_confirmation":
                                 workflow_definition = plan.get("workflow_definition") or {}
@@ -1044,14 +1257,22 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                     workflow_definition,
                                     member_user.id,
                                     room_id,
-                                    trigger_data={"message": ai_query},
+                                    trigger_data={"message": ai_query, "room_id": room_id},
                                 )
+                                _log_telemetry("workflow_execution", {
+                                    "user_id": member_user.id,
+                                    "room_id": room_id,
+                                    "status": execution.get("status"),
+                                    "mode": execution.get("mode"),
+                                    "step_count": len(workflow_definition.get("steps", [])),
+                                })
                                 async for chunk in synthesize_workflow_response_stream(
                                     ai_query,
                                     workflow_definition,
                                     execution.get("result") or {},
                                     execution.get("status") or "running",
                                     execution.get("error") or execution.get("message"),
+                                    preferences=user_preferences,
                                 ):
                                     await broadcast_chunk(chunk)
                                 should_cache_summary = True
@@ -1068,7 +1289,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                     "user_id": member_user.id,
                                     "username": member_username,
                                     "room_id": room_id,
-                                    "history": history_text
+                                    "history": history_text,
+                                    "preferences": user_preferences,
                                 })
 
                                 logger.info(f"Intent: {intent}")
@@ -1093,8 +1315,18 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                     )
                                     if not question:
                                         question = intent.get("clarifying_question") or "I need a bit more detail to proceed."
+                                    if conversation_mode == "social":
+                                        question = f"No rush — {question}"
+                                        task_state = pause_task_state(task_state, "social_mode", SOCIAL_PAUSE_SECONDS)
                                     task_state["last_prompt"] = question
                                     await save_task_state(adaptive_context, task_state)
+                                    _log_telemetry("clarification_requested", {
+                                        "user_id": member_user.id,
+                                        "room_id": room_id,
+                                        "source": "intent",
+                                        "action": action,
+                                        "missing_slots": task_state.get("missing_slots") or [],
+                                    })
                                     await broadcast_chunk(question)
                                 elif intent.get("confidence", 0) >= LLM_CONFIDENCE_EXECUTE and action != "general_chat":
                                     # Route through MCP
@@ -1114,21 +1346,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                     )
                                 else:
                                     # Fallback to LLM for general chat or low confidence (STREAMING)
-                                    from orchestration.llm_client import get_llm_client
-                                    llm_client = get_llm_client()
-
-                                    # Prepend history to query if available
-                                    full_query = ai_query
-                                    if history_text:
-                                        full_query = f"CONVERSATION HISTORY:\n{history_text}\n\nUSER message: {ai_query}"
-
-                                    async for chunk in llm_client.stream_text(
-                                        system_prompt="You are Mathia, a helpful AI assistant. Be concise and friendly.",
-                                        user_prompt=full_query,
-                                        temperature=0.7,
-                                        max_tokens=500
-                                    ):
-                                        await broadcast_chunk(chunk)
+                                    await _stream_general_chat(ai_query, history_text)
                         
                         # End stream
                         await broadcast_chunk("", is_final=True)

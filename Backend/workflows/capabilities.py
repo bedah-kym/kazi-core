@@ -314,7 +314,9 @@ def get_capabilities_prompt() -> str:
         '  "workflow_name": "...",',
         '  "workflow_description": "...",',
         '  "triggers": [ ... ],',
-        '  "steps": [ ... ],',
+        '  "steps": [',
+        '    {"id": "step_1", "service": "...", "action": "...", "params": {...}, "depends_on": ["step_0"], "condition": "..."}',
+        '  ],',
         '  "policy": {"allowed_phone_numbers": [...], "max_withdraw_amount": 0} // only if withdrawals',
         "}",
     ]
@@ -369,11 +371,21 @@ def validate_workflow_definition(workflow_def: Dict) -> Tuple[bool, str]:
     if not isinstance(steps, list):
         return False, "Steps must be a list"
 
-    for step in steps:
+    step_ids = []
+    for idx, step in enumerate(steps):
         if not isinstance(step, dict):
             return False, "Each step must be an object"
+        step_id = step.get('id') or step.get('action') or f"step_{idx + 1}"
+        step_ids.append(step_id)
+    if len(set(step_ids)) != len(step_ids):
+        return False, "Step ids must be unique"
+
+    index_map = {step_id: idx for idx, step_id in enumerate(step_ids)}
+
+    for step in steps:
         service = step.get('service')
         action = step.get('action')
+        step_id = step.get('id') or step.get('action')
 
         if service not in services:
             return False, f"Unknown service: {service}"
@@ -392,6 +404,22 @@ def validate_workflow_definition(workflow_def: Dict) -> Tuple[bool, str]:
             for param in required:
                 if param not in params:
                     return False, f"Missing param '{param}' in step '{step.get('id')}'"
+
+        depends_on = step.get('depends_on')
+        if depends_on is not None:
+            if not isinstance(depends_on, list):
+                return False, f"depends_on must be a list in step '{step_id}'"
+            for dep in depends_on:
+                if not isinstance(dep, str):
+                    return False, f"depends_on entries must be strings in step '{step_id}'"
+                if dep not in index_map:
+                    return False, f"Unknown dependency '{dep}' in step '{step_id}'"
+                if index_map.get(dep, -1) >= index_map.get(step_id, -1):
+                    return False, f"Dependency '{dep}' must appear before step '{step_id}'"
+
+        condition = step.get('condition')
+        if condition is not None and not isinstance(condition, str):
+            return False, f"condition must be a string in step '{step_id}'"
 
     if _requires_withdraw_policy(workflow_def):
         policy = workflow_def.get('policy') or {}

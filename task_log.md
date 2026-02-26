@@ -209,6 +209,44 @@
 8. Chat export: per-room export with date range/all history, grouped by day in a Markdown download with a UI entry point.
 9. Adaptive orchestration foundation: action registry + cache-backed task state with dynamic missing-slot prompts and summary auto-fill.
 10. Option selection gating: block booking by option number when no prior results (workflow + chat), and suppress nudges during active tasks.
+11. Small-talk aware task handling: pause/keep pending tasks without re-asking slots on greetings; added cancel intent for pending tasks.
+12. Conversation modes: added auto/focus/social modes with pause policy, resume handling, and friendly mode acknowledgements.
 
 ### In Progress
 - Milestone 4 refinement: monitor Celery load and tune thresholds if needed.
+
+---
+
+## Current Session: 2026-03-07 - GPT-5
+**Objective:** Phase 2 memory architecture: layered memory capture + prompt retrieval with decay.
+
+### Completed
+1. Added layered memory fields to RoomContext (facts, preferences, episodes, updated_at).
+2. Updated context prompt to include filtered memory sections with confidence/recency gating.
+3. Added manual migration for new memory fields (local makemigrations blocked by missing rest_framework).
+
+### Notes
+- Context memory retrieval now trims by age, confidence, and max items to avoid prompt bloat.
+
+### Phase 3 (Planner/Executor Boundary)
+1. Added dependency-aware planning defaults for delivery and booking steps.
+2. Hardened ManagerVerifier with dependency checks, ordering, and auto subjects for summary emails.
+3. Enforced depends_on validation in workflow schema and executor guards.
+
+### Phase 4 (Personalization + Cultural Communication)
+1. Added user preference helpers (tone, verbosity, locale, date order, time format, currency).
+2. Injected preferences into planning and intent prompts; locale-aware date hints in clarifications.
+3. Style-aware LLM responses for general chat, workflow summaries, and result synthesis.
+
+### Phase 5 (Telemetry + Evaluation Harness)
+1. Added lightweight JSONL telemetry logging for orchestration events.
+2. Added golden scenario harness (`run_golden_eval`) with starter scenarios and docs.
+3. Added assistant preference UI controls with an explanatory tooltip panel.
+
+### Phase 6 (Reliability, Cost, Onboarding, Trust)
+1. Added action receipts model for audit history and undo support (reminders).
+2. Added confirmation gating for sensitive actions (email, WhatsApp, payments, bookings).
+3. Logged workflow step receipts for side-effect actions and preserved room context for ad-hoc runs.
+4. Added receipt/undo commands in chat plus pause-for-now handling.
+5. Added LLM caching + conserve-mode token caps and deterministic workflow summaries.
+6. Added assistant controls + action receipts UI in the context panel with receipts API.

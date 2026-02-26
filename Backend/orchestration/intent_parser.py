@@ -8,6 +8,7 @@ import re
 from typing import Dict, Optional, Any
 
 from workflows.capabilities import SYSTEM_CAPABILITIES
+from orchestration.user_preferences import format_date_hint, format_time_hint
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +124,8 @@ Rules:
 - For travel searches: extract location/origin/destination, dates, passengers/guests, budget if mentioned
 - Dates should be extracted as YYYY-MM-DD format if possible, or raw string if user said "tomorrow", "next week", etc.
 - If required details are missing, list the param names in "missing_slots" and ask for only one missing detail in "clarifying_question"
+- Treat polite or indirect phrasing (e.g., "could you", "would you mind", "it would be great if") as intent.
+- If locale preferences are provided in user context, use date_order and time_format hints.
 - Be concise. No explanations outside JSON.
 """
 
@@ -148,17 +151,26 @@ Rules:
                     }
         return index
 
-    def _missing_param_message(self, param: str, action: Optional[str] = None) -> str:
+    def _missing_param_message(
+        self,
+        param: str,
+        action: Optional[str] = None,
+        preferences: Optional[Dict[str, Any]] = None,
+    ) -> str:
         label = param.replace("_", " ")
         suffix = ""
         if "date" in param:
-            suffix = " (YYYY-MM-DD)"
+            suffix = f" ({format_date_hint(preferences)})"
         elif "time" in param:
-            suffix = " (e.g., 15:00)"
+            suffix = f" (e.g., {format_time_hint(preferences)})"
         action_label = action.replace("_", " ") if action else "this request"
         return f"For {action_label}, I still need {label}{suffix}."
 
-    def _compute_missing_slots(self, intent: Dict) -> Dict[str, Any]:
+    def _compute_missing_slots(
+        self,
+        intent: Dict,
+        preferences: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         action = str(intent.get("action") or "").strip()
         if not action or action == "general_chat":
             return {"missing_slots": [], "clarifying_question": ""}
@@ -175,7 +187,7 @@ Rules:
                 missing.append(param_name)
         if not missing:
             return {"missing_slots": [], "clarifying_question": ""}
-        question = self._missing_param_message(str(missing[0]), action=action)
+        question = self._missing_param_message(str(missing[0]), action=action, preferences=preferences)
         return {"missing_slots": missing, "clarifying_question": question}
 
     def _rule_based_email_intent(self, message: str) -> Optional[Dict]:
@@ -248,12 +260,13 @@ Rules:
             
             # Validate and return
             intent = self._validate_intent(intent, message)
-            intent = self._postprocess_intent(intent)
+            preferences = (user_context or {}).get("preferences") if isinstance(user_context, dict) else None
+            intent = self._postprocess_intent(intent, preferences=preferences)
 
             if intent.get("confidence", 0.0) < _LOW_CONFIDENCE_THRESHOLD or intent.get("action") == "general_chat":
                 rule_based = self._rule_based_email_intent(message)
                 if rule_based:
-                    intent = self._postprocess_intent(rule_based)
+                    intent = self._postprocess_intent(rule_based, preferences=preferences)
             return intent
             
         except Exception as e:
@@ -278,6 +291,12 @@ Rules:
         
         prompt = f'Current Time: {timezone.now().isoformat()}\n'
         
+        if context and context.get('preferences'):
+            try:
+                prompt += f"USER PREFERENCES:\n{json.dumps(context.get('preferences'))}\n\n"
+            except Exception:
+                pass
+
         if context and context.get('history'):
             prompt += f"CONVERSATION HISTORY (Most recent last):\n{context['history']}\n\n"
             
@@ -339,7 +358,11 @@ Rules:
         
         return intent
 
-    def _postprocess_intent(self, intent: Dict) -> Dict:
+    def _postprocess_intent(
+        self,
+        intent: Dict,
+        preferences: Optional[Dict[str, Any]] = None,
+    ) -> Dict:
         if not isinstance(intent, dict):
             return {
                 "action": "general_chat",
@@ -382,7 +405,7 @@ Rules:
 
         intent["parameters"] = params
 
-        computed = self._compute_missing_slots(intent)
+        computed = self._compute_missing_slots(intent, preferences=preferences)
         missing_slots = computed.get("missing_slots") or []
         clarifying_question = computed.get("clarifying_question") or ""
 

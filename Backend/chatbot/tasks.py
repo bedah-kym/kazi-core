@@ -807,6 +807,39 @@ def _coerce_list(value):
     return []
 
 
+def _coerce_memory_list(value):
+    if isinstance(value, list):
+        return value
+    return []
+
+
+def _memory_sort_key(entry):
+    if not isinstance(entry, dict):
+        return ""
+    return str(entry.get("updated_at") or entry.get("date") or "")
+
+
+def _merge_memory_by_key(existing, incoming, key_field, max_items=25):
+    merged = {}
+    for item in _coerce_memory_list(existing):
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get(key_field) or "").strip().lower()
+        if not key:
+            continue
+        merged[key] = dict(item)
+    for item in _coerce_memory_list(incoming):
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get(key_field) or "").strip().lower()
+        if not key:
+            continue
+        merged[key] = dict(item)
+    merged_list = list(merged.values())
+    merged_list.sort(key=_memory_sort_key, reverse=True)
+    return merged_list[:max_items]
+
+
 @shared_task(bind=True, max_retries=2, default_retry_delay=60, ignore_result=True)
 def refresh_room_context_summary(self, room_id, message_id=None, message_delta=1):
     """
@@ -875,12 +908,20 @@ def refresh_room_context_summary(self, room_id, message_id=None, message_delta=1
             "active_topics: list of up to 5 short topics.",
             "notes: list of objects {type, content, priority}.",
             "highlights: list of up to 5 short strings.",
+            "memory_facts: list of objects {key, value, confidence}. Keep only durable facts.",
+            "memory_preferences: list of objects {key, value, confidence}.",
+            "memory_episodes: list of objects {summary, date, importance}.",
             "Valid note types: decision, action_item, insight, reminder, reference.",
             "Valid priorities: low, medium, high.",
+            "Valid importance: low, medium, high.",
+            "Only include memory items that are stable and helpful later.",
         ])
 
         user_prompt = "\n".join([
             f"Existing summary: {context.summary or ''}",
+            f"Existing facts: {(context.memory_facts or [])[:10]}",
+            f"Existing preferences: {(context.memory_preferences or [])[:10]}",
+            f"Existing episodes: {(context.memory_episodes or [])[:6]}",
             "",
             "Conversation (most recent last):",
             "\n".join(lines),
@@ -902,17 +943,57 @@ def refresh_room_context_summary(self, room_id, message_id=None, message_delta=1
         active_topics = _coerce_list(payload.get("active_topics"))[:5]
         notes = payload.get("notes") if isinstance(payload.get("notes"), list) else []
         highlights = _coerce_list(payload.get("highlights"))[:5]
+        memory_facts = _coerce_memory_list(payload.get("memory_facts"))
+        memory_preferences = _coerce_memory_list(payload.get("memory_preferences"))
+        memory_episodes = _coerce_memory_list(payload.get("memory_episodes"))
 
         if summary_text:
             context.summary = summary_text
         if active_topics:
             context.active_topics = active_topics
 
+        if memory_facts:
+            for item in memory_facts:
+                if isinstance(item, dict) and "updated_at" not in item:
+                    item["updated_at"] = now.isoformat()
+            context.memory_facts = _merge_memory_by_key(
+                context.memory_facts,
+                memory_facts,
+                "key",
+                max_items=30,
+            )
+        if memory_preferences:
+            for item in memory_preferences:
+                if isinstance(item, dict) and "updated_at" not in item:
+                    item["updated_at"] = now.isoformat()
+            context.memory_preferences = _merge_memory_by_key(
+                context.memory_preferences,
+                memory_preferences,
+                "key",
+                max_items=20,
+            )
+        if memory_episodes:
+            for item in memory_episodes:
+                if isinstance(item, dict) and "updated_at" not in item:
+                    item["updated_at"] = now.isoformat()
+            context.memory_episodes = _merge_memory_by_key(
+                context.memory_episodes,
+                memory_episodes,
+                "summary",
+                max_items=20,
+            )
+        if memory_facts or memory_preferences or memory_episodes:
+            context.memory_updated_at = now
+
         context.last_compressed_at = now
         context.message_count = 0
         context.save(update_fields=[
             "summary",
             "active_topics",
+            "memory_facts",
+            "memory_preferences",
+            "memory_episodes",
+            "memory_updated_at",
             "last_compressed_at",
             "message_count",
             "updated_at",

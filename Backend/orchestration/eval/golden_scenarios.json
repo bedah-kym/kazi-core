@@ -1,0 +1,40 @@
+[
+  {
+    "id": "travel_email_results",
+    "message": "Find flights from Nairobi to Kisumu on 2026-02-22 and email the results to bedankimani860@gmail.com.",
+    "history": "",
+    "preferences": {
+      "date_order": "DMY",
+      "time_format": "24h",
+      "tone": "friendly"
+    },
+    "expected_mode": "adhoc_workflow",
+    "expected_actions": ["search_flights", "send_email"],
+    "requires_llm": true
+  },
+  {
+    "id": "hotel_search",
+    "message": "Find a hotel in Mombasa from 04/03/2026 to 07/03/2026 for 2 guests.",
+    "history": "",
+    "preferences": {
+      "date_order": "DMY"
+    },
+    "expected_mode": "adhoc_workflow",
+    "expected_actions": ["search_hotels"],
+    "requires_llm": true
+  },
+  {
+    "id": "weather_single",
+    "message": "What is the weather in Nairobi?",
+    "history": "",
+    "expected_intent_action": "get_weather",
+    "requires_llm": true
+  },
+  {
+    "id": "quota_status",
+    "message": "Show my quotas.",
+    "history": "",
+    "expected_intent_action": "check_quotas",
+    "requires_llm": true
+  }
+]

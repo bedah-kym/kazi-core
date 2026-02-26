@@ -123,6 +123,67 @@ class UserForm(forms.ModelForm):
         fields = ['first_name', 'last_name', 'email']
 
 class UserProfileForm(forms.ModelForm):
+    assistant_tone = forms.ChoiceField(
+        required=False,
+        label='Assistant tone',
+        choices=[
+            ('', 'Default (friendly)'),
+            ('friendly', 'Friendly'),
+            ('formal', 'Formal'),
+            ('direct', 'Direct'),
+            ('warm', 'Warm'),
+            ('casual', 'Casual'),
+        ]
+    )
+    assistant_verbosity = forms.ChoiceField(
+        required=False,
+        label='Assistant verbosity',
+        choices=[
+            ('', 'Default (balanced)'),
+            ('short', 'Short'),
+            ('balanced', 'Balanced'),
+            ('detailed', 'Detailed'),
+        ]
+    )
+    assistant_directness = forms.ChoiceField(
+        required=False,
+        label='Assistant directness',
+        choices=[
+            ('', 'Default (neutral)'),
+            ('direct', 'Direct'),
+            ('neutral', 'Neutral'),
+            ('polite', 'Polite'),
+        ]
+    )
+    assistant_locale = forms.CharField(
+        required=False,
+        label='Assistant locale',
+        help_text='Leave blank for auto. Example: en-US, en-GB, en-KE'
+    )
+    assistant_date_order = forms.ChoiceField(
+        required=False,
+        label='Date order',
+        choices=[
+            ('', 'Auto (locale default)'),
+            ('DMY', 'Day / Month / Year'),
+            ('MDY', 'Month / Day / Year'),
+            ('YMD', 'Year / Month / Day'),
+        ]
+    )
+    assistant_time_format = forms.ChoiceField(
+        required=False,
+        label='Time format',
+        choices=[
+            ('', 'Auto (locale default)'),
+            ('24h', '24-hour'),
+            ('12h', '12-hour'),
+        ]
+    )
+    assistant_currency = forms.CharField(
+        required=False,
+        label='Preferred currency',
+        help_text='Leave blank for auto. Example: USD, EUR, KES'
+    )
     email_notifications = forms.BooleanField(
         required=False,
         label='Email notifications',
@@ -180,6 +241,13 @@ class UserProfileForm(forms.ModelForm):
         self.fields['email_notifications'].initial = prefs.get('email_notifications', True)
         self.fields['push_notifications'].initial = prefs.get('push_notifications', False)
         self.fields['digest_frequency'].initial = prefs.get('digest_frequency', 'weekly')
+        self.fields['assistant_tone'].initial = prefs.get('assistant_tone', '')
+        self.fields['assistant_verbosity'].initial = prefs.get('assistant_verbosity', '')
+        self.fields['assistant_directness'].initial = prefs.get('assistant_directness', '')
+        self.fields['assistant_locale'].initial = prefs.get('assistant_locale', '')
+        self.fields['assistant_date_order'].initial = prefs.get('assistant_date_order', '')
+        self.fields['assistant_time_format'].initial = prefs.get('assistant_time_format', '')
+        self.fields['assistant_currency'].initial = prefs.get('assistant_currency', '')
 
     def save(self, commit=True):
         instance = super().save(commit=False)
@@ -205,6 +273,42 @@ class UserProfileForm(forms.ModelForm):
         prefs['email_notifications'] = bool(self.cleaned_data.get('email_notifications'))
         prefs['push_notifications'] = bool(self.cleaned_data.get('push_notifications'))
         prefs['digest_frequency'] = self.cleaned_data.get('digest_frequency') or prefs.get('digest_frequency', 'weekly')
+        tone = (self.cleaned_data.get('assistant_tone') or '').strip()
+        verbosity = (self.cleaned_data.get('assistant_verbosity') or '').strip()
+        directness = (self.cleaned_data.get('assistant_directness') or '').strip()
+        locale = (self.cleaned_data.get('assistant_locale') or '').strip()
+        date_order = (self.cleaned_data.get('assistant_date_order') or '').strip()
+        time_format = (self.cleaned_data.get('assistant_time_format') or '').strip()
+        currency = (self.cleaned_data.get('assistant_currency') or '').strip().upper()
+
+        if tone:
+            prefs['assistant_tone'] = tone
+        else:
+            prefs.pop('assistant_tone', None)
+        if verbosity:
+            prefs['assistant_verbosity'] = verbosity
+        else:
+            prefs.pop('assistant_verbosity', None)
+        if directness:
+            prefs['assistant_directness'] = directness
+        else:
+            prefs.pop('assistant_directness', None)
+        if locale:
+            prefs['assistant_locale'] = locale
+        else:
+            prefs.pop('assistant_locale', None)
+        if date_order:
+            prefs['assistant_date_order'] = date_order
+        else:
+            prefs.pop('assistant_date_order', None)
+        if time_format:
+            prefs['assistant_time_format'] = time_format
+        else:
+            prefs.pop('assistant_time_format', None)
+        if currency:
+            prefs['assistant_currency'] = currency
+        else:
+            prefs.pop('assistant_currency', None)
         instance.social_links = social_links
         instance.notification_preferences = prefs
 

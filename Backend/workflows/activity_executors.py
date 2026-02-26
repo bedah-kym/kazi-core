@@ -1,7 +1,7 @@
 """Activity executors for workflow steps."""
 import json
 from decimal import Decimal
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from django.conf import settings
 
 from orchestration.llm_client import get_llm_client
@@ -17,6 +17,7 @@ from orchestration.connectors.travel_flights_connector import TravelFlightsConne
 from orchestration.connectors.travel_transfers_connector import TravelTransfersConnector
 from orchestration.connectors.travel_events_connector import TravelEventsConnector
 from orchestration.mcp_router import SearchConnector, WeatherConnector, GiphyConnector, CurrencyConnector, ReminderConnector, UpworkConnector, CalendarConnector
+from orchestration.action_receipts import record_action_receipt, should_record_receipt
 
 from .utils import resolve_parameters
 
@@ -61,9 +62,28 @@ _AUTO_EMAIL_SUMMARY_TOKEN = "__AUTO_SUMMARY__"
 _OPTION_PARAM_HINTS = ("item_id", "option", "selection")
 
 
-def _has_prior_results(context: Dict[str, Any]) -> bool:
+def _normalize_depends_on(value: Any) -> list:
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if isinstance(value, list):
+        return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+    return []
+
+
+def _dependency_ready(dep_id: str, context: Dict[str, Any]) -> bool:
+    if dep_id not in context:
+        return False
+    result = context.get(dep_id)
+    if isinstance(result, dict) and result.get("status") == "error":
+        return False
+    return True
+
+
+def _has_prior_results(context: Dict[str, Any], allowed_steps: Optional[list] = None) -> bool:
     for key, value in context.items():
         if key in ("trigger", "workflow", "user_id"):
+            continue
+        if allowed_steps and key not in allowed_steps:
             continue
         if not isinstance(value, dict):
             continue
@@ -211,8 +231,17 @@ async def execute_workflow_step(step: Dict[str, Any], context: Dict[str, Any]) -
     service = (step.get('service') or '').lower()
     action = step.get('action')
     params = resolve_parameters(step.get('params', {}), context)
+    depends_on = _normalize_depends_on(step.get("depends_on"))
+    if depends_on:
+        missing = [dep for dep in depends_on if not _dependency_ready(dep, context)]
+        if missing:
+            joined = ", ".join(missing[:3])
+            return {
+                "status": "error",
+                "error": f"I need results from {joined} before I can continue.",
+            }
 
-    if _needs_option_context(params) and not _has_prior_results(context):
+    if _needs_option_context(params) and not _has_prior_results(context, allowed_steps=depends_on or None):
         return {
             "status": "error",
             "error": (
@@ -221,47 +250,70 @@ async def execute_workflow_step(step: Dict[str, Any], context: Dict[str, Any]) -
             ),
         }
 
+    async def _record_and_return(result: Dict[str, Any]) -> Dict[str, Any]:
+        if should_record_receipt(action):
+            status = "success"
+            if isinstance(result, dict):
+                if result.get("status") in ("error", "failed"):
+                    status = "error"
+                elif result.get("error"):
+                    status = "error"
+            try:
+                await record_action_receipt(
+                    user_id=context.get("user_id"),
+                    room_id=context.get("room_id"),
+                    action=action or "",
+                    service=service or "",
+                    params=params,
+                    result=result if isinstance(result, dict) else {"result": result},
+                    status=status,
+                    reason=result.get("error") if isinstance(result, dict) else "",
+                )
+            except Exception:
+                pass
+        return result
+
     if service == 'payments' and action == 'withdraw':
         error = _enforce_withdraw_policy(params, context)
         if error:
-            return {"status": "error", "error": error}
+            return await _record_and_return({"status": "error", "error": error})
 
     if service in ('gmail', 'mailgun'):
         if params.get('text') == _AUTO_EMAIL_SUMMARY_TOKEN:
             params['text'] = await _build_email_summary(context)
         connector = GmailConnector()
         params.setdefault('action', 'send_email')
-        return await connector.execute(params, context)
+        return await _record_and_return(await connector.execute(params, context))
 
     if service == 'whatsapp':
         connector = WhatsAppConnector()
         params.setdefault('action', 'send_message')
-        return await connector.execute(params, context)
+        return await _record_and_return(await connector.execute(params, context))
 
     if service == 'payments':
         if action in _READ_ONLY_PAYMENT_ACTIONS:
             connector = ReadOnlyPaymentConnector()
             params.setdefault('action', action)
-            return await connector.execute(params, context)
+            return await _record_and_return(await connector.execute(params, context))
         if action in _PAYMENT_ACTIONS:
             connector = IntersendPayConnector()
             params.setdefault('action', action)
-            return await connector.execute(params, context)
-        return {"status": "error", "error": f"Unsupported payment action: {action}"}
+            return await _record_and_return(await connector.execute(params, context))
+        return await _record_and_return({"status": "error", "error": f"Unsupported payment action: {action}"})
 
     if service == 'travel' and action in _TRAVEL_ACTIONS:
         connector = _TRAVEL_ACTIONS[action]
         params.setdefault('action', action)
-        return await connector.execute(params, context)
+        return await _record_and_return(await connector.execute(params, context))
 
     if action in _TRAVEL_ACTIONS:
         connector = _TRAVEL_ACTIONS[action]
         params.setdefault('action', action)
-        return await connector.execute(params, context)
+        return await _record_and_return(await connector.execute(params, context))
 
     if action in _MISC_ACTIONS:
         connector = _MISC_ACTIONS[action]
         params.setdefault('action', action)
-        return await connector.execute(params, context)
+        return await _record_and_return(await connector.execute(params, context))
 
-    return {"status": "error", "error": f"Unsupported workflow step: {service}.{action}"}
+    return await _record_and_return({"status": "error", "error": f"Unsupported workflow step: {service}.{action}"})

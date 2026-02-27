@@ -667,3 +667,11 @@
         font-size: 1em !important;
     }
 }
+
+body.ai-only-room .invite-user-action {
+    display: none !important;
+}
+
+body.ai-only-room #inviteUserModal {
+    display: none;
+}

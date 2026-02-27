@@ -6,6 +6,9 @@
 
 document.addEventListener('DOMContentLoaded', () => {
     const driver = window.driver.js.driver;
+    const mentionHint = window.isAiOnlyRoom
+        ? 'Just type like you\'re talking to a friend. Ask for advice, a summary, or a joke!'
+        : 'Start with @mathia then just type like you\'re talking to a friend, e.g. @mathia how is the weather in Nairobi.';
 
     const driverObj = driver({
         showProgress: true,
@@ -100,7 +103,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 element: '#chat-message-input',
                 popover: {
                     title: 'Just Say Hi! 💬',
-                    description: 'start with @mathia then Just type like you\'re talking to a friend like @mathia how is the weather in nairobi. Ask for advice, a summary, or a joke!',
+                    description: mentionHint,
                     side: "top",
                     align: 'center'
                 }

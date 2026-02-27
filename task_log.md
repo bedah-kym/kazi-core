@@ -265,3 +265,9 @@
 
 ### Notes
 - New env knobs: CELERY_CONCURRENCY, CELERY_AUTOSCALE, CELERY_POOL, CELERY_WORKER_MAX_TASKS_PER_CHILD, CELERY_WORKER_MAX_MEMORY_PER_CHILD, MODERATION_ENABLED, MODERATION_FLUSH_SECONDS, WORKFLOW_REPLAY_SCHEDULE_SECONDS, REMINDER_SWEEP_SECONDS.
+
+### Follow-up
+1. Added inferred AI-only room mode (user + Mathia) and gated orchestration without @ in those rooms.
+2. Suppressed invites in AI-only rooms (UI hide + server-side block).
+3. Quick actions now show only when @mathia is completed and hide once typing continues; fixed duplicate @mathia prefixes in quick actions.
+4. Onboarding hint adapts to AI-only vs mention-required rooms.

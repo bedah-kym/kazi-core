@@ -84,6 +84,20 @@ class MathiaAssistant {
         this.hideAutocomplete();
     }
 
+    getMathiaTriggerState(value) {
+        if (!value) return { hasMention: false, show: false };
+        const lower = value.toLowerCase();
+        const pattern = /(?:^|\s)@mathia(?:\s|$)/g;
+        let match = null;
+        let lastEnd = -1;
+        while ((match = pattern.exec(lower)) !== null) {
+            lastEnd = pattern.lastIndex;
+        }
+        if (lastEnd === -1) return { hasMention: false, show: false };
+        const after = lower.slice(lastEnd);
+        return { hasMention: true, show: after.trim().length === 0 };
+    }
+
     // ============================================
     // QUICK PROMPTS
     // ============================================
@@ -197,11 +211,12 @@ class MathiaAssistant {
         promptsContainer.classList.remove('active');
 
         this.messageInput.addEventListener('input', (e) => {
-            if (e.target.value.toLowerCase().includes('@mathia')) {
+            const state = this.getMathiaTriggerState(e.target.value);
+            if (state.show) {
                 promptsContainer.classList.add('active');
-            } else {
-                promptsContainer.classList.remove('active');
+                return;
             }
+            promptsContainer.classList.remove('active');
         });
 
         promptsContainer.querySelector('.btn-close-prompts').addEventListener('click', () => {
@@ -272,7 +287,14 @@ class MathiaAssistant {
     }
 
     sendToMathia(message) {
-        const fullMessage = `@mathia ${message}`;
+        const trimmed = (message || '').trim();
+        const isAiOnlyRoom = !!window.isAiOnlyRoom;
+        let fullMessage = trimmed;
+        if (isAiOnlyRoom) {
+            fullMessage = trimmed.replace(/^@mathia\s*/i, '');
+        } else if (trimmed && !trimmed.toLowerCase().startsWith('@mathia')) {
+            fullMessage = `@mathia ${trimmed}`.trim();
+        }
         this.messageInput.value = fullMessage;
 
         // Trigger send
@@ -386,9 +408,14 @@ class MathiaAssistant {
     }
 
     checkForTrigger(data) {
-        if (data.command === 'new_message' &&
-            data.message?.content?.toLowerCase().includes('@mathia') &&
-            data.message?.member === (this.username || window.usernameGlobal)) {
+        if (data.command !== 'new_message') return;
+        const isFromSelf = data.message?.member === (this.username || window.usernameGlobal);
+        if (!isFromSelf) return;
+        if (window.isAiOnlyRoom) {
+            this.showAIThinking();
+            return;
+        }
+        if (data.message?.content?.toLowerCase().includes('@mathia')) {
             this.showAIThinking();
         }
     }

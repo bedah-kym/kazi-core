@@ -53,6 +53,12 @@ def _ensure_default_room(user):
         return new_room
 
 
+def _is_ai_only_room_members(members):
+    has_mathia = any(m.User.username == 'mathia' for m in members)
+    human_members = [m for m in members if m.User.username != 'mathia']
+    return has_mathia and len(human_members) == 1
+
+
 @login_required
 def home(request, room_name):
     # Security Fix: Only show rooms where the user is a participant
@@ -98,14 +104,15 @@ def home(request, room_name):
     # Security Fix: Ensure user can only access a room they belong to
     room = get_object_or_404(Chatroom, id=room_name, participants__User=request.user)
     
-    room_members = room.participants.all()
+    room_members = list(room.participants.all())
     # each room has two members the user and the other user we need to get the name of the other user to display
-    other_member = room_members.exclude(User=request.user).first()
+    other_member = next((m for m in room_members if m.User != request.user), None)
     current_room_name = other_member.User.username if other_member else "Unknown User"
     
     # Override current room name if it's Mathia
     if other_member and other_member.User.username == 'mathia':
         current_room_name = "General (AI)"
+    is_ai_room = _is_ai_only_room_members(room_members)
 
     return render(
         request, "chatbot/chatbase.html",
@@ -115,6 +122,7 @@ def home(request, room_name):
             "username": mark_safe(json.dumps(request.user.username)),
             "chatrooms": chatrooms_data,  # Passing processed data
             "room_member": current_room_name,
+            "is_ai_room": is_ai_room,
         }
     )
 
@@ -295,6 +303,13 @@ def invite_user(request):
         
         # Security Check: Ensure requester is in the room
         room = get_object_or_404(Chatroom, id=room_id, participants__User=request.user)
+
+        members = list(room.participants.select_related('User'))
+        if _is_ai_only_room_members(members):
+            return JsonResponse(
+                {'status': 'error', 'message': 'Invites are disabled in AI-only rooms'},
+                status=400
+            )
         
         # Prevent inviting yourself
         if email == request.user.email:

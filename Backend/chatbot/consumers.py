@@ -741,6 +741,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
             logger.info(f"Step 12: Getting room members...")
             room_members = await self.get_chatroom_participants(current_chat)
+            mathia_member = next((m for m in room_members if m.User.username == 'mathia'), None)
+            human_members = [m for m in room_members if m.User.username != 'mathia']
+            is_ai_room = bool(mathia_member) and len(human_members) == 1
 
             if member in room_members:
                 logger.info(f"Step 13: Adding message to chatroom...")
@@ -777,14 +780,21 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     logger.warning(f"Idle nudge schedule skipped: {e}")
 
                 # === ORCHESTRATION: Full pipeline ===
+                should_route_ai = False
+                ai_query = None
                 if message_content.lower().startswith('@mathia'):
+                    ai_query = message_content[7:].strip()
+                    should_route_ai = True
+                elif is_ai_room:
+                    ai_query = message_content.strip()
+                    should_route_ai = True
+
+                if should_route_ai:
                     logger.info(f"Step 16: @mathia detected! Starting orchestration...")
                     
                     from orchestration.intent_parser import parse_intent
                     from orchestration.mcp_router import route_intent
                     from orchestration.data_synthesizer import synthesize_response
-                    
-                    ai_query = message_content[7:].strip()
                     
                     if ai_query:
                         # Fetch history for conversation context

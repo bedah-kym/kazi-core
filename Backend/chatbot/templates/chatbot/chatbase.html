@@ -210,7 +210,7 @@
     </style>
 </head>
 
-<body class="chat-page">
+<body class="chat-page{% if is_ai_room %} ai-only-room{% endif %}">
     <button class="dark-mode-toggle" id="darkModeToggle" aria-label="Toggle dark mode">
         <i class="fas fa-moon"></i>
     </button>
@@ -345,7 +345,7 @@
                                     <li>
                                         <h6 class="dropdown-header">Chat Actions</h6>
                                     </li>
-                                    <li><a class="dropdown-item" data-bs-toggle="modal"
+                                    <li><a class="dropdown-item invite-user-action" data-bs-toggle="modal"
                                             data-bs-target="#inviteUserModal"><i
                                                 class="fas fa-user-plus me-2"></i>Invite User</a></li>
                                     <li><button class="dropdown-item" type="button"
@@ -401,7 +401,7 @@
                             </div>
                             <!-- Desktop: chat action buttons -->
                             <div class="d-none d-lg-flex align-items-center">
-                                <button class="btn btn-light me-2" data-bs-toggle="modal"
+                                <button class="btn btn-light me-2 invite-user-action" data-bs-toggle="modal"
                                     data-bs-target="#inviteUserModal" title="Invite User">
                                     <i class="fas fa-user-plus"></i>
                                 </button>
@@ -743,11 +743,13 @@
         window.usernameGlobal = {{ username }};
         window.currentRoomId = window.roomName || null;
         window.otherUser = '{{ room_member|default:"" }}';
+        window.isAiOnlyRoom = {{ is_ai_room|yesno:"true,false" }};
 
         // Legacy support for older scripts
         var roomName = window.roomName;
         var username = window.usernameGlobal;
         var otherUser = window.otherUser;
+        var isAiOnlyRoom = window.isAiOnlyRoom;
     </script>
 
     <script src="{% static 'js/main.js'%}"></script>

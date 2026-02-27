@@ -214,6 +214,7 @@ TRAVEL_ALLOW_FALLBACK = os.environ.get('TRAVEL_ALLOW_FALLBACK', str(DEBUG)).lowe
 # Celery Results
 CELERY_RESULT_BACKEND = 'django-db'  # Using Django DB for results
 CELERY_CACHE_BACKEND = 'django-cache'
+CELERY_TASK_IGNORE_RESULT = os.environ.get('CELERY_TASK_IGNORE_RESULT', 'True').lower() in ('1', 'true', 'yes')
 
 # Celery serialization
 CELERY_ACCEPT_CONTENT = ['json']
@@ -225,9 +226,10 @@ CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 30 * 60
 CELERY_TASK_SOFT_TIME_LIMIT = 25 * 60
+CELERY_WORKER_CONCURRENCY = int(os.environ.get('CELERY_CONCURRENCY', 1))
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
-CELERY_WORKER_MAX_TASKS_PER_CHILD = 1000
-CELERY_WORKER_MAX_MEMORY_PER_CHILD = int(os.environ.get('CELERY_WORKER_MAX_MEMORY_PER_CHILD', 300000))  # KiB
+CELERY_WORKER_MAX_TASKS_PER_CHILD = int(os.environ.get('CELERY_WORKER_MAX_TASKS_PER_CHILD', 200))
+CELERY_WORKER_MAX_MEMORY_PER_CHILD = int(os.environ.get('CELERY_WORKER_MAX_MEMORY_PER_CHILD', 250000))  # KiB
 CELERY_RESULT_EXPIRES = int(os.environ.get('CELERY_RESULT_EXPIRES', 3600))  # 1 hour
 
 # Django Cache with local Redis
@@ -252,15 +254,17 @@ CHANNEL_LAYERS = {
 }
 
 # Celery Beat Schedule
+MODERATION_ENABLED = os.environ.get('MODERATION_ENABLED')
+if MODERATION_ENABLED is None:
+    MODERATION_ENABLED = bool(os.environ.get('HF_API_TOKEN', ''))
+else:
+    MODERATION_ENABLED = MODERATION_ENABLED.lower() in ('1', 'true', 'yes')
+
+MODERATION_FLUSH_SECONDS = int(os.environ.get('MODERATION_FLUSH_SECONDS', 600))
+REMINDER_SWEEP_SECONDS = int(os.environ.get('REMINDER_SWEEP_SECONDS', 3600))
+WORKFLOW_REPLAY_SCHEDULE_SECONDS = int(os.environ.get('WORKFLOW_REPLAY_SCHEDULE_SECONDS', 300))
+
 CELERY_BEAT_SCHEDULE = {
-    'flush-moderation-batches': {
-        'task': 'chatbot.tasks.process_pending_batches',
-        'schedule': 300.0,  # 5 min
-    },
-    'cleanup-old-batches': {
-        'task': 'chatbot.tasks.cleanup_old_moderation_batches',
-        'schedule': 86400.0,  # Daily
-    },
     'reconcile-ledger': {
         'task': 'payments.tasks.reconcile_ledger',
         'schedule': 7200.0,  # Every 2 hours
@@ -271,17 +275,33 @@ CELERY_BEAT_SCHEDULE = {
     },
     'check-due-reminders': {
         'task': 'chatbot.tasks.check_due_reminders',
-        'schedule': 3600.0,  # Hourly safety sweep
+        'schedule': float(REMINDER_SWEEP_SECONDS),  # Safety sweep
     },
     'send-trial-summary': {
         'task': 'users.tasks.send_trial_summary_task',
         'schedule': crontab(hour=7, minute=0),  # every day at 07:00
     },
-    'replay-deferred-workflows': {
-        'task': 'workflows.tasks.replay_deferred_workflows',
-        'schedule': 60.0,  # Every minute
-    },
 }
+
+if MODERATION_ENABLED:
+    CELERY_BEAT_SCHEDULE.update({
+        'flush-moderation-batches': {
+            'task': 'chatbot.tasks.process_pending_batches',
+            'schedule': float(MODERATION_FLUSH_SECONDS),  # Batch moderation
+        },
+        'cleanup-old-batches': {
+            'task': 'chatbot.tasks.cleanup_old_moderation_batches',
+            'schedule': 86400.0,  # Daily
+        },
+    })
+
+if not TEMPORAL_DISABLED:
+    CELERY_BEAT_SCHEDULE.update({
+        'replay-deferred-workflows': {
+            'task': 'workflows.tasks.replay_deferred_workflows',
+            'schedule': float(WORKFLOW_REPLAY_SCHEDULE_SECONDS),  # Batch replays
+        },
+    })
 
 # AI Moderation Settings
 MODERATION_BATCH_SIZE = 10

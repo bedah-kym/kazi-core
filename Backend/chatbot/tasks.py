@@ -25,26 +25,39 @@ from .models import (
 from .context_manager import ContextManager
 from orchestration.llm_client import get_llm_client, extract_json
 from users.encryption import TokenEncryption
-import pypdf
-from PIL import Image
 from django.contrib.auth import get_user_model
 import os
 import traceback
 from django.conf import settings
-import openai
-from pydub import AudioSegment
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
-OpenAIError = getattr(openai, "OpenAIError", Exception)
+_HF_IMPORT_ERROR_LOGGED = False
+_OPENAI_IMPORT_ERROR_LOGGED = False
 
-# HF API imports (install: pip install huggingface_hub)
-try:
-    from huggingface_hub import InferenceClient
-    HF_AVAILABLE = True
-except ImportError:
-    HF_AVAILABLE = False
-    logger.warning("huggingface_hub not installed. AI features disabled.")
+
+def _get_hf_client_cls():
+    global _HF_IMPORT_ERROR_LOGGED
+    try:
+        from huggingface_hub import InferenceClient
+        return InferenceClient
+    except ImportError:
+        if not _HF_IMPORT_ERROR_LOGGED:
+            logger.warning("huggingface_hub not installed. AI features disabled.")
+            _HF_IMPORT_ERROR_LOGGED = True
+        return None
+
+
+def _get_openai_module():
+    global _OPENAI_IMPORT_ERROR_LOGGED
+    try:
+        import openai
+        return openai
+    except ImportError:
+        if not _OPENAI_IMPORT_ERROR_LOGGED:
+            logger.warning("openai not installed. Voice features disabled.")
+            _OPENAI_IMPORT_ERROR_LOGGED = True
+        return None
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60, ignore_result=True)
@@ -52,7 +65,8 @@ def moderate_message_batch(self, batch_id):
     """
     Process a batch of messages for moderation using HF API
     """
-    if not HF_AVAILABLE:
+    InferenceClient = _get_hf_client_cls()
+    if not InferenceClient:
         logger.error("HuggingFace not available")
         return {"error": "HF not installed"}
     
@@ -198,7 +212,8 @@ def generate_ai_response(self, room_id, user_id, user_message):
     """
     Generate AI assistant response with streaming support
     """
-    if not HF_AVAILABLE:
+    InferenceClient = _get_hf_client_cls()
+    if not InferenceClient:
         logger.error("HuggingFace not available")
         return {"error": "HF not installed"}
     
@@ -357,6 +372,9 @@ def transcribe_voice_note(self, message_id):
         file_path = os.path.join(settings.MEDIA_ROOT, message.audio_url)
         
         # OpenAI Whisper
+        openai = _get_openai_module()
+        if not openai:
+            return "OpenAI not installed"
         client = openai.OpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
         
         with open(file_path, "rb") as audio_file:
@@ -392,6 +410,7 @@ def transcribe_voice_note(self, message_id):
 @shared_task(bind=True, max_retries=1, default_retry_delay=300, ignore_result=True)
 def generate_voice_response(self, message_id):
     """Generate audio for AI response using OpenAI TTS"""
+    OpenAIError = Exception
     try:
         if not getattr(settings, "AI_VOICE_ENABLED", True):
             return {"status": "skipped", "reason": "disabled"}
@@ -425,6 +444,10 @@ def generate_voice_response(self, message_id):
             return {"status": "skipped", "reason": "empty_text"}
         
         # OpenAI TTS
+        openai = _get_openai_module()
+        if not openai:
+            return {"status": "skipped", "reason": "openai_not_installed"}
+        OpenAIError = getattr(openai, "OpenAIError", Exception)
         client = openai.OpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
         
         response = client.audio.speech.create(
@@ -477,7 +500,8 @@ def moderate_text_realtime(text_content):
     Real-time text moderation using HF (optional, for suspicious content)
     This runs async and logs results, doesn't block message sending
     """
-    if not HF_AVAILABLE:
+    InferenceClient = _get_hf_client_cls()
+    if not InferenceClient:
         return {"error": "HF not available"}
     
     try:
@@ -710,6 +734,11 @@ def extract_text_from_pdf(file_path):
     text = ""
     metadata = {}
     try:
+        try:
+            import pypdf
+        except ImportError:
+            logger.error("pypdf not installed. PDF extraction disabled.")
+            return "PDF extraction unavailable (missing dependency).", {}
         with open(file_path, 'rb') as f:
             reader = pypdf.PdfReader(f)
             metadata = {
@@ -731,6 +760,11 @@ def extract_text_from_image(file_path):
     """Utility to extract metadata and basic info from an image"""
     metadata = {}
     try:
+        try:
+            from PIL import Image
+        except ImportError:
+            logger.error("Pillow not installed. Image extraction disabled.")
+            return "Image extraction unavailable (missing dependency).", {}
         with Image.open(file_path) as img:
             metadata = {
                 "format": img.format,

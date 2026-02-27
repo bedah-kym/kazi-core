@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 MAX_ATTEMPTS = int(os.environ.get('WORKFLOW_REPLAY_MAX_ATTEMPTS', 6))
 BASE_BACKOFF_SECONDS = int(os.environ.get('WORKFLOW_REPLAY_BACKOFF_BASE', 30))
 MAX_BACKOFF_SECONDS = int(os.environ.get('WORKFLOW_REPLAY_BACKOFF_MAX', 10 * 60))
-REPLAY_BATCH_LIMIT = int(os.environ.get('WORKFLOW_REPLAY_BATCH_LIMIT', 10))
+REPLAY_BATCH_LIMIT = int(os.environ.get('WORKFLOW_REPLAY_BATCH_LIMIT', 25))
 TEMPORAL_GUARD_SECONDS = int(os.environ.get('WORKFLOW_REPLAY_GUARD_SECONDS', 120))
 TEMPORAL_GUARD_KEY = 'temporal:unavailable'
 

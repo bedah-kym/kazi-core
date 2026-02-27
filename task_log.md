@@ -250,3 +250,18 @@
 4. Added receipt/undo commands in chat plus pause-for-now handling.
 5. Added LLM caching + conserve-mode token caps and deterministic workflow summaries.
 6. Added assistant controls + action receipts UI in the context panel with receipts API.
+
+---
+
+## Current Session: 2026-03-08 - GPT-5
+**Objective:** Reduce Celery baseline memory and batch periodic work without losing behavior.
+
+### Completed
+1. Lazy-loaded heavy task dependencies in chatbot Celery tasks (HF/OpenAI/PDF/Image) to lower worker baseline.
+2. Added missing-dependency guards for voice/moderation tasks.
+3. Tuned Celery worker defaults: concurrency env (default 1), lower max-tasks-per-child, max-memory-per-child, ignore-result default.
+4. Added beat schedule gating and slower intervals for moderation + workflow replay; replay batch size increased.
+5. Updated Railway and docker worker commands to use the tuned worker script.
+
+### Notes
+- New env knobs: CELERY_CONCURRENCY, CELERY_AUTOSCALE, CELERY_POOL, CELERY_WORKER_MAX_TASKS_PER_CHILD, CELERY_WORKER_MAX_MEMORY_PER_CHILD, MODERATION_ENABLED, MODERATION_FLUSH_SECONDS, WORKFLOW_REPLAY_SCHEDULE_SECONDS, REMINDER_SWEEP_SECONDS.

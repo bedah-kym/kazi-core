@@ -58,7 +58,7 @@ services:
 
   celery_worker:
     image: ${WEB_IMAGE}
-    command: sh -c "python /app/wait_for_db.py && celery -A Backend worker -l info --concurrency 4"
+    command: sh -c "python /app/wait_for_db.py && sh /app/scripts/railway/celery_worker.sh"
     env_file: [.env]
     environment:
       - TZ=${TZ:-Africa/Nairobi}

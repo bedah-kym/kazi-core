@@ -19,6 +19,7 @@ from .connectors.gmail_connector import GmailConnector
 from .connectors.quota_connector import QuotaConnector
 from .connectors.payment_connector import ReadOnlyPaymentConnector
 from .connectors.invoice_connector import InvoiceConnector
+from .security_policy import sanitize_parameters, should_block_action, user_has_room_access
 
 logger = logging.getLogger(__name__)
 
@@ -145,13 +146,14 @@ class MCPRouter:
             
             # Execute with timeout
             logger.info(f"Routing to connector: {action}")
-            parameters = dict(intent.get("parameters") or {})
+            parameters = sanitize_parameters(intent.get("parameters") or {})
             if "action" not in parameters:
                 parameters["action"] = action
 
             # Merge missing fields from recent dialog state for continuity
             dialog_state = await self._get_dialog_state(user_context)
             parameters = self._merge_with_dialog_state(parameters, dialog_state)
+            parameters = sanitize_parameters(parameters)
 
             result = await connector.execute(parameters, user_context)
             
@@ -275,6 +277,19 @@ class MCPRouter:
             return {
                 "valid": False,
                 "reason": "This action is disabled in your settings. You can enable it in Settings > Integrations.",
+            }
+        raw_query = intent.get("raw_query") or ""
+        action = intent.get("action")
+        if should_block_action(raw_query, action):
+            return {
+                "valid": False,
+                "reason": "I can't run that request. Please rephrase without system or tool instructions.",
+            }
+        room_id = context.get("room_id")
+        if not await user_has_room_access(user_id, room_id):
+            return {
+                "valid": False,
+                "reason": "Room access check failed for this request.",
             }
         return {"valid": True, "reason": None}
 

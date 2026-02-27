@@ -1923,8 +1923,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
     async def get_chatroom_participants(cls, chat):
         """Get all participants in a chatroom"""
         try:
-            participants = chat.participants.all()
-            participants_list = await sync_to_async(list)(participants)
+            def _fetch():
+                return list(chat.participants.select_related('User'))
+            participants_list = await sync_to_async(_fetch)()
             logger.info(f"get_chatroom_participants returned {len(participants_list)} participants")
             return participants_list
         except Exception as e:

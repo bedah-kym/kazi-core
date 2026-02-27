@@ -24,6 +24,7 @@ from orchestration.user_preferences import (
     format_style_prompt,
 )
 from orchestration.action_receipts import requires_confirmation
+from orchestration.security_policy import sanitize_parameters, should_block_message
 from workflows.capabilities import SYSTEM_CAPABILITIES, validate_workflow_definition
 from workflows.temporal_integration import start_workflow_execution
 
@@ -1335,6 +1336,7 @@ def _normalize_steps(
             if "phone_number" not in params and phone:
                 params.setdefault("phone_number", phone)
 
+        params = sanitize_parameters(params)
         normalized_step["params"] = params
         normalized_steps.append(normalized_step)
     return _apply_step_dependencies(normalized_steps)
@@ -1412,6 +1414,14 @@ async def plan_user_request(
     quick_email = _quick_email_decision(message)
     if quick_email:
         return quick_email
+
+    if should_block_message(message):
+        return {
+            "mode": "needs_clarification",
+            "assistant_message": "I can't help with that request. Please rephrase without system or tool instructions.",
+            "workflow_definition": None,
+            "confidence": 0.0,
+        }
 
     if preferences is None and user_id:
         try:

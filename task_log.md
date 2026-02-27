@@ -271,3 +271,4 @@
 2. Suppressed invites in AI-only rooms (UI hide + server-side block).
 3. Quick actions now show only when @mathia is completed and hide once typing continues; fixed duplicate @mathia prefixes in quick actions.
 4. Onboarding hint adapts to AI-only vs mention-required rooms.
+5. Added low-cost prompt injection safeguards (policy module + action blocking + param sanitization + room access checks).

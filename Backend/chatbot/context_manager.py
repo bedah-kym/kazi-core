@@ -334,3 +334,163 @@ class ContextManager:
             "created_at": note.created_at.isoformat(),
             "tags": note.tags
         }
+
+    @staticmethod
+    def _compute_semantic_similarity(fact_text, request_text):
+        """
+        Compute simple keyword-based semantic similarity between fact and request.
+        Returns score 0.0-1.0 (higher = more similar).
+
+        Algorithm:
+        - Split both into words (lowercased, no stopwords)
+        - Count overlapping words
+        - Normalize by max(fact_words, request_words)
+        """
+        import re
+
+        # Common stopwords to ignore
+        stopwords = {
+            'the', 'a', 'an', 'and', 'or', 'is', 'are', 'am', 'was', 'were',
+            'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did',
+            'will', 'would', 'could', 'should', 'may', 'might', 'must', 'can',
+            'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'from', 'as',
+            'it', 'this', 'that', 'these', 'those', 'i', 'you', 'he', 'she',
+            'we', 'they', 'my', 'your', 'his', 'her', 'its', 'our', 'their'
+        }
+
+        # Extract words
+        fact_words = set(
+            word.lower() for word in re.findall(r'\b\w+\b', fact_text)
+            if word.lower() not in stopwords
+        )
+        request_words = set(
+            word.lower() for word in re.findall(r'\b\w+\b', request_text)
+            if word.lower() not in stopwords
+        )
+
+        if not fact_words or not request_words:
+            return 0.0
+
+        # Compute Jaccard similarity
+        overlap = len(fact_words & request_words)
+        union = len(fact_words | request_words)
+
+        if union == 0:
+            return 0.0
+
+        return overlap / union
+
+    @staticmethod
+    def rank_memory_facts(chatroom, current_request, max_results=3):
+        """
+        Score memory facts by relevance to current request.
+
+        Ranking formula:
+        relevance_score = (recency * 0.3) + (confidence * 0.5) + (semantic_match * 0.2)
+
+        Args:
+            chatroom: Chatroom object
+            current_request: User's request text
+            max_results: How many top facts to return (default: 3)
+
+        Returns:
+            List of dicts: [
+                {
+                    "fact": {...original fact dict...},
+                    "score": 0.85,
+                    "relevance": 0.6,
+                    "recency": 0.8,
+                    "confidence": 0.9
+                },
+                ...
+            ]
+        """
+        try:
+            context_obj, _ = RoomContext.objects.get_or_create(chatroom=chatroom)
+
+            if not context_obj.memory_facts:
+                return []
+
+            now = timezone.now()
+            scored_facts = []
+
+            for fact in context_obj.memory_facts:
+                if not isinstance(fact, dict):
+                    continue
+
+                # 1. SEMANTIC RELEVANCE (0.0-1.0)
+                fact_text = str(fact.get("value", ""))
+                if not fact_text:
+                    continue
+
+                semantic_match = ContextManager._compute_semantic_similarity(
+                    fact_text, current_request
+                )
+
+                # 2. RECENCY (0.0-1.0, higher = more recent)
+                entry_ts = ContextManager._entry_timestamp(fact)
+                if entry_ts:
+                    age_seconds = (now - entry_ts).total_seconds()
+                    age_days = age_seconds / (24 * 3600)
+                    # Decay: recent (0 days) = 1.0, old (365 days) = 0.0
+                    recency_score = max(0.0, 1.0 - (age_days / 365.0))
+                else:
+                    recency_score = 0.5  # Default if no timestamp
+
+                # 3. CONFIDENCE (normalize to 0.0-1.0)
+                confidence_value = fact.get("confidence")
+                try:
+                    confidence_score = float(confidence_value)
+                    # Clamp to [0, 1]
+                    confidence_score = min(max(confidence_score, 0.0), 1.0)
+                except (TypeError, ValueError):
+                    confidence_score = 0.5  # Default
+
+                # 4. COMPUTE FINAL SCORE
+                relevance_score = (
+                    recency_score * 0.3 +
+                    confidence_score * 0.5 +
+                    semantic_match * 0.2
+                )
+
+                scored_facts.append({
+                    "fact": fact,
+                    "score": relevance_score,
+                    "relevance": semantic_match,
+                    "recency": recency_score,
+                    "confidence": confidence_score
+                })
+
+            # Sort by relevance score (descending) and return top-K
+            scored_facts.sort(key=lambda x: x["score"], reverse=True)
+            return scored_facts[:max_results]
+
+        except Exception as e:
+            logger.error(f"Error ranking memory facts: {e}")
+            return []
+
+    @staticmethod
+    def get_ranked_context_for_ai(chatroom, current_request, lookback_hours=24):
+        """
+        Enhanced version of get_context_for_ai() that uses ranked memory facts.
+        Injects top-3 relevant facts based on current request.
+
+        Args:
+            chatroom: Chatroom object
+            current_request: User's current message/request
+            lookback_hours: Hours to look back in history (for other context)
+
+        Returns:
+            Context dict with ranked memory_facts instead of filtered ones
+        """
+        # Get base context (includes all memory entries)
+        context_data = ContextManager.get_context_for_ai(chatroom, lookback_hours)
+
+        # Rank and filter memory facts by relevance
+        ranked_facts = ContextManager.rank_memory_facts(chatroom, current_request, max_results=3)
+
+        # Replace generic filtered facts with ranked facts
+        context_data["memory_facts"] = [item["fact"] for item in ranked_facts]
+        context_data["memory_facts_ranked"] = ranked_facts  # Include scoring info
+
+        return context_data

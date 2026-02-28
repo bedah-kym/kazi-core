@@ -35,8 +35,17 @@ MIN_ADHOC_STEPS = 2
 MAX_WAIT_SECONDS = 20
 IDEMPOTENCY_TTL_SECONDS = 90
 IDEMPOTENCY_CACHE_PREFIX = "adhoc_workflow"
-LLM_CONFIDENCE_EXECUTE = 0.75
-LLM_CONFIDENCE_CONFIRM = 0.45
+
+# Phase 3B: Smart Confidence Thresholds
+# These control when MATHIA asks clarifying questions vs executes directly
+LLM_CONFIDENCE_AUTO_EXECUTE = 0.85      # All required params found, execute immediately
+LLM_CONFIDENCE_ASK_ONCE = 0.60          # Missing optional params or low confidence, ask ONE clarifying Q
+LLM_CONFIDENCE_ASK_ALL = 0.40           # Multiple required params missing, ask for all
+LLM_CONFIDENCE_REJECT = 0.20            # Intent unclear, ask user to rephrase
+
+# Backwards compatibility (deprecated, use above)
+LLM_CONFIDENCE_EXECUTE = LLM_CONFIDENCE_AUTO_EXECUTE
+LLM_CONFIDENCE_CONFIRM = LLM_CONFIDENCE_ASK_ONCE
 _CONFIRM_WORDS = {
     "yes",
     "approve",
@@ -1469,16 +1478,22 @@ async def plan_user_request(
 
     user_prompt_parts = [
         "Conversation context (most recent last):",
+        "---BEGIN CONTEXT---",
         history_text or "",
+        "---END CONTEXT---",
         "",
-        f"User message: {message}",
+        "---BEGIN USER MESSAGE---",
+        message,
+        "---END USER MESSAGE---",
     ]
     if preferences:
         user_prompt_parts.extend([
             "",
-            f"User preferences: {json.dumps(preferences)}",
+            "---BEGIN USER PREFERENCES---",
+            json.dumps(preferences),
+            "---END USER PREFERENCES---",
         ])
-    user_prompt_parts.extend(["", "Return JSON only."])
+    user_prompt_parts.extend(["", "Return only the JSON object enclosed in ```json``` markers."])
     user_prompt = "\n".join(user_prompt_parts)
 
     try:

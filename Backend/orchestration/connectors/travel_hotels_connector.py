@@ -122,7 +122,16 @@ class TravelHotelsConnector(BaseTravelConnector):
         try:
             data = await sync_to_async(_call_api)()
         except Exception as e:
+            error_str = str(e).lower()
+            if "429" in str(e) or "rate" in error_str or "quota" in error_str:
+                logger.warning(f"Amadeus rate limit encountered: {e}")
+                return []
             logger.error(f"Amadeus hotel search error: {e}")
+            return []
+
+        # Validate response is a list
+        if not isinstance(data, list):
+            logger.warning(f"Unexpected Amadeus response format: {type(data)}")
             return []
 
         return self._parse_amadeus_hotels(data)
@@ -200,7 +209,11 @@ class TravelHotelsConnector(BaseTravelConnector):
                     'amenities': hotel_info.get('amenities', ['WiFi', 'Breakfast']),
                     'room_type': (offer.get('room', {}) or {}).get('typeEstimated', {}).get('category', 'Standard'),
                     'nights': offer.get('rateFamilyEstimated', {}).get('nights', 1),
-                    'booking_url': offer.get('self', ''),
+                    'booking_url': self._construct_booking_url(
+                        hotel_info.get('hotelId', ''),
+                        hotel_info.get('cityCode', ''),
+                        offer.get('self', '')  # Try Amadeus-provided link first
+                    ),
                     'image_url': ''
                 })
             except Exception as e:
@@ -208,6 +221,26 @@ class TravelHotelsConnector(BaseTravelConnector):
                 continue
 
         return results
+
+    def _construct_booking_url(self, hotel_id: str, city_code: str, amadeus_link: str = '') -> str:
+        """
+        Construct booking URL with fallback logic when Amadeus API doesn't provide 'self' link.
+
+        Tries three sources in order:
+        1. Amadeus self link (if provided and valid)
+        2. Amadeus.com with hotel ID
+        3. Generic Amadeus hotel search for city
+        """
+        if amadeus_link and amadeus_link.startswith('http'):
+            return amadeus_link
+
+        if hotel_id:
+            return f"https://www.amadeus.com/en/shopping/hotel-offers/{hotel_id}"
+
+        if city_code:
+            return f"https://www.amadeus.com/en/hotels/{city_code.lower()}"
+
+        return "https://www.amadeus.com/en/hotels"
 
     def _convert_to_ksh(self, amount: float, currency: str) -> float:
         rates = {

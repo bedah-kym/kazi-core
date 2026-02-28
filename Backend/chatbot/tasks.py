@@ -187,24 +187,51 @@ def moderate_message_batch(self, batch_id):
 def process_pending_batches():
     """
     Periodic task to process batches that haven't been processed
-    Runs every 5 minutes via Celery Beat
+    Runs via Celery Beat (frequency controlled by MODERATION_FLUSH_SECONDS)
+
+    Feature-gated: Only runs if workspace has moderation_enabled=True
     """
     # Skip in DEBUG mode
     if settings.DEBUG:
         return {"queued": 0, "skipped": "DEBUG mode"}
-    
+
     pending_batches = ModerationBatch.objects.filter(
         status='pending',
         created_at__lte=timezone.now() - timezone.timedelta(minutes=5)
     )
-    
+
     count = 0
+    skipped = 0
+
     for batch in pending_batches:
-        moderate_message_batch.delay(batch.id)
-        count += 1
-    
-    logger.info(f"Queued {count} pending moderation batches")
-    return {"queued": count}
+        # Check if the room owner's workspace has moderation enabled
+        try:
+            # Get workspace from first participant
+            participant = batch.room.participants.first()
+            if not participant:
+                logger.warning(f"Batch {batch.id}: No participants in room {batch.room.id}")
+                skipped += 1
+                continue
+
+            user = participant.member
+            workspace = user.workspace
+
+            # Skip moderation if not enabled for this workspace
+            if not workspace.should_moderate():
+                logger.debug(f"Batch {batch.id}: Moderation disabled for {workspace.name} ({workspace.plan})")
+                skipped += 1
+                continue
+
+            # Queue the moderation task
+            moderate_message_batch.delay(batch.id)
+            count += 1
+        except Exception as e:
+            logger.error(f"Error checking workspace for batch {batch.id}: {e}")
+            skipped += 1
+            continue
+
+    logger.info(f"Moderation: queued {count}, skipped {skipped} (disabled by workspace)")
+    return {"queued": count, "skipped": skipped}
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=30, ignore_result=True)
@@ -227,8 +254,22 @@ def generate_ai_response(self, room_id, user_id, user_message):
             room=room,
             defaults={'context': '[]', 'last_interaction': timezone.now()}
         )
-        
-        context = json.loads(conversation.context)[-3:]
+
+        # Load context efficiently: parse JSON and slice to last 3 items
+        # This avoids storing unbounded context; sliding window pattern
+        try:
+            all_context = json.loads(conversation.context)
+            # Keep only the last 3 exchanges to limit memory bloat
+            context = all_context[-3:] if len(all_context) > 3 else all_context
+        except (json.JSONDecodeError, TypeError):
+            context = []
+
+        # Prune old context from storage if it exceeds max size
+        max_context_items = 20  # Keep last 20 in DB for future retrieval
+        if len(all_context) > max_context_items:
+            pruned_context = all_context[-max_context_items:]
+            conversation.context = json.dumps(pruned_context)
+            conversation.save(update_fields=['context'])
         
         hf_token = os.environ.get('HF_API_TOKEN', '')
         client = InferenceClient(token=hf_token if hf_token else None)

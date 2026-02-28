@@ -153,17 +153,42 @@ class ChatConsumer(AsyncWebsocketConsumer):
         refresh_room_context_summary.delay(room_id, message_id, count)
 
     async def schedule_idle_nudge_if_needed(self, room_id, user_id):
+        """
+        Schedule idle nudge only if:
+        1. No pending orchestration
+        2. No pending task state
+        3. Workspace has idle_nudges_enabled
+        """
         last_activity_key = f"proactive:last_activity:{room_id}:{user_id}"
         cache.set(last_activity_key, timezone.now().isoformat(), timeout=60 * 60 * 24)
+
+        # Check for pending orchestration
         pending_key = f"orchestration:pending:{room_id}:{user_id}"
         if cache.get(pending_key):
             return
+
+        # Check for pending task state
         adaptive_state = await load_task_state({"user_id": user_id, "room_id": room_id})
         if adaptive_state and adaptive_state.get("status") in ("awaiting_slots", "ready"):
             return
+
+        # Check for pending nudge already scheduled
         pending_key = f"proactive:pending:{room_id}:{user_id}"
         if cache.get(pending_key):
             return
+
+        # Check if idle nudges are enabled for this user's workspace
+        try:
+            user = await sync_to_async(User.objects.get)(id=user_id)
+            workspace = user.workspace
+            if not workspace.should_use_idle_nudges():
+                logger.debug(f"Idle nudges disabled for user {user_id} ({workspace.plan})")
+                return
+        except Exception as e:
+            logger.warning(f"Error checking workspace for idle nudge: {e}")
+            return
+
+        # Queue the idle nudge task
         from .tasks import schedule_idle_nudge
         schedule_idle_nudge.delay(room_id, user_id)
 

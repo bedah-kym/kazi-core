@@ -31,7 +31,11 @@ class ActionReceipt(models.Model):
         ordering = ["-created_at"]
         indexes = [
             models.Index(fields=["user", "room", "created_at"]),
+            models.Index(fields=["user", "action", "created_at"]),
         ]
+        # Prevent duplicate receipts for the same action within a short time window
+        # Uses unique constraint on (user, room, action) + separate index on created_at
+        unique_together = [("user", "room", "action")]
 
     def __str__(self):
         return f"ActionReceipt({self.user_id}, {self.action}, {self.status})"

@@ -258,7 +258,7 @@ class Workspace(models.Model):
         ('team', 'Team'),
         ('business', 'Business'),
     )
-    
+
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='workspace')
     owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='owned_workspaces', null=True)
     name = models.CharField(max_length=255, default="My Workspace")
@@ -268,10 +268,32 @@ class Workspace(models.Model):
     trial_started_at = models.DateTimeField(null=True, blank=True)
     trial_ends_at = models.DateTimeField(null=True, blank=True)
     trial_active = models.BooleanField(default=False)
+    # Cost optimization: enable expensive features per-plan
+    # Free & trial: moderation disabled (save HF tokens)
+    # Pro & agency: moderation enabled (premium feature)
+    moderation_enabled = models.BooleanField(default=False, help_text="Enable AI moderation (HF tokens required)")
+    idle_nudges_enabled = models.BooleanField(default=True, help_text="Enable idle nudge suggestions")
+    proactive_suggestions_enabled = models.BooleanField(default=True, help_text="Enable proactive workflow suggestions")
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
         return f"{self.name} ({self.plan})"
+
+    def should_moderate(self):
+        """Check if this workspace should run moderation."""
+        # Moderation only for trial+ (if trial active) or pro/agency
+        if self.plan in ('pro', 'agency'):
+            return self.moderation_enabled
+        if self.plan == 'trial' and self.trial_active:
+            return self.moderation_enabled
+        return False  # Free & expired trials: no moderation
+
+    def should_use_idle_nudges(self):
+        """Check if idle nudges should run for this workspace."""
+        if not self.idle_nudges_enabled:
+            return False
+        # Free tier: disable nudges to save LLM tokens
+        return self.plan in ('trial', 'pro', 'agency')
 
 
 class Wallet(models.Model):
@@ -433,3 +455,63 @@ class TrialInvite(models.Model):
     def __str__(self):
         return f"TrialInvite({self.email}, {self.status})"
 
+
+class CorrectionSignal(models.Model):
+    """
+    Learn from user corrections to improve AI over time.
+    When user corrects AI (e.g., "No, book the 9am flight, not 2pm"),
+    we record it as a signal for personalization.
+
+    Examples:
+    - Parameter correction: "Actually, 4 passengers not 3"
+    - Result selection: "Not the first one, the green one (#2)"
+    - Preference discovery: "I prefer aisle seats"
+    - Workflow adjustment: "Skip the email step"
+    """
+
+    CORRECTION_TYPES = [
+        ('parameter', 'Parameter Correction'),     # Wrong param, user corrects
+        ('result_selection', 'Result Selection'),  # Wrong result, user picks another
+        ('preference', 'Preference Discovery'),    # User reveals preference
+        ('workflow', 'Workflow Adjustment'),       # User modifies workflow steps
+        ('confirmation', 'Negative Confirmation'), # User says NO to action
+    ]
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='correction_signals')
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, null=True, blank=True)
+
+    # What intent was being executed
+    intent_action = models.CharField(max_length=100, help_text="e.g., search_flights, send_email")
+
+    # Type of correction
+    correction_type = models.CharField(max_length=30, choices=CORRECTION_TYPES)
+
+    # Details of the correction (JSON)
+    # Examples:
+    # {"parameter": "passengers", "wrong_value": 2, "correct_value": 4}
+    # {"result_index": 0, "correct_index": 2, "field": "price"}
+    # {"preference": "departure_time", "preferred_value": "early_morning"}
+    data = models.JSONField(default=dict, blank=True)
+
+    # Original AI reasoning (for debugging)
+    original_ai_reasoning = models.TextField(blank=True, help_text="What was the AI thinking?")
+
+    # User's explanation (if provided)
+    user_explanation = models.TextField(blank=True, help_text="Why did user correct?")
+
+    # Confidence of correction (1-10)
+    confidence = models.IntegerField(default=8, help_text="How confident is this signal? 1-10")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', 'created_at']),
+            models.Index(fields=['user', 'intent_action']),
+            models.Index(fields=['correction_type']),
+        ]
+
+    def __str__(self):
+        return f"CorrectionSignal({self.user.username}, {self.correction_type}, {self.intent_action})"

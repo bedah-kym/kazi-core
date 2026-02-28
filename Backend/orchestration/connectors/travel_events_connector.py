@@ -100,13 +100,17 @@ class TravelEventsConnector(BaseTravelConnector):
         if end_date:
             params['start_date.range_end'] = f'{end_date}T23:59:59Z'
 
-            headers = {
+        headers = {
             'User-Agent': 'Travel-Planner/1.0'
         }
 
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(api_url, params=params, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                    if response.status == 429:
+                        msg = "Eventbrite API rate limit (429)"
+                        logger.warning(msg)
+                        return [], msg
                     if response.status != 200:
                         text = await response.text()
                         msg = f"Eventbrite API status {response.status}: {text[:200]}"
@@ -114,12 +118,28 @@ class TravelEventsConnector(BaseTravelConnector):
                         return [], msg
                     data = await response.json()
         except Exception as e:
+            error_str = str(e).lower()
+            if "429" in str(e) or "rate" in error_str:
+                msg = "Eventbrite rate limit encountered"
+                logger.warning(msg)
+                return [], msg
             msg = f"Eventbrite API error: {str(e)}"
             logger.error(msg)
             return [], msg
 
+        # Validate response is a dict with events
+        if not isinstance(data, dict):
+            msg = f"Invalid Eventbrite response format: {type(data)}"
+            logger.warning(msg)
+            return [], msg
+
         results = []
         events = data.get('events', [])
+
+        if not isinstance(events, list):
+            msg = f"Eventbrite 'events' field is not a list: {type(events)}"
+            logger.warning(msg)
+            return [], msg
 
         for i, event in enumerate(events[:20]):
             try:

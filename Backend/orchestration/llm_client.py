@@ -1,6 +1,7 @@
 """
 LLM Client for Mathia Orchestration
 Handles communication with LLM providers (Anthropic, Hugging Face) with fallback logic.
+Includes rate limiting and token budget enforcement for cost control.
 """
 import os
 import json
@@ -22,26 +23,99 @@ class LLMClient:
     def __init__(self):
         self.anthropic_key = getattr(settings, 'ANTHROPIC_API_KEY', os.environ.get('ANTHROPIC_API_KEY'))
         self.hf_key = getattr(settings, 'HF_API_TOKEN', os.environ.get('HF_API_TOKEN'))
-        
+
         # Models
-        self.claude_model = "claude-3-sonnet-20240229" 
+        self.claude_model = "claude-3-sonnet-20240229"
         self.hf_model = "meta-llama/Llama-3.1-8B-Instruct"  # router-friendly chat model
 
         # Endpoints
         self.anthropic_url = "https://api.anthropic.com/v1/messages"
         self.hf_url = "https://router.huggingface.co/v1/chat/completions"
 
+    def _estimate_tokens(self, text: Optional[str]) -> int:
+        """Rough token estimation: ~4 chars per token."""
+        if not text:
+            return 0
+        return max(1, len(text) // 4)
+
+    def _get_user_token_budget(self, user_id: Optional[int]) -> Dict[str, int]:
+        """
+        Get token budget and current usage for a user.
+        Returns {"limit": N, "used": M, "reset_at": timestamp}
+        """
+        if not user_id:
+            return {"limit": 999999, "used": 0, "reset_at": 0}
+
+        cache_key = f"llm_tokens:{user_id}"
+        budget = cache.get(cache_key) or {"used": 0}
+        limit = int(getattr(settings, "LLM_TOKEN_LIMIT_PER_USER_PER_HOUR", 50000))
+        return {
+            "limit": limit,
+            "used": budget.get("used", 0),
+            "reset_at": budget.get("reset_at", 0)
+        }
+
+    async def _check_token_quota(self, estimated_tokens: int, user_id: Optional[int]) -> bool:
+        """
+        Check if user has enough token budget remaining.
+        Returns True if under quota, False if exceeded.
+        """
+        if not user_id:
+            return True  # No tracking for anonymous
+
+        budget = self._get_user_token_budget(user_id)
+        if budget["used"] + estimated_tokens > budget["limit"]:
+            logger.warning(
+                f"Token quota exceeded for user {user_id}: "
+                f"used {budget['used']} + {estimated_tokens} > limit {budget['limit']}"
+            )
+            return False
+        return True
+
+    def _record_token_usage(self, tokens: int, user_id: Optional[int]) -> None:
+        """Record token usage for rate limiting."""
+        if not user_id:
+            return
+
+        cache_key = f"llm_tokens:{user_id}"
+        ttl = 3600  # 1 hour
+        budget = cache.get(cache_key) or {"used": 0}
+        budget["used"] = budget.get("used", 0) + tokens
+        cache.set(cache_key, budget, ttl)
+
     async def generate_text(
-        self, 
-        system_prompt: str, 
-        user_prompt: str, 
+        self,
+        system_prompt: str,
+        user_prompt: str,
         temperature: float = 0.7,
         max_tokens: int = 600,
-        json_mode: bool = False
+        json_mode: bool = False,
+        user_id: Optional[int] = None,
+        room_id: Optional[int] = None
     ) -> str:
         """
         Generate text using available LLM provider.
+
+        Args:
+            system_prompt: System context for the LLM
+            user_prompt: User input
+            temperature: Sampling temperature (0.0-1.0)
+            max_tokens: Max tokens in response
+            json_mode: If True, request JSON output
+            user_id: User ID for cache isolation (prevent cache poisoning)
+            room_id: Room ID for cache isolation
+
+        Raises:
+            Exception: If token quota exceeded or all LLM providers fail
         """
+        # Estimate token cost BEFORE making request
+        estimated_tokens = self._estimate_tokens(system_prompt) + self._estimate_tokens(user_prompt)
+        if not await self._check_token_quota(estimated_tokens, user_id):
+            raise Exception(
+                f"LLM token quota exceeded for user {user_id}. "
+                f"Please try again later or contact support."
+            )
+
         max_tokens = min(max_tokens, getattr(settings, 'LLM_MAX_TOKENS', 700))
         user_prompt = self._truncate(user_prompt)
         system_prompt = self._truncate(system_prompt, is_system=True)
@@ -53,6 +127,8 @@ class LLMClient:
                 temperature=temperature,
                 max_tokens=max_tokens,
                 json_mode=json_mode,
+                user_id=user_id,
+                room_id=room_id,
             )
             cached = cache.get(cache_key)
             if cached:
@@ -62,21 +138,23 @@ class LLMClient:
         if self.anthropic_key:
             try:
                 response = await self._call_claude(system_prompt, user_prompt, temperature, max_tokens)
+                self._record_token_usage(estimated_tokens, user_id)
                 self._store_cache(cache_key, response)
                 return response
             except Exception as e:
                 logger.warning(f"Claude API failed: {e}. Falling back to Hugging Face.")
-        
+
         # Fallback to Hugging Face
         if self.hf_key:
             try:
                 response = await self._call_huggingface(system_prompt, user_prompt, temperature, max_tokens, json_mode)
+                self._record_token_usage(estimated_tokens, user_id)
                 self._store_cache(cache_key, response)
                 return response
             except Exception as e:
                 logger.error(f"Hugging Face API failed: {e}")
                 raise Exception(f"All LLM providers failed. Last error: {e}")
-        
+
         raise Exception("No valid API keys configured for Anthropic or Hugging Face.")
 
     async def stream_text(
@@ -351,6 +429,8 @@ class LLMClient:
         temperature: float,
         max_tokens: int,
         json_mode: bool,
+        user_id: Optional[int] = None,
+        room_id: Optional[int] = None,
     ) -> str:
         payload = json.dumps({
             "system": system_prompt,
@@ -359,6 +439,8 @@ class LLMClient:
             "max_tokens": max_tokens,
             "json_mode": json_mode,
             "model": self.claude_model or self.hf_model,
+            "user_id": user_id,
+            "room_id": room_id,
         }, sort_keys=True)
         digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
         return f"llm_cache:{digest}"

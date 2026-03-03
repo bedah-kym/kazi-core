@@ -538,8 +538,6 @@ if not DEBUG:
 # DJANGO-JAZZMIN ADMIN CONFIGURATION
 # ==========================================
 
-from Backend.admin_dashboard import get_dashboard_config
-
 JAZZMIN_SETTINGS = {
     "site_header": "MATHIA Admin",
     "site_title": "MATHIA Administration",
@@ -549,7 +547,6 @@ JAZZMIN_SETTINGS = {
     # Dashboard and display settings
     "show_ui_builder": False,
     "use_google_fonts_cdn": True,
-    "dashboard_widgets": get_dashboard_config(),
 
     # Theme configuration
     "theme": "default",  # Can be 'default', 'dark' or custom

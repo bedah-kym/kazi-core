@@ -91,6 +91,8 @@ INTASEND_WEBHOOK_SECRET = os.environ.get('INTASEND_WEBHOOK_SECRET')
 
 INSTALLED_APPS = [
     'daphne',
+    # Admin UI Enhancement (must be before django.contrib.admin)
+    'jazzmin',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -109,10 +111,10 @@ INSTALLED_APPS = [
     'rest_framework.authtoken',
     'django_celery_beat',
     'django_celery_results',
-    
+
     # Sites (required by allauth)
     'django.contrib.sites',
-    
+
     # Allauth
     'allauth',
     'allauth.account',
@@ -121,7 +123,10 @@ INSTALLED_APPS = [
     'allauth.socialaccount.providers.github',
     'allauth.socialaccount.providers.linkedin_oauth2',
     'allauth.socialaccount.providers.twitter',
-    
+
+    # Import/Export
+    'import_export',
+
     # Security
     'axes',
     'django_ratelimit',
@@ -528,4 +533,67 @@ if not DEBUG:
     CSRF_COOKIE_HTTPONLY = False
     SECURE_CONTENT_TYPE_NOSNIFF = True
 
+
+# ==========================================
+# DJANGO-JAZZMIN ADMIN CONFIGURATION
+# ==========================================
+
+from Backend.admin_dashboard import get_dashboard_config
+
+JAZZMIN_SETTINGS = {
+    "site_header": "MATHIA Admin",
+    "site_title": "MATHIA Administration",
+    "welcome_sign": "Welcome to MATHIA Administration",
+    "copyright": "MATHIA Platform",
+
+    # Dashboard and display settings
+    "show_ui_builder": False,
+    "use_google_fonts_cdn": True,
+    "dashboard_widgets": get_dashboard_config(),
+
+    # Theme configuration
+    "theme": "default",  # Can be 'default', 'dark' or custom
+    "dark_mode_theme": "darkly",
+
+    # Colors
+    "user_avatar": None,
+
+    # Pagination
+    "pagination_per_page": 20,
+
+    # Admin site branding
+    "site_icon": None,  # Optional: add path to icon image
+    "has_search": True,
+    "search_model": "auth.User",
+
+    # Navigation
+    "show_sidebar": True,
+    "navigation_expanded": False,
+
+    # Search settings
+    "search_allow_url_search": True,
+
+    # Custom links in sidebar
+    "navigation": [
+        {"app": "users", "icon": "fas fa-users"},
+        {"app": "payments", "icon": "fas fa-credit-card"},
+        {"app": "travel", "icon": "fas fa-plane"},
+        {"app": "chatbot", "icon": "fas fa-comments"},
+        {"app": "workflows", "icon": "fas fa-project-diagram"},
+        {"app": "orchestration", "icon": "fas fa-cogs"},
+        {"app": "auth", "icon": "fas fa-lock"},
+    ],
+}
+
+# Jazzmin UI tweaks
+JAZZMIN_UI_TWEAKS = {
+    "navbar_small": False,
+    "footer_small": False,
+    "body_small": False,
+    "brand_small": False,
+    "brand_colour": "navbar-primary",
+    "accent": "accent-primary",
+    "tooltip_class": "tooltip-primary",
+    "window_box_shadow_class": "card-shadow",
+}
 

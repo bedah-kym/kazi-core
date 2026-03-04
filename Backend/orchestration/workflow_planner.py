@@ -130,6 +130,8 @@ _ACTION_ALIASES = {
         "check_status": "check_status",
         "invoice_status": "check_invoice_status",
         "check_invoice_status": "check_invoice_status",
+        "create_invoice": "create_invoice",
+        "invoice": "create_invoice",
         "create_payment_link": "create_payment_link",
         "payment_link": "create_payment_link",
         "withdraw": "withdraw",
@@ -185,6 +187,7 @@ _ACTION_SERVICE_FALLBACK = {
     "list_transactions": "payments",
     "check_invoice_status": "payments",
     "check_payments": "payments",
+    "create_invoice": "payments",
     "create_payment_link": "payments",
     "withdraw": "payments",
     "check_status": "payments",
@@ -1023,7 +1026,7 @@ async def _steps_allowed_for_user(steps: List[Dict[str, Any]], user_id: Optional
             return "Reminders are disabled in your settings."
         if action in ("search_info", "search_gif", "get_weather", "convert_currency") and not prefs.get("allow_web_search", True):
             return "Search and research actions are disabled in your settings."
-        if action in ("check_balance", "list_transactions", "check_invoice_status", "check_payments", "create_payment_link", "withdraw", "check_status") and not prefs.get("allow_payments", True):
+        if action in ("check_balance", "list_transactions", "check_invoice_status", "check_payments", "create_invoice", "create_payment_link", "withdraw", "check_status") and not prefs.get("allow_payments", True):
             return "Payments actions are disabled in your settings."
         if action in ("schedule_meeting", "check_availability") and not prefs.get("allow_calendar", True):
             return "Scheduling actions are disabled in your settings."

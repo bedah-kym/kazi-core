@@ -56,7 +56,7 @@ class MCPRouter:
         "list_transactions": "allow_payments",
         "check_invoice_status": "allow_payments",
         "check_payments": "allow_payments",
-        "create_invoice": ("allow_payments", "allow_email"),
+        "create_invoice": "allow_payments",
         "create_payment_link": "allow_payments",
         "withdraw": "allow_payments",
         "check_status": "allow_payments",
@@ -99,6 +99,9 @@ class MCPRouter:
             "list_transactions": ReadOnlyPaymentConnector(),
             "check_invoice_status": ReadOnlyPaymentConnector(),
             "create_invoice": InvoiceConnector(),
+            "create_payment_link": IntersendPayConnector(),
+            "withdraw": IntersendPayConnector(),
+            "check_status": IntersendPayConnector(),
             
             # Travel planner connectors
             "search_buses": TravelBusesConnector(),

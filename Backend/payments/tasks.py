@@ -52,7 +52,8 @@ def process_recurring_invoices():
                 amount=invoice.amount,
                 description=f"Recurring: {invoice.description}",
                 payer_email=invoice.payer_email,
-                recurrence='NONE'
+                recurrence='NONE',
+                currency=invoice.currency,
             )
             
             new_invoice.parent_invoice = invoice

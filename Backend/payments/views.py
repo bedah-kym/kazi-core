@@ -125,8 +125,7 @@ def initiate_deposit(request):
         if amount < Decimal('1.00'):
             return JsonResponse({'error': 'Minimum deposit is 1 KES'}, status=400)
         
-        # Generate payment link via IntaSend
-        from intasend import APIService
+        # Initiate STK push via IntaSend
         import os
         
         publishable_key = os.environ.get('INTASEND_PUBLISHABLE_KEY')
@@ -136,9 +135,6 @@ def initiate_deposit(request):
         if not publishable_key or not api_key:
             return JsonResponse({'error': 'Payment gateway not configured'}, status=500)
         
-        # Initialize APIService
-        service = APIService(token=api_key, publishable_key=publishable_key, test=is_test)
-        
         # STK Push for M-Pesa using Collect service
         from intasend import Collect
         collect = Collect(token=api_key, publishable_key=publishable_key, test=is_test)
@@ -146,23 +142,31 @@ def initiate_deposit(request):
         phone = request.POST.get('phone', '')
         
         if phone:
+            api_ref = f"wallet:{request.user.id}:{uuid.uuid4().hex}"
             response = collect.mpesa_stk_push(
                 phone_number=phone,
                 email=request.user.email,
                 amount=float(amount),
-                narrative=f"Wallet deposit - {request.user.username}"
+                narrative=f"Wallet deposit - {request.user.username}",
+                api_ref=api_ref,
+                name=request.user.get_full_name() or request.user.username,
             )
             
             # The 'invoice' key is standard in IntaSend response
             invoice_id = response.get('invoice', {}).get('invoice_id')
             # Or handle different response structure if needed
-            if not invoice_id and 'id' in response: # Some versions return direct ID
-                 invoice_id = response['id']
+            if not invoice_id:
+                invoice_id = (
+                    response.get('invoice_id')
+                    or response.get('tracking_id')
+                    or response.get('id')
+                )
             
             return JsonResponse({
                 'status': 'success',
                 'message': 'Payment request sent to your phone',
-                'tracking_id': invoice_id
+                'tracking_id': invoice_id,
+                'api_ref': api_ref,
             })
         else:
             return JsonResponse({'error': 'Phone number required'}, status=400)
@@ -209,6 +213,7 @@ def payment_callback(request):
         state = data.get('state')
         gross_amount = Decimal(str(data.get('value') or data.get('amount') or 0))
         fee = Decimal(str(data.get('fee') or 0))
+        api_ref = data.get('api_ref') or data.get('api_ref_id')
 
         invoice = None
         if invoice_id:
@@ -230,7 +235,7 @@ def payment_callback(request):
             from workflows.webhook_handlers import handle_intasend_webhook_event
             handle_intasend_webhook_event(invoice.issuer_id, data)
 
-            if state == 'COMPLETE':
+            if state in ('COMPLETE', 'COMPLETED'):
                 try:
                     InvoiceService.process_invoice_payment(invoice.id, invoice_id)
                 except Exception as e:
@@ -243,24 +248,34 @@ def payment_callback(request):
                 invoice.save(update_fields=['status'])
             return JsonResponse({'status': 'ignored', 'state': state})
         
-        # Find user by email or other identifier
-        email = data.get('email')
+        # Find user by api_ref or email for wallet deposits
         from django.contrib.auth import get_user_model
         User = get_user_model()
+        user = None
+        if api_ref:
+            try:
+                if str(api_ref).startswith("wallet:"):
+                    parts = str(api_ref).split(":")
+                    if len(parts) >= 2 and parts[1].isdigit():
+                        user = User.objects.filter(id=int(parts[1])).first()
+                if not user and str(api_ref).isdigit():
+                    user = User.objects.filter(id=int(api_ref)).first()
+            except Exception:
+                user = None
 
-        if not email:
-            return JsonResponse({'error': 'Missing email'}, status=400)
+        if not user:
+            email = data.get('email')
+            if email:
+                user = User.objects.filter(email=email).first()
 
-        try:
-            user = User.objects.get(email=email)
-        except User.DoesNotExist:
-            logger.error(f"User not found for email: {email}")
+        if not user:
+            logger.error(f"User not found for deposit: api_ref={api_ref}, email={data.get('email')}")
             return JsonResponse({'error': 'User not found'}, status=404)
 
         from workflows.webhook_handlers import handle_intasend_webhook_event
         handle_intasend_webhook_event(user.id, data)
 
-        if state == 'COMPLETE':
+        if state in ('COMPLETE', 'COMPLETED'):
             # Process deposit
             tx = WalletService.process_deposit(
                 user=user,
@@ -277,6 +292,28 @@ def payment_callback(request):
     except Exception as e:
         logger.error(f"Callback processing error: {e}")
         return JsonResponse({'error': str(e)}, status=500)
+
+
+@login_required
+def deposit_status(request):
+    """
+    Poll deposit status by IntaSend tracking id.
+    """
+    tracking_id = request.GET.get('tracking_id')
+    if not tracking_id:
+        return JsonResponse({'status': 'error', 'message': 'tracking_id required'}, status=400)
+
+    wallet = WalletService.get_or_create_user_wallet(request.user)
+    tx = WalletTransaction.objects.filter(wallet=wallet, reference=tracking_id).first()
+    if not tx:
+        return JsonResponse({'status': 'pending'})
+
+    return JsonResponse({
+        'status': tx.status.lower(),
+        'amount': float(tx.amount),
+        'currency': tx.currency,
+        'reference': tx.reference,
+    })
 
 
 @workspace_required

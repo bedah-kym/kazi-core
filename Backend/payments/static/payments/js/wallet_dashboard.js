@@ -15,6 +15,34 @@
 
     const btn = document.getElementById("btnDeposit");
     const depositUrl = form.dataset.depositUrl;
+    const statusUrl = form.dataset.statusUrl;
+
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    const pollDepositStatus = async (trackingId) => {
+      if (!statusUrl || !trackingId) {
+        return null;
+      }
+
+      const maxAttempts = 20;
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        await sleep(3000);
+        try {
+          const pollResponse = await fetch(
+            `${statusUrl}?tracking_id=${encodeURIComponent(trackingId)}`,
+            { credentials: "same-origin" }
+          );
+          const pollData = await pollResponse.json();
+          const status = (pollData.status || "").toLowerCase();
+          if (status === "completed" || status === "failed" || status === "error") {
+            return status;
+          }
+        } catch (err) {
+          console.error("Deposit status poll failed", err);
+        }
+      }
+      return "pending";
+    };
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -39,8 +67,25 @@
         });
         const data = await response.json();
         if (response.ok) {
-          alert("Success! Check your phone.");
-          window.location.reload();
+          const trackingId = data.tracking_id;
+          alert("Success! Check your phone for the M-Pesa prompt.");
+          if (trackingId) {
+            btn.innerHTML = "Waiting for confirmation...";
+            const status = await pollDepositStatus(trackingId);
+            if (status === "completed") {
+              alert("Deposit confirmed.");
+              window.location.reload();
+              return;
+            }
+            if (status === "failed") {
+              alert("Deposit failed. Please try again.");
+              window.location.reload();
+              return;
+            }
+            alert("Deposit is still pending. Refresh later to see updates.");
+          } else {
+            window.location.reload();
+          }
         } else {
           alert(`Error: ${data.error || "Failed"}`);
         }

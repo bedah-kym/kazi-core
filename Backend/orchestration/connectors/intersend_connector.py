@@ -82,17 +82,29 @@ class IntersendPayConnector(BaseConnector):
             }
         
         try:
-            if phone_number:
-                service = self.intasend.collect
-                response = service.mpesa_stk_push(
-                    phone_number=phone_number,
-                    email=email or getattr(user, 'email', 'nomail@example.com'),
-                    amount=amount,
-                    narrative=description
-                )
-                return response
-            
-            return {"message": "Please provide phone number for STK push or use frontend button with publishable key."}
+            from intasend import PaymentLinks
+
+            service = PaymentLinks(
+                token=self.api_key,
+                publishable_key=self.publishable_key,
+                test=self.is_test,
+            )
+            response = service.create(
+                title=f"Payment link for {getattr(user, 'username', 'customer')}",
+                amount=float(amount),
+                currency=(currency or "KES").upper(),
+                email=email or getattr(user, 'email', ''),
+                narrative=description or "Payment request",
+            )
+
+            payment_link = response.get("url") or response.get("payment_link")
+            invoice_id = response.get("invoice_id") or response.get("id")
+            return {
+                "status": "success",
+                "payment_link": payment_link,
+                "reference": invoice_id,
+                "message": "Payment link created.",
+            }
 
         except Exception as e:
             logger.error(f"Intersend Create Link Error: {e}")

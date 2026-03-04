@@ -85,6 +85,18 @@ SYSTEM_CAPABILITIES = {
                     "params": {}
                 },
                 {
+                    "name": "create_invoice",
+                    "description": "Create an invoice and optionally notify the payer",
+                    "params": {
+                        "amount": {"type": "number", "required": True},
+                        "currency": {"type": "string", "required": False},
+                        "description": {"type": "string", "required": False},
+                        "payer_email": {"type": "string", "required": False},
+                        "phone_number": {"type": "string", "required": False},
+                        "send_via": {"type": "string", "required": False}
+                    }
+                },
+                {
                     "name": "create_payment_link",
                     "description": "Create an IntaSend payment link",
                     "params": {

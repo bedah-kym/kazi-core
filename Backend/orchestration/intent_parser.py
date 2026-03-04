@@ -43,6 +43,7 @@ class IntentParser:
         "send_email",
         "send_whatsapp",
         "create_invoice",
+        "create_payment_link",
         "create_workflow",
         # Travel planner actions
         "search_buses",
@@ -75,6 +76,10 @@ Supported actions:
   Examples: "email alex@example.com saying hi", "send an email to ops with subject X", "mail me the report"
 - send_whatsapp: User wants to send a WhatsApp message via system account
   Examples: "send a whatsapp to +2547xxxx saying hello", "whatsapp my team the update"
+- create_payment_link: User wants a shareable payment link
+  Examples: "create a payment link for 5000 KES", "send me a payment link for 25 USD"
+- create_invoice: User wants to create an invoice/payment request (optionally email or WhatsApp it)
+  Examples: "invoice 3,000 to alex@example.com", "create an invoice for 1200 and WhatsApp +2547..."
 - create_workflow: User wants to create or edit an automated workflow\n  Examples: "create a workflow to email me when a payment completes", "automate reminders every Friday"\n- check_quotas: User asks about their usage limits, remaining searches, message count, or upload status.
   Examples: "show my quotas", "how many searches left?", "what are my limits?", "usage status"
 - general_chat: Casual conversation, greetings, or unclear requests

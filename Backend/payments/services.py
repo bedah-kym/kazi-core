@@ -322,7 +322,14 @@ class InvoiceService:
     """
     
     @staticmethod
-    def create_invoice(issuer: User, amount: Decimal, description: str, payer_email: str = '', recurrence: str = 'NONE'):
+    def create_invoice(
+        issuer: User,
+        amount: Decimal,
+        description: str,
+        payer_email: str = '',
+        recurrence: str = 'NONE',
+        currency: str = 'KES',
+    ):
         """
         Create a payment request/invoice
         """
@@ -335,6 +342,7 @@ class InvoiceService:
             issuer=issuer,
             payer_email=payer_email,
             amount=amount,
+            currency=currency,
             description=description,
             expires_at=expires_at,
             is_recurring=(recurrence != 'NONE'),
@@ -353,7 +361,7 @@ class InvoiceService:
                 response = service.create(
                     title=f"Invoice {invoice.reference_id}",
                     amount=float(amount),
-                    currency='KES',
+                    currency=currency,
                     email=payer_email if payer_email else issuer.email,
                     narrative=description,
                     mobile_tarrif="BUSINESS-PAYS" # or CUSTOMER-PAYS depending on need

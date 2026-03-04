@@ -9,6 +9,7 @@ from orchestration.connectors.gmail_connector import GmailConnector
 from orchestration.connectors.whatsapp_connector import WhatsAppConnector
 from orchestration.connectors.payment_connector import ReadOnlyPaymentConnector
 from orchestration.connectors.intersend_connector import IntersendPayConnector
+from orchestration.connectors.invoice_connector import InvoiceConnector
 from orchestration.connectors.quota_connector import QuotaConnector
 from orchestration.connectors.itinerary_connector import ItineraryConnector
 from orchestration.connectors.travel_buses_connector import TravelBusesConnector
@@ -293,6 +294,10 @@ async def execute_workflow_step(step: Dict[str, Any], context: Dict[str, Any]) -
     if service == 'payments':
         if action in _READ_ONLY_PAYMENT_ACTIONS:
             connector = ReadOnlyPaymentConnector()
+            params.setdefault('action', action)
+            return await _record_and_return(await connector.execute(params, context))
+        if action == 'create_invoice':
+            connector = InvoiceConnector()
             params.setdefault('action', action)
             return await _record_and_return(await connector.execute(params, context))
         if action in _PAYMENT_ACTIONS:

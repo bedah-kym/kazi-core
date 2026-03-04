@@ -135,7 +135,7 @@
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body p-4">
-                <form id="depositForm" data-deposit-url="{% url 'payments:initiate_deposit' %}">
+                <form id="depositForm" data-deposit-url="{% url 'payments:initiate_deposit' %}" data-status-url="{% url 'payments:deposit_status' %}">
                     {% csrf_token %}
                     <div class="mb-3">
                         <label class="form-label text-sm fw-medium">Phone Number (M-Pesa)</label>

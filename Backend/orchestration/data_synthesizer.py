@@ -140,6 +140,13 @@ class DataSynthesizer:
                 return _with_receipt(f"Payment link ready: {link}")
             return _with_receipt(data.get("message", "Payment link created."))
 
+        elif action == "create_invoice":
+            invoice = data.get("invoice") if isinstance(data, dict) else {}
+            link = invoice.get("payment_link") if isinstance(invoice, dict) else None
+            if link:
+                return _with_receipt(f"Invoice created. Payment link: {link}")
+            return _with_receipt(data.get("message", "Invoice created."))
+
         elif action == "withdraw":
             return _with_receipt(data.get("message", "Withdrawal initiated."))
 

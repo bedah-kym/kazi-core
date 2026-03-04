@@ -70,8 +70,8 @@ class WhatsAppConnector(BaseConnector):
         elif action == "send_invoice":
             # Just a wrapper for sending a message with payment link
             return self.send_message(
-                to=intent.get("phone_number"),
-                body=f"Hello, here is your invoice: {intent.get('payment_link')}"
+                to=parameters.get("phone_number"),
+                body=parameters.get("message") or f"Hello, here is your invoice: {parameters.get('payment_link')}"
             )
         elif action == "get_templates":
             return {"templates": ["hello_world", "payment_reminder", "shipping_update"]} # Mock for now

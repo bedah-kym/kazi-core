@@ -29,6 +29,10 @@ _ACTION_POLICIES: Dict[str, Dict[str, Any]] = {
         "requires_confirmation": True,
         "include_in_response": True,
     },
+    "create_invoice": {
+        "requires_confirmation": True,
+        "include_in_response": True,
+    },
     "withdraw": {
         "requires_confirmation": True,
         "include_in_response": True,
@@ -50,6 +54,7 @@ _AUDITED_ACTIONS = {
     "send_message",
     "send_whatsapp",
     "create_payment_link",
+    "create_invoice",
     "withdraw",
     "book_travel_item",
     "set_reminder",
@@ -146,6 +151,15 @@ def summarize_action(action: str, params: Dict[str, Any]) -> str:
         currency = params.get("currency") or ""
         description = _truncate(params.get("description") or "", 120)
         label = f"Payment link for {amount} {currency}".strip()
+        if description:
+            return f"{label} ({description})"
+        return label
+    if action == "create_invoice":
+        amount = params.get("amount") or "amount"
+        currency = params.get("currency") or ""
+        payer = params.get("payer_email") or params.get("to") or "payer"
+        description = _truncate(params.get("description") or "", 120)
+        label = f"Invoice for {amount} {currency} to {payer}".strip()
         if description:
             return f"{label} ({description})"
         return label

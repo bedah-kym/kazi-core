@@ -1,0 +1,52 @@
+{% extends 'payments/base.html' %}
+{% load humanize %}
+
+{% block title %}Transactions | Mathia Pay{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h2 class="h3 fw-bold tracking-tight">Transactions</h2>
+        <p class="text-muted">Full wallet activity log.</p>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-content p-0">
+        <div class="table-responsive">
+            <table class="table mb-0">
+                <thead>
+                    <tr>
+                        <th class="ps-4">Date</th>
+                        <th>Description</th>
+                        <th>Type</th>
+                        <th class="text-end">Amount</th>
+                        <th>Status</th>
+                        <th class="pe-4">Reference</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for tx in transactions %}
+                    <tr>
+                        <td class="ps-4">{{ tx.created_at|date:"M d, Y H:i" }}</td>
+                        <td>{{ tx.description|default:"-" }}</td>
+                        <td>{{ tx.get_type_display }}</td>
+                        <td class="text-end fw-bold {% if tx.type == 'CREDIT' %}text-success{% else %}text-danger{% endif %}">
+                            {% if tx.type == 'CREDIT' %}+{% else %}-{% endif %}{{ tx.currency }} {{ tx.amount|intcomma }}
+                        </td>
+                        <td>
+                            <span class="badge-status status-{{ tx.status }}">{{ tx.get_status_display }}</span>
+                        </td>
+                        <td class="pe-4 font-monospace">{{ tx.reference }}</td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="6" class="text-center py-4 text-muted">No transactions found</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

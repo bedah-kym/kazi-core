@@ -359,8 +359,12 @@ class InvoiceService:
                     mobile_tarrif="BUSINESS-PAYS" # or CUSTOMER-PAYS depending on need
                 )
                 
-                payment_link = response.get('url')
-                invoice.intasend_payment_link = payment_link
+                payment_link = response.get('url') or response.get('payment_link')
+                invoice_id = response.get('invoice_id') or response.get('id')
+                if payment_link:
+                    invoice.intasend_payment_link = payment_link
+                if invoice_id:
+                    invoice.intasend_invoice_id = invoice_id
                 invoice.save()
         except Exception as e:
             logger.error(f"Error generating payment link: {e}")
@@ -375,17 +379,16 @@ class InvoiceService:
         Process payment of an invoice
         """
         invoice = PaymentRequest.objects.select_for_update().get(id=invoice_id)
+        reference = provider_ref or str(invoice.reference_id)
+        existing = WalletTransaction.objects.filter(reference=reference).first()
+        if existing:
+            return existing
 
         if invoice.status != 'PENDING':
             raise ValueError(f"Invoice already {invoice.status}")
 
         wallet = WalletService.get_or_create_user_wallet(invoice.issuer)
         wallet = Wallet.objects.select_for_update().get(pk=wallet.pk)
-
-        reference = provider_ref or str(invoice.reference_id)
-        existing = WalletTransaction.objects.filter(reference=reference).first()
-        if existing:
-            return existing
 
         Wallet.objects.filter(pk=wallet.pk).update(balance=F('balance') + invoice.amount)
         wallet.refresh_from_db()
@@ -403,6 +406,13 @@ class InvoiceService:
         # Update invoice
         invoice.status = 'PAID'
         invoice.paid_at = timezone.now()
+        if invoice.is_recurring:
+            if invoice.recurrence_interval == 'MONTHLY':
+                invoice.next_billing_date = invoice.paid_at.date() + timedelta(days=30)
+            elif invoice.recurrence_interval == 'QUARTERLY':
+                invoice.next_billing_date = invoice.paid_at.date() + timedelta(days=90)
+            elif invoice.recurrence_interval == 'YEARLY':
+                invoice.next_billing_date = invoice.paid_at.date() + timedelta(days=365)
         invoice.journal_entry = None
         invoice.save()
 

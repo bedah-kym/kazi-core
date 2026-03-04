@@ -221,7 +221,8 @@
         }
 
         .status-SUCCESS,
-        .status-PAID {
+        .status-PAID,
+        .status-COMPLETED {
             background-color: #dcfce7;
             color: #166534;
         }
@@ -240,7 +241,10 @@
 
         /* Orange 100/800 */
         .status-ERROR,
-        .status-EXPIRED {
+        .status-EXPIRED,
+        .status-FAILED,
+        .status-CANCELLED,
+        .status-DISPUTED {
             background-color: #fee2e2;
             color: #991b1b;
         }
@@ -305,7 +309,8 @@
                 href="{% url 'payments:create_invoice' %}">
                 <i class="fas fa-file-invoice"></i> <span>Invoices</span>
             </a>
-            <a class="nav-link" href="#">
+            <a class="nav-link {% if request.resolver_match.url_name == 'transactions' %}active{% endif %}"
+                href="{% url 'payments:transactions' %}">
                 <i class="fas fa-history"></i> <span>Transactions</span>
             </a>
             <a class="nav-link" href="/">

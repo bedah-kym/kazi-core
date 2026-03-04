@@ -60,7 +60,7 @@
                         <div class="input-group mb-3">
                             <input type="text" class="form-control" value="{{ invoice.intasend_payment_link }}"
                                 id="paymentLink" readonly>
-                            <button class="btn btn-outline-primary" type="button" onclick="copyLink()">
+                            <button class="btn btn-outline-primary" type="button" data-copy-target="paymentLink">
                                 <i class="fas fa-copy"></i> Copy
                             </button>
                         </div>
@@ -87,12 +87,5 @@
     </div>
 </div>
 
-<script>
-    function copyLink() {
-        var copyText = document.getElementById("paymentLink");
-        copyText.select();
-        document.execCommand("copy");
-        alert("Link copied to clipboard!");
-    }
-</script>
+<script src="{% static 'payments/js/invoice_detail.js' %}" defer></script>
 {% endblock %}

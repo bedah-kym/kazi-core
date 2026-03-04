@@ -19,19 +19,22 @@ class IntersendPayConnector(BaseConnector):
         self.publishable_key = os.environ.get('INTASEND_PUBLISHABLE_KEY')
         self.api_key = os.environ.get('INTASEND_API_KEY')
         self.is_test = os.environ.get('INTASEND_IS_TEST', 'True').lower() == 'true'
+        self.config_error = ""
         
         try:
             from intasend import IntaSend
-            if self.publishable_key and self.api_key:
-                self.intasend = IntaSend(
-                    public_key=self.publishable_key,
-                    secret_key=self.api_key,
-                    test=self.is_test
-                )
-            else:
+            if not self.publishable_key or not self.api_key:
+                self.config_error = "IntaSend keys are not configured."
                 self.intasend = None
+                return
+            self.intasend = IntaSend(
+                public_key=self.publishable_key,
+                secret_key=self.api_key,
+                test=self.is_test
+            )
         except ImportError:
-            logger.warning("intasend-python not installed. Using mock mode.")
+            self.config_error = "IntaSend SDK is not installed."
+            logger.warning("intasend-python not installed.")
             self.intasend = None
 
     async def execute(self, parameters: dict, context: dict) -> dict:
@@ -72,12 +75,10 @@ class IntersendPayConnector(BaseConnector):
 
     def create_payment_link(self, amount, currency, description, phone_number=None, email=None, user=None):
         if not self.intasend:
-            print(f"[Intersend-Mock] Creating link for {currency} {amount}")
-            mock_ref = str(uuid.uuid4())
             return {
-                "payment_link": f"https://payment.intasend.com/pay/{mock_ref}",
-                "reference": mock_ref,
-                "status": "generated"
+                "status": "error",
+                "message": "Payment provider is not configured. " + self.config_error,
+                "action_required": "configure_intasend",
             }
         
         try:
@@ -98,6 +99,12 @@ class IntersendPayConnector(BaseConnector):
             return {"error": str(e)}
 
     def withdraw_to_mpesa(self, user, amount, phone_number):
+        if not self.intasend:
+            return {
+                "status": "error",
+                "message": "Payment provider is not configured. " + self.config_error,
+                "action_required": "configure_intasend",
+            }
         try:
             wallet = WalletService.get_or_create_user_wallet(user)
         except Exception as e:
@@ -123,13 +130,6 @@ class IntersendPayConnector(BaseConnector):
         if tx:
             tx.status = 'PENDING'
             tx.save(update_fields=['status'])
-
-        if not self.intasend:
-            if tx:
-                tx.status = 'COMPLETED'
-                tx.save(update_fields=['status'])
-            print(f"[Intersend-Mock] Payout {amount} to {phone_number}")
-            return {"status": "success", "message": "Funds sent to M-Pesa (Mock)", "reference": reference}
 
         try:
             service = self.intasend.transfer
@@ -158,7 +158,11 @@ class IntersendPayConnector(BaseConnector):
 
     def check_status(self, invoice_id):
         if not self.intasend:
-            return {"status": "COMPLETED", "mock": True}
+            return {
+                "status": "error",
+                "message": "Payment provider is not configured. " + self.config_error,
+                "action_required": "configure_intasend",
+            }
         
         try:
             service = self.intasend.collect

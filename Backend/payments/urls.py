@@ -9,6 +9,7 @@ app_name = 'payments'
 urlpatterns = [
     # Wallet views
     path('wallet/', views.wallet_dashboard, name='wallet_dashboard'),
+    path('transactions/', views.transactions_view, name='transactions'),
     path('wallet/deposit/', views.initiate_deposit, name='initiate_deposit'),
     path('wallet/callback/', views.payment_callback, name='payment_callback'),
     

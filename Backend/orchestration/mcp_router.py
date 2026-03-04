@@ -56,6 +56,7 @@ class MCPRouter:
         "list_transactions": "allow_payments",
         "check_invoice_status": "allow_payments",
         "check_payments": "allow_payments",
+        "create_invoice": ("allow_payments", "allow_email"),
         "create_payment_link": "allow_payments",
         "withdraw": "allow_payments",
         "check_status": "allow_payments",
@@ -312,6 +313,8 @@ class MCPRouter:
             return True
         gate_key = self.ACTION_GATES.get(action)
         if gate_key:
+            if isinstance(gate_key, (list, tuple, set)):
+                return all(bool(prefs.get(key, True)) for key in gate_key)
             return bool(prefs.get(gate_key, True))
         if action in self.TRAVEL_ACTIONS:
             return bool(prefs.get("allow_travel", True))

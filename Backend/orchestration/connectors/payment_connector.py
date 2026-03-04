@@ -55,7 +55,7 @@ class ReadOnlyPaymentConnector(BaseConnector):
         elif action == "list_transactions":
             return await self.list_transactions(user, parameters.get("limit", 10))
         elif action == "check_invoice_status":
-            return await self.check_invoice_status(parameters.get("invoice_id"))
+            return await self.check_invoice_status(user, parameters.get("invoice_id"))
         elif action == "check_payments":
              # Summary view: Balance + Last 3 transactions
             balance_data = await self.check_balance(user)
@@ -125,15 +125,30 @@ class ReadOnlyPaymentConnector(BaseConnector):
             logger.error(f"Error listing transactions: {e}")
             return {"error": str(e)}
     
-    async def check_invoice_status(self, invoice_id: str) -> dict:
+    async def check_invoice_status(self, user, invoice_id: str) -> dict:
         """Check status of an invoice"""
         from payments.models import PaymentRequest
         from asgiref.sync import sync_to_async
-        
+        from django.db.models import Q
+        import uuid
+
         try:
             def _get_invoice_status():
                 try:
-                    invoice = PaymentRequest.objects.get(reference_id=invoice_id)
+                    if not invoice_id:
+                        return None
+                    try:
+                        reference_uuid = uuid.UUID(str(invoice_id))
+                    except (ValueError, TypeError):
+                        return None
+                    email = getattr(user, "email", "") or ""
+                    invoice = PaymentRequest.objects.filter(
+                        reference_id=reference_uuid
+                    ).filter(
+                        Q(issuer=user) | Q(payer=user) | Q(payer_email__iexact=email)
+                    ).first()
+                    if not invoice:
+                        return None
                     return {
                         "reference_id": str(invoice.reference_id),
                         "amount": float(invoice.amount),

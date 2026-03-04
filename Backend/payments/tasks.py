@@ -52,11 +52,11 @@ def process_recurring_invoices():
                 amount=invoice.amount,
                 description=f"Recurring: {invoice.description}",
                 payer_email=invoice.payer_email,
-                recurrence=invoice.recurrence_interval
+                recurrence='NONE'
             )
             
             new_invoice.parent_invoice = invoice
-            new_invoice.save()
+            new_invoice.save(update_fields=['parent_invoice'])
             
             # Update next billing date on original
             if invoice.recurrence_interval == 'MONTHLY':

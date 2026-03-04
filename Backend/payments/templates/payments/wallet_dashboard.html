@@ -1,5 +1,6 @@
 {% extends 'payments/base.html' %}
 {% load humanize %}
+{% load static %}
 
 {% block title %}Overview | Mathia Pay{% endblock %}
 
@@ -27,7 +28,13 @@
                 <div class="d-flex align-items-baseline">
                     <span class="fs-2 fw-bold">KES {{ balance|intcomma }}</span>
                 </div>
-                <p class="text-xs text-muted mt-1">+20.1% from last month</p>
+                <p class="text-xs text-muted mt-1">
+                    {% if last_tx_at %}
+                    Last activity {{ last_tx_at|date:"M d, Y H:i" }}
+                    {% else %}
+                    No transactions yet
+                    {% endif %}
+                </p>
             </div>
         </div>
     </div>
@@ -40,24 +47,26 @@
             </div>
             <div class="card-content pt-0">
                 <div class="d-flex align-items-baseline">
-                    <span class="fs-2 fw-bold">12</span>
+                    <span class="fs-2 fw-bold">{{ active_invoices }}</span>
                 </div>
-                <p class="text-xs text-muted mt-1">2 pending payment</p>
+                <p class="text-xs text-muted mt-1">
+                    Pending {{ pending_invoices }}{% if overdue_invoices %} · Overdue {{ overdue_invoices }}{% endif %}
+                </p>
             </div>
         </div>
     </div>
 
-    <!-- Total Revenue Card (Placeholder) -->
+    <!-- Total Credits -->
     <div class="col-md-4">
         <div class="card h-100">
             <div class="card-header pb-2">
-                <h5 class="card-title text-sm font-medium text-muted">Total Revenue</h5>
+                <h5 class="card-title text-sm font-medium text-muted">Total Credits</h5>
             </div>
             <div class="card-content pt-0">
                 <div class="d-flex align-items-baseline">
-                    <span class="fs-2 fw-bold">KES 45,231</span>
+                    <span class="fs-2 fw-bold">{{ currency }} {{ total_revenue|intcomma }}</span>
                 </div>
-                <p class="text-xs text-muted mt-1">+12% from last month</p>
+                <p class="text-xs text-muted mt-1">{{ credit_count }} credits recorded</p>
             </div>
         </div>
     </div>
@@ -72,7 +81,9 @@
                 <p class="card-description">Monthly transaction volume.</p>
             </div>
             <div class="card-content">
-                <canvas id="transactionChart" height="240"></canvas>
+                <canvas id="transactionChart" height="240"
+                    data-labels='[{% for tx in transactions reversed %}"{{ tx.date|date:'M d' }}"{% if not forloop.last %},{% endif %}{% endfor %}]'
+                    data-values='[{% for tx in transactions reversed %}{{ tx.amount }}{% if not forloop.last %},{% endif %}{% endfor %}]'></canvas>
             </div>
         </div>
     </div>
@@ -81,8 +92,8 @@
     <div class="col-md-5">
         <div class="card h-100">
             <div class="card-header">
-                <h5 class="card-title">Recent Sales</h5>
-                <p class="card-description">Latest transactions.</p>
+                <h5 class="card-title">Recent Transactions</h5>
+                <p class="card-description">Latest wallet activity.</p>
             </div>
             <div class="card-content p-0">
                 <div class="table-responsive">
@@ -124,24 +135,29 @@
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body p-4">
-                <form id="depositForm">
+                <form id="depositForm" data-deposit-url="{% url 'payments:initiate_deposit' %}">
+                    {% csrf_token %}
                     <div class="mb-3">
                         <label class="form-label text-sm fw-medium">Phone Number (M-Pesa)</label>
                         <input type="tel" name="phone" class="form-control" placeholder="2547..." required>
                     </div>
                     <div class="mb-3">
                         <label class="form-label text-sm fw-medium">Amount (KES)</label>
-                        <input type="number" name="amount" class="form-control" min="10" value="1000" required>
+                        <input type="number" name="amount" class="form-control" min="1" value="1000" required>
                     </div>
 
                     <div class="alert bg-secondary text-secondary-foreground text-sm border-0 mb-4">
                         <i class="fas fa-info-circle me-1"></i>
-                        Includes <strong>50 KES</strong> platform fee.
+                        {% if platform_fee %}
+                        Includes <strong>{{ currency }} {{ platform_fee|intcomma }}</strong> platform fee.
+                        {% else %}
+                        Platform fee will be shown before confirmation.
+                        {% endif %}
                     </div>
 
                     <div class="d-grid">
                         <button type="submit" class="btn btn-primary" id="btnDeposit">
-                            Inititate Payment
+                            Initiate Payment
                         </button>
                     </div>
                 </form>
@@ -153,64 +169,5 @@
 {% endblock %}
 
 {% block extra_js %}
-<script>
-    // Deposit Form Logic (Same as before)
-    document.getElementById('depositForm').addEventListener('submit', async function (e) {
-        e.preventDefault();
-        const btn = document.getElementById('btnDeposit');
-        btn.disabled = true;
-        btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i> Processing...';
-
-        const formData = new FormData(this);
-
-        try {
-            const response = await fetch("{% url 'payments:initiate_deposit' %}", {
-                method: 'POST',
-                headers: { 'X-CSRFToken': '{{ csrf_token }}' },
-                body: formData
-            });
-            const data = await response.json();
-            if (response.ok) {
-                alert('Success! Check your phone.');
-                location.reload();
-            } else {
-                alert('Error: ' + (data.error || 'Failed'));
-            }
-        } catch (err) {
-            console.error(err);
-            alert('Connection error');
-        } finally {
-            btn.disabled = false;
-            btn.innerHTML = 'Initiate Payment';
-        }
-    });
-
-    // Clean Bar Chart
-    const ctx = document.getElementById('transactionChart').getContext('2d');
-    const txData = [{% for tx in transactions reversed %}{ { tx.amount } }, {% endfor %}];
-    const labels = [{% for tx in transactions reversed %}"{{ tx.date|date:'M d' }}", {% endfor %}];
-
-    new Chart(ctx, {
-        type: 'bar',
-        data: {
-            labels: labels,
-            datasets: [{
-                label: 'Volume',
-                data: txData,
-                backgroundColor: '#18181b', // Zinc 950
-                borderRadius: 4,
-                barThickness: 20
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: { legend: { display: false } },
-            scales: {
-                x: { grid: { display: false } },
-                y: { grid: { color: '#e4e4e7', borderDash: [4, 4] }, border: { display: false } }
-            }
-        }
-    });
-</script>
+<script src="{% static 'payments/js/wallet_dashboard.js' %}" defer></script>
 {% endblock %}

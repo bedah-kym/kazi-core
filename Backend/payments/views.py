@@ -6,13 +6,15 @@ from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.utils import timezone
+from django.db.models import Sum
 from django.contrib import messages
 from django.conf import settings
 from decimal import Decimal
+import uuid
 import json
 import logging
 
-from .models import PaymentRequest, PaymentNotification
+from .models import PaymentRequest, PaymentNotification, FeeSchedule
 from .services import WalletService, InvoiceService
 from users.models import WalletTransaction
 from users.decorators import workspace_required
@@ -50,14 +52,63 @@ def wallet_dashboard(request):
         is_read=False
     ).order_by('-created_at')[:5]
 
+    now = timezone.now()
+    invoice_qs = PaymentRequest.objects.filter(issuer=user)
+    active_invoices = invoice_qs.filter(status='PENDING', expires_at__gt=now).count()
+    pending_invoices = invoice_qs.filter(status='PENDING').count()
+    overdue_invoices = invoice_qs.filter(status='PENDING', expires_at__lte=now).count()
+
+    total_revenue = WalletTransaction.objects.filter(
+        wallet=wallet,
+        type='CREDIT',
+        status='COMPLETED'
+    ).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+    credit_count = WalletTransaction.objects.filter(
+        wallet=wallet,
+        type='CREDIT',
+        status='COMPLETED'
+    ).count()
+
+    last_tx_at = recent_entries[0].created_at if recent_entries else None
+
+    try:
+        fee_config = FeeSchedule.objects.get(transaction_type='DEPOSIT', is_active=True)
+        platform_fee = fee_config.platform_fee
+    except FeeSchedule.DoesNotExist:
+        platform_fee = None
+
     context = {
         'balance': balance,
         'transactions': transactions,
         'notifications': notifications,
         'workspace': request.user.workspace,
+        'currency': wallet.currency,
+        'active_invoices': active_invoices,
+        'pending_invoices': pending_invoices,
+        'overdue_invoices': overdue_invoices,
+        'total_revenue': total_revenue,
+        'credit_count': credit_count,
+        'last_tx_at': last_tx_at,
+        'platform_fee': platform_fee,
     }
 
     return render(request, 'payments/wallet_dashboard.html', context)
+
+
+@workspace_required
+def transactions_view(request):
+    """
+    Full transaction history for the workspace wallet
+    """
+    wallet = WalletService.get_or_create_user_wallet(request.user)
+    transactions = WalletTransaction.objects.filter(wallet=wallet).order_by('-created_at')[:200]
+
+    context = {
+        'transactions': transactions,
+        'workspace': request.user.workspace,
+    }
+
+    return render(request, 'payments/transactions.html', context)
 
 
 @login_required
@@ -149,22 +200,63 @@ def payment_callback(request):
         # Parse webhook data
         data = json.loads(raw_body)
         
-        invoice_id = data.get('invoice_id')
+        invoice_id = (
+            data.get('invoice_id')
+            or data.get('id')
+            or data.get('tracking_id')
+            or data.get('invoice')
+        )
         state = data.get('state')
-        gross_amount = Decimal(str(data.get('value', 0)))
-        fee = Decimal(str(data.get('fee', 0)))
+        gross_amount = Decimal(str(data.get('value') or data.get('amount') or 0))
+        fee = Decimal(str(data.get('fee') or 0))
+
+        invoice = None
+        if invoice_id:
+            invoice = PaymentRequest.objects.filter(intasend_invoice_id=invoice_id).first()
+            if not invoice:
+                try:
+                    invoice_uuid = uuid.UUID(str(invoice_id))
+                    invoice = PaymentRequest.objects.filter(reference_id=invoice_uuid).first()
+                except (ValueError, TypeError):
+                    invoice = None
+
+        if invoice:
+            if not invoice.intasend_invoice_id:
+                invoice.intasend_invoice_id = invoice_id
+            if data.get('email') and not invoice.payer_email:
+                invoice.payer_email = data.get('email')
+            invoice.save(update_fields=['intasend_invoice_id', 'payer_email'])
+
+            from workflows.webhook_handlers import handle_intasend_webhook_event
+            handle_intasend_webhook_event(invoice.issuer_id, data)
+
+            if state == 'COMPLETE':
+                try:
+                    InvoiceService.process_invoice_payment(invoice.id, invoice_id)
+                except Exception as e:
+                    logger.error(f"Invoice payment processing error: {e}")
+                    return JsonResponse({'error': 'Invoice processing failed'}, status=500)
+                return JsonResponse({'status': 'success'})
+
+            if state in ('FAILED', 'CANCELLED', 'EXPIRED') and invoice.status == 'PENDING':
+                invoice.status = 'CANCELLED' if state != 'EXPIRED' else 'EXPIRED'
+                invoice.save(update_fields=['status'])
+            return JsonResponse({'status': 'ignored', 'state': state})
         
         # Find user by email or other identifier
         email = data.get('email')
         from django.contrib.auth import get_user_model
         User = get_user_model()
-        
+
+        if not email:
+            return JsonResponse({'error': 'Missing email'}, status=400)
+
         try:
             user = User.objects.get(email=email)
         except User.DoesNotExist:
             logger.error(f"User not found for email: {email}")
             return JsonResponse({'error': 'User not found'}, status=404)
-        
+
         from workflows.webhook_handlers import handle_intasend_webhook_event
         handle_intasend_webhook_event(user.id, data)
 
@@ -176,10 +268,10 @@ def payment_callback(request):
                 intasend_fee=fee,
                 provider_ref=invoice_id
             )
-            
+
             logger.info(f"Deposit processed: {tx.reference}")
             return JsonResponse({'status': 'success'})
-        
+
         return JsonResponse({'status': 'ignored', 'state': state})
         
     except Exception as e:

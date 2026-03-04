@@ -116,10 +116,11 @@ class PaymentRequestAdmin(ImportExportModelAdmin):
 
     def status_badge(self, obj):
         colors = {
-            'pending': '#f39c12',
-            'paid': '#27ae60',
-            'failed': '#e74c3c',
-            'cancelled': '#95a5a6'
+            'PENDING': '#f39c12',
+            'PAID': '#27ae60',
+            'EXPIRED': '#95a5a6',
+            'DISPUTED': '#e74c3c',
+            'CANCELLED': '#95a5a6'
         }
         color = colors.get(obj.status, '#3498db')
         return format_html(
@@ -188,10 +189,10 @@ class DisputeAdmin(admin.ModelAdmin):
 
     def status_badge(self, obj):
         colors = {
-            'open': '#e74c3c',
-            'investigating': '#f39c12',
-            'resolved': '#27ae60',
-            'rejected': '#95a5a6'
+            'OPEN': '#e74c3c',
+            'INVESTIGATING': '#f39c12',
+            'RESOLVED': '#27ae60',
+            'WITHDRAWN': '#95a5a6'
         }
         color = colors.get(obj.status, '#3498db')
         return format_html(
@@ -238,9 +239,10 @@ class ReconciliationDiscrepancyAdmin(admin.ModelAdmin):
 
     def severity_badge(self, obj):
         colors = {
-            'low': '#3498db',
-            'medium': '#f39c12',
-            'high': '#e74c3c'
+            'LOW': '#3498db',
+            'MEDIUM': '#f39c12',
+            'HIGH': '#e74c3c',
+            'CRITICAL': '#c0392b'
         }
         color = colors.get(obj.severity, '#95a5a6')
         return format_html(

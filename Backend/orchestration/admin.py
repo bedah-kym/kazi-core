@@ -7,30 +7,34 @@ from .models import ActionReceipt
 class ActionReceiptAdmin(admin.ModelAdmin):
     list_display = ("id", "user", "room", "action", "status_badge", "reversible_badge", "created_at")
     list_filter = ("status", "action", "reversible", "created_at")
-    search_fields = ("action", "user__username", "user__email", "room__name")
-    readonly_fields = ("created_at", "updated_at")
+    search_fields = ("action", "service", "user__username", "user__email", "room__id")
+    readonly_fields = ("created_at",)
     ordering = ["-created_at"]
     autocomplete_fields = ["user", "room"]
     date_hierarchy = "created_at"
 
     fieldsets = (
         ("Action Details", {
-            "fields": ("user", "room", "action", "status")
+            "fields": ("user", "room", "action", "service", "status")
         }),
         ("Options", {
-            "fields": ("reversible",)
+            "fields": ("reversible", "undo_action", "undo_params")
+        }),
+        ("Payload", {
+            "fields": ("params", "result", "reason"),
+            "classes": ("collapse",)
         }),
         ("Timestamps", {
-            "fields": ("created_at", "updated_at"),
+            "fields": ("created_at",),
             "classes": ("collapse",)
         }),
     )
 
     def status_badge(self, obj):
         colors = {
+            'success': '#27ae60',
+            'error': '#e74c3c',
             'pending': '#f39c12',
-            'completed': '#27ae60',
-            'failed': '#e74c3c',
             'cancelled': '#95a5a6'
         }
         color = colors.get(obj.status, '#3498db')
@@ -50,4 +54,3 @@ class ActionReceiptAdmin(admin.ModelAdmin):
             status
         )
     reversible_badge.short_description = 'Reversible'
-

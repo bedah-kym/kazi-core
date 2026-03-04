@@ -81,10 +81,10 @@ class UserWorkflowAdmin(ImportExportModelAdmin):
 
     def status_badge(self, obj):
         colors = {
-            'draft': '#95a5a6',
             'active': '#27ae60',
             'paused': '#f39c12',
-            'archived': '#e74c3c'
+            'failed': '#e74c3c',
+            'deleted': '#95a5a6'
         }
         color = colors.get(obj.status, '#3498db')
         return format_html(
@@ -111,24 +111,23 @@ class WorkflowExecutionAdmin(ImportExportModelAdmin):
     list_display = ['id', 'workflow', 'status_badge', 'duration_display', 'started_at']
     list_filter = ['status', 'started_at', 'completed_at']
     search_fields = ['workflow__name', 'id']
-    readonly_fields = ['created_at', 'updated_at', 'started_at', 'completed_at']
+    readonly_fields = ['started_at', 'completed_at']
     ordering = ['-started_at']
     autocomplete_fields = ['workflow']
     date_hierarchy = 'started_at'
 
     fieldsets = (
         ('Execution Info', {
-            'fields': ('workflow', 'id')
+            'fields': ('workflow', 'temporal_workflow_id', 'temporal_run_id')
+        }),
+        ('Trigger', {
+            'fields': ('trigger_type', 'trigger_data')
         }),
         ('Status', {
-            'fields': ('status',)
+            'fields': ('status', 'result', 'error_message')
         }),
         ('Timeline', {
             'fields': ('started_at', 'completed_at'),
-        }),
-        ('Metadata', {
-            'fields': ('created_at', 'updated_at'),
-            'classes': ('collapse',)
         }),
     )
 
@@ -168,17 +167,30 @@ class WorkflowTriggerAdmin(admin.ModelAdmin):
     list_display = ['trigger_type_display', 'workflow', 'is_active_badge', 'created_at']
     list_filter = ['created_at', 'trigger_type']
     search_fields = ['workflow__name', 'trigger_type']
-    readonly_fields = ['created_at', 'updated_at']
+    readonly_fields = ['created_at', 'updated_at', 'last_triggered_at', 'trigger_count']
     ordering = ['-created_at']
     autocomplete_fields = ['workflow']
     date_hierarchy = 'created_at'
 
     fieldsets = (
         ('Trigger Info', {
-            'fields': ('workflow', 'trigger_type')
+            'fields': ('workflow', 'trigger_type', 'service', 'event')
         }),
         ('Configuration', {
-            'fields': ('trigger_config', 'is_active'),
+            'fields': (
+                'config',
+                'webhook_secret',
+                'webhook_url',
+                'schedule_cron',
+                'schedule_timezone',
+                'temporal_schedule_id',
+                'is_active',
+            ),
+            'classes': ('collapse',)
+        }),
+        ('Activity', {
+            'fields': ('last_triggered_at', 'trigger_count'),
+            'classes': ('collapse',)
         }),
         ('Timestamps', {
             'fields': ('created_at', 'updated_at'),
@@ -190,8 +202,7 @@ class WorkflowTriggerAdmin(admin.ModelAdmin):
         colors = {
             'webhook': '#3498db',
             'schedule': '#2ecc71',
-            'manual': '#f39c12',
-            'event': '#e74c3c'
+            'manual': '#f39c12'
         }
         color = colors.get(obj.trigger_type, '#95a5a6')
         return format_html(

@@ -9,40 +9,46 @@ from .models import Message, Member, Chatroom
 class MessageResource(resources.ModelResource):
     class Meta:
         model = Message
-        fields = ['id', 'member', 'content', 'created_at']
+        fields = ['id', 'member', 'content', 'timestamp', 'parent', 'is_voice', 'has_ai_voice']
         export_order = fields
 
 
 class ChatroomResource(resources.ModelResource):
     class Meta:
         model = Chatroom
-        fields = ['id', 'user', 'created_at', 'updated_at']
+        fields = ['id']
         export_order = fields
 
 
 @admin.register(Message)
 class MessageAdmin(ImportExportModelAdmin):
     resource_class = MessageResource
-    list_display = ['member_display', 'content_preview', 'timestamp_display', 'created_at']
-    list_filter = ['created_at', 'member__chatroom']
-    search_fields = ['member__user__username', 'member__user__email', 'content']
-    readonly_fields = ['created_at', 'updated_at']
-    ordering = ['-created_at']
+    list_display = ['member_display', 'content_preview', 'timestamp_display', 'is_voice', 'has_ai_voice']
+    list_filter = ['is_voice', 'has_ai_voice', 'timestamp']
+    search_fields = ['member__User__username', 'member__User__email', 'content', 'audio_url', 'voice_transcript']
+    readonly_fields = ['timestamp']
+    ordering = ['-timestamp']
     autocomplete_fields = ['member']
-    date_hierarchy = 'created_at'
+    date_hierarchy = 'timestamp'
 
     fieldsets = (
         ('Message Details', {
-            'fields': ('member', 'content')
+            'fields': ('member', 'content', 'parent')
+        }),
+        ('Voice', {
+            'fields': ('is_voice', 'audio_url', 'voice_transcript', 'has_ai_voice'),
+            'classes': ('collapse',)
         }),
         ('Metadata', {
-            'fields': ('created_at', 'updated_at'),
+            'fields': ('timestamp',),
             'classes': ('collapse',)
         }),
     )
 
     def member_display(self, obj):
-        return f"{obj.member.user.email if obj.member and obj.member.user else 'Unknown'}"
+        if obj.member and obj.member.User:
+            return f"{obj.member.User.email}"
+        return 'Unknown'
     member_display.short_description = 'Sent By'
 
     def content_preview(self, obj):
@@ -54,37 +60,40 @@ class MessageAdmin(ImportExportModelAdmin):
     content_preview.short_description = 'Content'
 
     def timestamp_display(self, obj):
-        return obj.created_at.strftime('%Y-%m-%d %H:%M')
+        return obj.timestamp.strftime('%Y-%m-%d %H:%M')
     timestamp_display.short_description = 'Sent At'
+    timestamp_display.admin_order_field = 'timestamp'
 
 
 @admin.register(Member)
 class MemberAdmin(admin.ModelAdmin):
-    list_display = ['user_display', 'chatroom', 'join_date_display', 'message_count']
-    list_filter = ['chatroom', 'created_at']
-    search_fields = ['user__username', 'user__email', 'chatroom__user__username']
-    readonly_fields = ['created_at', 'updated_at']
-    ordering = ['-created_at']
-    autocomplete_fields = ['user', 'chatroom']
-    date_hierarchy = 'created_at'
+    list_display = ['user_display', 'last_seen_display', 'message_count']
+    list_filter = ['last_seen']
+    search_fields = ['User__username', 'User__email']
+    readonly_fields = ['last_seen']
+    ordering = ['-last_seen']
+    autocomplete_fields = ['User']
+    date_hierarchy = 'last_seen'
 
     fieldsets = (
         ('Member Info', {
-            'fields': ('user', 'chatroom')
+            'fields': ('User',)
         }),
-        ('Timestamps', {
-            'fields': ('created_at', 'updated_at'),
+        ('Activity', {
+            'fields': ('last_seen',),
             'classes': ('collapse',)
         }),
     )
 
     def user_display(self, obj):
-        return f"{obj.user.email}"
+        return f"{obj.User.email}"
     user_display.short_description = 'User'
 
-    def join_date_display(self, obj):
-        return obj.created_at.strftime('%Y-%m-%d')
-    join_date_display.short_description = 'Joined'
+    def last_seen_display(self, obj):
+        if not obj.last_seen:
+            return '-'
+        return obj.last_seen.strftime('%Y-%m-%d')
+    last_seen_display.short_description = 'Last Seen'
 
     def message_count(self, obj):
         count = Message.objects.filter(member=obj).count()
@@ -100,62 +109,30 @@ class MemberAdmin(admin.ModelAdmin):
 @admin.register(Chatroom)
 class ChatroomAdmin(ImportExportModelAdmin):
     resource_class = ChatroomResource
-    list_display = ['room_name', 'owner', 'member_count', 'message_count_display', 'created_at']
-    list_filter = ['created_at']
-    search_fields = ['user__username', 'user__email']
-    readonly_fields = ['created_at', 'updated_at']
-    ordering = ['-created_at']
-    autocomplete_fields = ['user']
-    date_hierarchy = 'created_at'
+    list_display = ['id', 'participants_count', 'messages_count']
+    search_fields = ['id', 'participants__User__username', 'participants__User__email']
+    readonly_fields = ['encryption_key', 'participants_count', 'messages_count']
+    ordering = ['-id']
+    filter_horizontal = ['participants']
 
     fieldsets = (
-        ('Room Info', {
-            'fields': ('user',)
+        ('Members', {
+            'fields': ('participants',)
+        }),
+        ('Security', {
+            'fields': ('encryption_key',)
         }),
         ('Statistics', {
-            'fields': ('member_count_readonly', 'message_count_readonly'),
-        }),
-        ('Timestamps', {
-            'fields': ('created_at', 'updated_at'),
+            'fields': ('participants_count', 'messages_count'),
             'classes': ('collapse',)
         }),
     )
 
-    def room_name(self, obj):
-        return f"Room #{obj.id}"
-    room_name.short_description = 'Chatroom'
+    def participants_count(self, obj):
+        return obj.participants.count()
+    participants_count.short_description = 'Members'
 
-    def owner(self, obj):
-        return obj.user.email if obj.user else 'Unknown'
-    owner.short_description = 'Owner'
-
-    def member_count(self, obj):
-        count = Member.objects.filter(chatroom=obj).count()
-        color = '#3498db'
-        weight = 'bold' if count > 5 else 'normal'
-        return format_html(
-            '<span style="background-color: {}; color: white; padding: 3px 8px; border-radius: 3px; font-weight: {};">{} members</span>',
-            color,
-            weight,
-            count
-        )
-    member_count.short_description = 'Members'
-
-    def message_count_display(self, obj):
-        count = Message.objects.filter(member__chatroom=obj).count()
-        color = '#27ae60' if count > 0 else '#95a5a6'
-        return format_html(
-            '<span style="background-color: {}; color: white; padding: 3px 8px; border-radius: 3px;">{} messages</span>',
-            color,
-            count
-        )
-    message_count_display.short_description = 'Messages'
-
-    def member_count_readonly(self, obj):
-        return Member.objects.filter(chatroom=obj).count()
-    member_count_readonly.short_description = 'Total Members'
-
-    def message_count_readonly(self, obj):
-        return Message.objects.filter(member__chatroom=obj).count()
-    message_count_readonly.short_description = 'Total Messages'
+    def messages_count(self, obj):
+        return obj.chats.count()
+    messages_count.short_description = 'Messages'
 

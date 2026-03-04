@@ -63,10 +63,9 @@ class UserProfileAdmin(admin.ModelAdmin):
 
     def user_type_badge(self, obj):
         colors = {
-            'creator': '#3498db',
-            'manager': '#2ecc71',
-            'developer': '#e74c3c',
-            'other': '#95a5a6'
+            'personal': '#3498db',
+            'team': '#2ecc71',
+            'business': '#e74c3c'
         }
         color = colors.get(obj.user_type, '#3498db')
         return format_html(
@@ -128,7 +127,7 @@ class WorkspaceAdmin(admin.ModelAdmin):
     list_display = ['name', 'owner', 'plan_badge', 'account_type', 'onboarding_badge', 'trial_badge']
     list_filter = ['plan', 'account_type', 'onboarding_completed', 'trial_active']
     search_fields = ['name', 'owner__username', 'owner__email']
-    readonly_fields = ['created_at', 'updated_at']
+    readonly_fields = ['created_at']
     ordering = ['-created_at']
     autocomplete_fields = ['owner']
 
@@ -137,14 +136,15 @@ class WorkspaceAdmin(admin.ModelAdmin):
         ('Plan & Type', {'fields': ('plan', 'account_type')}),
         ('Status', {'fields': ('onboarding_completed',)}),
         ('Trial', {'fields': ('trial_active', 'trial_started_at', 'trial_ends_at')}),
-        ('Timestamps', {'fields': ('created_at', 'updated_at'), 'classes': ('collapse',)}),
+        ('Timestamps', {'fields': ('created_at',), 'classes': ('collapse',)}),
     )
 
     def plan_badge(self, obj):
         colors = {
             'free': '#95a5a6',
+            'trial': '#f39c12',
             'pro': '#3498db',
-            'enterprise': '#e74c3c'
+            'agency': '#e74c3c'
         }
         color = colors.get(obj.plan, '#95a5a6')
         return format_html(
@@ -179,6 +179,7 @@ class WorkspaceAdmin(admin.ModelAdmin):
 class WalletAdmin(admin.ModelAdmin):
     list_display = ['workspace', 'currency', 'balance_display', 'created_at']
     list_filter = ['currency', 'created_at']
+    search_fields = ['workspace__name', 'workspace__owner__email']
     readonly_fields = ['created_at', 'updated_at']
     ordering = ['-created_at']
     autocomplete_fields = ['workspace']
@@ -198,7 +199,7 @@ class WalletAdmin(admin.ModelAdmin):
 class WalletTransactionAdmin(admin.ModelAdmin):
     list_display = ['wallet', 'type_badge', 'amount_display', 'status_badge', 'created_at']
     list_filter = ['type', 'status', 'currency', 'created_at']
-    search_fields = ['wallet__workspace__name', 'reference_id']
+    search_fields = ['wallet__workspace__name', 'reference']
     readonly_fields = ['created_at']
     date_hierarchy = 'created_at'
     ordering = ['-created_at']
@@ -206,10 +207,8 @@ class WalletTransactionAdmin(admin.ModelAdmin):
 
     def type_badge(self, obj):
         colors = {
-            'deposit': '#27ae60',
-            'withdrawal': '#e74c3c',
-            'payment': '#3498db',
-            'refund': '#f39c12'
+            'CREDIT': '#27ae60',
+            'DEBIT': '#e74c3c'
         }
         color = colors.get(obj.type, '#95a5a6')
         return format_html(
@@ -225,15 +224,15 @@ class WalletTransactionAdmin(admin.ModelAdmin):
 
     def status_badge(self, obj):
         colors = {
-            'pending': '#f39c12',
-            'completed': '#27ae60',
-            'failed': '#e74c3c'
+            'PENDING': '#f39c12',
+            'COMPLETED': '#27ae60',
+            'FAILED': '#e74c3c'
         }
         color = colors.get(obj.status, '#95a5a6')
         return format_html(
             '<span style="background-color: {}; color: white; padding: 3px 8px; border-radius: 3px; text-transform: capitalize;">{}</span>',
             color,
-            obj.status
+            obj.get_status_display()
         )
     status_badge.short_description = 'Status'
 
@@ -248,8 +247,8 @@ class TrialApplicationAdmin(ImportExportModelAdmin):
     resource_class = TrialApplicationResource
     list_display = ['name', 'email', 'company', 'team_size', 'status_badge', 'created_at']
     list_filter = ['status', 'industry', 'team_size', 'created_at']
-    search_fields = ['name', 'email', 'company', 'primary_use_case', 'message']
-    readonly_fields = ['created_at', 'updated_at']
+    search_fields = ['name', 'email', 'company', 'primary_use_case', 'pain_points', 'notes']
+    readonly_fields = ['created_at']
     date_hierarchy = 'created_at'
     ordering = ['-created_at']
     actions = [approve_apps]
@@ -258,8 +257,7 @@ class TrialApplicationAdmin(ImportExportModelAdmin):
         colors = {
             'pending': '#f39c12',
             'approved': '#27ae60',
-            'rejected': '#e74c3c',
-            'invited': '#3498db'
+            'rejected': '#e74c3c'
         }
         color = colors.get(obj.status, '#95a5a6')
         return format_html(
@@ -276,17 +274,16 @@ class TrialInviteAdmin(ImportExportModelAdmin):
     list_display = ['email', 'status_badge', 'sent_at', 'activated_at', 'trial_ends_display', 'sent_by']
     list_filter = ['status', 'sent_at', 'activated_at']
     search_fields = ['email', 'token']
-    readonly_fields = ['token', 'created_at', 'updated_at']
+    readonly_fields = ['token', 'created_at']
     date_hierarchy = 'sent_at'
     ordering = ['-sent_at']
     autocomplete_fields = ['sent_by']
 
     def status_badge(self, obj):
         colors = {
-            'pending': '#f39c12',
-            'accepted': '#27ae60',
-            'expired': '#e74c3c',
-            'revoked': '#95a5a6'
+            'sent': '#f39c12',
+            'activated': '#27ae60',
+            'expired': '#e74c3c'
         }
         color = colors.get(obj.status, '#3498db')
         return format_html(

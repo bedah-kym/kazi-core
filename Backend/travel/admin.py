@@ -50,10 +50,9 @@ class ItineraryAdmin(ImportExportModelAdmin):
     def status_badge(self, obj):
         colors = {
             'draft': '#95a5a6',
-            'planned': '#3498db',
-            'in_progress': '#f39c12',
+            'active': '#3498db',
             'completed': '#27ae60',
-            'cancelled': '#e74c3c'
+            'archived': '#e74c3c'
         }
         color = colors.get(obj.status, '#95a5a6')
         return format_html(
@@ -68,7 +67,7 @@ class ItineraryAdmin(ImportExportModelAdmin):
 class ItineraryItemAdmin(admin.ModelAdmin):
     list_display = ['title', 'itinerary', 'type_badge', 'start_datetime', 'status_badge']
     list_filter = ['item_type', 'status', 'start_datetime', 'created_at']
-    search_fields = ['title', 'itinerary__title', 'location', 'description']
+    search_fields = ['title', 'itinerary__title', 'location_name', 'description', 'provider', 'provider_id']
     readonly_fields = ['created_at', 'updated_at']
     ordering = ['-start_datetime']
     autocomplete_fields = ['itinerary']
@@ -82,7 +81,13 @@ class ItineraryItemAdmin(admin.ModelAdmin):
             'fields': ('start_datetime', 'end_datetime')
         }),
         ('Location', {
-            'fields': ('location', 'location_coordinates')
+            'fields': ('location_name', 'location_latitude', 'location_longitude')
+        }),
+        ('Provider', {
+            'fields': ('provider', 'provider_id', 'booking_url')
+        }),
+        ('Pricing', {
+            'fields': ('price_ksh', 'price_currency')
         }),
         ('Status', {
             'fields': ('status',)
@@ -95,11 +100,13 @@ class ItineraryItemAdmin(admin.ModelAdmin):
 
     def type_badge(self, obj):
         colors = {
+            'bus': '#3498db',
             'flight': '#3498db',
             'hotel': '#2ecc71',
             'activity': '#f39c12',
+            'event': '#9b59b6',
             'restaurant': '#e74c3c',
-            'transport': '#9b59b6',
+            'transfer': '#9b59b6',
             'other': '#95a5a6'
         }
         color = colors.get(obj.item_type, '#95a5a6')
@@ -113,7 +120,7 @@ class ItineraryItemAdmin(admin.ModelAdmin):
 
     def status_badge(self, obj):
         colors = {
-            'pending': '#f39c12',
+            'planned': '#f39c12',
             'booked': '#27ae60',
             'cancelled': '#e74c3c',
             'completed': '#3498db'
@@ -141,13 +148,17 @@ class EventAdmin(admin.ModelAdmin):
             'fields': ('title', 'description', 'category')
         }),
         ('Location', {
-            'fields': ('location_name', 'location_country', 'location_coordinates')
+            'fields': ('location_name', 'location_country', 'location_latitude', 'location_longitude')
         }),
         ('Schedule', {
             'fields': ('start_datetime', 'end_datetime')
         }),
         ('Provider Info', {
-            'fields': ('provider', 'provider_event_id')
+            'fields': ('provider', 'provider_id')
+        }),
+        ('Media', {
+            'fields': ('image_url',),
+            'classes': ('collapse',)
         }),
         ('Sync Status', {
             'fields': ('last_synced_at',),
@@ -181,15 +192,19 @@ class SearchCacheAdmin(admin.ModelAdmin):
     list_display = ['provider', 'hit_count_display', 'cache_status', 'created_at', 'expires_at']
     list_filter = ['provider', 'created_at', 'expires_at']
     search_fields = ['query_hash']
-    readonly_fields = ['created_at', 'query_hash']
+    readonly_fields = ['created_at', 'query_hash', 'query_json', 'result_json']
     ordering = ['-hit_count']
 
     fieldsets = (
         ('Cache Info', {
-            'fields': ('provider', 'query_hash')
+            'fields': ('provider', 'query_hash', 'query_json')
         }),
         ('Metrics', {
-            'fields': ('hit_count', 'total_cache_size_bytes')
+            'fields': ('hit_count', 'ttl_seconds')
+        }),
+        ('Results', {
+            'fields': ('result_json',),
+            'classes': ('collapse',)
         }),
         ('Expiry', {
             'fields': ('created_at', 'expires_at'),
@@ -221,23 +236,27 @@ class BookingReferenceAdmin(ImportExportModelAdmin):
     resource_class = BookingReferenceResource
     list_display = ['provider', 'provider_booking_id_display', 'status_badge', 'booked_at', 'confirmed_at']
     list_filter = ['provider', 'status', 'booked_at', 'confirmed_at']
-    search_fields = ['provider_booking_id', 'external_reference']
-    readonly_fields = ['booked_at', 'confirmed_at', 'created_at', 'updated_at']
+    search_fields = ['provider_booking_id', 'booking_reference', 'confirmation_code', 'confirmation_email']
+    readonly_fields = ['booked_at', 'confirmed_at']
     ordering = ['-booked_at']
     date_hierarchy = 'booked_at'
 
     fieldsets = (
         ('Booking Info', {
-            'fields': ('provider', 'provider_booking_id', 'external_reference')
+            'fields': ('itinerary_item', 'provider', 'provider_booking_id', 'booking_reference', 'confirmation_code')
         }),
         ('Status', {
             'fields': ('status',)
         }),
+        ('Contact', {
+            'fields': ('booking_url', 'confirmation_email')
+        }),
+        ('Metadata', {
+            'fields': ('metadata',),
+            'classes': ('collapse',)
+        }),
         ('Dates', {
             'fields': ('booked_at', 'confirmed_at'),
-        }),
-        ('Timestamps', {
-            'fields': ('created_at', 'updated_at'),
             'classes': ('collapse',)
         }),
     )
@@ -254,7 +273,7 @@ class BookingReferenceAdmin(ImportExportModelAdmin):
             'pending': '#f39c12',
             'confirmed': '#27ae60',
             'cancelled': '#e74c3c',
-            'completed': '#3498db'
+            'failed': '#e74c3c'
         }
         color = colors.get(obj.status, '#95a5a6')
         return format_html(

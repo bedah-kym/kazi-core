@@ -329,6 +329,7 @@ class InvoiceService:
         payer_email: str = '',
         recurrence: str = 'NONE',
         currency: str = 'KES',
+        redirect_url: str = None,
     ):
         """
         Create a payment request/invoice
@@ -356,16 +357,21 @@ class InvoiceService:
             is_test = os.environ.get('INTASEND_IS_TEST', 'True').lower() == 'true'
             
             if publishable_key and api_key:
-                service = PaymentLinks(token=api_key, publishable_key=publishable_key, test=is_test)
+                from intasend import APIService
+                service = APIService(token=api_key, publishable_key=publishable_key, test=is_test)
                 
-                response = service.create(
-                    title=f"Invoice {invoice.reference_id}",
-                    amount=float(amount),
-                    currency=currency,
-                    email=payer_email if payer_email else issuer.email,
-                    narrative=description,
-                    mobile_tarrif="BUSINESS-PAYS" # or CUSTOMER-PAYS depending on need
-                )
+                payload = {
+                    "amount": float(amount),
+                    "currency": currency,
+                    "email": payer_email if payer_email else issuer.email,
+                    "api_ref": str(invoice.reference_id),
+                    "comment": description,
+                    "mobile_tarrif": "BUSINESS-PAYS" # or CUSTOMER-PAYS depending on need
+                }
+                if redirect_url:
+                    payload["redirect_url"] = redirect_url
+                
+                response = service.collect.checkout(**payload)
                 
                 payment_link = response.get('url') or response.get('payment_link')
                 invoice_id = response.get('invoice_id') or response.get('id')

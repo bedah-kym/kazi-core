@@ -136,6 +136,7 @@ def initiate_deposit(request):
             return JsonResponse({'error': 'Payment gateway not configured'}, status=500)
         
         from intasend import APIService
+        from django.urls import reverse
         service = APIService(token=api_key, publishable_key=publishable_key, test=is_test)
 
         response = service.collect.checkout(
@@ -145,6 +146,7 @@ def initiate_deposit(request):
             api_ref=f"wallet:{request.user.id}",
             comment=f"Wallet deposit - {request.user.username}",
             mobile_tarrif="BUSINESS-PAYS",
+            redirect_url=request.build_absolute_uri(reverse('payments:wallet_dashboard')),
         )
 
         payment_link = response.get('url') or response.get('payment_link')
@@ -317,12 +319,15 @@ def create_invoice_view(request):
             recipient_email = request.POST.get('recipient_email', '')
             recurrence = request.POST.get('recurrence', 'NONE')
             
+            from django.urls import reverse
+            
             invoice = InvoiceService.create_invoice(
                 issuer=request.user,
                 amount=amount,
                 description=description,
                 payer_email=recipient_email,
-                recurrence=recurrence
+                recurrence=recurrence,
+                redirect_url=request.build_absolute_uri(reverse('payments:wallet_dashboard'))
             )
             
             messages.success(request, f'Invoice created! Share link: {invoice.intasend_payment_link}')
@@ -352,7 +357,7 @@ def invoice_detail(request, reference_id):
     
     context = {
         'invoice': invoice,
-        'workspace': request.user.workspace,
+        'workspace': getattr(request.user, 'workspace', None),
     }
     return render(request, 'payments/invoice_detail.html', context)
 

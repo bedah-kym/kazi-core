@@ -82,23 +82,26 @@ class IntersendPayConnector(BaseConnector):
             }
         
         try:
-            from intasend import PaymentLinks
+            from intasend import APIService
 
-            service = PaymentLinks(
+            service = APIService(
                 token=self.api_key,
                 publishable_key=self.publishable_key,
                 test=self.is_test,
             )
-            response = service.create(
-                title=f"Payment link for {getattr(user, 'username', 'customer')}",
+            
+            # Using checkout API instead of paymentlinks because IntaSend sandbox returns 502 Bad Gateway
+            response = service.collect.checkout(
                 amount=float(amount),
                 currency=(currency or "KES").upper(),
                 email=email or getattr(user, 'email', ''),
-                narrative=description or "Payment request",
+                api_ref=f"wallet:{getattr(user, 'id', '')}",
+                comment=description or "Payment request",
+                mobile_tarrif="BUSINESS-PAYS"
             )
 
-            payment_link = response.get("url") or response.get("payment_link")
-            invoice_id = response.get("invoice_id") or response.get("id")
+            payment_link = response.get("url")
+            invoice_id = response.get("id")
             return {
                 "status": "success",
                 "payment_link": payment_link,

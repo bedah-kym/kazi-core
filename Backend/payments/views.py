@@ -135,15 +135,15 @@ def initiate_deposit(request):
         if not publishable_key or not api_key:
             return JsonResponse({'error': 'Payment gateway not configured'}, status=500)
         
-        from intasend import PaymentLinks
-        service = PaymentLinks(token=api_key, publishable_key=publishable_key, test=is_test)
+        from intasend import APIService
+        service = APIService(token=api_key, publishable_key=publishable_key, test=is_test)
 
-        response = service.create(
-            title=f"Wallet deposit - {request.user.username}",
+        response = service.collect.checkout(
             amount=float(amount),
             currency="KES",
             email=request.user.email,
-            narrative=f"Wallet deposit - {request.user.username}",
+            api_ref=f"wallet:{request.user.id}",
+            comment=f"Wallet deposit - {request.user.username}",
             mobile_tarrif="BUSINESS-PAYS",
         )
 

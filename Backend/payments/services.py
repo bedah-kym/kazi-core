@@ -333,7 +333,7 @@ class InvoiceService:
         """
         Create a payment request/invoice
         """
-        from intasend import PaymentLinks
+        # Uses APIService for link generation below
         import os
         
         expires_at = timezone.now() + timedelta(days=7)

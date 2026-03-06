@@ -1,6 +1,9 @@
 """
 Payment views for wallet and invoice management
 """
+"""
+Payment views for wallet and invoice management
+"""
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse
@@ -9,6 +12,7 @@ from django.utils import timezone
 from django.db.models import Sum
 from django.contrib import messages
 from django.conf import settings
+from django_ratelimit.decorators import ratelimit
 from decimal import Decimal
 import uuid
 import json
@@ -109,13 +113,17 @@ def transactions_view(request):
     }
 
     return render(request, 'payments/transactions.html', context)
-
-
+        
 @login_required
+@ratelimit(key='user', rate='5/m', block=False)
+@ratelimit(key='ip', rate='10/m', block=False)
 def initiate_deposit(request):
     """
     Initiate a deposit via IntaSend
     """
+    if getattr(request, 'limited', False):
+        return JsonResponse({'error': 'Rate limit exceeded. Please try again later.'}, status=429)
+        
     if request.method != 'POST':
         return JsonResponse({'error': 'Method not allowed'}, status=405)
     
@@ -128,7 +136,7 @@ def initiate_deposit(request):
         # Create a hosted payment link via IntaSend
         import os
         
-        publishable_key = os.environ.get('INTASEND_PUBLISHABLE_KEY')
+        publishable_key = os.environ.get('INTASEND_PUBLISHable_KEY')
         api_key = os.environ.get('INTASEND_API_KEY')
         is_test = os.environ.get('INTASEND_IS_TEST', 'True').lower() == 'true'
         
@@ -308,10 +316,16 @@ def deposit_status(request):
 
 
 @workspace_required
+@ratelimit(key='user', rate='5/m', block=False)
+@ratelimit(key='ip', rate='10/m', block=False)
 def create_invoice_view(request):
     """
     Create a new payment request/invoice
     """
+    if getattr(request, 'limited', False):
+        messages.error(request, 'Rate limit exceeded. Please try again later.')
+        return redirect('payments:wallet_dashboard')
+        
     if request.method == 'POST':
         try:
             amount = Decimal(request.POST.get('amount'))

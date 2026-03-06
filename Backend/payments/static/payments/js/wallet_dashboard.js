@@ -7,6 +7,29 @@
     return cookieValue ? decodeURIComponent(cookieValue.split("=")[1]) : "";
   };
 
+  const showToast = (message, type = "info") => {
+    const toast = document.createElement("div");
+    toast.className = `action-toast ${type}`;
+
+    let iconClass = "fa-info-circle";
+    if (type === "success") iconClass = "fa-check-circle";
+    if (type === "error") iconClass = "fa-exclamation-circle";
+    if (type === "warning") iconClass = "fa-exclamation-triangle";
+
+    toast.innerHTML = `
+      <i class="fas ${iconClass}"></i>
+      <div class="action-toast-message">${message}</div>
+    `;
+
+    document.body.appendChild(toast);
+
+    setTimeout(() => {
+      if (toast.parentNode) {
+        toast.remove();
+      }
+    }, 4000);
+  };
+
   const initDepositForm = () => {
     const form = document.getElementById("depositForm");
     if (!form) {
@@ -47,7 +70,7 @@
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       if (!depositUrl) {
-        alert("Deposit endpoint unavailable.");
+        showToast("Deposit endpoint unavailable.", "error");
         return;
       }
 
@@ -73,28 +96,28 @@
             window.location.href = paymentLink;
             return;
           }
-          alert("Payment link unavailable. Please try again.");
+          showToast("Payment link unavailable. Please try again.", "error");
           if (trackingId) {
             btn.innerHTML = "Waiting for confirmation...";
             const status = await pollDepositStatus(trackingId);
             if (status === "completed") {
-              alert("Deposit confirmed.");
-              window.location.reload();
+              showToast("Deposit confirmed.", "success");
+              setTimeout(() => window.location.reload(), 1500);
               return;
             }
             if (status === "failed") {
-              alert("Deposit failed. Please try again.");
-              window.location.reload();
+              showToast("Deposit failed. Please try again.", "error");
+              setTimeout(() => window.location.reload(), 1500);
               return;
             }
-            alert("Deposit is still pending. Refresh later to see updates.");
+            showToast("Deposit is still pending. Refresh later to see updates.", "warning");
           }
         } else {
-          alert(`Error: ${data.error || "Failed"}`);
+          showToast(`Error: ${data.error || "Failed"}`, "error");
         }
       } catch (err) {
         console.error(err);
-        alert("Connection error");
+        showToast("Connection error", "error");
       } finally {
         btn.disabled = false;
         btn.innerHTML = "Initiate Payment";

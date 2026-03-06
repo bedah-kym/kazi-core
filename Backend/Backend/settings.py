@@ -594,3 +594,16 @@ JAZZMIN_UI_TWEAKS = {
     "window_box_shadow_class": "card-shadow",
 }
 
+# Celery Beat Schedule
+from celery.schedules import crontab
+
+CELERY_BEAT_SCHEDULE = {
+    'nightly_ledger_reconciliation': {
+        'task': 'payments.tasks.reconcile_ledger',
+        'schedule': crontab(hour=2, minute=0),
+    },
+    'daily_recurring_invoices': {
+        'task': 'payments.tasks.process_recurring_invoices',
+        'schedule': crontab(hour=1, minute=0),
+    },
+}

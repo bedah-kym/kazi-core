@@ -125,7 +125,7 @@ def initiate_deposit(request):
         if amount < Decimal('1.00'):
             return JsonResponse({'error': 'Minimum deposit is 1 KES'}, status=400)
         
-        # Initiate STK push via IntaSend
+        # Create a hosted payment link via IntaSend
         import os
         
         publishable_key = os.environ.get('INTASEND_PUBLISHABLE_KEY')
@@ -135,41 +135,30 @@ def initiate_deposit(request):
         if not publishable_key or not api_key:
             return JsonResponse({'error': 'Payment gateway not configured'}, status=500)
         
-        # STK Push for M-Pesa using Collect service
-        from intasend import Collect
-        collect = Collect(token=api_key, publishable_key=publishable_key, test=is_test)
-        
-        phone = request.POST.get('phone', '')
-        
-        if phone:
-            api_ref = f"wallet:{request.user.id}:{uuid.uuid4().hex}"
-            response = collect.mpesa_stk_push(
-                phone_number=phone,
-                email=request.user.email,
-                amount=float(amount),
-                narrative=f"Wallet deposit - {request.user.username}",
-                api_ref=api_ref,
-                name=request.user.get_full_name() or request.user.username,
-            )
-            
-            # The 'invoice' key is standard in IntaSend response
-            invoice_id = response.get('invoice', {}).get('invoice_id')
-            # Or handle different response structure if needed
-            if not invoice_id:
-                invoice_id = (
-                    response.get('invoice_id')
-                    or response.get('tracking_id')
-                    or response.get('id')
-                )
-            
-            return JsonResponse({
-                'status': 'success',
-                'message': 'Payment request sent to your phone',
-                'tracking_id': invoice_id,
-                'api_ref': api_ref,
-            })
-        else:
-            return JsonResponse({'error': 'Phone number required'}, status=400)
+        from intasend import PaymentLinks
+        service = PaymentLinks(token=api_key, publishable_key=publishable_key, test=is_test)
+
+        response = service.create(
+            title=f"Wallet deposit - {request.user.username}",
+            amount=float(amount),
+            currency="KES",
+            email=request.user.email,
+            narrative=f"Wallet deposit - {request.user.username}",
+            mobile_tarrif="BUSINESS-PAYS",
+        )
+
+        payment_link = response.get('url') or response.get('payment_link')
+        invoice_id = response.get('invoice_id') or response.get('id')
+
+        if not payment_link:
+            return JsonResponse({'error': 'Payment link not returned by gateway'}, status=502)
+
+        return JsonResponse({
+            'status': 'success',
+            'message': 'Redirecting to payment page',
+            'payment_link': payment_link,
+            'tracking_id': invoice_id,
+        })
             
     except Exception as e:
         logger.error(f"Deposit initiation error: {e}")

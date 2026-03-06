@@ -138,8 +138,8 @@
                 <form id="depositForm" data-deposit-url="{% url 'payments:initiate_deposit' %}" data-status-url="{% url 'payments:deposit_status' %}">
                     {% csrf_token %}
                     <div class="mb-3">
-                        <label class="form-label text-sm fw-medium">Phone Number (M-Pesa)</label>
-                        <input type="tel" name="phone" class="form-control" placeholder="2547..." required>
+                        <label class="form-label text-sm fw-medium">Phone Number (Optional)</label>
+                        <input type="tel" name="phone" class="form-control" placeholder="2547...">
                     </div>
                     <div class="mb-3">
                         <label class="form-label text-sm fw-medium">Amount (KES)</label>

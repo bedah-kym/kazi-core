@@ -67,8 +67,13 @@
         });
         const data = await response.json();
         if (response.ok) {
+          const paymentLink = data.payment_link;
           const trackingId = data.tracking_id;
-          alert("Success! Check your phone for the M-Pesa prompt.");
+          if (paymentLink) {
+            window.location.href = paymentLink;
+            return;
+          }
+          alert("Payment link unavailable. Please try again.");
           if (trackingId) {
             btn.innerHTML = "Waiting for confirmation...";
             const status = await pollDepositStatus(trackingId);
@@ -83,8 +88,6 @@
               return;
             }
             alert("Deposit is still pending. Refresh later to see updates.");
-          } else {
-            window.location.reload();
           }
         } else {
           alert(`Error: ${data.error || "Failed"}`);

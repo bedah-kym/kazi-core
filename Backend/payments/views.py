@@ -1,9 +1,6 @@
 """
 Payment views for wallet and invoice management
 """
-"""
-Payment views for wallet and invoice management
-"""
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse
@@ -136,7 +133,7 @@ def initiate_deposit(request):
         # Create a hosted payment link via IntaSend
         import os
         
-        publishable_key = os.environ.get('INTASEND_PUBLISHable_KEY')
+        publishable_key = os.environ.get('INTASEND_PUBLISHABLE_KEY')
         api_key = os.environ.get('INTASEND_API_KEY')
         is_test = os.environ.get('INTASEND_IS_TEST', 'True').lower() == 'true'
         

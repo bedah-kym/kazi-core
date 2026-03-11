@@ -8,6 +8,7 @@ import re
 from asgiref.sync import sync_to_async
 from django.utils import timezone
 
+from orchestration.action_catalog import requires_confirmation as catalog_requires_confirmation
 from orchestration.models import ActionReceipt
 from orchestration.telemetry import record_event
 
@@ -82,7 +83,10 @@ def get_action_policy(action: Optional[str]) -> Dict[str, Any]:
 
 
 def requires_confirmation(action: Optional[str]) -> bool:
-    return bool(get_action_policy(action).get("requires_confirmation"))
+    policy = get_action_policy(action)
+    if "requires_confirmation" in policy:
+        return bool(policy.get("requires_confirmation"))
+    return bool(catalog_requires_confirmation(action))
 
 
 def should_record_receipt(action: Optional[str]) -> bool:

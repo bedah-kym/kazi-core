@@ -23,6 +23,7 @@ from .tasks import moderate_message_batch, generate_ai_response, generate_voice_
 from orchestration.intent_parser import parse_intent
 from orchestration.user_preferences import get_user_preferences, format_style_prompt
 from orchestration.telemetry import record_event
+from orchestration.contracts import build_step_event
 from orchestration.action_receipts import (
     attach_receipt_to_result,
     build_confirmation_prompt,
@@ -837,6 +838,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                         # Helper to broadcast chunks (Buffered & Whitespace Filtered)
                         # We use a mutable container for closure state
                         stream_state = {'buffer': [], 'last_send': 0, 'first_token_sent': False, 'full_response': []}
+                        turn_step_id = f"turn_{message.id}"
                         
                         async def broadcast_chunk(chunk_text, is_final=False):
                             import time
@@ -870,6 +872,21 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                     )
                                     stream_state['buffer'] = []
                                     stream_state['last_send'] = current_time
+
+                        async def emit_progress(phase, state, message_text=""):
+                            event_payload = build_step_event(
+                                step_id=turn_step_id,
+                                phase=phase,
+                                state=state,
+                                message=message_text,
+                            )
+                            await self.channel_layer.group_send(
+                                self.room_group_name,
+                                {
+                                    "type": "ai_step_event",
+                                    "event": event_payload,
+                                }
+                            )
                         
                         from orchestration.workflow_planner import (
                             plan_user_request,
@@ -921,6 +938,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
                         async def _execute_intent(intent):
                             nonlocal summary_text_for_cache, should_cache_summary
+                            await emit_progress("validating", "started", "Checking safety and required details.")
                             _log_telemetry("intent_execute", {
                                 "user_id": member_user.id,
                                 "room_id": room_id,
@@ -939,6 +957,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                 task_state["last_prompt"] = prompt
                                 await save_task_state(adaptive_context, task_state)
                                 await broadcast_chunk(prompt)
+                                await emit_progress("validating", "completed", "Waiting for missing details.")
                                 return {"status": "needs_input", "message": prompt}
                             if requires_confirmation(intent.get("action")) and not intent.get("confirmed"):
                                 confirm_prompt = build_confirmation_prompt(
@@ -951,7 +970,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                     timeout=PENDING_CONFIRM_TTL_SECONDS,
                                 )
                                 await broadcast_chunk(confirm_prompt)
+                                await emit_progress("validating", "completed", "Waiting for confirmation.")
                                 return {"status": "needs_confirmation", "message": confirm_prompt}
+                            await emit_progress("executing", "started", f"Running {intent.get('action')}.")
                             result = await route_intent(intent, {
                                 "user_id": member_user.id,
                                 "room_id": room_id,
@@ -961,7 +982,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
                             logger.info(f"MCP result: {result['status']}")
                             receipt = None
-                            if should_record_receipt(intent.get("action")):
+                            terminal_statuses = {"success", "error", "failed"}
+                            if should_record_receipt(intent.get("action")) and result.get("status") in terminal_statuses:
                                 action_def = get_action_definition(intent.get("action")) or {}
                                 if not action_def and intent.get("action") == "send_whatsapp":
                                     action_def = get_action_definition("send_message") or {}
@@ -980,7 +1002,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                 )
                                 result = attach_receipt_to_result(result, receipt)
 
-                            if result["status"] == "success":
+                            if result["status"] in ("needs_clarification", "needs_confirmation"):
+                                clarification = result.get("clarification_prompt") or result.get("message") or "I need a bit more detail to proceed."
+                                await broadcast_chunk(clarification)
+                                await emit_progress("executing", "completed", "Execution paused for clarification.")
+                            elif result["status"] == "success":
                                 _log_telemetry("intent_success", {
                                     "user_id": member_user.id,
                                     "room_id": room_id,
@@ -1015,6 +1041,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                     await broadcast_chunk(chunk)
                                 should_cache_summary = True
                                 _bump_signals([intent.get("action")])
+                                await emit_progress("executing", "completed", "Execution finished.")
                             else:
                                 _log_telemetry("intent_error", {
                                     "user_id": member_user.id,
@@ -1022,7 +1049,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                     "action": intent.get("action"),
                                     "error": result.get("message"),
                                 })
-                                await broadcast_chunk(f"Error: {result['message']}")
+                                error_text = result.get("message") or result.get("reason") or "I could not complete that request."
+                                await broadcast_chunk(f"Error: {error_text}")
+                                await emit_progress("executing", "completed", "Execution failed.")
                             return result
 
                         def _is_dismiss_request(query: str) -> bool:
@@ -1250,12 +1279,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                                     pending_handled = True
 
                         if not pending_handled:
+                            await emit_progress("planning", "started", "Interpreting your request.")
                             plan = await plan_user_request(
                                 ai_query,
                                 history_text,
                                 user_id=member_user.id,
                                 preferences=user_preferences,
                             )
+                            await emit_progress("planning", "completed", f"Mode: {plan.get('mode')}.")
                             _log_telemetry("plan_decision", {
                                 "user_id": member_user.id,
                                 "room_id": room_id,
@@ -1264,9 +1295,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             })
 
                             if plan["mode"] == "automation_request":
+                                await emit_progress("executing", "started", "Preparing workflow draft.")
                                 from workflows.workflow_agent import handle_workflow_message
                                 response_text = await handle_workflow_message(member_user.id, room_id, ai_query, history_text)
                                 await broadcast_chunk(response_text)
+                                await emit_progress("executing", "completed", "Workflow draft ready.")
                             elif plan["mode"] == "needs_clarification":
                                 _log_telemetry("clarification_requested", {
                                     "user_id": member_user.id,
@@ -1274,6 +1307,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                     "source": "planner",
                                 })
                                 await broadcast_chunk(plan.get("assistant_message") or "I need a bit more detail to proceed.")
+                                await emit_progress("validating", "completed", "Waiting for clarification.")
                             elif plan["mode"] == "needs_confirmation":
                                 workflow_definition = plan.get("workflow_definition") or {}
                                 cache.set(
@@ -1286,7 +1320,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                     timeout=PENDING_CONFIRM_TTL_SECONDS,
                                 )
                                 await broadcast_chunk(plan.get("assistant_message") or "Please confirm to proceed.")
+                                await emit_progress("validating", "completed", "Waiting for confirmation.")
                             elif plan["mode"] == "adhoc_workflow":
+                                await emit_progress("executing", "started", "Running workflow steps.")
                                 workflow_definition = plan.get("workflow_definition") or {}
                                 execution = await execute_adhoc_workflow(
                                     workflow_definition,
@@ -1318,7 +1354,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                         if isinstance(step, dict)
                                     ]
                                     _bump_signals(step_actions + ["workflow_run"])
+                                await emit_progress("executing", "completed", f"Workflow status: {execution.get('status')}.")
                             else:
+                                await emit_progress("understanding", "started", "Resolving intent and parameters.")
                                 # Step 1: Parse intent
                                 intent = await parse_intent(ai_query, {
                                     "user_id": member_user.id,
@@ -1327,6 +1365,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                     "history": history_text,
                                     "preferences": user_preferences,
                                 })
+                                await emit_progress("understanding", "completed", f"Intent: {intent.get('action')}.")
 
                                 logger.info(f"Intent: {intent}")
                                 action = intent.get("action")
@@ -1384,6 +1423,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                     await _stream_general_chat(ai_query, history_text)
                         
                         # End stream
+                        await emit_progress("done", "completed", "Request complete.")
                         await broadcast_chunk("", is_final=True)
                         
                         # === NEW: Save complete AI message to database ===
@@ -1888,6 +1928,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
             "command": "ai_stream",
             "chunk": event.get('chunk'),
             "is_final": event.get('is_final', False)
+        }))
+
+    async def ai_step_event(self, event):
+        """Handle structured orchestration progress updates."""
+        await self.send(text_data=json.dumps({
+            "command": "orchestration_step",
+            "event": event.get("event") or {},
         }))
     
     async def ai_message_saved(self, event):

@@ -5,17 +5,20 @@ Converts natural language commands into structured JSON intents
 import json
 import logging
 import re
+import threading
 from typing import Dict, Optional, Any
 
-from workflows.capabilities import SYSTEM_CAPABILITIES
+from orchestration.action_catalog import (
+    get_action_definition,
+    get_supported_actions,
+    iter_action_definitions,
+    resolve_action_alias,
+)
 from orchestration.user_preferences import format_date_hint, format_time_hint
 
 logger = logging.getLogger(__name__)
 
 _LOW_CONFIDENCE_THRESHOLD = 0.45
-_ACTION_SCHEMA_ALIASES = {
-    "send_whatsapp": "send_message",
-}
 
 # Phase 3B: Confidence adjustment thresholds
 # These thresholds determine how much confidence is reduced when params are missing
@@ -30,40 +33,16 @@ class IntentParser:
     """
     
     # Define supported actions
-    SUPPORTED_ACTIONS = [
-        "find_jobs",
-        "schedule_meeting", 
-        "check_payments",
-        "search_info",
+    SUPPORTED_ACTIONS = sorted(set(get_supported_actions(include_aliases=False) + [
         "general_chat",
-        "get_weather",
-        "search_gif",
-        "convert_currency",
-        "set_reminder",
-        "send_email",
-        "send_whatsapp",
-        "create_invoice",
-        "create_payment_link",
         "create_workflow",
-        # Travel planner actions
-        "search_buses",
-        "search_hotels",
-        "search_flights",
-        "search_transfers",
-        "search_events",
-        "create_itinerary",
-        "view_itinerary",
-        "add_to_itinerary",
-        "book_travel_item",
-        "check_quotas",
-    ]
+    ]))
     
     SYSTEM_PROMPT = """You are an intent classifier for Mathia, a personal assistant with travel planning.
     
 Your job: Parse user messages into structured JSON.
 
 Supported actions:
-- find_jobs: User wants to search for freelance work on platforms like Upwork
 - schedule_meeting: User wants to CHECK CALENDAR AVAILABILITY or SCHEDULE A MEETING
   Examples: "is my calendar free?", "what meetings do I have?", "check my availability"
 - check_payments: User asks about payments, invoices, or financial transactions
@@ -80,7 +59,9 @@ Supported actions:
   Examples: "create a payment link for 5000 KES", "send me a payment link for 25 USD"
 - create_invoice: User wants to create an invoice/payment request (optionally email or WhatsApp it)
   Examples: "invoice 3,000 to alex@example.com", "create an invoice for 1200 and WhatsApp +2547..."
-- create_workflow: User wants to create or edit an automated workflow\n  Examples: "create a workflow to email me when a payment completes", "automate reminders every Friday"\n- check_quotas: User asks about their usage limits, remaining searches, message count, or upload status.
+- create_workflow: User wants to create or edit an automated workflow
+  Examples: "create a workflow to email me when a payment completes", "automate reminders every Friday"
+- check_quotas: User asks about their usage limits, remaining searches, message count, or upload status.
   Examples: "show my quotas", "how many searches left?", "what are my limits?", "usage status"
 - general_chat: Casual conversation, greetings, or unclear requests
 
@@ -145,20 +126,11 @@ Rules:
     def __init__(self):
         from .llm_client import get_llm_client
         self.llm = get_llm_client()
-        self._action_index = self._build_action_index(SYSTEM_CAPABILITIES)
+        self._action_index = self._build_action_index()
 
     def _build_personalized_system_prompt(self, user_id: Optional[int] = None) -> str:
         """
         Phase 3C: Build personalized system prompt with user correction patterns.
-
-        Loads user's correction patterns and injects them into system prompt
-        so the LLM can learn from past corrections.
-
-        Args:
-            user_id: Optional user ID to load correction patterns for
-
-        Returns:
-            System prompt string with personalization injected
         """
         prompt = self.SYSTEM_PROMPT
 
@@ -170,11 +142,9 @@ Rules:
 
             patterns = load_user_correction_patterns(user_id)
 
-            # If we found correction patterns, inject them
             if patterns.get("corrections_found", 0) > 0:
                 personalization_section = "\n\n--- PERSONALIZATION FROM USER HISTORY ---\n"
 
-                # Add parameter patterns
                 if patterns.get("parameter_patterns"):
                     personalization_section += "\nThis user's typical parameters:\n"
                     for action, params in list(patterns["parameter_patterns"].items())[:3]:
@@ -184,13 +154,11 @@ Rules:
                                 f"(corrected {info.get('frequency')} times)\n"
                             )
 
-                # Add preference patterns
                 if patterns.get("preference_patterns"):
                     personalization_section += "\nThis user's stated preferences:\n"
                     for pref_key, pref_value in list(patterns["preference_patterns"].items())[:3]:
                         personalization_section += f"- {pref_key}: {pref_value}\n"
 
-                # Add workflow patterns
                 if patterns.get("workflow_patterns"):
                     personalization_section += "\nThis user's workflow preferences:\n"
                     for workflow_key, action in list(patterns["workflow_patterns"].items())[:2]:
@@ -200,26 +168,20 @@ Rules:
                 prompt += personalization_section
 
         except Exception as e:
-            # Personalization failure shouldn't break prompt - just use base prompt
             logger.debug(f"Could not load user patterns: {e}")
 
         return prompt
 
-    def _build_action_index(self, capabilities: Dict) -> Dict[str, Dict[str, Dict]]:
+    def _build_action_index(self) -> Dict[str, Dict[str, Dict]]:
         index: Dict[str, Dict[str, Dict]] = {}
-        for service in capabilities.get("integrations", []):
-            service_name = service.get("service")
-            if not service_name:
+        for action in iter_action_definitions():
+            action_name = action.get("action")
+            if not action_name:
                 continue
-            for action in service.get("actions", []):
-                action_name = action.get("name")
-                if not action_name:
-                    continue
-                if action_name not in index:
-                    index[action_name] = {
-                        "service": service_name,
-                        "params": action.get("params") or {},
-                    }
+            index[action_name] = {
+                "service": action.get("service"),
+                "params": action.get("params") or {},
+            }
         return index
 
     def _missing_param_message(
@@ -245,7 +207,7 @@ Rules:
         action = str(intent.get("action") or "").strip()
         if not action or action == "general_chat":
             return {"missing_slots": [], "clarifying_question": ""}
-        lookup_action = _ACTION_SCHEMA_ALIASES.get(action, action)
+        lookup_action = resolve_action_alias(action)
         action_def = self._action_index.get(lookup_action)
         if not action_def:
             return {"missing_slots": [], "clarifying_question": ""}
@@ -268,18 +230,6 @@ Rules:
     ) -> float:
         """
         Phase 3B: Adjust confidence based on missing parameters.
-
-        Algorithm:
-        1. Get current confidence from intent
-        2. Find missing required/optional parameters
-        3. Check if context can infer missing params (dates, locations, contacts)
-        4. Reduce confidence for missing required params
-        5. Slightly reduce for missing optional params
-        6. Boost if context can help infer missing params
-        7. Return adjusted confidence clamped to [0, 1]
-
-        Returns:
-            Adjusted confidence score (0.0-1.0)
         """
         base_confidence = float(intent.get("confidence") or 0.5)
 
@@ -287,7 +237,7 @@ Rules:
         if not action or action == "general_chat":
             return base_confidence
 
-        lookup_action = _ACTION_SCHEMA_ALIASES.get(action, action)
+        lookup_action = resolve_action_alias(action)
         action_def = self._action_index.get(lookup_action)
         if not action_def:
             return base_confidence
@@ -296,7 +246,6 @@ Rules:
         if not isinstance(params, dict):
             params = {}
 
-        # Count missing required and optional parameters
         missing_required = []
         missing_optional = []
 
@@ -307,37 +256,21 @@ Rules:
                 else:
                     missing_optional.append(param_name)
 
-        # Start with base confidence
         adjusted = base_confidence
-
-        # Penalties for missing parameters
-        # Each missing required param reduces confidence by 20%
         adjusted -= len(missing_required) * _CONFIDENCE_REDUCTION_REQUIRED_PARAM
-        # Each missing optional param reduces by 5%
         adjusted -= len(missing_optional) * _CONFIDENCE_REDUCTION_OPTIONAL_PARAM
 
-        # Boost if context can help infer missing parameters
         if user_context and isinstance(user_context, dict):
             inferrable_count = 0
-
-            # Check if context has location data (useful for "where?")
             if user_context.get("preferences", {}).get("timezone"):
                 inferrable_count += 1
-
-            # Check if context has recent search results (useful for "book that one")
             if user_context.get("last_search_results"):
                 inferrable_count += 1
-
-            # Check if context has user history (useful for "same dates as last time")
             if user_context.get("memory_facts"):
                 inferrable_count += 1
-
-            # Boost confidence slightly for each inference opportunity
             adjusted += min(inferrable_count, len(missing_required)) * _CONFIDENCE_BOOST_CONTEXT_CAN_INFER
 
-        # Clamp to [0, 1]
         adjusted = max(0.0, min(1.0, adjusted))
-
         return adjusted
 
     def _should_ask_clarifying_question(
@@ -345,24 +278,11 @@ Rules:
         intent: Dict,
         user_context: Optional[Dict] = None,
     ) -> bool:
-        """
-        Phase 3B: Smart logic to determine if we should ask a clarifying question.
-
-        Returns True if:
-        - Missing required parameters
-        - Confidence is medium-low (don't trust the intent fully)
-        - We have a specific question to ask (ask_once, not all at once)
-
-        Returns:
-            True if clarifying question should be asked
-        """
+        """Phase 3B: Determine if we should ask a clarifying question."""
         missing_slots = intent.get("missing_slots") or []
         confidence = intent.get("confidence") or 0.5
-
-        # If we have missing required parameters and low confidence, ask
         if missing_slots and confidence < 0.75:
             return True
-
         return False
 
     def _rule_based_email_intent(self, message: str) -> Optional[Dict]:
@@ -415,37 +335,28 @@ Rules:
         return match.group(0) if match else None
         
     async def parse(self, message: str, user_context: Optional[Dict] = None) -> Dict:
-        """
-        Parse a natural language message into structured intent
-        """
+        """Parse a natural language message into structured intent"""
         try:
-            # Build context-aware prompt
             user_prompt = self._build_user_prompt(message, user_context)
 
-            # Phase 3C: Build personalized system prompt with user correction patterns
             user_id = None
             if user_context and isinstance(user_context, dict):
                 user_id = user_context.get("user_id")
 
             system_prompt = self._build_personalized_system_prompt(user_id)
 
-            # Call LLM
             response_text = await self.llm.generate_text(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
-                temperature=0.1, # Low temp for deterministic JSON
+                temperature=0.1,
                 json_mode=True
             )
 
-            # Parse response
             intent = self.llm.extract_json(response_text)
-
-            # Validate and return
             intent = self._validate_intent(intent, message)
             preferences = (user_context or {}).get("preferences") if isinstance(user_context, dict) else None
             intent = self._postprocess_intent(intent, preferences=preferences, user_context=user_context)
 
-            # Phase 3B: Adjust confidence based on missing params and context
             adjusted_confidence = self._adjust_confidence_for_missing_params(intent, user_context)
             intent["confidence"] = adjusted_confidence
 
@@ -460,7 +371,6 @@ Rules:
             rule_based = self._rule_based_email_intent(message)
             if rule_based:
                 return self._postprocess_intent(rule_based, user_context=user_context)
-            # Fallback to general chat
             return {
                 "action": "general_chat",
                 "confidence": 0.3,
@@ -501,7 +411,6 @@ Rules:
     
     def _validate_intent(self, intent: Dict, original_message: str) -> Dict:
         """Validate and normalize the parsed intent"""
-        # Ensure required fields
         if not intent or "action" not in intent:
             logger.warning(f"Invalid intent structure: {intent}")
             return {
@@ -527,16 +436,15 @@ Rules:
         if "clarifying_question" not in intent:
             intent["clarifying_question"] = ""
         
-        # Clamp confidence
         try:
             intent["confidence"] = max(0.0, min(1.0, float(intent["confidence"])))
         except (ValueError, TypeError):
             intent["confidence"] = 0.5
 
-        if intent.get("action") == "send_message":
-            intent["action"] = "send_whatsapp"
+        canonical_action = resolve_action_alias(intent.get("action"))
+        if canonical_action:
+            intent["action"] = canonical_action
         
-        # Validate action is supported
         if intent["action"] not in self.SUPPORTED_ACTIONS:
             logger.warning(f"Unknown action: {intent['action']}, defaulting to general_chat")
             intent["action"] = "general_chat"
@@ -589,6 +497,13 @@ Rules:
                     params["phone_number"] = extracted_phone
             if params.get("text") and not params.get("message"):
                 params["message"] = params.get("text")
+        if action == "send_message":
+            if not params.get("phone_number"):
+                extracted_phone = self._extract_first_phone(raw_query)
+                if extracted_phone:
+                    params["phone_number"] = extracted_phone
+            if params.get("text") and not params.get("message"):
+                params["message"] = params.get("text")
 
         intent["parameters"] = params
 
@@ -598,24 +513,28 @@ Rules:
 
         intent["missing_slots"] = missing_slots
         intent["clarifying_question"] = clarifying_question
+        action_definition = get_action_definition(intent.get("action"))
+        intent["risk_level"] = (action_definition or {}).get("risk_level", "low")
+        intent["requires_confirmation"] = bool((action_definition or {}).get("confirmation_policy") == "always")
         return intent
 
 
-# Singleton instance
+# Singleton instance (thread-safe)
 _parser = None
+_parser_lock = threading.Lock()
 
 def get_intent_parser() -> IntentParser:
-    """Get or create the global intent parser instance"""
+    """Get or create the global intent parser instance (thread-safe)."""
     global _parser
     if _parser is None:
-        _parser = IntentParser()
+        with _parser_lock:
+            if _parser is None:
+                _parser = IntentParser()
     return _parser
 
 
 # Convenience function for use in consumers
 async def parse_intent(message: str, user_context: Optional[Dict] = None) -> Dict:
-    """
-    Parse a message into structured intent
-    """
+    """Parse a message into structured intent"""
     parser = get_intent_parser()
     return await parser.parse(message, user_context)

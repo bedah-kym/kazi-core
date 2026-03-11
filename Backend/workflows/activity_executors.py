@@ -17,8 +17,9 @@ from orchestration.connectors.travel_hotels_connector import TravelHotelsConnect
 from orchestration.connectors.travel_flights_connector import TravelFlightsConnector
 from orchestration.connectors.travel_transfers_connector import TravelTransfersConnector
 from orchestration.connectors.travel_events_connector import TravelEventsConnector
-from orchestration.mcp_router import SearchConnector, WeatherConnector, GiphyConnector, CurrencyConnector, ReminderConnector, UpworkConnector, CalendarConnector
+from orchestration.mcp_router import SearchConnector, WeatherConnector, GiphyConnector, CurrencyConnector, ReminderConnector, CalendarConnector
 from orchestration.action_receipts import record_action_receipt, should_record_receipt
+from orchestration.action_catalog import get_supported_actions, resolve_action_alias
 
 from .utils import resolve_parameters
 
@@ -48,7 +49,6 @@ _TRAVEL_ACTIONS = {
 }
 
 _MISC_ACTIONS = {
-    'find_jobs': UpworkConnector(),
     'search_info': SearchConnector(),
     'get_weather': WeatherConnector(),
     'search_gif': GiphyConnector(),
@@ -61,6 +61,29 @@ _MISC_ACTIONS = {
 
 _AUTO_EMAIL_SUMMARY_TOKEN = "__AUTO_SUMMARY__"
 _OPTION_PARAM_HINTS = ("item_id", "option", "selection")
+
+_EXECUTOR_BASE_ACTIONS = {
+    "send_email",
+    "send_message",
+    "create_invoice",
+}
+
+
+def validate_executor_action_mappings() -> None:
+    mapped = set(_EXECUTOR_BASE_ACTIONS)
+    mapped.update(_READ_ONLY_PAYMENT_ACTIONS)
+    mapped.update(_PAYMENT_ACTIONS)
+    mapped.update(_TRAVEL_ACTIONS.keys())
+    mapped.update(_MISC_ACTIONS.keys())
+    required = set(get_supported_actions(include_aliases=False))
+    missing = sorted(required - mapped)
+    if missing:
+        raise RuntimeError(
+            "Workflow executor is missing action mappings for: " + ", ".join(missing)
+        )
+
+
+validate_executor_action_mappings()
 
 
 def _normalize_depends_on(value: Any) -> list:
@@ -230,7 +253,7 @@ def _enforce_withdraw_policy(params: Dict[str, Any], context: Dict[str, Any]) ->
 
 async def execute_workflow_step(step: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
     service = (step.get('service') or '').lower()
-    action = step.get('action')
+    action = resolve_action_alias(step.get('action'))
     params = resolve_parameters(step.get('params', {}), context)
     depends_on = _normalize_depends_on(step.get("depends_on"))
     if depends_on:

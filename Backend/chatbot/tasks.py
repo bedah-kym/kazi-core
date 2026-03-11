@@ -294,7 +294,7 @@ def generate_ai_response(self, room_id, user_id, user_message):
                 "Your job is to help users communicate clearly and safely while discussing tasks and projects. "
                 "Be concise, polite, and professional. "
                 "Encourage respectful collaboration, and flag or refuse to generate content that includes harassment, spam, or scams. "
-                "You can summarize conversations, clarify task details, and offer neutral guidance—never make legal, financial, or medical claims."
+                "You can summarize conversations, clarify task details, and offer neutral guidanceâ€”never make legal, financial, or medical claims."
                 f"\n\n{ContextManager.get_context_prompt(room_id)}"
             ),
         }
@@ -320,7 +320,7 @@ def generate_ai_response(self, room_id, user_id, user_message):
                     model=model,
                     max_tokens=150,
                     temperature=0.7,
-                    stream=True  # ✅ Enable streaming
+                    stream=True  # âœ… Enable streaming
                 )
                 
                 # Collect full response and send chunks
@@ -372,7 +372,7 @@ def generate_ai_response(self, room_id, user_id, user_message):
                 continue
         
         if not ai_reply or len(ai_reply) < 2:
-            ai_reply = "I'm experiencing high demand. Please try again! 🤖"
+            ai_reply = "I'm experiencing high demand. Please try again! ðŸ¤–"
         
         # Update conversation context
         context.append({
@@ -1175,8 +1175,8 @@ _SIGNAL_CATEGORY_MAP = {
     "create_itinerary": "travel",
     "send_email": "communication",
     "send_whatsapp": "communication",
+    "send_message": "communication",
     "set_reminder": "productivity",
-    "find_jobs": "jobs",
     "search_info": "research",
     "workflow_run": "automation",
 }
@@ -1429,3 +1429,5 @@ def send_idle_nudge(self, room_id: int, user_id: int, scheduled_at_iso: str):
         logger.error(traceback.format_exc())
         cache.delete(f"proactive:pending:{room_id}:{user_id}")
         return {"status": "error", "reason": str(exc)}
+
+

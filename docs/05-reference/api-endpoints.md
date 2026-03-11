@@ -1,7 +1,7 @@
 # API Endpoints Reference - Complete Guide
 
 **Status:** ✅ Updated (v2.0 - Feb 3, 2026)  
-**Last Updated:** February 3, 2026  
+**Last Updated:** March 11, 2026  
 **Scope:** All REST API endpoints across Mathia platform  
 **Related:**
 - `Backend/Backend/urls.py` (root URL configuration)
@@ -905,7 +905,44 @@ const socket = new WebSocket(
 }
 ```
 
+### Orchestration Progress Events
+
+The AI orchestration layer streams structured progress updates over WebSocket.
+
+**Command:** `orchestration_step`
+
+**Payload:**
+```json
+{
+  "command": "orchestration_step",
+  "event": {
+    "step_id": "turn_123",
+    "phase": "understanding|planning|validating|executing|done",
+    "state": "started|completed",
+    "message": "Short human-readable update",
+    "timestamp": "2026-02-03T14:00:05Z"
+  }
+}
+```
+
+### Orchestration Result Envelope
+
+Single-step orchestration responses use a unified envelope:
+
+```json
+{
+  "status": "success|error|needs_clarification|needs_confirmation",
+  "action": "create_payment_link",
+  "risk_level": "low|medium|high",
+  "requires_confirmation": true,
+  "clarification_prompt": "",
+  "data": {"...": "..."},
+  "receipt": {"id": 1, "summary": "...", "reversible": false, "undo_hint": ""}
+}
+```
+
 ---
 
-**Last Updated:** February 3, 2026  
-**Next Review:** May 3, 2026
+**Last Updated:** March 11, 2026  
+**Next Review:** June 11, 2026
+

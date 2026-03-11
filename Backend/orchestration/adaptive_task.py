@@ -9,7 +9,7 @@ import re
 from asgiref.sync import sync_to_async
 from django.core.cache import cache
 
-from workflows.capabilities import SYSTEM_CAPABILITIES
+from orchestration.action_catalog import get_action_definition as get_catalog_action_definition
 
 logger = logging.getLogger(__name__)
 
@@ -29,34 +29,8 @@ _CANCEL_RE = re.compile(r"\b(cancel|nevermind|never mind|stop|forget it|drop it|
 _RESUME_RE = re.compile(r"\b(resume|continue|go ahead|proceed|let's finish|finish it|keep going)\b", re.IGNORECASE)
 _MODE_RE = re.compile(r"\b(mode)\b", re.IGNORECASE)
 
-
-def _build_action_registry(capabilities: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-    registry: Dict[str, Dict[str, Any]] = {}
-    for service in capabilities.get("integrations", []):
-        service_name = service.get("service")
-        for action in service.get("actions", []):
-            action_name = action.get("name")
-            if not action_name:
-                continue
-            if action_name in registry:
-                continue
-            registry[action_name] = {
-                "service": service_name,
-                "params": action.get("params") or {},
-                "description": action.get("description") or "",
-            }
-    return registry
-
-
-_ACTION_REGISTRY = _build_action_registry(SYSTEM_CAPABILITIES)
-
-
 def get_action_definition(action: Optional[str]) -> Optional[Dict[str, Any]]:
-    if not action:
-        return None
-    if action == "send_whatsapp":
-        action = "send_message"
-    return _ACTION_REGISTRY.get(action)
+    return get_catalog_action_definition(action)
 
 
 def get_required_params(action_def: Optional[Dict[str, Any]]) -> List[str]:

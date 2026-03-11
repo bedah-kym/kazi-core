@@ -13,7 +13,7 @@ class MathiaAssistant {
     }
 
     init() {
-        console.log('🤖 Mathia AI Assistant initialized');
+        console.log('Mathia AI Assistant initialized');
         this.setupAutocomplete();
         this.setupQuickPrompts();
         // this.listenForAIMessages(); // Handled via main.js handleMessage callback
@@ -361,9 +361,14 @@ class MathiaAssistant {
             return;
         }
 
+        if (data.command === 'orchestration_step') {
+            this.handleOrchestrationStep(data.event);
+            return;
+        }
+
         // NEW: Handle saved message after streaming completes
         if (data.command === 'ai_message_saved') {
-            console.log('📝 AI message saved event received');
+            console.log('AI message saved event received');
             this.isThinking = false;
 
             // Remove ALL temporary AI states from THIS room
@@ -385,7 +390,7 @@ class MathiaAssistant {
 
         // Handle Mathia voice ready
         if (data.command === 'ai_voice_ready') {
-            console.log('🎙️ AI voice response ready');
+            console.log('AI voice response ready');
             const roomId = window.currentRoomId || (typeof roomName !== 'undefined' ? roomName : null);
             const msgContainer = document.querySelector(`[data-message-id="${data.message_id}"] .mathia-message`);
             if (msgContainer && typeof renderVoiceBubble === 'function') {
@@ -406,7 +411,47 @@ class MathiaAssistant {
             return;
         }
     }
+    handleOrchestrationStep(event) {
+        if (!event) return;
+        const chatList = this.getCurrentMessageList();
+        if (!chatList) return;
 
+        const stepId = event.step_id || 'orchestration';
+        let stepItem = chatList.querySelector(`.orchestration-step[data-step-id="${stepId}"]`);
+
+        if (!stepItem) {
+            const msgListTag = document.createElement('li');
+            msgListTag.className = 'clearfix orchestration-step';
+            msgListTag.dataset.stepId = stepId;
+            msgListTag.innerHTML = `
+            <div class="message-data">
+                <div class="time-label">${new Date().toLocaleTimeString()}</div>
+            </div>
+            <div class="message other-message mathia-message">
+                <div class="mathia-badge">
+                    <i class="fas fa-robot"></i>
+                    <span>Mathia AI</span>
+                </div>
+                <div class="mathia-content orchestration-step-text"></div>
+            </div>
+        `;
+
+            chatList.appendChild(msgListTag);
+            stepItem = msgListTag;
+        }
+
+        const parts = [];
+        if (event.phase) parts.push(event.phase);
+        if (event.state) parts.push(event.state);
+        let summary = parts.join(' - ');
+        if (event.message) {
+            summary = summary ? `${summary} - ${event.message}` : event.message;
+        }
+
+        const content = stepItem.querySelector('.orchestration-step-text');
+        if (content) content.textContent = summary;
+        chatList.scrollTop = chatList.scrollHeight;
+    }
     checkForTrigger(data) {
         if (data.command !== 'new_message') return;
         const isFromSelf = data.message?.member === (this.username || window.usernameGlobal);
@@ -496,7 +541,7 @@ class MathiaAssistant {
     // ============================================
     // ERROR HANDLING
     // ============================================
-    showAIError(errorMessage = "I'm having trouble right now. Please try again! 🤖") {
+    showAIError(errorMessage = "I'm having trouble right now. Please try again!") {
         this.hideAIThinking();
 
         const errorMsg = {
@@ -518,7 +563,7 @@ document.addEventListener('DOMContentLoaded', function () {
         if (uName) {
             clearInterval(initMathia);
             window.mathiaAssistant = new MathiaAssistant(uName);
-            console.log('✅ Mathia AI Assistant ready');
+            console.log('Mathia AI Assistant ready');
         }
     }, 100);
 });

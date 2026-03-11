@@ -56,6 +56,14 @@ async def update_execution_record(
         execution.save()
 
     await sync_to_async(_update)()
+    if status in ("completed", "failed", "cancelled"):
+        try:
+            from django_redis import get_redis_connection
+
+            redis = get_redis_connection("default")
+            redis.publish(f"wf_exec:{execution_id}", status)
+        except Exception:
+            pass
 
 
 @activity.defn
@@ -222,3 +230,4 @@ async def create_schedule_for_trigger(trigger_obj) -> None:
         trigger_obj.save(update_fields=['temporal_schedule_id'])
 
     await sync_to_async(_save_schedule)()
+

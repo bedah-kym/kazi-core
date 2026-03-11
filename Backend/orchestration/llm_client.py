@@ -5,6 +5,7 @@ Includes rate limiting and token budget enforcement for cost control.
 """
 import os
 import json
+import threading
 import logging
 import httpx
 import hashlib
@@ -41,18 +42,18 @@ class LLMClient:
     def _get_user_token_budget(self, user_id: Optional[int]) -> Dict[str, int]:
         """
         Get token budget and current usage for a user.
-        Returns {"limit": N, "used": M, "reset_at": timestamp}
+        Uses atomic integer counter in cache for thread-safe tracking.
+        Returns {"limit": N, "used": M}
         """
         if not user_id:
-            return {"limit": 999999, "used": 0, "reset_at": 0}
+            return {"limit": 999999, "used": 0}
 
         cache_key = f"llm_tokens:{user_id}"
-        budget = cache.get(cache_key) or {"used": 0}
+        used = cache.get(cache_key, 0)
         limit = int(getattr(settings, "LLM_TOKEN_LIMIT_PER_USER_PER_HOUR", 50000))
         return {
             "limit": limit,
-            "used": budget.get("used", 0),
-            "reset_at": budget.get("reset_at", 0)
+            "used": int(used),
         }
 
     async def _check_token_quota(self, estimated_tokens: int, user_id: Optional[int]) -> bool:
@@ -73,15 +74,17 @@ class LLMClient:
         return True
 
     def _record_token_usage(self, tokens: int, user_id: Optional[int]) -> None:
-        """Record token usage for rate limiting."""
-        if not user_id:
+        """Record token usage for rate limiting — atomic increment."""
+        if not user_id or tokens <= 0:
             return
 
         cache_key = f"llm_tokens:{user_id}"
         ttl = 3600  # 1 hour
-        budget = cache.get(cache_key) or {"used": 0}
-        budget["used"] = budget.get("used", 0) + tokens
-        cache.set(cache_key, budget, ttl)
+        try:
+            cache.incr(cache_key, tokens)
+        except ValueError:
+            # Key doesn't exist yet — create with initial value
+            cache.set(cache_key, tokens, ttl)
 
     async def generate_text(
         self,
@@ -483,12 +486,15 @@ def extract_json(text: str) -> Dict:
     # to keep it importable as a utility function.
     return LLMClient().extract_json(text)
 
-# Singleton
+# Singleton (thread-safe)
 _client = None
+_client_lock = threading.Lock()
 
 def get_llm_client() -> LLMClient:
+    """Get or create the global LLM client instance (thread-safe)."""
     global _client
-    
     if _client is None:
-        _client = LLMClient()
+        with _client_lock:
+            if _client is None:
+                _client = LLMClient()
     return _client

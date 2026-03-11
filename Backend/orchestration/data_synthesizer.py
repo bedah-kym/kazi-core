@@ -87,12 +87,7 @@ class DataSynthesizer:
                 return receipt_line
             return text
         
-        if action == "find_jobs":
-            jobs = data.get("jobs", [])
-            count = data.get("total", 0)
-            return _with_receipt(f"Found {count} jobs for '{data.get('query')}'. Top result: {jobs[0]['title'] if jobs else 'None'}")
-            
-        elif action == "check_payments":
+        if action == "check_payments":
             return _with_receipt(f"Current balance: {data.get('currency')} {data.get('balance')}")
             
         elif action == "schedule_meeting":

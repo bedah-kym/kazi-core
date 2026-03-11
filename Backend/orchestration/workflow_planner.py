@@ -15,6 +15,7 @@ from django.core.cache import cache
 from django.utils import timezone
 from django.conf import settings
 
+from orchestration.action_catalog import get_action_definition, is_high_risk_action, resolve_action_alias
 from orchestration.llm_client import get_llm_client
 from orchestration.user_preferences import (
     get_user_preferences,
@@ -35,6 +36,7 @@ MIN_ADHOC_STEPS = 2
 MAX_WAIT_SECONDS = 20
 IDEMPOTENCY_TTL_SECONDS = 90
 IDEMPOTENCY_CACHE_PREFIX = "adhoc_workflow"
+VERIFIER_CACHE_TTL_SECONDS = 600
 
 # Phase 3B: Smart Confidence Thresholds
 # These control when MATHIA asks clarifying questions vs executes directly
@@ -54,9 +56,6 @@ _CONFIRM_WORDS = {
     "confirmed",
     "go ahead",
     "proceed",
-}
-_HIGH_RISK_ACTIONS = {
-    ("payments", "withdraw"),
 }
 _SERVICE_ALIASES = {
     "email": "gmail",
@@ -79,9 +78,6 @@ _SERVICE_ALIASES = {
     "quota": "quota",
     "quotas": "quota",
     "usage": "quota",
-    "job": "jobs",
-    "jobs": "jobs",
-    "upwork": "jobs",
     "search": "search",
     "web": "search",
     "google": "search",
@@ -143,11 +139,6 @@ _ACTION_ALIASES = {
         "schedule_meeting": "schedule_meeting",
         "book_meeting": "schedule_meeting",
     },
-    "jobs": {
-        "find_jobs": "find_jobs",
-        "search_jobs": "find_jobs",
-        "jobs": "find_jobs",
-    },
     "search": {
         "search_info": "search_info",
         "search": "search_info",
@@ -193,7 +184,6 @@ _ACTION_SERVICE_FALLBACK = {
     "check_status": "payments",
     "check_availability": "calendly",
     "schedule_meeting": "calendly",
-    "find_jobs": "jobs",
     "search_info": "search",
     "get_weather": "weather",
     "search_gif": "gif",
@@ -241,20 +231,16 @@ _AUTO_EMAIL_SUMMARY_TOKEN = "__AUTO_SUMMARY__"
 _DELIVERY_ACTIONS = {"send_email", "send_message"}
 _RESULT_TEXT_RE = re.compile(r"\b(results?|options?|summary|details)\b", re.IGNORECASE)
 
-_AUTOMATION_HINTS = (
-    "workflow",
-    "automate",
-    "automation",
-    "every ",
-    "whenever",
-    "schedule",
-    "cron",
+_AUTOMATION_HINTS_RE = re.compile(
+    r"\b(?:workflow|automate|automation|whenever|cron)\b"
+    r"|\bevery\s+(?:\d+\s+)?(?:day|week|month|morning|evening|hour|minute|monday|tuesday|wednesday|thursday|friday|saturday|sunday)s?\b"
+    r"|\bschedule\s+(?:a|an|the|this|to|daily|weekly|monthly)\b",
+    re.IGNORECASE,
 )
 
 
 def _looks_like_automation(message: str) -> bool:
-    lowered = message.lower()
-    return any(hint in lowered for hint in _AUTOMATION_HINTS)
+    return bool(_AUTOMATION_HINTS_RE.search(message))
 
 
 def _looks_like_confirmation(message: str) -> bool:
@@ -277,11 +263,8 @@ def _clamp_confidence(value: Optional[Any], default: float = 0.5) -> float:
 
 def _has_high_risk_step(steps: List[Dict[str, Any]]) -> bool:
     for step in steps:
-        service = str(step.get("service") or "").lower()
         action = str(step.get("action") or "").lower()
-        if (service, action) in _HIGH_RISK_ACTIONS:
-            return True
-        if requires_confirmation(action):
+        if is_high_risk_action(action) or requires_confirmation(action):
             return True
     return False
 
@@ -301,6 +284,14 @@ def _normalize_service_action(step: Dict[str, Any]) -> Dict[str, Any]:
 
     if not service and action in _ACTION_SERVICE_FALLBACK:
         service = _ACTION_SERVICE_FALLBACK[action]
+
+    canonical_action = resolve_action_alias(action)
+    if canonical_action:
+        action = canonical_action
+    action_def = get_action_definition(action) or {}
+    if action_def.get("service"):
+        if not service or service in ("mailgun",):
+            service = str(action_def.get("service") or service)
 
     if service:
         step["service"] = service
@@ -772,6 +763,27 @@ def _friendly_validation_error(
     return f"I need a bit more detail to run that: {error}"
 
 
+def _cached_clarification_prompt(
+    *,
+    message: str,
+    question: str,
+    missing_slots: Optional[List[str]] = None,
+) -> str:
+    payload = {
+        "message": message or "",
+        "question": question or "",
+        "missing_slots": missing_slots or [],
+    }
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+    cache_key = f"wf_clarify:{digest}"
+    cached = cache.get(cache_key)
+    if isinstance(cached, str) and cached.strip():
+        return cached
+    prompt = question or "I need a bit more detail to proceed."
+    cache.set(cache_key, prompt, VERIFIER_CACHE_TTL_SECONDS)
+    return prompt
+
+
 def _format_confirmation_message(steps: List[Dict[str, Any]], assistant_message: str = "") -> str:
     lines = []
     if assistant_message:
@@ -920,6 +932,13 @@ def _quick_email_decision(message: str) -> Optional[Dict[str, Any]]:
 
 
 async def _llm_manager_review(message: str, steps: List[Dict[str, Any]]) -> Dict[str, Any]:
+    payload = json.dumps({"message": message, "steps": steps}, sort_keys=True, default=str)
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+    cache_key = f"wf_verifier:{digest}"
+    cached = cache.get(cache_key)
+    if isinstance(cached, dict):
+        return cached
+
     llm = get_llm_client()
     system_prompt = "\n".join([
         "You are a manager verifier for workflow steps.",
@@ -957,16 +976,18 @@ async def _llm_manager_review(message: str, steps: List[Dict[str, Any]]) -> Dict
     revised_steps = parsed.get("revised_steps")
     if not isinstance(revised_steps, list):
         revised_steps = []
-    return {
+    result = {
         "verdict": verdict,
         "assistant_message": parsed.get("assistant_message") or "",
         "revised_steps": revised_steps,
         "missing_fields": parsed.get("missing_fields") or [],
     }
+    cache.set(cache_key, result, VERIFIER_CACHE_TTL_SECONDS)
+    return result
 
 
 async def _manager_llm_enabled_for_user(user_id: Optional[int]) -> bool:
-    if not getattr(settings, "MANAGER_LLM_ENABLED", False):
+    if not getattr(settings, "MANAGER_LLM_ENABLED", True):
         return False
     if not user_id:
         return True
@@ -1012,24 +1033,21 @@ async def _get_user_capability_prefs(user_id: Optional[int]) -> Dict[str, Any]:
 
 async def _steps_allowed_for_user(steps: List[Dict[str, Any]], user_id: Optional[int]) -> Optional[str]:
     prefs = await _get_user_capability_prefs(user_id)
+    gate_messages = {
+        "allow_travel": "Travel actions are disabled in your settings.",
+        "allow_email": "Email sending is disabled in your settings.",
+        "allow_whatsapp": "WhatsApp sending is disabled in your settings.",
+        "allow_reminders": "Reminders are disabled in your settings.",
+        "allow_web_search": "Search and research actions are disabled in your settings.",
+        "allow_payments": "Payments actions are disabled in your settings.",
+        "allow_calendar": "Scheduling actions are disabled in your settings.",
+    }
     for step in steps:
-        service = str(step.get("service") or "").lower()
         action = str(step.get("action") or "").lower()
-        if service == "travel" or action.startswith("search_") or action == "book_travel_item":
-            if not prefs.get("allow_travel", True):
-                return "Travel actions are disabled in your settings."
-        if action == "send_email" and not prefs.get("allow_email", True):
-            return "Email sending is disabled in your settings."
-        if action == "send_message" and not prefs.get("allow_whatsapp", True):
-            return "WhatsApp sending is disabled in your settings."
-        if action == "set_reminder" and not prefs.get("allow_reminders", True):
-            return "Reminders are disabled in your settings."
-        if action in ("search_info", "search_gif", "get_weather", "convert_currency") and not prefs.get("allow_web_search", True):
-            return "Search and research actions are disabled in your settings."
-        if action in ("check_balance", "list_transactions", "check_invoice_status", "check_payments", "create_invoice", "create_payment_link", "withdraw", "check_status") and not prefs.get("allow_payments", True):
-            return "Payments actions are disabled in your settings."
-        if action in ("schedule_meeting", "check_availability") and not prefs.get("allow_calendar", True):
-            return "Scheduling actions are disabled in your settings."
+        action_def = get_action_definition(action) or {}
+        gate_key = action_def.get("capability_gate")
+        if gate_key and not prefs.get(gate_key, True):
+            return gate_messages.get(gate_key, "This action is disabled in your settings.")
     return None
 
 
@@ -1042,7 +1060,8 @@ async def _review_steps_with_manager(
 ) -> Dict[str, Any]:
     try:
         from orchestration.manager_verifier import ManagerVerifier
-        review = ManagerVerifier().review_steps(steps, message, preferences=preferences)
+        manager = ManagerVerifier()
+        review = manager.review_steps(steps, message, preferences=preferences)
     except Exception as exc:
         logger.warning("Manager verifier failed: %s", exc)
         return {
@@ -1052,30 +1071,14 @@ async def _review_steps_with_manager(
         }
 
     if review.get("verdict") == "ask_user":
-        if review.get("reason") == "unknown_action" and await _manager_llm_enabled_for_user(user_id):
-            llm_review = await _llm_manager_review(message, steps)
-            if llm_review.get("verdict") == "approve" and llm_review.get("revised_steps"):
-                revised_steps = _normalize_steps(llm_review["revised_steps"], message)
-                review = ManagerVerifier().review_steps(revised_steps, message, preferences=preferences)
-                if review.get("verdict") == "approve":
-                    return {
-                        "verdict": "approve",
-                        "assistant_message": "",
-                        "steps": review.get("steps") or revised_steps,
-                    }
-            if llm_review.get("assistant_message"):
-                return {
-                    "verdict": "ask_user",
-                    "assistant_message": llm_review["assistant_message"],
-                    "steps": steps,
-                }
         return {
             "verdict": "ask_user",
             "assistant_message": review.get("assistant_message") or assistant_message,
             "steps": steps,
         }
 
-    disabled_message = await _steps_allowed_for_user(review.get("steps") or steps, user_id)
+    reviewed_steps = review.get("steps") or steps
+    disabled_message = await _steps_allowed_for_user(reviewed_steps, user_id)
     if disabled_message:
         return {
             "verdict": "ask_user",
@@ -1083,10 +1086,30 @@ async def _review_steps_with_manager(
             "steps": steps,
         }
 
+    # Run a second LLM verifier pass only for high-risk actions.
+    if _has_high_risk_step(reviewed_steps) and await _manager_llm_enabled_for_user(user_id):
+        llm_review = await _llm_manager_review(message, reviewed_steps)
+        if llm_review.get("verdict") == "ask_user":
+            return {
+                "verdict": "ask_user",
+                "assistant_message": llm_review.get("assistant_message") or "Please confirm the sensitive step details.",
+                "steps": reviewed_steps,
+            }
+        if llm_review.get("verdict") == "approve" and llm_review.get("revised_steps"):
+            revised_steps = _normalize_steps(llm_review["revised_steps"], message, preferences=preferences)
+            followup_review = manager.review_steps(revised_steps, message, preferences=preferences)
+            if followup_review.get("verdict") == "ask_user":
+                return {
+                    "verdict": "ask_user",
+                    "assistant_message": followup_review.get("assistant_message") or assistant_message,
+                    "steps": steps,
+                }
+            reviewed_steps = followup_review.get("steps") or revised_steps
+
     return {
         "verdict": "approve",
         "assistant_message": "",
-        "steps": review.get("steps") or steps,
+        "steps": reviewed_steps,
     }
 
 
@@ -1322,7 +1345,7 @@ def _normalize_steps(
             if not params.get("to_currency") and currency_conversion.get("to_currency"):
                 params.setdefault("to_currency", currency_conversion["to_currency"])
 
-        if action in ("search_info", "search_gif", "find_jobs") and not params.get("query"):
+        if action in ("search_info", "search_gif") and not params.get("query"):
             params.setdefault("query", message.strip())
 
         if action == "get_weather" and not params.get("city") and location:
@@ -1527,6 +1550,11 @@ async def plan_user_request(
             date_order=date_order,
             time_format=time_format,
         )
+        question = _cached_clarification_prompt(
+            message=message,
+            question=question,
+            missing_slots=missing_slots,
+        )
         return {
             "mode": "needs_clarification",
             "assistant_message": question,
@@ -1548,9 +1576,13 @@ async def plan_user_request(
                     preferences=preferences,
                 )
                 if review.get("verdict") == "ask_user":
+                    clarification = _cached_clarification_prompt(
+                        message=message,
+                        question=review.get("assistant_message") or assistant_message,
+                    )
                     return {
                         "mode": "needs_clarification",
-                        "assistant_message": review.get("assistant_message") or assistant_message,
+                        "assistant_message": clarification,
                         "workflow_definition": None,
                         "confidence": confidence,
                     }
@@ -1590,9 +1622,13 @@ async def plan_user_request(
             preferences=preferences,
         )
         if review.get("verdict") == "ask_user":
+            clarification = _cached_clarification_prompt(
+                message=message,
+                question=review.get("assistant_message") or assistant_message,
+            )
             return {
                 "mode": "needs_clarification",
-                "assistant_message": review.get("assistant_message") or assistant_message,
+                "assistant_message": clarification,
                 "workflow_definition": None,
             }
         normalized_steps = review.get("steps") or normalized_steps
@@ -1600,12 +1636,16 @@ async def plan_user_request(
             return {"mode": "single", "assistant_message": "", "workflow_definition": None}
 
         if len(normalized_steps) > MAX_ADHOC_STEPS:
-            return {
-                "mode": "needs_clarification",
-                "assistant_message": (
+            clarification = _cached_clarification_prompt(
+                message=message,
+                question=(
                     f"That is a lot to do at once. Please break it into "
                     f"{MAX_ADHOC_STEPS} steps or fewer."
                 ),
+            )
+            return {
+                "mode": "needs_clarification",
+                "assistant_message": clarification,
                 "workflow_definition": None,
             }
 
@@ -1644,13 +1684,17 @@ async def plan_user_request(
                     preferences=preferences,
                 )
                 if review.get("verdict") == "ask_user":
+                    clarification = _cached_clarification_prompt(
+                        message=message,
+                        question=review.get("assistant_message") or _friendly_validation_error(
+                            error,
+                            date_order=date_order,
+                            time_format=time_format,
+                        ),
+                    )
                     return {
                         "mode": "needs_clarification",
-                    "assistant_message": review.get("assistant_message") or _friendly_validation_error(
-                        error,
-                        date_order=date_order,
-                        time_format=time_format,
-                    ),
+                        "assistant_message": clarification,
                         "workflow_definition": None,
                     }
                 fallback_normalized = review.get("steps") or fallback_normalized
@@ -1666,10 +1710,13 @@ async def plan_user_request(
                     error = fallback_error or error
             return {
                 "mode": "needs_clarification",
-                "assistant_message": _friendly_validation_error(
-                    error,
-                    date_order=date_order,
-                    time_format=time_format,
+                "assistant_message": _cached_clarification_prompt(
+                    message=message,
+                    question=_friendly_validation_error(
+                        error,
+                        date_order=date_order,
+                        time_format=time_format,
+                    ),
                 ),
                 "workflow_definition": None,
                 "confidence": confidence,
@@ -1696,9 +1743,13 @@ async def plan_user_request(
                 preferences=preferences,
             )
             if review.get("verdict") == "ask_user":
+                clarification = _cached_clarification_prompt(
+                    message=message,
+                    question=review.get("assistant_message") or assistant_message,
+                )
                 return {
                     "mode": "needs_clarification",
-                    "assistant_message": review.get("assistant_message") or assistant_message,
+                    "assistant_message": clarification,
                     "workflow_definition": None,
                 }
             fallback_normalized = review.get("steps") or fallback_normalized
@@ -1719,7 +1770,10 @@ async def plan_user_request(
                     )
         return {
             "mode": "needs_clarification",
-            "assistant_message": assistant_message or "I need a bit more detail to proceed.",
+            "assistant_message": _cached_clarification_prompt(
+                message=message,
+                question=assistant_message or "I need a bit more detail to proceed.",
+            ),
             "workflow_definition": None,
             "confidence": confidence,
         }
@@ -1800,17 +1854,28 @@ async def execute_adhoc_workflow(
     """
     trigger_data = trigger_data or {}
     wait_seconds = min(max(wait_seconds, 1), MAX_WAIT_SECONDS)
+    workflow_risk = "high" if _has_high_risk_step(definition.get("steps") or []) else "low"
+
+    def _enrich(payload: Dict[str, Any]) -> Dict[str, Any]:
+        enriched = dict(payload)
+        enriched.setdefault("action", "adhoc_workflow")
+        enriched.setdefault("risk_level", workflow_risk)
+        enriched.setdefault("requires_confirmation", False)
+        enriched.setdefault("clarification_prompt", "")
+        enriched.setdefault("data", enriched.get("result") or {})
+        enriched.setdefault("receipt", None)
+        return enriched
 
     idempotency_key = _idempotency_key(user_id, definition, trigger_data)
     if not cache.add(idempotency_key, {"status": "running"}, IDEMPOTENCY_TTL_SECONDS):
-        return {
+        return _enrich({
             "status": "duplicate",
             "mode": "noop",
             "workflow": None,
             "execution": None,
             "result": {},
             "message": "I already started that request. Please wait a moment.",
-        }
+        })
 
     workflow_obj = await _create_adhoc_workflow(user_id, room_id, definition)
 
@@ -1818,13 +1883,13 @@ async def execute_adhoc_workflow(
         logger.info("Temporal disabled; using inline execution.")
         result = await _run_inline(definition, user_id, trigger_data)
         cache.set(idempotency_key, {"status": "completed"}, IDEMPOTENCY_TTL_SECONDS)
-        return {
+        return _enrich({
             "status": "completed",
             "mode": "inline",
             "workflow": workflow_obj,
             "execution": None,
             "result": result,
-        }
+        })
 
     try:
         execution = await start_workflow_execution(workflow_obj, trigger_data, "manual")
@@ -1833,68 +1898,100 @@ async def execute_adhoc_workflow(
         deferred_id = await _enqueue_deferred_execution(workflow_obj, user_id, room_id, trigger_data)
         if deferred_id:
             cache.set(idempotency_key, {"status": "queued"}, IDEMPOTENCY_TTL_SECONDS)
-            return {
+            return _enrich({
                 "status": "queued",
                 "mode": "deferred",
                 "workflow": workflow_obj,
                 "execution": None,
                 "result": {},
                 "message": "Temporal is unavailable. Your request is queued and will run when it is back up.",
-            }
+            })
         result = await _run_inline(definition, user_id, trigger_data)
         cache.set(idempotency_key, {"status": "completed"}, IDEMPOTENCY_TTL_SECONDS)
-        return {
+        return _enrich({
             "status": "completed",
             "mode": "inline",
             "workflow": workflow_obj,
             "execution": None,
             "result": result,
-        }
+        })
 
     completed = await _wait_for_execution(execution.id, wait_seconds)
     if completed and completed.status == "completed":
         cache.set(idempotency_key, {"status": "completed"}, IDEMPOTENCY_TTL_SECONDS)
-        return {
+        return _enrich({
             "status": "completed",
             "mode": "temporal",
             "workflow": workflow_obj,
             "execution": completed,
             "result": completed.result or {},
-        }
+        })
 
     if completed and completed.status in ("failed", "cancelled"):
         cache.set(idempotency_key, {"status": completed.status}, IDEMPOTENCY_TTL_SECONDS)
-        return {
+        return _enrich({
             "status": completed.status,
             "mode": "temporal",
             "workflow": workflow_obj,
             "execution": completed,
             "result": completed.result or {},
             "error": completed.error_message,
-        }
+        })
 
     cache.set(idempotency_key, {"status": "running"}, IDEMPOTENCY_TTL_SECONDS)
-    return {
+    return _enrich({
         "status": "running",
         "mode": "temporal",
         "workflow": workflow_obj,
         "execution": completed or execution,
         "result": completed.result if completed else {},
-    }
+    })
 
 
 async def _wait_for_execution(execution_id: int, wait_seconds: int):
+    """Wait for a workflow execution to complete using Redis pub/sub (no DB polling)."""
     from workflows.models import WorkflowExecution
 
-    deadline = time.monotonic() + max(wait_seconds, 1)
-    while time.monotonic() < deadline:
-        def _fetch():
-            return WorkflowExecution.objects.filter(id=execution_id).first()
-        execution = await sync_to_async(_fetch)()
-        if execution and execution.status in ("completed", "failed", "cancelled"):
-            return execution
-        await asyncio.sleep(0.5)
-    return await sync_to_async(lambda: WorkflowExecution.objects.filter(id=execution_id).first())()
+    # First, check if it's already done (fast path)
+    def _fetch():
+        return WorkflowExecution.objects.filter(id=execution_id).first()
+    execution = await sync_to_async(_fetch)()
+    if execution and execution.status in ("completed", "failed", "cancelled"):
+        return execution
+
+    # Subscribe to Redis channel for this execution
+    channel = f"wf_exec:{execution_id}"
+    try:
+        from django_redis import get_redis_connection
+        redis = get_redis_connection("default")
+        pubsub = redis.pubsub()
+        # pubsub.subscribe is synchronous in redis-py, but we use it in sync_to_async
+        await sync_to_async(pubsub.subscribe)(channel)
+
+        deadline = time.monotonic() + max(wait_seconds, 1)
+        while time.monotonic() < deadline:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            # Wait for message with timeout (non-blocking in terms of CPU, but blocks thread)
+            # Since we are in an async function, we must use a non-blocking way to check
+            # but standard django-redis (redis-py) pubsub.get_message(timeout=...) blocks the thread.
+            # However, for a short wait it's better than rapid DB polling.
+            timeout = min(remaining, 1.0)
+            msg = await sync_to_async(pubsub.get_message)(ignore_subscribe_messages=True, timeout=timeout)
+            if msg and msg.get("type") == "message":
+                # Got a completion signal — fetch the final state
+                execution = await sync_to_async(_fetch)()
+                if execution:
+                    return execution
+
+        await sync_to_async(pubsub.unsubscribe)(channel)
+        await sync_to_async(pubsub.close)()
+    except Exception as e:
+        logger.warning("Redis pub/sub wait failed, falling back to single DB check: %s", e)
+
+    # Final fallback: one last DB hit
+    return await sync_to_async(_fetch)()
 
 
 async def _run_inline(definition: Dict[str, Any], user_id: int, trigger_data: Dict[str, Any]) -> Dict[str, Any]:

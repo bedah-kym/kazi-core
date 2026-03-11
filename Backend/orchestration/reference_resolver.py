@@ -15,8 +15,10 @@ from datetime import datetime, timedelta
 import re
 from difflib import SequenceMatcher
 
+from asgiref.sync import sync_to_async
 from django.utils import timezone
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 
 User = get_user_model()
 
@@ -34,10 +36,16 @@ class ReferenceResolver:
         self.user_id = user_id
         self.room_id = room_id
         self.context = context
-        self.user = User.objects.get(pk=user_id)
-        self.workspace = self.user.workspace
+        self.user = None
+        self.workspace = None
 
-    def resolve_references(self, user_message: str) -> Dict[str, Any]:
+    async def _ensure_user(self):
+        """Ensure user and workspace are loaded (async-safe)."""
+        if self.user is None:
+            self.user = await User.objects.aget(pk=self.user_id)
+            self.workspace = await sync_to_async(lambda: self.user.workspace)()
+
+    async def resolve_references(self, user_message: str) -> Dict[str, Any]:
         """
         Analyze user message and resolve all vague references.
 
@@ -51,6 +59,7 @@ class ReferenceResolver:
                 }
             }
         """
+        await self._ensure_user()
         replacements = {}
 
         # 1. Resolve anaphoric references (those, that, it, etc.)
@@ -60,7 +69,7 @@ class ReferenceResolver:
         message = anaphora_resolved
 
         # 2. Resolve possessive references (my team, my preferences, etc.)
-        possessive_resolved, possessive_dict = self._resolve_possessives(message)
+        possessive_resolved, possessive_dict = await self._resolve_possessives(message)
         replacements.update(possessive_dict)
         message = possessive_resolved
 
@@ -120,7 +129,7 @@ class ReferenceResolver:
 
         return replaced_message, replacements
 
-    def _resolve_possessives(self, message: str) -> Tuple[str, Dict]:
+    async def _resolve_possessives(self, message: str) -> Tuple[str, Dict]:
         """
         Resolve possessive references: 'my team', 'my preferences', 'my contacts', etc.
 
@@ -142,7 +151,7 @@ class ReferenceResolver:
             for match in matches:
                 if 'contacts' in pattern or 'team' in match.group(0).lower():
                     # Get workspace members / contact list
-                    contacts = self._get_user_contacts()
+                    contacts = await self._get_user_contacts()
                     replacements[match.group(0)] = {
                         "type": "contact_reference",
                         "value": contacts,
@@ -156,7 +165,7 @@ class ReferenceResolver:
                     )
 
                 elif 'preference' in match.group(0).lower():
-                    prefs = self._get_user_preferences()
+                    prefs = await self._get_user_preferences()
                     replacements[match.group(0)] = {
                         "type": "preference_reference",
                         "value": prefs,
@@ -262,36 +271,38 @@ class ReferenceResolver:
                         return value.get('data', {})
         return None
 
-    def _get_user_contacts(self) -> List[Dict]:
+    async def _get_user_contacts(self) -> List[Dict]:
         """Get user's team/contacts (workspace members + custom contacts)."""
         try:
             from chatbot.models import Chatroom
-            from users.models import UserIntegration
 
-            # Get workspace members
-            contacts = []
-            rooms = Chatroom.objects.filter(
-                participants__member__member__workspace=self.workspace
-            ).distinct()
+            def _fetch():
+                # Get workspace members
+                contacts = []
+                rooms = Chatroom.objects.filter(
+                    participants__member__member__workspace=self.workspace
+                ).distinct()
 
-            for room in rooms:
-                for member in room.participants.all():
-                    if member.member.id != self.user.id:
-                        contacts.append({
-                            'name': member.member.get_full_name() or member.member.username,
-                            'email': member.member.email,
-                            'id': member.member.id,
-                        })
+                for room in rooms:
+                    for member in room.participants.all():
+                        if member.member.id != self.user_id:
+                            contacts.append({
+                                'name': member.member.get_full_name() or member.member.username,
+                                'email': member.member.email,
+                                'id': member.member.id,
+                            })
 
-            return list({c['email']: c for c in contacts}.values())  # Deduplicate by email
+                return list({c['email']: c for c in contacts}.values())  # Deduplicate by email
+
+            return await sync_to_async(_fetch)()
         except Exception:
             return []
 
-    def _get_user_preferences(self) -> Dict:
+    async def _get_user_preferences(self) -> Dict:
         """Get user's preferences."""
         try:
             from orchestration.workflow_planner import get_user_preferences
-            return get_user_preferences(self.user_id)
+            return await sync_to_async(get_user_preferences)(self.user_id)
         except Exception:
             return {}
 
@@ -373,10 +384,10 @@ class ReferenceResolver:
 
 
 # Convenience function
-def resolve_request_references(user_id: int, room_id: int, message: str, context: Dict) -> Dict:
+async def resolve_request_references(user_id: int, room_id: int, message: str, context: Dict) -> Dict:
     """Resolve all vague references in a user request."""
     resolver = ReferenceResolver(user_id, room_id, context)
-    return resolver.resolve_references(message)
+    return await resolver.resolve_references(message)
 
 
 # Test cases (run with: pytest orchestration/tests/test_reference_resolver.py)

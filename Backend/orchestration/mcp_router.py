@@ -4,14 +4,26 @@ Routes parsed intents to appropriate connectors/tools
 """
 import json
 import logging
+import threading
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
 from django.core.cache import cache
+from django.core.exceptions import ImproperlyConfigured
 from django_redis import get_redis_connection
 from asgiref.sync import sync_to_async
 import httpx
 from users.encryption import TokenEncryption
 from django.contrib.auth import get_user_model
+from orchestration.action_catalog import (
+    get_action_definition,
+    get_capability_gate,
+    get_required_params,
+    is_high_risk_action,
+    requires_confirmation as catalog_requires_confirmation,
+    resolve_action_alias,
+    validate_router_mappings,
+)
+from orchestration.contracts import build_orchestration_result
 from .base_connector import BaseConnector
 from .connectors.whatsapp_connector import WhatsAppConnector
 from .connectors.intersend_connector import IntersendPayConnector
@@ -42,25 +54,6 @@ class MCPRouter:
         "create_itinerary", "add_to_itinerary", "view_itinerary",
         "book_travel_item",
     }
-    ACTION_GATES = {
-        "send_email": "allow_email",
-        "send_whatsapp": "allow_whatsapp",
-        "set_reminder": "allow_reminders",
-        "search_info": "allow_web_search",
-        "search_gif": "allow_web_search",
-        "get_weather": "allow_web_search",
-        "convert_currency": "allow_web_search",
-        "schedule_meeting": "allow_calendar",
-        "check_availability": "allow_calendar",
-        "check_balance": "allow_payments",
-        "list_transactions": "allow_payments",
-        "check_invoice_status": "allow_payments",
-        "check_payments": "allow_payments",
-        "create_invoice": "allow_payments",
-        "create_payment_link": "allow_payments",
-        "withdraw": "allow_payments",
-        "check_status": "allow_payments",
-    }
     DEFAULT_CAPABILITY_PREFS = {
         "capability_mode": "custom",
         "allow_web_search": True,
@@ -82,16 +75,16 @@ class MCPRouter:
         from .connectors.itinerary_connector import ItineraryConnector
         
         self.connectors = {
-            # Existing connectors
-            "find_jobs": UpworkConnector(),
+            # Core connectors
             "schedule_meeting": CalendarConnector(),
+            "check_availability": CalendarConnector(),
             "check_payments": ReadOnlyPaymentConnector(),
             "search_info": SearchConnector(),
             "get_weather": WeatherConnector(),
             "search_gif": GiphyConnector(),
             "convert_currency": CurrencyConnector(),
+            "send_message": WhatsAppConnector(),
             "send_whatsapp": WhatsAppConnector(),
-            "payment_action": IntersendPayConnector(),
             "send_email": GmailConnector(),
             "set_reminder": ReminderConnector(),
             "check_quotas": QuotaConnector(),
@@ -114,6 +107,20 @@ class MCPRouter:
             "add_to_itinerary": ItineraryConnector(),
             "book_travel_item": ItineraryConnector(),
         }
+        self._validate_action_connector_integrity()
+
+    def _validate_action_connector_integrity(self) -> None:
+        missing, extra = validate_router_mappings(self.connectors.keys())
+        if missing:
+            raise ImproperlyConfigured(
+                "Orchestration action catalog mismatch. Missing router mappings for: "
+                + ", ".join(missing)
+            )
+        if extra:
+            logger.warning(
+                "Router has connector mappings not present in action catalog: %s",
+                ", ".join(extra),
+            )
     
     async def route(self, intent: Dict, user_context: Dict) -> Dict:
         """
@@ -127,26 +134,77 @@ class MCPRouter:
             Dict with status, data, and metadata
         """
         try:
-            action = intent.get("action")
+            raw_action = intent.get("action")
+            action = resolve_action_alias(raw_action)
+            risk_level = (get_action_definition(action) or {}).get("risk_level", "low")
+            requires_confirmation = catalog_requires_confirmation(action)
             
             # Validate
             validation = await self._validate_request(intent, user_context)
             if not validation["valid"]:
-                return {
-                    "status": "error",
-                    "message": validation["reason"],
-                    "data": None
-                }
+                return build_orchestration_result(
+                    status="error",
+                    action=action,
+                    risk_level=risk_level,
+                    requires_confirmation=requires_confirmation,
+                    clarification_prompt=validation["reason"] or "",
+                    data={},
+                    reason=validation["reason"] or "",
+                    next_step="clarify",
+                )
+
+            required_params = get_required_params(action)
+            params = intent.get("parameters") if isinstance(intent.get("parameters"), dict) else {}
+            missing_slots = intent.get("missing_slots") or []
+            if not isinstance(missing_slots, list):
+                missing_slots = []
+            for key in required_params:
+                if key not in missing_slots and not params.get(key):
+                    missing_slots.append(key)
+            clarified = str(intent.get("clarifying_question") or "").strip()
+            if missing_slots and is_high_risk_action(action):
+                question = clarified or f"Before I proceed, I still need: {missing_slots[0].replace('_', ' ')}."
+                return build_orchestration_result(
+                    status="needs_clarification",
+                    action=action,
+                    risk_level=risk_level,
+                    requires_confirmation=requires_confirmation,
+                    clarification_prompt=question,
+                    data={"missing_slots": missing_slots},
+                    reason="missing_required_parameters",
+                    next_step="clarify",
+                )
+            confidence = intent.get("confidence")
+            try:
+                confidence_value = float(confidence) if confidence is not None else 1.0
+            except (TypeError, ValueError):
+                confidence_value = 1.0
+            if is_high_risk_action(action) and confidence_value < 0.75 and not intent.get("confirmed"):
+                question = clarified or "Please confirm what you want me to do before I proceed."
+                return build_orchestration_result(
+                    status="needs_clarification",
+                    action=action,
+                    risk_level=risk_level,
+                    requires_confirmation=True,
+                    clarification_prompt=question,
+                    data={"confidence": confidence_value},
+                    reason="ambiguous_high_risk_request",
+                    next_step="clarify",
+                )
             
             # Get connector
             connector = self.connectors.get(action)
             if not connector:
                 logger.warning(f"No connector for action: {action}")
-                return {
-                    "status": "error",
-                    "message": f"Action '{action}' not supported yet",
-                    "data": None
-                }
+                return build_orchestration_result(
+                    status="error",
+                    action=action,
+                    risk_level=risk_level,
+                    requires_confirmation=requires_confirmation,
+                    clarification_prompt=f"Action '{action}' is not supported yet.",
+                    data={},
+                    reason="unsupported_action",
+                )
             
             # Execute with timeout
             logger.info(f"Routing to connector: {action}")
@@ -166,29 +224,35 @@ class MCPRouter:
 
             # Persist dialog state for the next turn
             await self._store_dialog_state(user_context, action, parameters, status="success")
-            
-            return {
-                "status": "success",
-                "action": action,
-                "data": result,
-                "metadata": {
-                    "cached": False,
-                    "timestamp": datetime.now().isoformat(),
-                    "connector": connector.__class__.__name__
-                }
+            payload = build_orchestration_result(
+                status="success",
+                action=action,
+                risk_level=risk_level,
+                requires_confirmation=requires_confirmation,
+                data=result if isinstance(result, dict) else {"result": result},
+            )
+            payload["metadata"] = {
+                "cached": False,
+                "timestamp": datetime.now().isoformat(),
+                "connector": connector.__class__.__name__,
             }
+            return payload
             
         except Exception as e:
-            logger.error(f"MCP routing error: {e}")
+            logger.error("MCP routing error: %s", e)
             try:
                 await self._store_dialog_state(user_context, action, intent.get("parameters", {}), status="error")
             except Exception:
                 pass
-            return {
-                "status": "error",
-                "message": str(e),
-                "data": None
-            }
+            return build_orchestration_result(
+                status="error",
+                action=resolve_action_alias(intent.get("action")),
+                risk_level=(get_action_definition(intent.get("action")) or {}).get("risk_level", "low"),
+                requires_confirmation=catalog_requires_confirmation(intent.get("action")),
+                clarification_prompt="Something went wrong processing your request. Please try again.",
+                data={},
+                reason=str(e),
+            )
 
     # ----------------------------
     # Dialog state helpers
@@ -260,30 +324,29 @@ class MCPRouter:
             merged["_dialog_origin"] = previous_action
 
         return merged
-    
+
     async def _validate_request(self, intent: Dict, context: Dict) -> Dict:
         """Validate request against rate limits, auth, etc."""
-        
-        # Rate limit check (100 requests per hour per user)
         user_id = context.get("user_id")
         cache_key = f"mcp_rate:{user_id}"
-        
-        current = cache.get(cache_key, 0)
+
+        try:
+            current = cache.incr(cache_key)
+        except ValueError:
+            cache.set(cache_key, 1, 3600)
+            current = 1
+
         if current >= 100:
-            return {
-                "valid": False,
-                "reason": "Rate limit exceeded. Try again in an hour."
-            }
-        
-        cache.set(cache_key, current + 1, 3600)  # 1 hour TTL
+            return {"valid": False, "reason": "Rate limit exceeded. Try again in an hour."}
+
+        action = resolve_action_alias(intent.get("action"))
         prefs = await self._get_user_prefs(user_id)
-        if not self._is_action_allowed(intent.get("action"), prefs):
+        if not self._is_action_allowed(action, prefs):
             return {
                 "valid": False,
                 "reason": "This action is disabled in your settings. You can enable it in Settings > Integrations.",
             }
         raw_query = intent.get("raw_query") or ""
-        action = intent.get("action")
         if should_block_action(raw_query, action):
             return {
                 "valid": False,
@@ -291,10 +354,7 @@ class MCPRouter:
             }
         room_id = context.get("room_id")
         if not await user_has_room_access(user_id, room_id):
-            return {
-                "valid": False,
-                "reason": "Room access check failed for this request.",
-            }
+            return {"valid": False, "reason": "Room access check failed for this request."}
         return {"valid": True, "reason": None}
 
     async def _get_user_prefs(self, user_id: Optional[int]) -> Dict[str, Any]:
@@ -314,19 +374,15 @@ class MCPRouter:
     def _is_action_allowed(self, action: Optional[str], prefs: Dict[str, Any]) -> bool:
         if not action:
             return True
-        gate_key = self.ACTION_GATES.get(action)
+        gate_key = get_capability_gate(action)
         if gate_key:
-            if isinstance(gate_key, (list, tuple, set)):
-                return all(bool(prefs.get(key, True)) for key in gate_key)
             return bool(prefs.get(gate_key, True))
-        if action in self.TRAVEL_ACTIONS:
-            return bool(prefs.get("allow_travel", True))
         return True
-    
+
     async def _cache_result(self, intent: Dict, context: Dict, result: Any):
         """Cache results in Redis for quick retrieval"""
         try:
-            cache_key = f"mcp_cache:{intent['action']}:{context['user_id']}"
+            cache_key = f"mcp_cache:{resolve_action_alias(intent.get('action'))}:{context.get('user_id')}"
             redis = get_redis_connection("default")
             
             # Store with 5 min TTL
@@ -338,73 +394,31 @@ class MCPRouter:
             
             await sync_to_async(redis.setex)(cache_key, 300, cache_data)
         except Exception as e:
-            logger.error(f"Cache error: {e}")
+            logger.error("Cache error: %s", e)
 
 
 # ============================================
-# CONNECTORS
+# CONNECTORS (all inherit from base_connector.BaseConnector)
 # ============================================
-
-class BaseConnector:
-    """Base class for all connectors"""
-    
-    async def execute(self, parameters: Dict, context: Dict) -> Any:
-        raise NotImplementedError
-
-
-class UpworkConnector(BaseConnector):
-    """Mock Upwork API connector - returns fake job listings"""
-    
-    async def execute(self, parameters: Dict, context: Dict) -> List[Dict]:
-        """Search for jobs on Upwork"""
-        logger.info(f"UpworkConnector called with: {parameters}")
-        
-        import asyncio
-        await asyncio.sleep(0.5)
-        
-        query = parameters.get("query", "Python")
-        budget_max = parameters.get("budget_max", 5000)
-        
-        jobs = [
-            {
-                "id": "job_001",
-                "title": f"{query} Developer Needed",
-                "budget": f"${budget_max - 200}-${budget_max}",
-                "description": f"Looking for experienced {query} developer for 2-week project",
-                "posted": "2 hours ago",
-                "proposals": 8,
-                "client_rating": 4.8,
-                "url": "https://upwork.com/jobs/mock-001"
-            },
-            {
-                "id": "job_002",
-                "title": f"Senior {query} Engineer",
-                "budget": f"${budget_max - 500}-${budget_max - 200}",
-                "description": f"Full-time {query} position with benefits",
-                "posted": "5 hours ago",
-                "proposals": 15,
-                "client_rating": 4.9,
-                "url": "https://upwork.com/jobs/mock-002"
-            },
-        ]
-        
-        return {"jobs": jobs, "total": len(jobs), "query": query}
 
 
 class CalendarConnector(BaseConnector):
-    """Real Calendly connector using CalendlyProfile"""
-    
+    """Real Calendly connector using CalendlyProfile.
+    Uses httpx.AsyncClient for non-blocking HTTP in ASGI."""
+
+    CALENDLY_EVENTS_URL = 'https://api.calendly.com/scheduled_events'
+    CALENDLY_TOKEN_URL = 'https://auth.calendly.com/oauth/token'
+
     async def execute(self, parameters: Dict, context: Dict) -> Dict:
         """Execute Calendly actions"""
         from users.models import CalendlyProfile
         from django.contrib.auth import get_user_model
-        import requests
-        
+
         User = get_user_model()
         user_id = context.get("user_id")
         action = parameters.get("action", "check_availability")
         target_user_name = parameters.get("target_user")
-        
+
         try:
             try:
                 user = await sync_to_async(User.objects.get)(pk=user_id)
@@ -418,7 +432,7 @@ class CalendarConnector(BaseConnector):
 
             if not profile or not await sync_to_async(lambda: profile.is_connected)():
                 return {
-                    "status": "error", 
+                    "status": "error",
                     "message": "You are not connected to Calendly. Please connect first.",
                     "action_required": "connect_calendly"
                 }
@@ -429,10 +443,10 @@ class CalendarConnector(BaseConnector):
                     try:
                         target_user = await sync_to_async(User.objects.get)(username=target_username)
                         target_profile = await sync_to_async(lambda: getattr(target_user, 'calendly', None))()
-                        
+
                         if not target_profile or not await sync_to_async(lambda: target_profile.is_connected)():
                             return {"status": "error", "message": f"User @{target_username} has not connected their Calendly yet."}
-                        
+
                         booking_link = await sync_to_async(lambda: target_profile.booking_link)()
                         return {"status": "success", "type": "booking_link", "booking_link": booking_link, "message": f"Here is the booking link for @{target_username}"}
                     except User.DoesNotExist:
@@ -446,82 +460,92 @@ class CalendarConnector(BaseConnector):
             access_token = await sync_to_async(profile.get_access_token)()
             if not access_token:
                 return {"status": "error", "message": "Could not retrieve access token. Please reconnect Calendly.", "action_required": "connect_calendly"}
-                
-            headers = {'Authorization': f'Bearer {access_token}'}
+
             user_uri = await sync_to_async(lambda: profile.calendly_user_uri)()
-            
-            def fetch_events(token=None):
-                req_headers = headers
-                if token:
-                    req_headers = {'Authorization': f'Bearer {token}'}
-                return requests.get('https://api.calendly.com/scheduled_events', headers=req_headers, params={'user': user_uri, 'status': 'active', 'sort': 'start_time:asc'})
-            
-            response = await sync_to_async(fetch_events)()
-            
-            if response.status_code == 401:
-                logger.info("Calendly token expired. Attempting refresh...")
-                new_token = await self._refresh_token(profile)
-                if new_token:
-                    response = await sync_to_async(fetch_events)(new_token)
-                else:
-                    return {"status": "error", "message": "Calendly authorization failed. Please reconnect.", "action_required": "connect_calendly"}
-            
-            if response.status_code != 200:
-                logger.error(f"Calendly API error: {response.text}")
-                return {"status": "error", "message": "Failed to fetch Calendly events."}
-                
+
+            # Fully async HTTP — no thread pool blocking
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.get(
+                    self.CALENDLY_EVENTS_URL,
+                    headers={'Authorization': f'Bearer {access_token}'},
+                    params={'user': user_uri, 'status': 'active', 'sort': 'start_time:asc'},
+                )
+
+                if response.status_code == 401:
+                    logger.info("Calendly token expired. Attempting refresh...")
+                    new_token = await self._refresh_token(profile)
+                    if new_token:
+                        response = await client.get(
+                            self.CALENDLY_EVENTS_URL,
+                            headers={'Authorization': f'Bearer {new_token}'},
+                            params={'user': user_uri, 'status': 'active', 'sort': 'start_time:asc'},
+                        )
+                    else:
+                        return {"status": "error", "message": "Calendly authorization failed. Please reconnect.", "action_required": "connect_calendly"}
+
+                if response.status_code != 200:
+                    logger.error("Calendly API error: %s", response.text)
+                    return {"status": "error", "message": "Failed to fetch Calendly events."}
+
             data = response.json()
             events = data.get('collection', [])
-            
+
             formatted_events = []
             for event in events[:5]:
                 formatted_events.append({"start": event.get('start_time'), "title": event.get('name'), "url": event.get('uri')})
-                
-            return {"status": "success", "type": "events", "events": formatted_events, "message": f"You have {len(formatted_events)} upcoming meetings." if formatted_events else "You have no upcoming meetings scheduled."}
+
+            return {
+                "status": "success",
+                "type": "events",
+                "events": formatted_events,
+                "message": f"You have {len(formatted_events)} upcoming meetings." if formatted_events else "You have no upcoming meetings scheduled.",
+            }
 
         except Exception as e:
-            logger.error(f"CalendarConnector error: {e}")
-            return {"status": "error", "message": f"An error occurred: {str(e)}"}
+            logger.error("CalendarConnector error: %s", e)
+            return {"status": "error", "message": "Calendar operation failed. Please try again."}
 
     async def _refresh_token(self, profile):
-        """Refresh the Calendly access token"""
+        """Refresh the Calendly access token using async httpx."""
         from django.conf import settings
-        import requests
-        
+
         refresh_token = await sync_to_async(profile.get_refresh_token)()
         if not refresh_token:
             logger.error("No refresh token available")
             return None
-            
+
         try:
-            def do_refresh():
-                return requests.post('https://auth.calendly.com/oauth/token', data={'grant_type': 'refresh_token', 'refresh_token': refresh_token, 'client_id': settings.CALENDLY_CLIENT_ID, 'client_secret': settings.CALENDLY_CLIENT_SECRET})
-            
-            response = await sync_to_async(do_refresh)()
-            
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.post(
+                    self.CALENDLY_TOKEN_URL,
+                    data={
+                        'grant_type': 'refresh_token',
+                        'refresh_token': refresh_token,
+                        'client_id': settings.CALENDLY_CLIENT_ID,
+                        'client_secret': settings.CALENDLY_CLIENT_SECRET,
+                    },
+                )
+
             if response.status_code == 200:
                 data = response.json()
                 new_access = data.get('access_token')
                 new_refresh = data.get('refresh_token')
-                
+
                 def update_profile():
                     profile.encrypted_access_token = TokenEncryption.encrypt(new_access)
                     if new_refresh:
                         profile.encrypted_refresh_token = TokenEncryption.encrypt(new_refresh)
                     profile.save()
                     return new_access
-                
+
                 return await sync_to_async(update_profile)()
             else:
-                logger.error(f"Token refresh failed: {response.text}")
+                logger.error("Token refresh failed: %s", response.text)
                 return None
-                
+
         except Exception as e:
-            logger.error(f"Error refreshing token: {e}")
+            logger.error("Error refreshing token: %s", e)
             return None
-
-
-
 
 
 class SearchConnector(BaseConnector):
@@ -542,34 +566,34 @@ class SearchConnector(BaseConnector):
         if not query:
             return {"error": "No search query provided"}
 
-        # RATE LIMIT CHECK
+        # RATE LIMIT CHECK — atomic increment
         if user_id:
             today = datetime.now().strftime("%Y-%m-%d")
             limit_key = f"search_limit:{user_id}:{today}"
-            current_count = cache.get(limit_key, 0)
-            
-            if current_count >= 10:
+            try:
+                current_count = cache.incr(limit_key)
+            except ValueError:
+                cache.set(limit_key, 1, 86400)
+                current_count = 1
+
+            if current_count > 10:
                 return {
                     "results": [],
                     "summary": "Daily search limit reached (10/10). Please try again tomorrow.",
                     "error": "rate_limit_exceeded"
                 }
-            
+
         if not self.llm.anthropic_key:
             logger.warning("Search requested but Anthropic key missing.")
             return {"results": [], "summary": "I cannot browse the live web right now.", "source": "system_fallback"}
-            
-        try:
-            # Increment usage
-            if user_id:
-                cache.incr(limit_key) if cache.get(limit_key) else cache.set(limit_key, 1, 86400)
 
+        try:
             system_prompt = "You are a helpful research assistant."
             response = await self.llm.generate_text(system_prompt=system_prompt, user_prompt=f"Search for: {query}", temperature=0.7)
             return {"results": [{"title": "Search Result", "snippet": response[:200] + "..."}], "summary": response, "source": "claude_search"}
         except Exception as e:
-            logger.error(f"Search failed: {e}")
-            return {"results": [{"title": "Error", "snippet": "Search functionality temporarily unavailable."}], "summary": "Search failed.", "error": str(e)}
+            logger.error("Search failed: %s", e)
+            return {"results": [{"title": "Error", "snippet": "Search functionality temporarily unavailable."}], "summary": "Search failed."}
 
 
 class WeatherConnector(BaseConnector):
@@ -618,8 +642,8 @@ class WeatherConnector(BaseConnector):
                 }
                 
         except Exception as e:
-            logger.error(f"Weather fetch error: {e}")
-            return {"status": "error", "message": f"Weather lookup failed: {str(e)}"}
+            logger.error("Weather fetch error: %s", e)
+            return {"status": "error", "message": "Weather lookup failed. Please try again."}
 
 
 class GiphyConnector(BaseConnector):
@@ -670,8 +694,8 @@ class GiphyConnector(BaseConnector):
                 }
                 
         except Exception as e:
-            logger.error(f"GIPHY fetch error: {e}")
-            return {"status": "error", "message": f"GIF search failed: {str(e)}"}
+            logger.error("GIPHY fetch error: %s", e)
+            return {"status": "error", "message": "GIF search failed. Please try again."}
 
 
 class CurrencyConnector(BaseConnector):
@@ -726,8 +750,8 @@ class CurrencyConnector(BaseConnector):
                 }
                 
         except Exception as e:
-            logger.error(f"Currency conversion error: {e}")
-            return {"status": "error", "message": f"Currency conversion failed: {str(e)}"}
+            logger.error("Currency conversion error: %s", e)
+            return {"status": "error", "message": "Currency conversion failed. Please try again."}
 
 
 class ReminderConnector(BaseConnector):
@@ -810,12 +834,15 @@ class ReminderConnector(BaseConnector):
 
 
 _router = None
+_router_lock = threading.Lock()
 
 def get_mcp_router() -> MCPRouter:
-    """Get or create the global MCP router instance"""
+    """Get or create the global MCP router instance (thread-safe)."""
     global _router
     if _router is None:
-        _router = MCPRouter()
+        with _router_lock:
+            if _router is None:
+                _router = MCPRouter()
     return _router
 
 
@@ -823,3 +850,4 @@ async def route_intent(intent: Dict, user_context: Dict) -> Dict:
     """Convenience function to route an intent"""
     router = get_mcp_router()
     return await router.route(intent, user_context)
+

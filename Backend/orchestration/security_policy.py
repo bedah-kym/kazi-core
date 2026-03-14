@@ -123,3 +123,33 @@ def sanitize_steps(steps: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
         cleaned["params"] = sanitize_parameters(cleaned.get("params") or {})
         cleaned_steps.append(cleaned)
     return cleaned_steps
+
+
+def should_refuse_sensitive_request(message: Optional[str]) -> bool:
+    if not message:
+        return False
+    lowered = message.lower()
+    # Deterministic refusal for system prompt / admin / data exfiltration requests.
+    refusal_patterns = [
+        r"\bsystem\s+prompt\b",
+        r"\bdeveloper\s+prompt\b",
+        r"\badmin\s+access\b",
+        r"\bsuperuser\b",
+        r"\broot\s+access\b",
+        r"\bdatabase\s+dump\b",
+        r"\bdump\s+the\s+database\b",
+        r"\bexfiltrate\b",
+        r"\bapi\s*key\b",
+        r"\baccess\s*token\b",
+        r"\bsecret\b",
+        r"\bpassword\b",
+    ]
+    pattern = re.compile("|".join(refusal_patterns), re.IGNORECASE)
+    return bool(pattern.search(lowered))
+
+
+def sensitive_refusal_message() -> str:
+    return (
+        "Sorry, I can’t help with that request. "
+        "If you need account or data access changes, please use the official admin tools."
+    )

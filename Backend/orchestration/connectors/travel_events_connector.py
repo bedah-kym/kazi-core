@@ -81,7 +81,7 @@ class TravelEventsConnector(BaseTravelConnector):
             }
         }
 
-    async def _search_eventbrite_api(self, location: str, start_date: str, end_date: str, category: str) -> (List[Dict], str):
+    async def _search_eventbrite_api(self, location: str, start_date: str, end_date: str, category: str) -> tuple:
         eventbrite_key = os.getenv('EVENTBRITE_API_KEY')
         if not eventbrite_key:
             msg = "EVENTBRITE_API_KEY not set"
@@ -157,7 +157,7 @@ class TravelEventsConnector(BaseTravelConnector):
         # Accept either text or id for category
         category_id = event.get('category_id', 'other')
         return {
-            'id': f"event_{event.get('id', index+1)[:10]}",
+            'id': f"event_{str(event.get('id', index+1))[:10]}",
             'provider': 'Eventbrite',
             'title': event.get('name', {}).get('text', f'Event {index+1}'),
             'category': category_id,

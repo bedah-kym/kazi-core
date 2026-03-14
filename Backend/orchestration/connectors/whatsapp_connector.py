@@ -85,7 +85,7 @@ class WhatsAppConnector(BaseConnector):
 
         if settings.DEBUG and not self.client:
              # Mock mode for dev
-             print(f"[WhatsApp-Mock] Sending to {to}: {body}")
+             logger.debug(f"[WhatsApp-Mock] Sending to {to}: {body}")
              return {"status": "sent", "mock": True}
 
         if self.provider == 'twilio' and self.client:

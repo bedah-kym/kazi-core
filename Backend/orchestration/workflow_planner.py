@@ -980,8 +980,9 @@ async def _email_results_decision(
         review = await _review_steps_with_manager(
             normalized_steps,
             message,
+            "",
+            user_id,
             preferences=preferences,
-            user_id=user_id,
         )
         if review.get("verdict") != "approve":
             return {
@@ -1144,7 +1145,8 @@ async def _review_steps_with_manager(
     try:
         from orchestration.manager_verifier import ManagerVerifier
         manager = ManagerVerifier()
-        review = manager.review_steps(steps, message, preferences=preferences)
+        from asgiref.sync import sync_to_async
+        review = await sync_to_async(manager.review_steps)(steps, message, preferences=preferences)
     except Exception as exc:
         logger.warning("Manager verifier failed: %s", exc)
         return {
@@ -1180,7 +1182,7 @@ async def _review_steps_with_manager(
             }
         if llm_review.get("verdict") == "approve" and llm_review.get("revised_steps"):
             revised_steps = _normalize_steps(llm_review["revised_steps"], message, preferences=preferences)
-            followup_review = manager.review_steps(revised_steps, message, preferences=preferences)
+            followup_review = await sync_to_async(manager.review_steps)(revised_steps, message, preferences=preferences)
             if followup_review.get("verdict") == "ask_user":
                 return {
                     "verdict": "ask_user",

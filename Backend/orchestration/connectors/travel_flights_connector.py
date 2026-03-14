@@ -117,6 +117,7 @@ class TravelFlightsConnector(BaseTravelConnector):
             return_date,
             passengers,
             cabin_class,
+            non_stop=parameters.get('non_stop'),
         )
 
         if api_error:
@@ -171,7 +172,8 @@ class TravelFlightsConnector(BaseTravelConnector):
         return_date: str,
         passengers: int,
         cabin_class: str,
-    ) -> (List[Dict], str):
+        non_stop=None,
+    ) -> tuple:
         client = get_amadeus_client()
         if client is None:
             return [], "Amadeus client not configured"
@@ -185,14 +187,10 @@ class TravelFlightsConnector(BaseTravelConnector):
                 'travelClass': cabin_class.upper(),
                 'currencyCode': 'KES'
             }
-            # Only include nonStop if explicitly requested; the Amadeus SDK is picky
-            # about boolean serialization for this field.
-            if parameters := locals().get('parameters_ctx', None):
-                non_stop = parameters.get('non_stop')
-                if isinstance(non_stop, bool):
-                    params['nonStop'] = non_stop
-                elif isinstance(non_stop, str) and non_stop.lower() in ('true', 'false'):
-                    params['nonStop'] = non_stop.lower() == 'true'
+            if isinstance(non_stop, bool):
+                params['nonStop'] = non_stop
+            elif isinstance(non_stop, str) and non_stop.lower() in ('true', 'false'):
+                params['nonStop'] = non_stop.lower() == 'true'
 
             if return_date:
                 params['returnDate'] = return_date

@@ -54,7 +54,7 @@ class IntersendPayConnector(BaseConnector):
         action = parameters.get("action")
         
         if action == "create_payment_link":
-            return self.create_payment_link(
+            return await sync_to_async(self.create_payment_link)(
                 amount=parameters.get("amount"),
                 currency=parameters.get("currency", "KES"),
                 description=parameters.get("description"),
@@ -63,15 +63,15 @@ class IntersendPayConnector(BaseConnector):
                 user=user
             )
         elif action == "withdraw":
-            return self.withdraw_to_mpesa(
+            return await sync_to_async(self.withdraw_to_mpesa)(
                 user=user,
                 amount=parameters.get("amount"),
                 phone_number=parameters.get("phone_number")
             )
         elif action == "check_status":
-            return self.check_status(parameters.get("invoice_id"))
-            
-        return {"error": f"Unknown Intersend action: {action}"}
+            return await sync_to_async(self.check_status)(parameters.get("invoice_id"))
+
+        return {"status": "error", "message": f"Unknown Intersend action: {action}"}
 
     def create_payment_link(self, amount, currency, description, phone_number=None, email=None, user=None):
         if not self.intasend:
@@ -111,7 +111,7 @@ class IntersendPayConnector(BaseConnector):
 
         except Exception as e:
             logger.error(f"Intersend Create Link Error: {e}")
-            return {"error": str(e)}
+            return {"status": "error", "message": str(e)}
 
     def withdraw_to_mpesa(self, user, amount, phone_number):
         if not self.intasend:
@@ -123,14 +123,14 @@ class IntersendPayConnector(BaseConnector):
         try:
             wallet = WalletService.get_or_create_user_wallet(user)
         except Exception as e:
-            return {"error": f"User has no wallet configured: {str(e)}"}
+            return {"status": "error", "message": f"User has no wallet configured: {str(e)}"}
 
         amount = Decimal(str(amount))
         if amount <= Decimal('0'):
-            return {"error": "Invalid amount"}
+            return {"status": "error", "message": "Invalid amount"}
 
         if wallet.balance < amount:
-            return {"error": "Insufficient balance"}
+            return {"status": "error", "message": "Insufficient balance"}
 
         reference = str(uuid.uuid4())
         success, message = wallet.withdraw(
@@ -139,7 +139,7 @@ class IntersendPayConnector(BaseConnector):
             description=f"Withdrawal to M-Pesa {phone_number}"
         )
         if not success:
-            return {"error": message}
+            return {"status": "error", "message": message}
 
         tx = WalletTransaction.objects.filter(reference=reference).first()
         if tx:
@@ -169,7 +169,7 @@ class IntersendPayConnector(BaseConnector):
             if tx:
                 tx.status = 'FAILED'
                 tx.save(update_fields=['status'])
-            return {"error": f"Payout failed: {str(e)}"}
+            return {"status": "error", "message": f"Payout failed: {str(e)}"}
 
     def check_status(self, invoice_id):
         if not self.intasend:
@@ -183,4 +183,4 @@ class IntersendPayConnector(BaseConnector):
             service = self.intasend.collect
             return service.status(invoice_id=invoice_id)
         except Exception as e:
-            return {"error": str(e)}
+            return {"status": "error", "message": str(e)}

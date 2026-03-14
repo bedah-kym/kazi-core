@@ -26,7 +26,7 @@ class LLMClient:
         self.hf_key = getattr(settings, 'HF_API_TOKEN', os.environ.get('HF_API_TOKEN'))
 
         # Models
-        self.claude_model = "claude-3-sonnet-20240229"
+        self.claude_model = "claude-sonnet-4-6"
         self.hf_model = "meta-llama/Llama-3.1-8B-Instruct"  # router-friendly chat model
 
         # Endpoints

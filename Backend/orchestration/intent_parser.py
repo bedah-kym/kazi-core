@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import threading
+import hashlib
 from typing import Dict, Optional, Any
 
 from orchestration.action_catalog import (
@@ -15,6 +16,7 @@ from orchestration.action_catalog import (
     resolve_action_alias,
 )
 from orchestration.user_preferences import format_date_hint, format_time_hint
+from orchestration.telemetry import record_event
 
 logger = logging.getLogger(__name__)
 
@@ -349,7 +351,9 @@ Rules:
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 temperature=0.1,
-                json_mode=True
+                json_mode=True,
+                user_id=user_id,
+                model_role="planner",
             )
 
             intent = self.llm.extract_json(response_text)
@@ -364,6 +368,16 @@ Rules:
                 rule_based = self._rule_based_email_intent(message)
                 if rule_based:
                     intent = self._postprocess_intent(rule_based, preferences=preferences, user_context=user_context)
+            record_event(
+                "intent_parse",
+                {
+                    "user_id": user_id,
+                    "action": intent.get("action"),
+                    "confidence": intent.get("confidence"),
+                    "missing_slots": intent.get("missing_slots") or [],
+                    "raw_hash": hashlib.sha256(message.encode("utf-8")).hexdigest(),
+                },
+            )
             return intent
 
         except Exception as e:
@@ -392,6 +406,9 @@ Rules:
                 prompt += f"USER PREFERENCES:\n{json.dumps(context.get('preferences'))}\n\n"
             except Exception:
                 pass
+
+        if context and context.get('memory_summary'):
+            prompt += f"MEMORY SUMMARY:\\n{context['memory_summary']}\\n\\n"
 
         if context and context.get('history'):
             prompt += f"CONVERSATION HISTORY (Most recent last):\n{context['history']}\n\n"

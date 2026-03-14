@@ -589,7 +589,12 @@ class SearchConnector(BaseConnector):
 
         try:
             system_prompt = "You are a helpful research assistant."
-            response = await self.llm.generate_text(system_prompt=system_prompt, user_prompt=f"Search for: {query}", temperature=0.7)
+            response = await self.llm.generate_text(
+                system_prompt=system_prompt,
+                user_prompt=f"Search for: {query}",
+                temperature=0.7,
+                model_role="executor",
+            )
             return {"results": [{"title": "Search Result", "snippet": response[:200] + "..."}], "summary": response, "source": "claude_search"}
         except Exception as e:
             logger.error("Search failed: %s", e)

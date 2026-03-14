@@ -49,6 +49,9 @@ from orchestration.adaptive_task import (
     should_use_summary,
     store_result_set,
     needs_option_context,
+    clear_result_sets,
+    is_reset_request,
+    resolve_option_selection,
     is_small_talk,
     is_cancel_request,
     is_resume_request,
@@ -62,6 +65,12 @@ from orchestration.adaptive_task import (
     DEFAULT_PAUSE_SECONDS,
     SOCIAL_PAUSE_SECONDS,
 )
+from orchestration.memory_state import (
+    load_memory_summary,
+    update_memory_state,
+    clear_memory,
+)
+from orchestration.security_policy import should_refuse_sensitive_request, sensitive_refusal_message
 from django.conf import settings
 from django.utils.text import get_valid_filename
 logger = logging.getLogger(__name__)
@@ -823,8 +832,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     from orchestration.data_synthesizer import synthesize_response
                     
                     if ai_query:
-                        # Fetch history for conversation context
-                        history_text = await self.get_history_as_text(room_id)
+                        # Fetch history for conversation context (bounded)
+                        history_text = await self.get_history_as_text(room_id, limit=8)
                         try:
                             from .context_manager import ContextManager
                             context_prompt = await sync_to_async(ContextManager.get_context_prompt)(room_id)
@@ -839,6 +848,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                         # We use a mutable container for closure state
                         stream_state = {'buffer': [], 'last_send': 0, 'first_token_sent': False, 'full_response': []}
                         turn_step_id = f"turn_{message.id}"
+                        correlation_id = uuid.uuid4().hex
                         
                         async def broadcast_chunk(chunk_text, is_final=False):
                             import time
@@ -862,14 +872,27 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             # Send if buffer > 20 chars OR > 0.2s passed OR is_final
                             if len(joined_text) > 20 or (current_time - stream_state['last_send']) > 0.2 or is_final:
                                 if joined_text or is_final:
-                                    await self.channel_layer.group_send(
-                                        self.room_group_name,
-                                        {
-                                            "type": "ai_stream_chunk",
-                                            "chunk": joined_text,
-                                            "is_final": is_final
-                                        }
-                                    )
+                                    try:
+                                        await self.channel_layer.group_send(
+                                            self.room_group_name,
+                                            {
+                                                "type": "ai_stream_chunk",
+                                                "chunk": joined_text,
+                                                "is_final": is_final,
+                                                "correlation_id": correlation_id,
+                                            }
+                                        )
+                                    finally:
+                                        record_event(
+                                            "progress_event",
+                                            {
+                                                "phase": "stream",
+                                                "state": "chunk",
+                                                "room_id": room_id,
+                                                "user_id": member_user.id,
+                                                "correlation_id": correlation_id,
+                                            },
+                                        )
                                     stream_state['buffer'] = []
                                     stream_state['last_send'] = current_time
 
@@ -880,13 +903,31 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                 state=state,
                                 message=message_text,
                             )
-                            await self.channel_layer.group_send(
-                                self.room_group_name,
-                                {
-                                    "type": "ai_step_event",
-                                    "event": event_payload,
-                                }
-                            )
+                            send_ok = True
+                            try:
+                                await self.channel_layer.group_send(
+                                    self.room_group_name,
+                                    {
+                                        "type": "ai_step_event",
+                                        "event": event_payload,
+                                        "correlation_id": correlation_id,
+                                    }
+                                )
+                            except Exception:
+                                send_ok = False
+                                raise
+                            finally:
+                                record_event(
+                                    "progress_event",
+                                    {
+                                        "phase": phase,
+                                        "state": state,
+                                        "room_id": room_id,
+                                        "user_id": member_user.id,
+                                        "correlation_id": correlation_id,
+                                        "sent": send_ok,
+                                    },
+                                )
                         
                         from orchestration.workflow_planner import (
                             plan_user_request,
@@ -904,6 +945,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             "room_id": room_id,
                             "username": member_username,
                         }
+                        memory_summary = await load_memory_summary(adaptive_context)
+                        if memory_summary:
+                            history_text = "\n\n".join([memory_summary, history_text]).strip()
                         user_preferences = {}
                         try:
                             user_preferences = await sync_to_async(get_user_preferences)(member_user.id)
@@ -919,6 +963,35 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             conversation_mode = mode_cmd
                             await broadcast_chunk(format_mode_ack(mode_cmd))
                             mode_handled = True
+                        if is_reset_request(ai_query):
+                            await clear_task_state(adaptive_context)
+                            await clear_result_sets(adaptive_context)
+                            await clear_memory(adaptive_context)
+                            cache.delete(pending_key)
+                            cache.delete(last_summary_key)
+                            record_event(
+                                "context_reset",
+                                {
+                                    "user_id": member_user.id,
+                                    "room_id": room_id,
+                                    "correlation_id": correlation_id,
+                                },
+                            )
+                            await broadcast_chunk("Okay, starting fresh. What would you like to do?")
+                            await emit_progress("done", "completed", "Context reset.")
+                            return
+                        if should_refuse_sensitive_request(ai_query):
+                            record_event(
+                                "refused_sensitive_request",
+                                {
+                                    "user_id": member_user.id,
+                                    "room_id": room_id,
+                                    "correlation_id": correlation_id,
+                                },
+                            )
+                            await broadcast_chunk(sensitive_refusal_message())
+                            await emit_progress("done", "completed", "Request refused.")
+                            return
                         summary_text_for_cache = None
                         should_cache_summary = False
                         def _log_telemetry(event_type, payload=None):
@@ -1207,6 +1280,26 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                         "expected_slots": adaptive_state.get("missing_slots") or [],
                                         "preferences": user_preferences,
                                     })
+                                    if (
+                                        adaptive_state.get("missing_slots")
+                                        and not (followup_intent.get("parameters") or {})
+                                        and ai_query
+                                        and len(ai_query.split()) <= 4
+                                    ):
+                                        slot_name = (adaptive_state.get("missing_slots") or [None])[0]
+                                        if slot_name:
+                                            followup_intent["parameters"] = {slot_name: ai_query.strip()}
+                                            record_event(
+                                                "slot_fill",
+                                                {
+                                                    "action": expected_action,
+                                                    "missing_slots": adaptive_state.get("missing_slots") or [],
+                                                    "filled_slots": [slot_name],
+                                                    "source": "direct_reply",
+                                                    "user_id": member_user.id,
+                                                    "room_id": room_id,
+                                                },
+                                            )
                                     if (
                                         followup_intent.get("action") == "general_chat"
                                         and not (followup_intent.get("parameters") or {})

@@ -33,6 +33,40 @@ class LLMClient:
         self.anthropic_url = "https://api.anthropic.com/v1/messages"
         self.hf_url = "https://router.huggingface.co/v1/chat/completions"
 
+    def _provider_order(self, model_role: str, provider_preference: Optional[str]) -> List[str]:
+        role = (model_role or "default").lower()
+        preference = (provider_preference or "").lower().strip()
+        if preference:
+            ordered = [preference, "anthropic", "huggingface"]
+        elif role == "planner":
+            ordered = [getattr(settings, "LLM_PLANNER_PROVIDER", "anthropic").lower(), "anthropic", "huggingface"]
+        elif role == "executor":
+            ordered = [getattr(settings, "LLM_EXECUTOR_PROVIDER", "huggingface").lower(), "huggingface", "anthropic"]
+        else:
+            ordered = ["anthropic", "huggingface"]
+        # De-dup while preserving order
+        seen = set()
+        result: List[str] = []
+        for item in ordered:
+            if item in ("anthropic", "huggingface") and item not in seen:
+                result.append(item)
+                seen.add(item)
+        return result
+
+    def _model_for(self, provider: str, model_role: str) -> str:
+        role = (model_role or "default").lower()
+        if provider == "anthropic":
+            if role == "planner":
+                return getattr(settings, "LLM_PLANNER_MODEL", self.claude_model)
+            if role == "executor":
+                return getattr(settings, "LLM_EXECUTOR_MODEL", self.claude_model)
+            return self.claude_model
+        if role == "planner":
+            return getattr(settings, "LLM_PLANNER_MODEL", self.hf_model)
+        if role == "executor":
+            return getattr(settings, "LLM_EXECUTOR_MODEL", self.hf_model)
+        return self.hf_model
+
     def _estimate_tokens(self, text: Optional[str]) -> int:
         """Rough token estimation: ~4 chars per token."""
         if not text:
@@ -94,7 +128,9 @@ class LLMClient:
         max_tokens: int = 600,
         json_mode: bool = False,
         user_id: Optional[int] = None,
-        room_id: Optional[int] = None
+        room_id: Optional[int] = None,
+        model_role: str = "default",
+        provider_preference: Optional[str] = None,
     ) -> str:
         """
         Generate text using available LLM provider.
@@ -132,31 +168,38 @@ class LLMClient:
                 json_mode=json_mode,
                 user_id=user_id,
                 room_id=room_id,
+                model_role=model_role,
+                provider_preference=provider_preference,
             )
             cached = cache.get(cache_key)
             if cached:
                 return cached
+        provider_order = self._provider_order(model_role, provider_preference)
+        last_error: Optional[Exception] = None
+        for provider in provider_order:
+            if provider == "anthropic" and self.anthropic_key:
+                try:
+                    model_name = self._model_for("anthropic", model_role)
+                    response = await self._call_claude(system_prompt, user_prompt, temperature, max_tokens, model_name)
+                    self._record_token_usage(estimated_tokens, user_id)
+                    self._store_cache(cache_key, response)
+                    return response
+                except Exception as e:
+                    last_error = e
+                    logger.warning(f"Claude API failed: {e}. Falling back.")
+            if provider == "huggingface" and self.hf_key:
+                try:
+                    model_name = self._model_for("huggingface", model_role)
+                    response = await self._call_huggingface(system_prompt, user_prompt, temperature, max_tokens, json_mode, model_name)
+                    self._record_token_usage(estimated_tokens, user_id)
+                    self._store_cache(cache_key, response)
+                    return response
+                except Exception as e:
+                    last_error = e
+                    logger.error(f"Hugging Face API failed: {e}")
 
-        # Try Claude first
-        if self.anthropic_key:
-            try:
-                response = await self._call_claude(system_prompt, user_prompt, temperature, max_tokens)
-                self._record_token_usage(estimated_tokens, user_id)
-                self._store_cache(cache_key, response)
-                return response
-            except Exception as e:
-                logger.warning(f"Claude API failed: {e}. Falling back to Hugging Face.")
-
-        # Fallback to Hugging Face
-        if self.hf_key:
-            try:
-                response = await self._call_huggingface(system_prompt, user_prompt, temperature, max_tokens, json_mode)
-                self._record_token_usage(estimated_tokens, user_id)
-                self._store_cache(cache_key, response)
-                return response
-            except Exception as e:
-                logger.error(f"Hugging Face API failed: {e}")
-                raise Exception(f"All LLM providers failed. Last error: {e}")
+        if last_error:
+            raise Exception(f"All LLM providers failed. Last error: {last_error}")
 
         raise Exception("No valid API keys configured for Anthropic or Hugging Face.")
 
@@ -165,7 +208,9 @@ class LLMClient:
         system_prompt: str, 
         user_prompt: str, 
         temperature: float = 0.7,
-        max_tokens: int = 600
+        max_tokens: int = 600,
+        model_role: str = "default",
+        provider_preference: Optional[str] = None,
     ):
         """
         Stream text generation. Yields chunks of text.
@@ -174,29 +219,35 @@ class LLMClient:
         user_prompt = self._truncate(user_prompt)
         system_prompt = self._truncate(system_prompt, is_system=True)
 
-        # Try Claude first (now with streaming)
-        if self.anthropic_key:
-            try:
-                async for chunk in self._call_claude_stream(system_prompt, user_prompt, temperature, max_tokens):
-                    if chunk:
+        provider_order = self._provider_order(model_role, provider_preference)
+        last_error: Optional[Exception] = None
+        for provider in provider_order:
+            if provider == "anthropic" and self.anthropic_key:
+                try:
+                    model_name = self._model_for("anthropic", model_role)
+                    async for chunk in self._call_claude_stream(system_prompt, user_prompt, temperature, max_tokens, model_name):
+                        if chunk:
+                            yield chunk
+                    return
+                except Exception as e:
+                    last_error = e
+                    logger.warning(f"Claude API failed: {e}. Falling back.")
+            if provider == "huggingface" and self.hf_key:
+                try:
+                    model_name = self._model_for("huggingface", model_role)
+                    async for chunk in self._stream_huggingface(system_prompt, user_prompt, temperature, max_tokens, model_name):
                         yield chunk
-                return
-            except Exception as e:
-                logger.warning(f"Claude API failed: {e}. Falling back to Hugging Face.")
+                    return
+                except Exception as e:
+                    last_error = e
+                    logger.error(f"Hugging Face API failed: {e}")
 
-        # Fallback to Hugging Face
-        if self.hf_key:
-            try:
-                async for chunk in self._stream_huggingface(system_prompt, user_prompt, temperature, max_tokens):
-                    yield chunk
-                return
-            except Exception as e:
-                logger.error(f"Hugging Face API failed: {e}")
-                raise Exception(f"All LLM providers failed. Last error: {e}")
+        if last_error:
+            raise Exception(f"All LLM providers failed. Last error: {last_error}")
 
         raise Exception("No valid API keys configured for Anthropic or Hugging Face.")
 
-    async def _call_claude(self, system_prompt: str, user_prompt: str, temperature: float, max_tokens: int) -> str:
+    async def _call_claude(self, system_prompt: str, user_prompt: str, temperature: float, max_tokens: int, model_name: Optional[str] = None) -> str:
         """Call Anthropic API"""
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
@@ -207,7 +258,7 @@ class LLMClient:
                     "content-type": "application/json"
                 },
                 json={
-                    "model": self.claude_model,
+                    "model": model_name or self.claude_model,
                     "max_tokens": max_tokens,
                     "temperature": temperature,
                     "system": system_prompt,
@@ -223,7 +274,7 @@ class LLMClient:
             data = response.json()
             return data["content"][0]["text"]
 
-    async def _call_claude_stream(self, system_prompt: str, user_prompt: str, temperature: float, max_tokens: int):
+    async def _call_claude_stream(self, system_prompt: str, user_prompt: str, temperature: float, max_tokens: int, model_name: Optional[str] = None):
         """
         Stream from Anthropic Messages API.
         Yields small text deltas to reduce perceived latency and token waste.
@@ -238,7 +289,7 @@ class LLMClient:
                     "content-type": "application/json"
                 },
                 json={
-                    "model": self.claude_model,
+                    "model": model_name or self.claude_model,
                     "max_tokens": max_tokens,
                     "temperature": temperature,
                     "system": system_prompt,
@@ -269,7 +320,15 @@ class LLMClient:
                     except Exception:
                         continue
 
-    async def _call_huggingface(self, system_prompt: str, user_prompt: str, temperature: float, max_tokens: int, json_mode: bool) -> str:
+    async def _call_huggingface(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float,
+        max_tokens: int,
+        json_mode: bool,
+        model_name: Optional[str] = None,
+    ) -> str:
         """Call Hugging Face Router (OpenAI-compatible /v1/chat/completions API)"""
 
         # Build messages array in OpenAI/ChatML style
@@ -292,7 +351,7 @@ class LLMClient:
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": self.hf_model,
+                    "model": model_name or self.hf_model,
                     "messages": messages,
                     "max_tokens": max_tokens,
                     "temperature": temperature,
@@ -326,7 +385,7 @@ class LLMClient:
                 # Fallback: just return the raw data stringified
                 return str(data)
 
-    async def _stream_huggingface(self, system_prompt: str, user_prompt: str, temperature: float, max_tokens: int):
+    async def _stream_huggingface(self, system_prompt: str, user_prompt: str, temperature: float, max_tokens: int, model_name: Optional[str] = None):
         """Stream from Hugging Face Router (OpenAI-compatible SSE)"""
         
         messages = []
@@ -343,7 +402,7 @@ class LLMClient:
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": self.hf_model,
+                    "model": model_name or self.hf_model,
                     "messages": messages,
                     "max_tokens": max_tokens,
                     "temperature": temperature,
@@ -434,6 +493,8 @@ class LLMClient:
         json_mode: bool,
         user_id: Optional[int] = None,
         room_id: Optional[int] = None,
+        model_role: str = "default",
+        provider_preference: Optional[str] = None,
     ) -> str:
         payload = json.dumps({
             "system": system_prompt,
@@ -442,6 +503,8 @@ class LLMClient:
             "max_tokens": max_tokens,
             "json_mode": json_mode,
             "model": self.claude_model or self.hf_model,
+            "role": model_role,
+            "provider": provider_preference or "",
             "user_id": user_id,
             "room_id": room_id,
         }, sort_keys=True)

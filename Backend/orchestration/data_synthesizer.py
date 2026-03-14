@@ -178,7 +178,8 @@ Please generate a natural response for the user.
             response = await self.llm.generate_text(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
-                temperature=0.7
+                temperature=0.7,
+                model_role="executor",
             )
             
             return response
@@ -209,7 +210,8 @@ Please generate a natural response for the user.
             async for chunk in self.llm.stream_text(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
-                temperature=0.7
+                temperature=0.7,
+                model_role="executor",
             ):
                 yield chunk
             

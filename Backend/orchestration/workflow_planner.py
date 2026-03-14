@@ -966,6 +966,7 @@ async def _llm_manager_review(message: str, steps: List[Dict[str, Any]]) -> Dict
             temperature=0.2,
             max_tokens=700,
             json_mode=True,
+            model_role="planner",
         )
     except Exception as exc:
         logger.warning("LLM manager failed: %s", exc)
@@ -1529,6 +1530,7 @@ async def plan_user_request(
             temperature=0.2,
             max_tokens=900,
             json_mode=True,
+            model_role="planner",
         )
     except Exception as exc:
         logger.error("Planner LLM failed: %s", exc)
@@ -2092,6 +2094,7 @@ async def synthesize_workflow_response_stream(
             user_prompt=user_prompt,
             temperature=0.4,
             max_tokens=600,
+            model_role="executor",
         ):
             if chunk:
                 yield chunk

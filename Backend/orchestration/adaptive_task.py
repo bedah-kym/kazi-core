@@ -10,6 +10,7 @@ from asgiref.sync import sync_to_async
 from django.core.cache import cache
 
 from orchestration.action_catalog import get_action_definition as get_catalog_action_definition
+from orchestration.telemetry import record_event
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,23 @@ _SMALL_TALK_RE = re.compile(
 _CANCEL_RE = re.compile(r"\b(cancel|nevermind|never mind|stop|forget it|drop it|not now|pause)\b", re.IGNORECASE)
 _RESUME_RE = re.compile(r"\b(resume|continue|go ahead|proceed|let's finish|finish it|keep going)\b", re.IGNORECASE)
 _MODE_RE = re.compile(r"\b(mode)\b", re.IGNORECASE)
+_RESET_RE = re.compile(
+    r"\b(new\s+conversation|start\s+over|forget\s+context|reset\s+context|clear\s+context|fresh\s+start)\b",
+    re.IGNORECASE,
+)
+
+PARAM_ALIASES = {
+    "search_flights": {"from": "origin", "to": "destination"},
+    "search_buses": {"from": "origin", "to": "destination"},
+    "search_transfers": {"from": "origin", "to": "destination"},
+    "search_hotels": {"city": "location", "destination": "location"},
+    "search_events": {"city": "location"},
+    "get_weather": {"location": "city", "town": "city"},
+    "send_message": {"phone": "phone_number", "to": "phone_number", "recipient": "phone_number"},
+    "send_email": {"email": "to", "recipient": "to"},
+    "create_invoice": {"email": "payer_email", "phone": "phone_number", "to": "payer_email"},
+    "create_payment_link": {"phone": "phone_number", "payer_email": "email"},
+}
 
 def get_action_definition(action: Optional[str]) -> Optional[Dict[str, Any]]:
     return get_catalog_action_definition(action)
@@ -49,9 +67,32 @@ def normalize_params(params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return dict(params)
 
 
-def merge_params(existing: Optional[Dict[str, Any]], incoming: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    merged = normalize_params(existing)
-    for key, value in normalize_params(incoming).items():
+def _apply_param_aliases(action: Optional[str], params: Dict[str, Any]) -> Dict[str, Any]:
+    if not action:
+        return params
+    aliases = PARAM_ALIASES.get(action, {})
+    if not aliases:
+        return params
+    updated = dict(params)
+    for alias, target in aliases.items():
+        if alias in updated and target not in updated and updated.get(alias) not in (None, "", [], {}):
+            updated[target] = updated.get(alias)
+    return updated
+
+
+def normalize_params_for_action(action: Optional[str], params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    normalized = normalize_params(params)
+    return _apply_param_aliases(action, normalized)
+
+
+def merge_params(
+    existing: Optional[Dict[str, Any]],
+    incoming: Optional[Dict[str, Any]],
+    *,
+    action: Optional[str] = None,
+) -> Dict[str, Any]:
+    merged = normalize_params_for_action(action, existing)
+    for key, value in normalize_params_for_action(action, incoming).items():
         if value in (None, "", [], {}):
             continue
         merged[key] = value
@@ -62,7 +103,7 @@ def compute_missing_slots(action: Optional[str], params: Optional[Dict[str, Any]
     action_def = get_action_definition(action)
     if not action_def:
         return []
-    params = normalize_params(params)
+    params = normalize_params_for_action(action, params)
     missing: List[str] = []
     for param_name, spec in (action_def.get("params") or {}).items():
         if spec.get("required") and not params.get(param_name):
@@ -182,6 +223,12 @@ def detect_mode_command(message: str) -> Optional[str]:
     return None
 
 
+def is_reset_request(message: str) -> bool:
+    if not message:
+        return False
+    return bool(_RESET_RE.search(message))
+
+
 def format_mode_ack(mode: str) -> str:
     if mode == "focus":
         return "Focus mode on. I'll prioritize tasks and keep prompts tight."
@@ -204,9 +251,25 @@ async def store_result_set(
 ) -> None:
     if not action or results is None:
         return
+    normalized_results: List[Dict[str, Any]] = []
+    for idx, item in enumerate(results or [], start=1):
+        if not isinstance(item, dict):
+            continue
+        base_id = (
+            item.get("id")
+            or item.get("provider_id")
+            or item.get("offer_id")
+            or item.get("flight_id")
+            or item.get("item_id")
+        )
+        option_id = f"{idx}:{base_id}" if base_id else str(idx)
+        enriched = dict(item)
+        enriched.setdefault("option_id", option_id)
+        enriched.setdefault("option_index", idx)
+        normalized_results.append(enriched)
     payload = {
         "action": action,
-        "results": results,
+        "results": normalized_results,
         "metadata": metadata or {},
         "updated_at": datetime.utcnow().isoformat(),
     }
@@ -234,6 +297,14 @@ async def load_last_search(context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
 
+async def clear_result_sets(context: Dict[str, Any]) -> None:
+    try:
+        await sync_to_async(cache.delete)(_result_cache_key(context, "last"))
+        await sync_to_async(cache.delete)(_result_cache_key(context, "last_search"))
+    except Exception as exc:
+        logger.warning("Adaptive result set delete failed: %s", exc)
+
+
 def _is_option_selection(param_name: str, value: Any) -> bool:
     if param_name in _OPTION_PARAM_HINTS or param_name.endswith("_id"):
         if isinstance(value, int):
@@ -255,6 +326,31 @@ def _needs_option_context(action_def: Optional[Dict[str, Any]], params: Dict[str
         if _is_option_selection(param_name, value):
             return True
     return False
+
+
+def _selection_index(selection: Any) -> Optional[int]:
+    if selection is None:
+        return None
+    if isinstance(selection, int):
+        return selection if selection > 0 else None
+    raw = str(selection).strip().lower()
+    if raw.isdigit():
+        return int(raw)
+    lookup = {
+        "first": 1,
+        "second": 2,
+        "third": 3,
+        "fourth": 4,
+        "fifth": 5,
+    }
+    for key, idx in lookup.items():
+        if key in raw:
+            return idx
+    if "option" in raw:
+        digits = re.findall(r"\d+", raw)
+        if digits:
+            return int(digits[0])
+    return None
 
 
 def format_option_dependency_prompt(action_def: Optional[Dict[str, Any]], action: Optional[str]) -> str:
@@ -288,6 +384,42 @@ async def needs_option_context(
     if last_search and (last_search.get("results") or []):
         return None
     return format_option_dependency_prompt(action_def, action)
+
+
+async def resolve_option_selection(
+    context: Dict[str, Any],
+    action: Optional[str],
+    params: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    params = normalize_params_for_action(action, params)
+    action_def = get_action_definition(action)
+    if not _needs_option_context(action_def, params):
+        return params
+    selection_value = None
+    for key in ("item_id", "option", "selection"):
+        if key in params:
+            selection_value = params.get(key)
+            break
+    index = _selection_index(selection_value)
+    if not index:
+        return params
+    last_search = await load_last_search(context)
+    results = (last_search or {}).get("results") or []
+    if 0 < index <= len(results):
+        chosen = results[index - 1]
+        item_id = (
+            chosen.get("id")
+            or chosen.get("provider_id")
+            or chosen.get("offer_id")
+            or chosen.get("flight_id")
+            or chosen.get("item_id")
+            or chosen.get("option_id")
+        )
+        if item_id:
+            params["item_id"] = item_id
+            params["option_index"] = index
+            params["option_id"] = chosen.get("option_id") or params.get("option_id")
+    return params
 
 
 async def load_task_state(context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -369,11 +501,20 @@ def is_resume_request(message: str) -> bool:
 
 def update_task_state(state: Dict[str, Any], new_params: Dict[str, Any]) -> Dict[str, Any]:
     action = state.get("action")
-    merged = merge_params(state.get("parameters"), new_params)
+    merged = merge_params(state.get("parameters"), new_params, action=action)
     missing = compute_missing_slots(action, merged)
     status = "awaiting_slots" if missing else "ready"
     next_state = dict(state)
     next_state["parameters"] = merged
     next_state["missing_slots"] = missing
     next_state["status"] = status
+    record_event(
+        "slot_fill",
+        {
+            "action": action,
+            "missing_slots": missing,
+            "filled_slots": [k for k in (merged or {}).keys() if k not in missing],
+            "source": "user_params",
+        },
+    )
     return next_state

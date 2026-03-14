@@ -544,14 +544,14 @@ async def _create_workflow_handoff(
         return {"status": "error", "message": "Steps must be a non-empty list."}
 
     try:
-        from workflows.models import Workflow
+        from workflows.models import UserWorkflow
         from asgiref.sync import sync_to_async
 
         workflow_def = {
             "description": description,
             "steps": steps,
         }
-        workflow = await sync_to_async(Workflow.objects.create)(
+        workflow = await sync_to_async(UserWorkflow.objects.create)(
             user_id=context.get("user_id"),
             name=description[:100],
             definition=workflow_def,

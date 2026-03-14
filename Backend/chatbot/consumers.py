@@ -1141,10 +1141,35 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                 return False
                             return bool(re.search(r"\b(nudge|suggestion|proactive)\b", lowered))
 
+                        def _history_to_messages(history_text: str):
+                            """Convert 'Member: message' text history to Anthropic messages format."""
+                            if not history_text:
+                                return None
+                            messages = []
+                            for line in history_text.strip().split("\n"):
+                                line = line.strip()
+                                if not line or ": " not in line:
+                                    continue
+                                speaker, _, content = line.partition(": ")
+                                content = content.strip()
+                                if not content:
+                                    continue
+                                role = "assistant" if speaker.lower() == "mathia" else "user"
+                                # Merge consecutive same-role messages
+                                if messages and messages[-1]["role"] == role:
+                                    messages[-1]["content"] += "\n" + content
+                                else:
+                                    messages.append({"role": role, "content": content})
+                            # Anthropic requires messages to start with user role
+                            if messages and messages[0]["role"] == "assistant":
+                                messages = messages[1:]
+                            return messages if messages else None
+
                         async def _handle_agent_loop(query: str, history: str, ctx_prompt: str, mem_summary: str):
                             """Run the agentic loop and map AgentEvents to WebSocket frames."""
                             nonlocal summary_text_for_cache, should_cache_summary
                             await emit_progress("planning", "started", "Thinking…")
+                            history_msgs = _history_to_messages(history)
                             async for event in run_agent_loop(
                                 user_message=query,
                                 context={
@@ -1155,8 +1180,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                 },
                                 preferences=user_preferences,
                                 context_prompt=ctx_prompt,
-                                memory_summary=mem_summary,
-                                history=history if isinstance(history, list) else None,
+                                memory_summary="",
+                                history=history_msgs,
                             ):
                                 if event.kind == "text":
                                     await broadcast_chunk(event.data.get("text", ""))

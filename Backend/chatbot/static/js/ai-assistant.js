@@ -413,32 +413,8 @@ class MathiaAssistant {
     }
     handleOrchestrationStep(event) {
         if (!event) return;
-        const chatList = this.getCurrentMessageList();
-        if (!chatList) return;
-
-        const stepId = event.step_id || 'orchestration';
-        let stepItem = chatList.querySelector(`.orchestration-step[data-step-id="${stepId}"]`);
-
-        if (!stepItem) {
-            const msgListTag = document.createElement('li');
-            msgListTag.className = 'clearfix orchestration-step';
-            msgListTag.dataset.stepId = stepId;
-            msgListTag.innerHTML = `
-            <div class="message-data">
-                <div class="time-label">${new Date().toLocaleTimeString()}</div>
-            </div>
-            <div class="message other-message mathia-message">
-                <div class="mathia-badge">
-                    <i class="fas fa-robot"></i>
-                    <span>Mathia AI</span>
-                </div>
-                <div class="mathia-content orchestration-step-text"></div>
-            </div>
-        `;
-
-            chatList.appendChild(msgListTag);
-            stepItem = msgListTag;
-        }
+        const statusEl = this.getOrchestrationStatusContainer();
+        if (!statusEl) return;
 
         const parts = [];
         if (event.phase) parts.push(event.phase);
@@ -448,9 +424,44 @@ class MathiaAssistant {
             summary = summary ? `${summary} - ${event.message}` : event.message;
         }
 
-        const content = stepItem.querySelector('.orchestration-step-text');
+        const content = statusEl.querySelector('.mathia-progress-text');
         if (content) content.textContent = summary;
-        chatList.scrollTop = chatList.scrollHeight;
+        statusEl.classList.add('active');
+
+        const phase = (event.phase || '').toLowerCase();
+        const state = (event.state || '').toLowerCase();
+        const isDone = phase === 'done' || state === 'completed' || state === 'failed';
+        if (isDone) {
+            statusEl.classList.add('done');
+            window.setTimeout(() => {
+                statusEl.classList.remove('active');
+                statusEl.classList.remove('done');
+            }, 1200);
+        } else {
+            statusEl.classList.remove('done');
+        }
+    }
+
+    getOrchestrationStatusContainer() {
+        let statusEl = document.getElementById('mathia-progress-status');
+        if (statusEl) return statusEl;
+
+        const anchor = document.querySelector('.chat-message');
+        if (!anchor || !anchor.parentElement) return null;
+
+        statusEl = document.createElement('div');
+        statusEl.id = 'mathia-progress-status';
+        statusEl.className = 'mathia-progress-status';
+        statusEl.innerHTML = `
+            <div class="mathia-progress-badge">
+                <i class="fas fa-robot"></i>
+                <span>Mathia</span>
+            </div>
+            <div class="mathia-progress-text"></div>
+        `;
+
+        anchor.parentElement.insertBefore(statusEl, anchor);
+        return statusEl;
     }
     checkForTrigger(data) {
         if (data.command !== 'new_message') return;

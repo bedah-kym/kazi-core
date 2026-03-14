@@ -195,17 +195,22 @@ class GmailConnector(BaseConnector):
 
         if response.status_code != 200:
             logger.error("Gmail token refresh failed: %s", response.text)
+            if "invalid_grant" in response.text:
+                await sync_to_async(self._disconnect_integration)(integration)
             return None
 
         payload = response.json()
         access_token = payload.get("access_token")
         expires_in = payload.get("expires_in")
+        rotated_refresh_token = payload.get("refresh_token")
         if not access_token:
             return None
 
         credentials["access_token"] = access_token
         if expires_in:
             credentials["expires_at"] = int(time.time()) + int(expires_in)
+        if rotated_refresh_token:
+            credentials["refresh_token"] = rotated_refresh_token
 
         await sync_to_async(self._save_credentials)(integration, credentials)
         return credentials
@@ -213,4 +218,9 @@ class GmailConnector(BaseConnector):
     def _save_credentials(self, integration: UserIntegration, credentials: Dict[str, Any]) -> None:
         integration.encrypted_credentials = TokenEncryption.encrypt(json.dumps(credentials))
         integration.is_connected = True
+        integration.save(update_fields=["encrypted_credentials", "is_connected", "updated_at"])
+
+    def _disconnect_integration(self, integration: UserIntegration) -> None:
+        integration.is_connected = False
+        integration.encrypted_credentials = None
         integration.save(update_fields=["encrypted_credentials", "is_connected", "updated_at"])

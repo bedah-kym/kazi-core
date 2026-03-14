@@ -190,7 +190,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         # Check if idle nudges are enabled for this user's workspace
         try:
             user = await sync_to_async(User.objects.get)(id=user_id)
-            workspace = user.workspace
+            workspace = await sync_to_async(lambda: user.workspace)()
             if not workspace.should_use_idle_nudges():
                 logger.debug(f"Idle nudges disabled for user {user_id} ({workspace.plan})")
                 return

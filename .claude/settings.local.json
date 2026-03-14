@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep:*)",
+      "Bash(cd:*)",
+      "Bash(python:*)",
+      "WebFetch(domain:docs.claude.com)",
+      "WebSearch",
+      "Bash(for f:*)",
+      "Bash(git status:*)",
+      "Bash(git check-ignore:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
+    ]
+  }
+}

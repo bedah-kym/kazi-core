@@ -1,3 +1,4 @@
 {
-    "chatgpt.openOnStartup": true
+    "chatgpt.openOnStartup": true,
+    "python-envs.defaultEnvManager": "ms-python.python:system"
 }

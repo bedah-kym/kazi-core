@@ -419,6 +419,7 @@ function createMessage(data, roomId, prepend = false) {
     const msgpTag = document.createElement('div');
     const msgTextTag = document.createElement('div');
 
+    let safeHtml = '';
     if (isVoiceMessage && typeof renderVoiceBubble === 'function') {
         renderVoiceBubble(msgTextTag, {
             id: data.id,
@@ -429,7 +430,7 @@ function createMessage(data, roomId, prepend = false) {
     } else {
         // MARKDOWN & SECURITY PROCESSING
         let rawContent = data.content;
-        let safeHtml = rawContent;
+        safeHtml = rawContent;
 
         if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
             try {
@@ -457,7 +458,7 @@ function createMessage(data, roomId, prepend = false) {
         msgTextTag.className = 'message other-message';
     }
 
-    if (data.content.includes('<img') || (safeHtml && safeHtml.includes('<img'))) {
+    if ((hasContent && data.content.includes('<img')) || (safeHtml && safeHtml.includes('<img'))) {
         msgTextTag.classList.add('sentimage');
     }
 

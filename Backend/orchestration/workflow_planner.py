@@ -922,13 +922,95 @@ def _quick_email_decision(message: str) -> Optional[Dict[str, Any]]:
     message_text = _extract_message_text(message)
     if not message_text:
         if _should_email_results(message):
-            return {"mode": "single", "assistant_message": "", "workflow_definition": None}
+            return None
         return {
             "mode": "needs_clarification",
             "assistant_message": _missing_param_message("text"),
             "workflow_definition": None,
         }
     return {"mode": "single", "assistant_message": "", "workflow_definition": None}
+
+
+async def _email_results_decision(
+    message: str,
+    preferences: Optional[Dict[str, Any]] = None,
+    user_id: Optional[int] = None,
+) -> Optional[Dict[str, Any]]:
+    if not message:
+        return None
+    lowered = message.lower()
+    has_delivery = any(token in lowered for token in ("email", "mail", "send"))
+    has_result_action = any(
+        token in lowered for token in ("weather", "forecast", "search", "flight", "hotel", "bus", "transfer", "event")
+    )
+    if not _should_email_results(message) and not (has_delivery and has_result_action):
+        return None
+
+    email = _extract_first_email(message)
+    if not email:
+        return {
+            "mode": "needs_clarification",
+            "assistant_message": _missing_param_message("to"),
+            "workflow_definition": None,
+        }
+
+    if "weather" in lowered or "forecast" in lowered:
+        city = _extract_location(message)
+        if not city:
+            return {
+                "mode": "needs_clarification",
+                "assistant_message": _missing_param_message("city"),
+                "workflow_definition": None,
+            }
+        steps = [
+            {
+                "id": "step_1",
+                "service": "weather",
+                "action": "get_weather",
+                "params": {"city": city},
+            },
+            {
+                "id": "step_2",
+                "service": "gmail",
+                "action": "send_email",
+                "params": {"to": email, "text": _AUTO_EMAIL_SUMMARY_TOKEN},
+            },
+        ]
+        normalized_steps = _normalize_steps(steps, message, preferences=preferences)
+        review = await _review_steps_with_manager(
+            normalized_steps,
+            message,
+            preferences=preferences,
+            user_id=user_id,
+        )
+        if review.get("verdict") != "approve":
+            return {
+                "mode": "needs_clarification",
+                "assistant_message": review.get("assistant_message") or "I need a bit more detail to proceed.",
+                "workflow_definition": None,
+            }
+        reviewed_steps = review.get("steps") or normalized_steps
+        definition = _build_definition(reviewed_steps, message)
+        valid, error = validate_workflow_definition(definition)
+        if not valid:
+            return {
+                "mode": "needs_clarification",
+                "assistant_message": error or "I need a bit more detail to proceed.",
+                "workflow_definition": None,
+            }
+        if _has_high_risk_step(reviewed_steps) and not _looks_like_confirmation(message):
+            return {
+                "mode": "needs_confirmation",
+                "assistant_message": _format_confirmation_message(reviewed_steps),
+                "workflow_definition": definition,
+            }
+        return {"mode": "adhoc_workflow", "assistant_message": "", "workflow_definition": definition}
+
+    return {
+        "mode": "needs_clarification",
+        "assistant_message": "What results should I send?",
+        "workflow_definition": None,
+    }
 
 
 async def _llm_manager_review(message: str, steps: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -1447,10 +1529,6 @@ async def plan_user_request(
             "workflow_definition": None,
         }
 
-    quick_email = _quick_email_decision(message)
-    if quick_email:
-        return quick_email
-
     if should_block_message(message):
         return {
             "mode": "needs_clarification",
@@ -1467,6 +1545,14 @@ async def plan_user_request(
     preferences = preferences or {}
     date_order = preferences.get("date_order")
     time_format = preferences.get("time_format")
+
+    email_results = await _email_results_decision(message, preferences=preferences, user_id=user_id)
+    if email_results:
+        return email_results
+
+    quick_email = _quick_email_decision(message)
+    if quick_email:
+        return quick_email
 
     llm = get_llm_client()
     capabilities_json = json.dumps(SYSTEM_CAPABILITIES, indent=2)

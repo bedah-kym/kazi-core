@@ -10,11 +10,18 @@ class VoiceAssistant {
         this.isRecording = false;
         this.recordingTimer = null;
         this.startTime = 0;
+        this.audioContext = null;
+        this.analyser = null;
+        this.waveformCanvas = null;
+        this.waveformCtx = null;
+        this.waveformAnim = null;
+        this.resizeHandler = null;
 
         // UI Elements
         this.recordBtn = document.getElementById('voice-record-btn');
         this.cancelBtn = document.getElementById('cancel-recording');
         this.overlay = document.getElementById('voice-recording-overlay');
+        this.waveformContainer = document.getElementById('recording-waveform');
         // Guard the timerDisplay and inputGroup in case the fixture or page
         // doesn't include them (tests/headless envs may have a minimal DOM).
         this.timerDisplay = this.overlay ? this.overlay.querySelector('.recording-timer') : null;
@@ -56,6 +63,7 @@ class VoiceAssistant {
             this.isRecording = true;
             this.showOverlay();
             this.startTimer();
+            this.startWaveform(stream);
 
             // Visual feedback
             this.recordBtn.classList.add('recording');
@@ -74,6 +82,7 @@ class VoiceAssistant {
             this.isRecording = false;
             this.hideOverlay();
             this.stopTimer();
+            this.stopWaveform();
 
             this.recordBtn.classList.remove('recording');
             this.recordBtn.innerHTML = '<i class="fas fa-microphone"></i>';
@@ -89,6 +98,7 @@ class VoiceAssistant {
             this.audioChunks = [];
             this.hideOverlay();
             this.stopTimer();
+            this.stopWaveform();
 
             this.recordBtn.classList.remove('recording');
             this.recordBtn.innerHTML = '<i class="fas fa-microphone"></i>';
@@ -119,6 +129,89 @@ class VoiceAssistant {
         }
         const textInput = document.getElementById('chat-message-input');
         if (textInput) textInput.disabled = false;
+    }
+
+    startWaveform(stream) {
+        if (!this.waveformContainer || !(window.AudioContext || window.webkitAudioContext)) {
+            return;
+        }
+        try {
+            this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            this.analyser = this.audioContext.createAnalyser();
+            this.analyser.fftSize = 2048;
+            const source = this.audioContext.createMediaStreamSource(stream);
+            source.connect(this.analyser);
+
+            if (!this.waveformCanvas) {
+                this.waveformCanvas = document.createElement('canvas');
+                this.waveformCanvas.className = 'recording-canvas';
+                this.waveformContainer.innerHTML = '';
+                this.waveformContainer.appendChild(this.waveformCanvas);
+                this.waveformCtx = this.waveformCanvas.getContext('2d');
+            }
+
+            const resizeCanvas = () => {
+                if (!this.waveformCanvas || !this.waveformContainer) return;
+                const width = this.waveformContainer.clientWidth || 240;
+                const height = this.waveformContainer.clientHeight || 32;
+                this.waveformCanvas.width = width;
+                this.waveformCanvas.height = height;
+            };
+            resizeCanvas();
+            this.resizeHandler = resizeCanvas;
+            window.addEventListener('resize', this.resizeHandler);
+
+            const bufferLength = this.analyser.fftSize;
+            const dataArray = new Uint8Array(bufferLength);
+
+            const draw = () => {
+                this.waveformAnim = requestAnimationFrame(draw);
+                if (!this.waveformCtx || !this.waveformCanvas || !this.analyser) return;
+                this.analyser.getByteTimeDomainData(dataArray);
+                const width = this.waveformCanvas.width;
+                const height = this.waveformCanvas.height;
+                this.waveformCtx.clearRect(0, 0, width, height);
+                this.waveformCtx.lineWidth = 2;
+                this.waveformCtx.strokeStyle = '#667eea';
+                this.waveformCtx.beginPath();
+                const sliceWidth = width / bufferLength;
+                let x = 0;
+                for (let i = 0; i < bufferLength; i++) {
+                    const v = dataArray[i] / 128.0;
+                    const y = (v * height) / 2;
+                    if (i === 0) {
+                        this.waveformCtx.moveTo(x, y);
+                    } else {
+                        this.waveformCtx.lineTo(x, y);
+                    }
+                    x += sliceWidth;
+                }
+                this.waveformCtx.lineTo(width, height / 2);
+                this.waveformCtx.stroke();
+            };
+            draw();
+        } catch (err) {
+            console.error('Waveform init failed:', err);
+        }
+    }
+
+    stopWaveform() {
+        if (this.waveformAnim) {
+            cancelAnimationFrame(this.waveformAnim);
+            this.waveformAnim = null;
+        }
+        if (this.resizeHandler) {
+            window.removeEventListener('resize', this.resizeHandler);
+            this.resizeHandler = null;
+        }
+        if (this.waveformCtx && this.waveformCanvas) {
+            this.waveformCtx.clearRect(0, 0, this.waveformCanvas.width, this.waveformCanvas.height);
+        }
+        if (this.audioContext) {
+            this.audioContext.close().catch(() => {});
+            this.audioContext = null;
+            this.analyser = null;
+        }
     }
 
     startTimer() {

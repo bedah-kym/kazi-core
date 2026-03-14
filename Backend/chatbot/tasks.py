@@ -471,7 +471,7 @@ def generate_voice_response(self, message_id):
                 for member in participants:
                     profile = getattr(member.User, "profile", None) if member else None
                     settings_json = profile.notification_preferences if profile and profile.notification_preferences else {}
-                    prefs.append(bool(settings_json.get("ai_voice_enabled", True)))
+                    prefs.append(bool(settings_json.get("ai_voice_enabled", False)))
                 if prefs and not any(prefs):
                     return {"status": "skipped", "reason": "disabled_by_users"}
 

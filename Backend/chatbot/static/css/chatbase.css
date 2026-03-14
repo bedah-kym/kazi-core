@@ -2006,6 +2006,15 @@ body[data-message-density="compact"] .message {
     }
 }
 
+@media (min-width: 769px) {
+    .chat-page .recording-overlay {
+        left: 50%;
+        right: auto;
+        width: min(720px, calc(100% - 40px));
+        transform: translateX(-50%);
+    }
+}
+
 .mathia-progress-status {
     display: none;
     align-items: center;

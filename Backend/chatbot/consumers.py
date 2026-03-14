@@ -1573,8 +1573,15 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                     await sync_to_async(current_chat.save)()
                                     logger.info(f"AI message saved with ID: {ai_message.id}")
                                     
-                                    # Trigger Mathia Voice Response (TTS)
-                                    generate_voice_response.delay(ai_message.id)
+                                    # Trigger Mathia Voice Response (TTS) only in voice mode
+                                    voice_enabled = False
+                                    try:
+                                        prefs = await sync_to_async(get_user_preferences)(member_user.id)
+                                        voice_enabled = bool(prefs.get("ai_voice_enabled", False))
+                                    except Exception as e:
+                                        logger.warning(f"Voice preference check failed: {e}")
+                                    if voice_enabled:
+                                        generate_voice_response.delay(ai_message.id)
                                     
                                     # Broadcast saved message to clients for proper rendering
                                     message_json = await self.message_to_json(ai_message)

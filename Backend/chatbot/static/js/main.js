@@ -380,7 +380,10 @@ if (typeof marked !== 'undefined') {
 
 // FIX: createMessage now accepts roomId parameter and prepend flag
 function createMessage(data, roomId, prepend = false) {
-    if (!data || !data.member || !data.content || !data.timestamp) {
+    const hasAudio = data && data.audio_url && data.audio_url !== "null";
+    const isVoiceMessage = data && (data.is_voice || hasAudio);
+    const hasContent = data && typeof data.content === 'string' && data.content.trim() !== '';
+    if (!data || !data.member || !data.timestamp || (!hasContent && !isVoiceMessage)) {
         console.error('Invalid message data:', data);
         return;
     }
@@ -416,24 +419,33 @@ function createMessage(data, roomId, prepend = false) {
     const msgpTag = document.createElement('div');
     const msgTextTag = document.createElement('div');
 
-    // MARKDOWN & SECURITY PROCESSING
-    let rawContent = data.content;
-    let safeHtml = rawContent;
+    if (isVoiceMessage && typeof renderVoiceBubble === 'function') {
+        renderVoiceBubble(msgTextTag, {
+            id: data.id,
+            audio_url: data.audio_url || '',
+            voice_transcript: data.voice_transcript,
+            member: data.member
+        });
+    } else {
+        // MARKDOWN & SECURITY PROCESSING
+        let rawContent = data.content;
+        let safeHtml = rawContent;
 
-    if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
-        try {
-            const parsedHtml = marked.parse(rawContent);
-            safeHtml = DOMPurify.sanitize(parsedHtml, {
-                ADD_TAGS: ['img', 'code', 'pre'],
-                ADD_ATTR: ['src', 'alt', 'class', 'style', 'target']
-            });
-        } catch (e) {
-            console.error('Markdown processing error:', e);
-            safeHtml = rawContent.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
+            try {
+                const parsedHtml = marked.parse(rawContent);
+                safeHtml = DOMPurify.sanitize(parsedHtml, {
+                    ADD_TAGS: ['img', 'code', 'pre'],
+                    ADD_ATTR: ['src', 'alt', 'class', 'style', 'target']
+                });
+            } catch (e) {
+                console.error('Markdown processing error:', e);
+                safeHtml = rawContent.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+            }
         }
-    }
 
-    msgTextTag.innerHTML = safeHtml;
+        msgTextTag.innerHTML = safeHtml;
+    }
     msgdivtag.innerHTML = data.member;
     msgpTag.innerHTML = time;
 

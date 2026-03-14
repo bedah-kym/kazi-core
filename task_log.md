@@ -9,6 +9,23 @@
 3. Wired Temporal execution with activity routing and schedule triggers.
 4. Connected service-specific webhooks (Calendly, IntaSend) to workflow triggers.
 5. Swapped travel flights/hotels/transfers to Amadeus; gated mock fallbacks behind TRAVEL_ALLOW_FALLBACK.
+
+## Current Session: Mar 14, 2026 - Codex
+**Objective:** Reliability hardening, progress UI, Gmail token stability, async safety.
+
+### Completed
+1. Added deterministic sensitive-request refusal helpers in `Backend/orchestration/security_policy.py` (fixes missing import).
+2. Added progress status UI (non-chat) for orchestration steps in `Backend/chatbot/static/js/ai-assistant.js` and styles in `Backend/chatbot/static/css/chatbase.css`.
+3. Gmail connector improvements:
+   - Persist rotated refresh tokens on refresh.
+   - Disconnect integration on `invalid_grant` to force re-auth.
+4. Async-safe workspace access for idle nudges in `Backend/chatbot/consumers.py`.
+5. Documented Phase 2 hardening + cost-flat LLM routing in `docs/new-capabilities/consistency-reliability-hardening.md`.
+
+### Pending / Follow-ups
+1. Redeploy and reconnect Gmail once for affected users.
+2. (Optional) Add cache-busting for `ai-assistant.js` if progress UI doesn’t update in prod.
+3. Consider adding clearer UI message when Gmail disconnects due to `invalid_grant`.
 6. Implemented itinerary actions: view, add, book.
 7. Added workflow safety policy for withdrawals and system limits.
 8. Added workflow API routes and configuration settings.

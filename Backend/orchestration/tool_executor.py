@@ -166,14 +166,33 @@ async def execute_tool(
     return result
 
 
-def get_tool_risk_info(tool_name: str) -> Dict[str, Any]:
+def get_tool_risk_info(
+    tool_name: str,
+    user_preferences: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """
     Return risk metadata for a tool call. Used by the agent loop
     to decide whether to pause for confirmation.
+
+    Supports user-configurable approval overrides via preferences:
+        preferences.approval_overrides = {"send_email": "auto", "withdraw": "always"}
+        "auto"   → skip confirmation
+        "always" → force confirmation (default for high-risk)
     """
     action = resolve_action_alias(tool_name)
+    catalog_requires = requires_confirmation(action)
+
+    # Check user overrides
+    if user_preferences:
+        overrides = user_preferences.get("approval_overrides") or {}
+        override = overrides.get(action)
+        if override == "auto":
+            catalog_requires = False
+        elif override == "always":
+            catalog_requires = True
+
     return {
         "is_high_risk": is_high_risk_action(action),
-        "requires_confirmation": requires_confirmation(action),
+        "requires_confirmation": catalog_requires,
         "risk_level": (get_action_definition(action) or {}).get("risk_level", "low"),
     }

@@ -71,12 +71,20 @@ from orchestration.memory_state import (
     clear_memory,
 )
 from orchestration.security_policy import should_refuse_sensitive_request, sensitive_refusal_message
+from orchestration.agent_loop import (
+    run_agent_loop,
+    has_pending_agent_state,
+    resume_after_confirmation,
+    cancel_pending_action,
+    AgentEvent,
+)
 from django.conf import settings
 from django.utils.text import get_valid_filename
 logger = logging.getLogger(__name__)
 User = get_user_model()
 PENDING_CONFIRM_TTL_SECONDS = 600
 LAST_SUMMARY_TTL_SECONDS = 60 * 60
+AGENT_LOOP_ENABLED = getattr(settings, "AGENT_LOOP_ENABLED", True)
 
 class ChatConsumer(AsyncWebsocketConsumer):
     # Define constants for key rotation
@@ -1133,6 +1141,81 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                 return False
                             return bool(re.search(r"\b(nudge|suggestion|proactive)\b", lowered))
 
+                        async def _handle_agent_loop(query: str, history: str, ctx_prompt: str, mem_summary: str):
+                            """Run the agentic loop and map AgentEvents to WebSocket frames."""
+                            nonlocal summary_text_for_cache, should_cache_summary
+                            await emit_progress("planning", "started", "Thinking…")
+                            async for event in run_agent_loop(
+                                user_message=query,
+                                context={
+                                    "user_id": member_user.id,
+                                    "room_id": room_id,
+                                    "username": member_username,
+                                    "preferences": user_preferences,
+                                },
+                                preferences=user_preferences,
+                                context_prompt=ctx_prompt,
+                                memory_summary=mem_summary,
+                                history=history if isinstance(history, list) else None,
+                            ):
+                                if event.kind == "text":
+                                    await broadcast_chunk(event.data.get("text", ""))
+                                elif event.kind == "thinking":
+                                    await emit_progress("thinking", "started", "Reasoning…")
+                                    await broadcast_chunk(event.data.get("text", ""))
+                                elif event.kind == "tool_start":
+                                    tool = event.data.get("name", "action")
+                                    await emit_progress("executing", "started", f"Running {tool.replace('_', ' ')}…")
+                                elif event.kind == "tool_result":
+                                    tool = event.data.get("name", "action")
+                                    result = event.data.get("result", {})
+                                    status = result.get("status", "")
+                                    msg = f"{tool.replace('_', ' ')}: {status}"
+                                    await emit_progress("executing", "completed", msg)
+                                elif event.kind == "confirmation":
+                                    await broadcast_chunk(event.data.get("message", "Please confirm."))
+                                    await emit_progress("validating", "completed", "Waiting for confirmation.")
+                                elif event.kind == "error":
+                                    await broadcast_chunk(event.data.get("message", "Something went wrong."))
+                                    await emit_progress("executing", "completed", "Error encountered.")
+                                elif event.kind == "done":
+                                    await emit_progress("done", "completed", "Request complete.")
+
+                        async def _handle_agent_resume(ctx_prompt: str, mem_summary: str):
+                            """Resume a paused agent loop after user confirms."""
+                            nonlocal summary_text_for_cache, should_cache_summary
+                            async for event in resume_after_confirmation(
+                                context={
+                                    "user_id": member_user.id,
+                                    "room_id": room_id,
+                                    "username": member_username,
+                                    "preferences": user_preferences,
+                                },
+                                preferences=user_preferences,
+                                context_prompt=ctx_prompt,
+                                memory_summary=mem_summary,
+                            ):
+                                if event.kind == "text":
+                                    await broadcast_chunk(event.data.get("text", ""))
+                                elif event.kind == "thinking":
+                                    await emit_progress("thinking", "started", "Reasoning…")
+                                    await broadcast_chunk(event.data.get("text", ""))
+                                elif event.kind == "tool_start":
+                                    tool = event.data.get("name", "action")
+                                    await emit_progress("executing", "started", f"Running {tool.replace('_', ' ')}…")
+                                elif event.kind == "tool_result":
+                                    tool = event.data.get("name", "action")
+                                    result = event.data.get("result", {})
+                                    status = result.get("status", "")
+                                    await emit_progress("executing", "completed", f"{tool.replace('_', ' ')}: {status}")
+                                elif event.kind == "confirmation":
+                                    await broadcast_chunk(event.data.get("message", "Please confirm."))
+                                    await emit_progress("validating", "completed", "Waiting for confirmation.")
+                                elif event.kind == "error":
+                                    await broadcast_chunk(event.data.get("message", "Something went wrong."))
+                                elif event.kind == "done":
+                                    await emit_progress("done", "completed", "Request complete.")
+
                         async def _stream_general_chat(query: str, history: str):
                             from orchestration.llm_client import get_llm_client
                             llm_client = get_llm_client()
@@ -1188,6 +1271,26 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             await set_conversation_mode(adaptive_context, "social")
                             await broadcast_chunk("Okay, I will pause tasks for now. Say 'resume' when you are ready.")
                             handled_directive = True
+                        if not handled_directive and re.search(
+                            r"\b(what can you do|what are your (capabilities|tools|features)|"
+                            r"what tools do you have|help me understand|show me your tools)\b",
+                            ai_query, re.IGNORECASE,
+                        ):
+                            from orchestration.action_catalog import ACTION_CATALOG
+                            categories = {}
+                            for action_def in ACTION_CATALOG:
+                                svc = action_def.get("service", "other")
+                                categories.setdefault(svc, []).append(
+                                    f"**{action_def['action'].replace('_', ' ')}** — {action_def.get('description', '')[:80]}"
+                                )
+                            lines = ["Here's what I can help with:\n"]
+                            for svc, actions in sorted(categories.items()):
+                                lines.append(f"\n**{svc.title()}**")
+                                for a in actions:
+                                    lines.append(f"  - {a}")
+                            lines.append("\nI can also **search the web** for information and **delegate complex tasks** to focused sub-assistants.")
+                            await broadcast_chunk("\n".join(lines))
+                            handled_directive = True
 
                         pending = cache.get(pending_key)
                         pending_handled = handled_directive
@@ -1242,6 +1345,27 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                         await clear_task_state(adaptive_context)
                             else:
                                 cache.delete(pending_key)
+
+                        # --- Agent loop confirmation resume ---
+                        if not pending_handled and AGENT_LOOP_ENABLED:
+                            if has_pending_agent_state(room_id, member_user.id):
+                                if is_cancel_request(ai_query):
+                                    cancel_msg = await cancel_pending_action(room_id, member_user.id)
+                                    await broadcast_chunk(cancel_msg or "Okay, cancelled.")
+                                    pending_handled = True
+                                elif looks_like_confirmation(ai_query):
+                                    ctx_prompt = ""
+                                    try:
+                                        ctx_prompt = await sync_to_async(ContextManager.get_context_prompt)(room_id) or ""
+                                    except Exception:
+                                        pass
+                                    mem_sum = await load_memory_summary(adaptive_context) or ""
+                                    await _handle_agent_resume(ctx_prompt, mem_sum)
+                                    pending_handled = True
+                                else:
+                                    # User said something other than yes/no — clear the pending state
+                                    from orchestration.agent_loop import clear_loop_state
+                                    clear_loop_state(room_id, member_user.id)
 
                         if not pending_handled:
                             adaptive_state = await load_task_state(adaptive_context)
@@ -1370,6 +1494,36 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                                     if result.get("status") == "success":
                                                         await clear_task_state(adaptive_context)
                                                     pending_handled = True
+
+                        if not pending_handled and AGENT_LOOP_ENABLED and conversation_mode != "classic":
+                            # --- Agentic loop path ---
+                            _log_telemetry("agent_loop_start", {
+                                "user_id": member_user.id,
+                                "room_id": room_id,
+                            })
+                            ctx_prompt = ""
+                            try:
+                                ctx_prompt = await sync_to_async(ContextManager.get_context_prompt)(room_id) or ""
+                            except Exception:
+                                pass
+                            mem_sum = await load_memory_summary(adaptive_context) or ""
+                            try:
+                                await _handle_agent_loop(
+                                    ai_query,
+                                    history_text,
+                                    ctx_prompt,
+                                    mem_sum,
+                                )
+                            except Exception as agent_exc:
+                                logger.warning(
+                                    "Agent loop failed, falling back to classic pipeline: %s",
+                                    agent_exc,
+                                    exc_info=True,
+                                )
+                                # Fall through to classic path below
+                                pass
+                            else:
+                                pending_handled = True
 
                         if not pending_handled:
                             await emit_progress("planning", "started", "Interpreting your request.")

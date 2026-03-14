@@ -549,7 +549,7 @@ class CalendarConnector(BaseConnector):
 
 
 class SearchConnector(BaseConnector):
-    """Web search connector using LLM capabilities"""
+    """Web search fallback for classic pipeline. Agent loop uses Claude's native web_search tool instead."""
     
     def __init__(self):
         from .llm_client import get_llm_client
@@ -564,7 +564,7 @@ class SearchConnector(BaseConnector):
         query = parameters.get("query")
         
         if not query:
-            return {"error": "No search query provided"}
+            return {"status": "error", "message": "No search query provided"}
 
         # RATE LIMIT CHECK — atomic increment
         if user_id:
@@ -578,9 +578,8 @@ class SearchConnector(BaseConnector):
 
             if current_count > 10:
                 return {
-                    "results": [],
-                    "summary": "Daily search limit reached (10/10). Please try again tomorrow.",
-                    "error": "rate_limit_exceeded"
+                    "status": "error",
+                    "message": "Daily search limit reached (10/10). Please try again tomorrow.",
                 }
 
         if not self.llm.anthropic_key:
@@ -595,10 +594,10 @@ class SearchConnector(BaseConnector):
                 temperature=0.7,
                 model_role="executor",
             )
-            return {"results": [{"title": "Search Result", "snippet": response[:200] + "..."}], "summary": response, "source": "claude_search"}
+            return {"status": "success", "results": [{"title": "Search Result", "snippet": response[:200] + "..."}], "summary": response, "source": "claude_search"}
         except Exception as e:
             logger.error("Search failed: %s", e)
-            return {"results": [{"title": "Error", "snippet": "Search functionality temporarily unavailable."}], "summary": "Search failed."}
+            return {"status": "error", "message": "Search functionality temporarily unavailable."}
 
 
 class WeatherConnector(BaseConnector):

@@ -157,6 +157,10 @@ class IntersendPayConnector(BaseConnector):
             if tx:
                 tx.status = 'COMPLETED'
                 tx.save(update_fields=['status'])
+            if isinstance(response, dict) and "status" not in response:
+                response["status"] = "success"
+            elif not isinstance(response, dict):
+                response = {"status": "success", "data": response}
             return response
 
         except Exception as e:
@@ -181,6 +185,11 @@ class IntersendPayConnector(BaseConnector):
         
         try:
             service = self.intasend.collect
-            return service.status(invoice_id=invoice_id)
+            result = service.status(invoice_id=invoice_id)
+            if isinstance(result, dict) and "status" not in result:
+                result["status"] = "success"
+            elif not isinstance(result, dict):
+                result = {"status": "success", "data": result}
+            return result
         except Exception as e:
             return {"status": "error", "message": str(e)}

@@ -5,6 +5,7 @@ from django.conf import settings
 from ..base_connector import BaseConnector
 from twilio.rest import Client
 from twilio.base.exceptions import TwilioRestException
+from asgiref.sync import sync_to_async
 
 logger = logging.getLogger(__name__)
 
@@ -12,14 +13,14 @@ class WhatsAppConnector(BaseConnector):
     """
     Two-way sync with WhatsApp Business API (via Twilio or Meta Cloud API).
     """
-    
+
     def __init__(self):
         # Allow switching between vendors via env
         self.provider = os.environ.get('WHATSAPP_PROVIDER', 'twilio')
         self.account_sid = os.environ.get('TWILIO_ACCOUNT_SID')
         self.auth_token = os.environ.get('TWILIO_AUTH_TOKEN')
         self.from_number = os.environ.get('TWILIO_FROM_NUMBER') # e.g., 'whatsapp:+254...'
-        
+
         if self.account_sid and self.auth_token:
             self.client = Client(self.account_sid, self.auth_token)
         else:
@@ -37,7 +38,7 @@ class WhatsAppConnector(BaseConnector):
         except Exception as e:
             logger.error(f"WhatsApp Validation Error: {e}")
             return False, str(e)
-            
+
     def send_test_message(self, to, account_sid, auth_token, from_number):
         """
         Send a test message using provided credentials (not the env vars).
@@ -45,7 +46,7 @@ class WhatsAppConnector(BaseConnector):
         try:
             temp_client = Client(account_sid, auth_token)
             to_number = to if to.startswith('whatsapp:') else f"whatsapp:{to}"
-            
+
             message = temp_client.messages.create(
                 from_=from_number,
                 to=to_number,
@@ -53,35 +54,39 @@ class WhatsAppConnector(BaseConnector):
             )
             return {"status": "sent", "sid": message.sid}
         except Exception as e:
-             return {"error": str(e)}
+             return {"status": "error", "message": str(e)}
 
     async def execute(self, parameters: dict, context: dict) -> dict:
         """
         Execute a WhatsApp action.
         """
         action = parameters.get("action")
-        
+
         if action in ("send_message", "send_whatsapp"):
-            return self.send_message(
+            return await self._send_message_async(
                 to=parameters.get("phone_number"),
                 body=parameters.get("message"),
                 media_url=parameters.get("media_url")
             )
         elif action == "send_invoice":
             # Just a wrapper for sending a message with payment link
-            return self.send_message(
+            return await self._send_message_async(
                 to=parameters.get("phone_number"),
                 body=parameters.get("message") or f"Hello, here is your invoice: {parameters.get('payment_link')}"
             )
         elif action == "get_templates":
-            return {"templates": ["hello_world", "payment_reminder", "shipping_update"]} # Mock for now
-            
-        return {"error": f"Unknown WhatsApp action: {action}"}
+            return {"status": "success", "templates": ["hello_world", "payment_reminder", "shipping_update"]} # Mock for now
 
-    def send_message(self, to, body, media_url=None):
+        return {"status": "error", "message": f"Unknown WhatsApp action: {action}"}
+
+    async def _send_message_async(self, to, body, media_url=None):
+        """Async wrapper around the sync Twilio send."""
+        return await sync_to_async(self._send_message_sync)(to, body, media_url)
+
+    def _send_message_sync(self, to, body, media_url=None):
         # Basic validation
         if not to or not body:
-            return {"error": "phone_number and message are required"}
+            return {"status": "error", "message": "phone_number and message are required"}
 
         if settings.DEBUG and not self.client:
              # Mock mode for dev
@@ -92,7 +97,7 @@ class WhatsAppConnector(BaseConnector):
             try:
                 # Ensure 'to' number is in whatsapp format
                 to_number = to if isinstance(to, str) and to.startswith('whatsapp:') else f"whatsapp:{to}"
-                
+
                 msg_args = {
                     'from_': self.from_number,
                     'to': to_number,
@@ -102,18 +107,18 @@ class WhatsAppConnector(BaseConnector):
                     msg_args['media_url'] = [media_url]
 
                 message = self.client.messages.create(**msg_args)
-                
+
                 return {
-                    "status": "sent", 
-                    "sid": message.sid, 
+                    "status": "sent",
+                    "sid": message.sid,
                     "error_code": message.error_code,
                     "error_message": message.error_message
                 }
             except TwilioRestException as e:
                 logger.error(f"Twilio API Error: {e}")
-                return {"error": f"Twilio Error: {e.msg}", "code": e.code}
+                return {"status": "error", "message": f"Twilio Error: {e.msg}", "code": e.code}
             except Exception as e:
                 logger.error(f"WhatsApp Connector Error: {str(e)}")
-                return {"error": str(e)}
+                return {"status": "error", "message": str(e)}
         else:
-            return {"error": "Unsupported WhatsApp provider or missing credentials"}
+            return {"status": "error", "message": "Unsupported WhatsApp provider or missing credentials"}

@@ -71,10 +71,10 @@ Transform Mathia from an **intent-classification + routing** system into a **ful
 - This replaces the need for intent_parser + mcp_router for tool calls
 
 ### Deliverables
-- [ ] `tool_schemas.py` with `get_tool_definitions(user_id) -> List[Dict]`
-- [ ] Enriched ACTION_CATALOG with param descriptions and return descriptions
-- [ ] `tool_executor.py` with `execute_tool(name, input, context) -> Dict`
-- [ ] Unit tests for schema generation and tool execution
+- [x] `tool_schemas.py` with `get_tool_definitions(user_id) -> List[Dict]`
+- [x] Enriched ACTION_CATALOG with param descriptions and return descriptions
+- [x] `tool_executor.py` with `execute_tool(name, input, context) -> Dict`
+- [x] Unit tests for schema generation and tool execution (in `tests/test_agentic.py`)
 
 ---
 
@@ -148,11 +148,12 @@ Transform Mathia from an **intent-classification + routing** system into a **ful
 - **Key:** `orchestration:agent_state:{room_id}:{user_id}` in Redis with 10-min TTL
 
 ### Deliverables
-- [ ] `agent_loop.py` with `run_agent_loop()` async generator
-- [ ] `agent_prompts.py` with system prompt builder
-- [ ] Confirmation pause/resume via Redis state
-- [ ] Iteration and cost limits
-- [ ] Unit tests for loop mechanics (mock LLM + mock tools)
+- [x] `agent_loop.py` with `run_agent_loop()` async generator
+- [x] `agent_prompts.py` with system prompt builder
+- [x] Confirmation pause/resume via Redis state
+- [x] Iteration and cost limits
+- [x] `llm_client.py` — `create_message()` and `stream_message()` with tool_use support
+- [x] Unit tests for loop mechanics (in `tests/test_agentic.py` and `tests/test_agentic_scenarios.py`)
 
 ---
 
@@ -193,11 +194,11 @@ Transform Mathia from an **intent-classification + routing** system into a **ful
 - But now the agent can continue executing more tools after confirmation
 
 ### Deliverables
-- [ ] Modified `consumers.py` with agent loop integration
-- [ ] Feature flag for gradual rollout
-- [ ] Backward-compatible fallback to current pipeline
-- [ ] Streaming callbacks wired through
-- [ ] Confirmation pause/resume working end-to-end
+- [x] Modified `consumers.py` with agent loop integration
+- [x] Feature flag for gradual rollout (`AGENT_LOOP_ENABLED`, default True)
+- [x] Backward-compatible fallback to current pipeline (on exception or `conversation_mode == "classic"`)
+- [x] Streaming callbacks wired through (`_handle_agent_loop` maps AgentEvents → broadcast_chunk/emit_progress)
+- [x] Confirmation pause/resume working end-to-end (agent state in Redis, resume on "yes", cancel on "cancel")
 
 ---
 
@@ -240,11 +241,14 @@ Transform Mathia from an **intent-classification + routing** system into a **ful
 - Record action receipts for all tool calls (already implemented)
 
 ### Deliverables
-- [ ] Tool result observation working in loop
-- [ ] Error recovery with retry logic
-- [ ] End-to-end multi-tool chaining tests
-- [ ] Memory updates after tool execution
-- [ ] At least 5 complex multi-step scenarios tested
+- [x] Tool result observation working in loop (results appended as tool_result messages, LLM decides next step)
+- [x] Error recovery with retry logic (MAX_RETRIES_PER_TOOL=2, retry_counts tracked in LoopState)
+- [x] Tool timeout handling (30s per tool via asyncio.wait_for)
+- [x] Memory updates after tool execution (update_memory_state + save_memory_summary on loop completion)
+- [x] Action receipt recording for audit trail (_record_receipt after each tool call)
+- [x] Enhanced system prompt with observation, error recovery, and multi-step chaining instructions
+- [x] End-to-end multi-tool chaining tests (in `tests/test_agentic_scenarios.py`)
+- [x] 11 complex multi-step scenarios tested
 
 ---
 
@@ -288,11 +292,11 @@ Transform Mathia from an **intent-classification + routing** system into a **ful
   - Calls create_payment_link with extracted data
 
 ### Deliverables
-- [ ] Parallel tool execution via asyncio.gather
-- [ ] Reasoning transparency in stream
-- [ ] Sub-agent delegation for complex tasks
-- [ ] Temporal handoff for long-running work
-- [ ] Document-aware tool calls
+- [x] Parallel tool execution via asyncio.gather (done in Phase 4)
+- [x] Reasoning transparency in stream (`"thinking"` AgentEvent when LLM explains before tool calls)
+- [x] Sub-agent delegation (`delegate_task` meta-tool spawns focused sub-loop with scoped tools, 5 iter / 8 call limits)
+- [x] Temporal handoff (`handoff_to_workflow` meta-tool creates Workflow + starts Temporal execution)
+- [x] Document-aware tool calls (already flows via ContextManager → context_prompt → system prompt)
 
 ---
 
@@ -330,10 +334,11 @@ Transform Mathia from an **intent-classification + routing** system into a **ful
 - Hard cap prevents runaway loops
 
 ### Deliverables
-- [ ] Native tool_use in llm_client.py for Anthropic
-- [ ] Prompt caching for system + tools
-- [ ] Model routing (Sonnet vs Haiku)
-- [ ] Per-loop token tracking
+- [x] Native tool_use in llm_client.py for Anthropic (done in Phase 2: create_message + stream_message)
+- [x] Prompt caching — `cache_control: {"type": "ephemeral"}` on system prompt via `use_prompt_cache=True`
+- [x] Model routing — Haiku for simple first-turn requests (≤25 words, no multi-step), Sonnet for complex/multi-turn
+- [x] Per-loop token tracking — `tokens_used` in LoopState, hard cap at 50K, warning at 80%
+- [x] Claude native web search — replaces SearchConnector with `web_search_20250305` server-side tool, rate-limited to 10/day
 
 ---
 
@@ -373,11 +378,11 @@ Transform Mathia from an **intent-classification + routing** system into a **ful
 - User can disable specific tools: "don't use whatsapp"
 
 ### Deliverables
-- [ ] Approval policies enforced in tool_executor
-- [ ] Loop guardrails (iterations, time, dedup)
-- [ ] Full audit trail per loop
-- [ ] Injection protection on tool inputs and results
-- [ ] User interrupt and mode switching
+- [x] Approval policies enforced in tool_executor + user-configurable overrides via `approval_overrides` in preferences
+- [x] Loop guardrails — iterations, time, token budget, dedup with cached result return
+- [x] Full audit trail — loop transcript (tool, input, status, iteration) in telemetry event
+- [x] Injection protection — `_sanitize_tool_result()` caps size (8K chars) and strips injection patterns from tool outputs
+- [x] User interrupt — cancel/stop handled, mode switching, "what can you do?" capabilities query
 
 ---
 
@@ -413,29 +418,31 @@ Transform Mathia from an **intent-classification + routing** system into a **ful
 - Cross-user data isolation
 
 ### Deliverables
-- [ ] Unit test suite for all new modules
-- [ ] Integration test suite
-- [ ] 10+ scenario tests documented and passing
-- [ ] Safety test suite
+- [x] Unit test suite — `tests/test_agentic.py` (30+ tests covering tool_schemas, tool_executor, agent_prompts, model selection, web search rate limits, token tracking, confirmation state, dedup, sanitization, meta-tools)
+- [x] Scenario test suite — `tests/test_agentic_scenarios.py` (11 scenario tests with mock LLM + mock tools)
+- [x] Scenarios covered: simple tool, multi-tool chain, error recovery, iteration limit, token budget, parallel tools, confirmation pause, injection protection, cancel pending, general chat, thinking transparency
+- [x] Safety tests: injection in tool results, prompt injection detection, result size capping
 
 ---
 
 ## Implementation Order & Dependencies
 
 ```
-Phase 1 (Tool Schemas)          ← No dependencies, start here
+Phase 1 (Tool Schemas)          ✅ COMPLETE
     |
-Phase 2 (Agent Loop Core)      ← Depends on Phase 1
+Phase 2 (Agent Loop Core)      ✅ COMPLETE
     |
-Phase 3 (Consumer Integration) ← Depends on Phase 2
+Phase 3 (Consumer Integration) ✅ COMPLETE
     |
-Phase 4 (Observation)          ← Depends on Phase 3
+Phase 4 (Observation)          ✅ COMPLETE
     |          |
-Phase 6 (LLM)  Phase 7 (Safety)  ← Can run in parallel
+Phase 6 (LLM)  Phase 7 (Safety)  ✅ COMPLETE (both)
     |          |
-Phase 5 (Advanced)             ← Depends on Phase 4
+Phase 5 (Advanced)             ✅ COMPLETE
     |
-Phase 8 (Testing)              ← Depends on all phases
+Phase 8 (Testing)              ✅ COMPLETE
+
+ALL PHASES COMPLETE — Mathia is now fully agentic.
 ```
 
 ## Estimated Effort Per Phase

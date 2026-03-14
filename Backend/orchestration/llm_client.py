@@ -247,6 +247,226 @@ class LLMClient:
 
         raise Exception("No valid API keys configured for Anthropic or Hugging Face.")
 
+    # ------------------------------------------------------------------ #
+    #  Agent loop methods — full Messages API with tool_use support       #
+    # ------------------------------------------------------------------ #
+
+    async def create_message(
+        self,
+        *,
+        messages: List[Dict[str, Any]],
+        system: str = "",
+        tools: Optional[List[Dict[str, Any]]] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        user_id: Optional[int] = None,
+        model: Optional[str] = None,
+        use_prompt_cache: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Call the Anthropic Messages API with full tool_use support.
+
+        Args:
+            model: Override model (e.g. "claude-haiku-4-5-20251001" for simple tasks).
+            use_prompt_cache: If True, wraps the system prompt with cache_control
+                for Anthropic prompt caching (~90% cost reduction on cached tokens).
+
+        Returns the raw response dict with keys:
+            content: List of content blocks (text and/or tool_use)
+            stop_reason: "end_turn" | "tool_use" | "max_tokens"
+            usage: {input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens}
+        """
+        if not self.anthropic_key:
+            raise Exception("Anthropic API key is not configured.")
+
+        estimated_tokens = sum(
+            self._estimate_tokens(
+                m.get("content") if isinstance(m.get("content"), str) else str(m.get("content", ""))
+            )
+            for m in messages
+        ) + self._estimate_tokens(system)
+
+        if not await self._check_token_quota(estimated_tokens, user_id):
+            raise Exception(
+                f"LLM token quota exceeded for user {user_id}. "
+                f"Please try again later."
+            )
+
+        body: Dict[str, Any] = {
+            "model": model or self.claude_model,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "messages": messages,
+        }
+        if system:
+            if use_prompt_cache:
+                # Structured system prompt with cache_control for prompt caching
+                body["system"] = [
+                    {
+                        "type": "text",
+                        "text": system,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ]
+            else:
+                body["system"] = system
+        if tools:
+            body["tools"] = tools
+
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.post(
+                self.anthropic_url,
+                headers={
+                    "x-api-key": self.anthropic_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json=body,
+            )
+            if response.status_code != 200:
+                raise Exception(f"Anthropic Error {response.status_code}: {response.text}")
+
+            data = response.json()
+
+        output_tokens = data.get("usage", {}).get("output_tokens", 0)
+        input_tokens = data.get("usage", {}).get("input_tokens", 0)
+        self._record_token_usage(input_tokens + output_tokens, user_id)
+
+        return data
+
+    async def stream_message(
+        self,
+        *,
+        messages: List[Dict[str, Any]],
+        system: str = "",
+        tools: Optional[List[Dict[str, Any]]] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        user_id: Optional[int] = None,
+    ):
+        """
+        Stream from Anthropic Messages API with tool_use support.
+
+        Yields event dicts:
+            {"type": "text", "text": "..."}
+            {"type": "tool_use_start", "id": "...", "name": "..."}
+            {"type": "tool_use_input", "partial_json": "..."}
+            {"type": "tool_use_end", "id": "...", "name": "...", "input": {...}}
+            {"type": "message_done", "stop_reason": "...", "usage": {...}}
+        """
+        if not self.anthropic_key:
+            raise Exception("Anthropic API key is not configured.")
+
+        body: Dict[str, Any] = {
+            "model": self.claude_model,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "messages": messages,
+            "stream": True,
+        }
+        if system:
+            body["system"] = system
+        if tools:
+            body["tools"] = tools
+
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            async with client.stream(
+                "POST",
+                self.anthropic_url,
+                headers={
+                    "x-api-key": self.anthropic_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json=body,
+            ) as response:
+                if response.status_code != 200:
+                    error_body = await response.aread()
+                    raise Exception(
+                        f"Anthropic Stream Error {response.status_code}: {error_body}"
+                    )
+
+                # Track active content blocks by index
+                active_blocks: Dict[int, Dict[str, Any]] = {}
+                accumulated_json: Dict[int, str] = {}
+
+                async for line in response.aiter_lines():
+                    if not line or not line.startswith("data: "):
+                        continue
+                    payload = line[6:]
+                    if payload.strip() == "[DONE]":
+                        break
+
+                    try:
+                        event = json.loads(payload)
+                    except Exception:
+                        continue
+
+                    event_type = event.get("type", "")
+
+                    if event_type == "content_block_start":
+                        idx = event.get("index", 0)
+                        block = event.get("content_block", {})
+                        active_blocks[idx] = block
+                        if block.get("type") == "tool_use":
+                            accumulated_json[idx] = ""
+                            yield {
+                                "type": "tool_use_start",
+                                "id": block.get("id", ""),
+                                "name": block.get("name", ""),
+                            }
+
+                    elif event_type == "content_block_delta":
+                        idx = event.get("index", 0)
+                        delta = event.get("delta", {})
+                        delta_type = delta.get("type", "")
+
+                        if delta_type == "text_delta":
+                            text = delta.get("text", "")
+                            if text:
+                                yield {"type": "text", "text": text}
+
+                        elif delta_type == "input_json_delta":
+                            partial = delta.get("partial_json", "")
+                            if idx in accumulated_json:
+                                accumulated_json[idx] += partial
+                            yield {
+                                "type": "tool_use_input",
+                                "partial_json": partial,
+                            }
+
+                    elif event_type == "content_block_stop":
+                        idx = event.get("index", 0)
+                        block = active_blocks.get(idx, {})
+                        if block.get("type") == "tool_use":
+                            raw_json = accumulated_json.pop(idx, "{}")
+                            try:
+                                parsed_input = json.loads(raw_json)
+                            except Exception:
+                                parsed_input = {}
+                            yield {
+                                "type": "tool_use_end",
+                                "id": block.get("id", ""),
+                                "name": block.get("name", ""),
+                                "input": parsed_input,
+                            }
+
+                    elif event_type == "message_delta":
+                        delta = event.get("delta", {})
+                        usage = event.get("usage", {})
+                        yield {
+                            "type": "message_done",
+                            "stop_reason": delta.get("stop_reason", ""),
+                            "usage": usage,
+                        }
+
+                    elif event_type == "message_stop":
+                        pass  # Already handled via message_delta
+
+    # ------------------------------------------------------------------ #
+    #  Original methods (kept for backward compatibility)                 #
+    # ------------------------------------------------------------------ #
+
     async def _call_claude(self, system_prompt: str, user_prompt: str, temperature: float, max_tokens: int, model_name: Optional[str] = None) -> str:
         """Call Anthropic API"""
         async with httpx.AsyncClient(timeout=30.0) as client:

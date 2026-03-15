@@ -1765,12 +1765,13 @@ em-emoji-picker {
     opacity: 0;
     padding: 12px;
     color: var(--text-color);
-    pointer-events: auto;
+    pointer-events: none;
 }
 
 .mini-settings.open {
     transform: translateY(0) scale(1);
     opacity: 1;
+    pointer-events: auto;
 }
 
 .mini-settings-header {

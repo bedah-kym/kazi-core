@@ -60,10 +60,12 @@
     overflow: hidden;
     display: flex;
     flex-direction: column;
+    pointer-events: none;
 }
 
 .context-panel.open {
     right: 0;
+    pointer-events: auto;
 }
 
 .context-panel-toggle {

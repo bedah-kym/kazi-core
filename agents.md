@@ -3,7 +3,9 @@
 
 ## Overview
 
-Mathia.OS is an AI-powered operating system that uses an **LLM-first orchestration loop** to handle user requests across social media, finance, travel, and productivity domains. The system follows a three-stage pipeline: **Parse → Route → Execute**, with safety gates, multi-turn state, and streaming responses throughout.
+Mathia.OS is an AI-powered operating system built on a **fully agentic ReAct loop** — the LLM autonomously reasons, selects tools, observes results, and iterates until the task is complete. The system handles requests across communication, finance, travel, and productivity domains with dynamic multi-tool chaining, self-correction, and parallel execution.
+
+A legacy "classic" pipeline (Parse → Route → Execute) is retained as a fallback, controlled by the `AGENT_LOOP_ENABLED` feature flag.
 
 ---
 
@@ -24,33 +26,47 @@ Orchestration Decision Gate
      ├── @mathia mention OR AI room → Route to AI
      │
      ▼
-┌─────────────────────────────────────────────┐
-│            ORCHESTRATION PIPELINE           │
-│                                             │
-│  1. ContextManager.get_context_prompt()     │
-│     └── 3-tier memory (hot/notes/daily)     │
-│                                             │
-│  2. plan_user_request()                     │
-│     ├── general_chat → LLM stream           │
-│     ├── needs_clarification → ask user      │
-│     ├── structured_action → intent pipeline │
-│     └── automation_request → workflow agent  │
-│                                             │
-│  3. IntentParser.parse()                    │
-│     └── LLM → JSON intent + confidence      │
-│                                             │
-│  4. MCPRouter.route()                       │
-│     ├── Security & rate limit checks        │
-│     ├── Confidence gates                    │
-│     ├── Dialog state merging                │
-│     └── Connector dispatch                  │
-│                                             │
-│  5. Connector.execute()                     │
-│     └── Gmail, WhatsApp, Payments, Travel…  │
-│                                             │
-│  6. Response synthesis & streaming          │
-│     └── Buffered chunks → WebSocket         │
-└─────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│              AGENTIC ORCHESTRATION                   │
+│                                                      │
+│  1. ContextManager.get_context_prompt()              │
+│     └── 3-tier memory (hot/notes/daily)              │
+│                                                      │
+│  2. Agent Loop (agent_loop.py)                       │
+│     ┌──────────────────────────────────────┐         │
+│     │  messages = [system, history, user]  │         │
+│     │  tools = get_tool_definitions(user)  │         │
+│     │                                      │         │
+│     │  while iterations < MAX (10):        │         │
+│     │    response = LLM(messages, tools)   │         │
+│     │                                      │         │
+│     │    if end_turn → stream final text   │         │
+│     │                                      │         │
+│     │    if tool_use:                       │         │
+│     │      ├── safety gate (confirm?)      │         │
+│     │      ├── execute_tool()              │         │
+│     │      ├── append result to messages   │         │
+│     │      └── stream progress to user     │         │
+│     │                                      │         │
+│     │    → loop back (LLM sees results)    │         │
+│     └──────────────────────────────────────┘         │
+│                                                      │
+│  3. Tool Executor (tool_executor.py)                 │
+│     ├── Resolves tool → connector                    │
+│     ├── Security policy + capability gates           │
+│     ├── Confirmation gates (high-risk)               │
+│     ├── Dedup (cached results for same input)        │
+│     └── Connector.execute()                          │
+│                                                      │
+│  4. Streaming (callbacks → WebSocket)                │
+│     ├── Text chunks → broadcast_chunk()              │
+│     ├── Thinking events → emit_progress()            │
+│     ├── Tool call events → emit_progress()           │
+│     └── Final response → broadcast_chunk(final)      │
+│                                                      │
+│  FALLBACK (conversation_mode == "classic"):          │
+│     plan_user_request() → IntentParser → MCPRouter   │
+└──────────────────────────────────────────────────────┘
      │
      ▼
 Client receives ai_stream frames
@@ -60,101 +76,156 @@ Client receives ai_stream frames
 
 ## Core Agent Components
 
-### 1. Intent Parser (`orchestration/intent_parser.py`)
+### 1. Agent Loop (`orchestration/agent_loop.py`) — PRIMARY
 
-**Purpose:** Convert natural language into structured JSON intents.
+**Purpose:** ReAct-style autonomous agent loop — the core orchestration engine. Replaces the old parse→route→done pipeline.
 
-- **Class:** `IntentParser` (singleton, thread-safe)
+- **Entry point:** `run_agent_loop(message, context, on_chunk, on_tool_call) → AsyncGenerator[AgentEvent]`
+- **Architecture:** Think → Act → Observe → Think (iterative)
+- **LLM:** Claude Sonnet 4.6 (complex/multi-turn) or Claude Haiku 4.5 (simple first-turn, ≤25 words)
+
+**Loop Mechanics:**
+1. Build messages array: system prompt + conversation history + user message
+2. Attach tool definitions filtered by user capability gates
+3. Call LLM with tools → inspect stop_reason
+4. `end_turn` → stream final text, done
+5. `tool_use` → safety gate → execute tool → append result → loop back
+6. LLM sees results and decides next action autonomously
+
+**Guardrails:**
+| Limit | Value |
+|-------|-------|
+| Max iterations | 10 |
+| Max tool calls | 15 per loop |
+| Wall clock timeout | 120 seconds |
+| Token budget | 50K per loop (warning at 80%) |
+| Tool timeout | 30 seconds per tool |
+| Max retries per tool | 2 |
+| Dedup | Identical tool+input returns cached result |
+
+**AgentEvent Types:** `thinking`, `tool_call`, `tool_result`, `text_chunk`, `confirmation_needed`, `error`, `done`
+
+**Confirmation Pause/Resume:**
+- High-risk tools pause the loop, store state in Redis (`orchestration:agent_state:{room_id}:{user_id}`, 10-min TTL)
+- User confirms → loop resumes from stored state
+- User cancels → loop terminates gracefully
+
+---
+
+### 2. Tool Schema Layer (`orchestration/tool_schemas.py`)
+
+**Purpose:** Convert ACTION_CATALOG entries into Claude-compatible tool definitions.
+
+- **Entry point:** `get_tool_definitions(user_id) → List[Dict]`
+- Generates schemas dynamically from ACTION_CATALOG (single source of truth)
+- Filters tools by user capability gates (allow_email, allow_travel, etc.)
+- Rich `description` fields on every parameter so the LLM knows what to pass
+
+---
+
+### 3. Tool Executor (`orchestration/tool_executor.py`)
+
+**Purpose:** Execute tool calls with safety checks, routing, and audit.
+
+- **Entry point:** `execute_tool(tool_name, tool_input, context) → Dict`
+- Resolves tool_name → connector (reuses existing connector map)
+- Enforces: security policy, capability gates, approval policies, rate limits
+- User-configurable approval overrides via `approval_overrides` in preferences
+- Sanitizes tool results: caps at 8K chars, strips injection patterns
+- Records action receipts for audit trail
+- Returns standardized result dict
+
+---
+
+### 4. Agent System Prompt (`orchestration/agent_prompts.py`)
+
+**Purpose:** Build the system prompt that instructs the agent LLM.
+
+**Injected Context:**
+- Agent identity and capabilities
+- Available tools and their descriptions
+- User preferences (tone, verbosity, locale)
+- Memory context (entities, recent actions, notes)
+- Conversation history
+- Uploaded document text
+- Instructions for: observation, error recovery, multi-step chaining, confirmation behavior
+
+**Prompt Caching:** `cache_control: {"type": "ephemeral"}` on system prompt block for ~90% cost savings on cached tokens.
+
+---
+
+### 5. Meta-Tools (Advanced Capabilities)
+
+**Sub-Agent Delegation (`delegate_task`):**
+- Spawns a focused sub-loop with scoped tool set
+- Limits: 5 iterations, 8 tool calls
+- Shares parent's token budget
+- Use case: complex tasks like full trip planning (flights sub-loop + hotels sub-loop + itinerary)
+
+**Temporal Handoff (`handoff_to_workflow`):**
+- Creates a Workflow + starts Temporal execution for long-running async tasks
+- Use case: "Monitor this payment and notify me when it completes"
+- Bridges synchronous agent loop with durable async workflows
+
+**Claude Web Search:**
+- Native `web_search_20250305` server-side tool (replaces SearchConnector)
+- Rate-limited to 10/day per user
+
+---
+
+### 6. LLM Client (`orchestration/llm_client.py`)
+
+**Purpose:** Unified LLM interface with native tool_use support, dual-provider fallback, and token budgets.
+
+**Providers & Model Routing:**
+| Complexity | Model | When |
+|------------|-------|------|
+| Simple (≤25 words, single tool) | Claude Haiku 4.5 | First-turn, clear intent |
+| Complex / multi-turn | Claude Sonnet 4.6 | Multi-step, ambiguous, follow-ups |
+| Fallback | Llama 3.1 8B (HuggingFace) | When Anthropic unavailable |
+
+**Tool Use Support:**
+- `create_message(messages, tools)` — synchronous with tool_use handling
+- `stream_message(messages, tools)` — async streaming with tool_use blocks
+
+**Token Budget:** 50K tokens/user/hour (atomic increment in cache). Per-loop tracking with hard cap and 80% warning.
+
+**Prompt Caching:** System prompt + tool definitions cached via `use_prompt_cache=True`.
+
+**Caching:** SHA256 hash of (system + user + temp + max_tokens + json_mode + user_id + room_id). TTL 600s.
+
+---
+
+### 7. Intent Parser (`orchestration/intent_parser.py`) — FALLBACK ONLY
+
+**Status:** Retained for "classic" mode fallback. Not used in agentic mode.
+
+**Purpose:** Convert natural language into structured JSON intents (legacy pipeline).
+
 - **Entry point:** `parse_intent(message, user_context) → Dict`
-- **LLM:** Claude 3 Sonnet at temperature 0.1 (deterministic)
-- **Output format:**
-  ```json
-  {
-    "action": "search_hotels",
-    "confidence": 0.85,
-    "parameters": { "location": "Nairobi", "check_in_date": "2026-12-25" },
-    "missing_slots": [],
-    "clarifying_question": "",
-    "raw_query": "original message"
-  }
-  ```
-
-**Confidence Adjustment:**
-| Factor | Adjustment |
-|--------|-----------|
-| Missing required param | -0.20 each |
-| Missing optional param | -0.05 each |
-| Context can infer value | +0.10 each |
-| Final range | Clamped to [0.0, 1.0] |
-
-**Personalization (Phase 3C):** Loads user correction history to customize system prompt (e.g., "user typically travels with 4 passengers").
-
-**Fallback:** Rule-based email regex detection when confidence < 0.45.
+- Used when `conversation_mode == "classic"` or agent loop fails
 
 ---
 
-### 2. MCP Router (`orchestration/mcp_router.py`)
+### 8. MCP Router (`orchestration/mcp_router.py`) — SIMPLIFIED
 
-**Purpose:** Validate, gate, and dispatch intents to the correct connector.
+**Status:** Routing logic replaced by tool_executor. Safety/state logic retained.
 
-- **Class:** `MCPRouter` (singleton, thread-safe)
-- **Entry point:** `route_intent(intent, user_context) → Dict`
-
-**Pipeline:**
-1. **Validate** — rate limits (100/hr per user), security policy, capability gates
-2. **Missing params** — asks clarification for high-risk actions with missing required params
-3. **Confidence gates:**
-   - `>= 0.75` → execute directly
-   - `< 0.75` + high-risk → ask clarification
-   - `< 0.45` → fallback/reject
-4. **Dialog state merge** — reuses params from previous turn (6-hour TTL in Redis)
-5. **Connector dispatch** → execute action
-6. **Cache result** — Redis, 5-minute TTL
+**Retained features:** Rate limits, security policy, dialog state cache (6-hour TTL), connector dispatch.
 
 ---
 
-### 3. LLM Client (`orchestration/llm_client.py`)
+### RETIRED Components
 
-**Purpose:** Unified LLM interface with dual-provider fallback and token budgets.
-
-**Providers:**
-| Role | Primary | Fallback |
-|------|---------|----------|
-| Planner (parsing) | Claude 3 Sonnet (Anthropic) | Llama 3.1 8B (HuggingFace) |
-| Executor | Llama 3.1 8B (HuggingFace) | Claude 3 Sonnet (Anthropic) |
-
-**Token Budget:** 50K tokens/user/hour (atomic increment in cache). Estimated at ~4 chars/token. Checked before each request.
-
-**Caching:** SHA256 hash of (system + user + temp + max_tokens + json_mode + user_id + room_id). TTL 600s. Only caches low-temperature or JSON-mode requests.
-
-**Streaming:** Async generators for both Claude (SSE content_block_delta) and HuggingFace (OpenAI-compatible).
+| Component | Replacement |
+|-----------|-------------|
+| `workflow_planner.py` (ad-hoc planning) | Agent loop — LLM plans dynamically step-by-step |
+| `data_synthesizer.py` | Agent loop — LLM synthesizes responses natively |
+| `manager_verifier.py` | Agent loop — self-verification via observation |
 
 ---
 
-### 4. Workflow Planner (`orchestration/workflow_planner.py`)
-
-**Purpose:** Break multi-step natural language requests into executable step sequences.
-
-**Process:**
-1. Parse message for workflow intent (delimiters: "then", "and then", "next")
-2. Break into up to 7 steps
-3. Determine service & action per step using alias maps
-4. LLM fills parameters for each step
-5. Execute sequentially or in parallel
-
-**Confidence Thresholds:**
-| Range | Behavior |
-|-------|----------|
-| >= 0.85 | Auto-execute |
-| 0.60 – 0.85 | Ask one clarifying question |
-| 0.40 – 0.60 | Ask all missing details |
-| < 0.20 | Reject, ask to rephrase |
-
-**Idempotency:** 90-second cache per workflow hash prevents duplicate submissions.
-
----
-
-### 5. Workflow Agent (`workflows/workflow_agent.py`)
+### 9. Workflow Agent (`workflows/workflow_agent.py`)
 
 **Purpose:** LLM-based conversational agent for creating multi-step workflow definitions through chat.
 
@@ -164,7 +235,7 @@ Client receives ai_stream frames
 
 ---
 
-### 6. Temporal Integration (`workflows/temporal_integration.py`)
+### 10. Temporal Integration (`workflows/temporal_integration.py`)
 
 **Purpose:** Durable, scheduled, and webhook-triggered workflow execution.
 
@@ -185,7 +256,7 @@ Client receives ai_stream frames
 
 ---
 
-### 7. Activity Executor (`workflows/activity_executors.py`)
+### 11. Activity Executor (`workflows/activity_executors.py`)
 
 **Purpose:** Execute individual workflow steps by routing to the correct connector.
 
@@ -408,8 +479,8 @@ Message → Redis buffer → Batch (10 msgs) → Celery task → HF toxic-bert �
 |-------|-----------|
 | Core | Python 3.11, Django 5.0 (ASGI) |
 | Real-time | Django Channels, Redis (WebSockets) |
-| AI Orchestration | MCP Router (Model Context Protocol) |
-| LLM Providers | Anthropic Claude, HuggingFace (Llama/Mistral) |
+| AI Orchestration | Agentic ReAct Loop (agent_loop.py) with tool_use |
+| LLM Providers | Anthropic Claude (Sonnet 4.6 / Haiku 4.5), HuggingFace (Llama 3.1 fallback) |
 | Database | PostgreSQL 16 |
 | Cache/State | Redis |
 | Async Tasks | Celery & Celery Beat |
@@ -428,28 +499,39 @@ Message → Redis buffer → Batch (10 msgs) → Celery task → HF toxic-bert �
 
 | File | Purpose |
 |------|---------|
-| `Backend/chatbot/consumers.py` | WebSocket handler, main message flow (~2200 lines) |
+| **Agentic Core** | |
+| `Backend/orchestration/agent_loop.py` | ReAct agent loop — primary orchestration engine |
+| `Backend/orchestration/agent_prompts.py` | Agent system prompt builder with context injection |
+| `Backend/orchestration/tool_schemas.py` | ACTION_CATALOG → Claude tool definitions |
+| `Backend/orchestration/tool_executor.py` | Tool execution with safety, dedup, audit |
+| `Backend/orchestration/llm_client.py` | LLM interface with tool_use, model routing, prompt caching |
+| **Consumer & Streaming** | |
+| `Backend/chatbot/consumers.py` | WebSocket handler, agent loop integration (~2200 lines) |
 | `Backend/chatbot/context_manager.py` | 3-tier memory system |
 | `Backend/chatbot/models.py` | 12 DB models (chat, context, memory) |
 | `Backend/chatbot/tasks.py` | Celery tasks (moderation, voice, reminders) |
-| `Backend/orchestration/intent_parser.py` | NL → JSON intent parsing |
-| `Backend/orchestration/mcp_router.py` | Intent validation, routing, execution |
-| `Backend/orchestration/llm_client.py` | Dual-provider LLM with token budgets |
-| `Backend/orchestration/workflow_planner.py` | Multi-step workflow planning |
+| **Orchestration (Legacy/Support)** | |
+| `Backend/orchestration/intent_parser.py` | NL → JSON intent parsing (classic mode fallback) |
+| `Backend/orchestration/mcp_router.py` | Intent routing (classic mode fallback) |
 | `Backend/orchestration/security_policy.py` | Injection detection, access control |
 | `Backend/orchestration/memory_state.py` | Entity tracking across turns |
-| `Backend/orchestration/action_catalog.py` | Single source of truth for all actions |
-| `Backend/orchestration/telemetry.py` | Event logging, correction signals |
+| `Backend/orchestration/action_catalog.py` | Single source of truth for all 40+ actions |
+| `Backend/orchestration/telemetry.py` | Event logging, loop transcripts, correction signals |
 | `Backend/orchestration/user_preferences.py` | Localization, style preferences |
 | `Backend/orchestration/contracts.py` | Standardized response format |
 | `Backend/orchestration/models.py` | ActionReceipt audit model |
-| `Backend/orchestration/connectors/` | All service connectors |
-| `Backend/workflows/temporal_integration.py` | Temporal workflow definitions |
+| `Backend/orchestration/connectors/` | All service connectors (tools the agent calls) |
+| **Workflows** | |
+| `Backend/workflows/temporal_integration.py` | Temporal workflow definitions + agent handoff |
 | `Backend/workflows/activity_executors.py` | Step execution with connector routing |
 | `Backend/workflows/workflow_agent.py` | Conversational workflow creation |
 | `Backend/workflows/models.py` | Workflow, trigger, execution models |
 | `Backend/workflows/tasks.py` | Celery deferred workflow replay |
+| **Domain** | |
 | `Backend/payments/models.py` | Double-entry ledger, invoices |
 | `Backend/payments/services.py` | Ledger, wallet, invoice services |
 | `Backend/travel/models.py` | Itinerary, items, bookings |
 | `Backend/users/models.py` | Profiles, wallets, Calendly OAuth |
+| **Tests** | |
+| `Backend/tests/test_agentic.py` | 30+ unit tests for agentic components |
+| `Backend/tests/test_agentic_scenarios.py` | 11 end-to-end scenario tests |

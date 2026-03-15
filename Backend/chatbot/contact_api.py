@@ -8,7 +8,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.db.models import Q
 
-from chatbot.models import Contact
+from chatbot.models import Contact, RoomContext
 
 
 @api_view(['GET', 'POST'])
@@ -22,7 +22,15 @@ def list_create_contacts(request):
         room_id = request.query_params.get('room_id')
         qs = Contact.objects.filter(user=request.user)
         if room_id:
-            qs = qs.filter(Q(room__isnull=True) | Q(room_id=room_id))
+            room_filter = Q(room__isnull=True) | Q(room_id=room_id)
+            try:
+                ctx = RoomContext.objects.get(chatroom_id=room_id)
+                linked_ids = list(ctx.related_rooms.values_list('chatroom_id', flat=True))
+                if linked_ids:
+                    room_filter = room_filter | Q(room_id__in=linked_ids)
+            except RoomContext.DoesNotExist:
+                pass
+            qs = qs.filter(room_filter)
         else:
             qs = qs.filter(room__isnull=True)
 
@@ -111,7 +119,15 @@ def search_contacts(request):
 
     qs = Contact.objects.filter(user=request.user)
     if room_id:
-        qs = qs.filter(Q(room__isnull=True) | Q(room_id=room_id))
+        room_filter = Q(room__isnull=True) | Q(room_id=room_id)
+        try:
+            ctx = RoomContext.objects.get(chatroom_id=room_id)
+            linked_ids = list(ctx.related_rooms.values_list('chatroom_id', flat=True))
+            if linked_ids:
+                room_filter = room_filter | Q(room_id__in=linked_ids)
+        except RoomContext.DoesNotExist:
+            pass
+        qs = qs.filter(room_filter)
 
     qs = qs.filter(
         Q(name__icontains=q) | Q(email__icontains=q) | Q(phone__icontains=q)

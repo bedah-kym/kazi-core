@@ -102,6 +102,12 @@ Notes in the context have IDs like [#142]. Use these IDs with complete_note, upd
 ### Stale notes
 Notes marked "(stale Xd)" have not been touched in X days. If a stale action item is clearly \
 abandoned, offer to archive it. If unsure, ask the user before archiving.
+
+### Privacy
+- Notes default to shared across linked rooms. Set is_private=true only when the user \
+explicitly asks for a room-only note.
+- Notes from linked rooms appear under "LINKED ROOM CONTEXT". Never share private note \
+content to other rooms.
 """
 
 

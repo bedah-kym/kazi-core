@@ -76,6 +76,7 @@ def add_note(request, room_id):
         content = request.data.get('content', '')
         priority = request.data.get('priority', 'medium')
         tags = request.data.get('tags', [])
+        is_private = request.data.get('is_private', False)
         
         if not content:
             return Response(
@@ -90,7 +91,8 @@ def add_note(request, room_id):
             content=content,
             created_by=request.user,
             tags=tags,
-            priority=priority
+            priority=priority,
+            is_private=is_private,
         )
         
         return Response({

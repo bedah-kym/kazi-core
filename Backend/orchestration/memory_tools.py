@@ -59,6 +59,11 @@ MEMORY_TOOL_CATALOG: List[Dict[str, Any]] = [
                 "required": False,
                 "description": "Comma-separated tags for searchability",
             },
+            "is_private": {
+                "type": "boolean",
+                "required": False,
+                "description": "If true, note stays room-only and is not shared across linked rooms",
+            },
         },
         "risk_level": "low",
         "confirmation_policy": "never",
@@ -235,6 +240,7 @@ async def execute_create_note(
     priority = params.get("priority", "medium")
     tags_raw = params.get("tags", "")
     tags = [t.strip() for t in tags_raw.split(",") if t.strip()] if tags_raw else []
+    is_private = params.get("is_private", False)
 
     if not content:
         return {"status": "error", "message": "Content is required."}
@@ -248,6 +254,7 @@ async def execute_create_note(
             priority=priority,
             tags=tags,
             is_ai_generated=True,
+            is_private=is_private,
         )
 
     note = await sync_to_async(_create)()

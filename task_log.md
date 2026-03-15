@@ -1,5 +1,31 @@
 # Mathia Project - Task & Context Log
 
+## Current Session: Mar 15, 2026 - Claude Opus
+**Objective:** Full agentic transformation — convert Mathia from intent-classification + routing into a fully autonomous ReAct agent loop.
+
+### Completed (8 Phases — ALL COMPLETE)
+
+1. **Phase 1 — Tool Schema Layer:** Created `tool_schemas.py` (ACTION_CATALOG → Claude tool defs), enriched ACTION_CATALOG with param/return descriptions, built `tool_executor.py` (safety, routing, audit).
+2. **Phase 2 — Agent Loop Core:** Built `agent_loop.py` (ReAct loop with think→act→observe cycle), `agent_prompts.py` (system prompt builder with memory/preferences/docs injection), confirmation pause/resume via Redis state, iteration/cost limits.
+3. **Phase 3 — Consumer Integration:** Replaced orchestration path in `consumers.py` with `_handle_agent_loop()`, wired streaming callbacks (AgentEvents → broadcast_chunk/emit_progress), feature flag `AGENT_LOOP_ENABLED` (default True), backward-compatible classic mode fallback.
+4. **Phase 4 — Observation & Self-Correction:** Tool result observation in loop, error recovery with retry (max 2 per tool), tool timeout handling (30s), memory updates after execution, action receipt recording.
+5. **Phase 5 — Advanced Capabilities:** Parallel tool execution (`asyncio.gather`), reasoning transparency (thinking events), sub-agent delegation (`delegate_task` meta-tool), Temporal handoff (`handoff_to_workflow` meta-tool), document-aware tool calls.
+6. **Phase 6 — LLM Optimization:** Native tool_use in `llm_client.py`, prompt caching (`cache_control: ephemeral`), model routing (Haiku for simple, Sonnet for complex), per-loop token tracking (50K cap, 80% warning), Claude native web search.
+7. **Phase 7 — Safety & Guardrails:** Approval policies with user-configurable overrides, loop guardrails (iterations/time/tokens/dedup), full audit trail (loop transcripts in telemetry), injection protection (`_sanitize_tool_result` — 8K cap, pattern stripping), user interrupt/cancel support.
+8. **Phase 8 — Testing:** 30+ unit tests (`test_agentic.py`), 11 scenario tests (`test_agentic_scenarios.py`) covering multi-tool chains, error recovery, confirmation, injection, parallel tools, thinking transparency.
+
+### Architecture Changes
+- **New files:** `agent_loop.py`, `agent_prompts.py`, `tool_schemas.py`, `tool_executor.py`, `test_agentic.py`, `test_agentic_scenarios.py`
+- **Modified:** `consumers.py` (agent loop integration), `llm_client.py` (tool_use + model routing), `action_catalog.py` (enriched descriptions), `temporal_integration.py` (agent handoff)
+- **Retired:** `workflow_planner.py` (ad-hoc), `data_synthesizer.py`, `manager_verifier.py` — all replaced by agent loop
+- **Kept:** All connectors (now tools), Temporal (durable workflows), safety layers, memory system, streaming infra
+
+### Notes
+- Agent loop is the default path; classic pipeline available via `conversation_mode == "classic"` or on agent loop failure
+- Updated `agents.md` to reflect new agentic architecture
+
+---
+
 ## Current Session: Jan 25, 2026 - GPT-5
 **Objective:** Implement workflow builder (Temporal-first), wire chat entrypoint, enable service-specific webhooks, and swap travel to Amadeus.
 

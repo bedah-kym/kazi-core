@@ -740,6 +740,50 @@
     margin-top: 0.5rem;
 }
 
+/* ================================================================
+   Linked Rooms
+   ================================================================ */
+
+.linked-room-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.5rem 0.25rem;
+    border-bottom: 1px solid hsl(var(--border));
+}
+
+.linked-room-item:last-child {
+    border-bottom: none;
+}
+
+.linked-room-name {
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: hsl(var(--foreground));
+}
+
+.linked-room-select {
+    font-size: 0.8rem;
+    flex: 1;
+    background: hsl(var(--background));
+    border-color: hsl(var(--border));
+    color: hsl(var(--foreground));
+}
+
+.linked-room-picker {
+    padding-top: 0.5rem;
+    border-top: 1px solid hsl(var(--border));
+}
+
+/* ================================================================
+   Note Privacy Icon
+   ================================================================ */
+
+.note-private-icon {
+    font-size: 0.65rem;
+    vertical-align: middle;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
     .context-panel {

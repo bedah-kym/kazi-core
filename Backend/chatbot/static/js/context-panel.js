@@ -12,6 +12,8 @@ class ContextPanel {
         this.receipts = [];
         this.contextData = null;
         this.contactSearchTimeout = null;
+        this._abortController = null;
+        this._requestGeneration = 0;
 
         // Section definitions
         this.sections = [
@@ -19,6 +21,7 @@ class ContextPanel {
             { id: 'contacts', label: 'Contacts', icon: 'fa-address-book', eager: false },
             { id: 'receipts', label: 'Action Receipts', icon: 'fa-receipt', eager: false },
             { id: 'notes', label: 'Notes', icon: 'fa-sticky-note', eager: false },
+            { id: 'linked_rooms', label: 'Linked Rooms', icon: 'fa-link', eager: false },
             { id: 'summary', label: 'AI Summary', icon: 'fa-brain', eager: false },
         ];
 
@@ -96,16 +99,28 @@ class ContextPanel {
         const contentEl = document.getElementById('contextPanelContent');
         if (!contentEl || !this.roomId) return;
 
+        // Cancel any in-flight request
+        if (this._abortController) {
+            this._abortController.abort();
+        }
+        this._abortController = new AbortController();
+        const gen = ++this._requestGeneration;
+
         try {
-            const response = await fetch(`/chatbot/api/rooms/${this.roomId}/context/`);
+            const response = await fetch(`/chatbot/api/rooms/${this.roomId}/context/`, {
+                signal: this._abortController.signal,
+            });
+            if (gen !== this._requestGeneration) return; // stale
             if (!response.ok) throw new Error('Failed to fetch context');
 
             this.contextData = await response.json();
+            if (gen !== this._requestGeneration) return; // stale
             this.renderContext();
             this.panel.dataset.loaded = 'true';
         } catch (error) {
+            if (error.name === 'AbortError') return; // expected on room switch
             console.error('Context load error:', error);
-            this.renderError();
+            if (gen === this._requestGeneration) this.renderError();
         }
     }
 
@@ -199,6 +214,9 @@ class ContextPanel {
             case 'notes':
                 this._loadNotesSection(contentEl);
                 break;
+            case 'linked_rooms':
+                await this._loadLinkedRoomsSection(contentEl);
+                break;
             case 'summary':
                 this._loadSummarySection(contentEl);
                 break;
@@ -240,8 +258,12 @@ class ContextPanel {
     // ----------------------------------------------------------------
 
     async _loadContactsSection(contentEl) {
+        const gen = this._requestGeneration;
         try {
-            const response = await fetch(`/chatbot/api/contacts/search/?room_id=${this.roomId}&q=`);
+            const response = await fetch(`/chatbot/api/contacts/search/?room_id=${this.roomId}&q=`, {
+                signal: this._abortController?.signal,
+            });
+            if (gen !== this._requestGeneration) return;
             let contacts = [];
             if (response.ok) {
                 const data = await response.json();
@@ -253,6 +275,7 @@ class ContextPanel {
             }
             contentEl.innerHTML = this._renderContactsContent(contacts);
         } catch (err) {
+            if (err.name === 'AbortError') return;
             console.error('Contacts load error:', err);
             const contacts = (this.contextData && this.contextData.contacts) || [];
             contentEl.innerHTML = this._renderContactsContent(contacts);
@@ -303,13 +326,18 @@ class ContextPanel {
         const listEl = this.panel.querySelector('#contactList');
         if (!listEl) return;
 
+        const gen = this._requestGeneration;
         try {
             const url = `/chatbot/api/contacts/search/?room_id=${this.roomId}&q=${encodeURIComponent(query)}`;
-            const response = await fetch(url);
+            const response = await fetch(url, {
+                signal: this._abortController?.signal,
+            });
+            if (gen !== this._requestGeneration) return;
             if (!response.ok) return;
             const data = await response.json();
             listEl.innerHTML = this._renderContactList(data.contacts || []);
         } catch (err) {
+            if (err.name === 'AbortError') return;
             console.error('Contact search error:', err);
         }
     }
@@ -419,12 +447,17 @@ class ContextPanel {
 
     async loadReceipts() {
         if (!this.roomId) return [];
+        const gen = this._requestGeneration;
         try {
-            const response = await fetch(`/chatbot/api/rooms/${this.roomId}/actions/?limit=3`);
+            const response = await fetch(`/chatbot/api/rooms/${this.roomId}/actions/?limit=3`, {
+                signal: this._abortController?.signal,
+            });
+            if (gen !== this._requestGeneration) return [];
             if (!response.ok) return [];
             const data = await response.json();
             return data.receipts || [];
         } catch (error) {
+            if (error.name === 'AbortError') return [];
             console.error('Receipt load error:', error);
             return [];
         }
@@ -497,6 +530,109 @@ class ContextPanel {
     }
 
     // ----------------------------------------------------------------
+    // Section: Linked Rooms (lazy)
+    // ----------------------------------------------------------------
+
+    async _loadLinkedRoomsSection(contentEl) {
+        const gen = this._requestGeneration;
+        try {
+            const response = await fetch(`/chatbot/api/rooms/${this.roomId}/linked/`, {
+                signal: this._abortController?.signal,
+            });
+            if (gen !== this._requestGeneration) return;
+            if (!response.ok) {
+                contentEl.innerHTML = '<div class="receipts-empty">Could not load linked rooms.</div>';
+                return;
+            }
+            const data = await response.json();
+            contentEl.innerHTML = this._renderLinkedRoomsContent(data);
+        } catch (err) {
+            if (err.name === 'AbortError') return;
+            console.error('Linked rooms load error:', err);
+            contentEl.innerHTML = '<div class="receipts-empty">Could not load linked rooms.</div>';
+        }
+    }
+
+    _renderLinkedRoomsContent(data) {
+        const linked = data.linked || [];
+        const linkable = data.linkable || [];
+
+        let html = '';
+
+        // Current linked rooms
+        if (linked.length > 0) {
+            html += linked.map(r => `
+                <div class="linked-room-item">
+                    <div class="linked-room-name">
+                        <i class="fas fa-comments me-1"></i>
+                        ${this.escapeHtml(r.name || `Room #${r.id}`)}
+                    </div>
+                    <button class="btn btn-sm btn-link text-danger" data-unlink-room="${r.id}" title="Unlink">
+                        <i class="fas fa-unlink"></i>
+                    </button>
+                </div>
+            `).join('');
+        } else {
+            html += '<div class="receipts-empty mb-2">No linked rooms. Link rooms to share notes, contacts, and summaries.</div>';
+        }
+
+        // Link room picker
+        if (linkable.length > 0) {
+            html += `
+                <div class="linked-room-picker mt-2">
+                    <div class="d-flex gap-2">
+                        <select class="form-select form-select-sm linked-room-select" id="linkRoomSelect">
+                            <option value="">Select a room...</option>
+                            ${linkable.map(r => `<option value="${r.id}">${this.escapeHtml(r.name || `Room #${r.id}`)}</option>`).join('')}
+                        </select>
+                        <button class="btn btn-sm btn-outline-primary" data-confirm-link title="Link">
+                            <i class="fas fa-link"></i>
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+
+        return html;
+    }
+
+    async linkRoom(targetRoomId) {
+        if (!targetRoomId) return;
+        try {
+            const response = await fetch(`/chatbot/api/rooms/${this.roomId}/linked/`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': this.getCookie('csrftoken'),
+                },
+                body: JSON.stringify({ target_room_id: parseInt(targetRoomId) }),
+            });
+            if (!response.ok) throw new Error('Failed to link room');
+            // Reload the linked rooms section
+            this.sectionLoaded['linked_rooms'] = false;
+            const contentEl = this.panel.querySelector('#section-content-linked_rooms');
+            if (contentEl) await this._loadLinkedRoomsSection(contentEl);
+        } catch (err) {
+            console.error('Error linking room:', err);
+        }
+    }
+
+    async unlinkRoom(targetRoomId) {
+        try {
+            const response = await fetch(`/chatbot/api/rooms/${this.roomId}/linked/${targetRoomId}/`, {
+                method: 'DELETE',
+                headers: { 'X-CSRFToken': this.getCookie('csrftoken') },
+            });
+            if (!response.ok) throw new Error('Failed to unlink room');
+            this.sectionLoaded['linked_rooms'] = false;
+            const contentEl = this.panel.querySelector('#section-content-linked_rooms');
+            if (contentEl) await this._loadLinkedRoomsSection(contentEl);
+        } catch (err) {
+            console.error('Error unlinking room:', err);
+        }
+    }
+
+    // ----------------------------------------------------------------
     // Note form (reused from original)
     // ----------------------------------------------------------------
 
@@ -534,6 +670,12 @@ class ContextPanel {
                             </select>
                         </div>
                     </div>
+                    <div class="form-check mb-3">
+                        <input type="checkbox" class="form-check-input" id="notePrivate">
+                        <label class="form-check-label small" for="notePrivate">
+                            <i class="fas fa-lock me-1"></i> Private (room-only)
+                        </label>
+                    </div>
                     <button type="submit" class="btn btn-primary btn-sm w-100" data-submit-note>
                         <i class="fas fa-save me-1"></i> Save Note
                     </button>
@@ -556,6 +698,7 @@ class ContextPanel {
         const content = document.getElementById('noteContent')?.value;
         const type = document.getElementById('noteType')?.value;
         const priority = document.getElementById('notePriority')?.value;
+        const is_private = document.getElementById('notePrivate')?.checked || false;
         if (!content) return;
 
         const btn = formEl.querySelector('[data-submit-note]');
@@ -571,7 +714,7 @@ class ContextPanel {
                     'Content-Type': 'application/json',
                     'X-CSRFToken': this.getCookie('csrftoken'),
                 },
-                body: JSON.stringify({ content, note_type: type, priority }),
+                body: JSON.stringify({ content, note_type: type, priority, is_private }),
             });
             if (!response.ok) throw new Error('Failed to save note');
             this.isAddingNote = false;
@@ -602,6 +745,7 @@ class ContextPanel {
                 <div class="note-card-header">
                     <span class="note-type-badge note-type-${note.type}">
                         ${this.getNoteIcon(note.type)} ${this.formatNoteType(note.type)}
+                        ${note.is_private ? '<i class="fas fa-lock text-muted ms-1 note-private-icon" title="Private (room-only)"></i>' : ''}
                     </span>
                     <span class="note-priority note-priority-${note.priority}"
                           title="${note.priority} priority"></span>
@@ -738,6 +882,24 @@ class ContextPanel {
             this.deleteContact(deleteBtn.dataset.deleteContact);
             return;
         }
+
+        // Unlink room
+        const unlinkBtn = event.target.closest('[data-unlink-room]');
+        if (unlinkBtn) {
+            event.preventDefault();
+            this.unlinkRoom(unlinkBtn.dataset.unlinkRoom);
+            return;
+        }
+
+        // Confirm link room
+        if (event.target.closest('[data-confirm-link]')) {
+            event.preventDefault();
+            const select = this.panel.querySelector('#linkRoomSelect');
+            if (select && select.value) {
+                this.linkRoom(select.value);
+            }
+            return;
+        }
     }
 
     // Handle input events (search debounce)
@@ -870,10 +1032,32 @@ class ContextPanel {
     updateRoom(newRoomId) {
         if (!newRoomId || this.roomId === newRoomId) return;
         this.roomId = newRoomId;
-        if (this.panel) this.panel.dataset.loaded = 'false';
-        this.activeMode = this.loadStoredMode();
+
+        // Cancel in-flight requests immediately
+        this._requestGeneration++;
+        if (this._abortController) {
+            this._abortController.abort();
+            this._abortController = null;
+        }
+
+        // Full state reset
+        this.contextData = null;
         this.sectionLoaded = {};
+        this.sectionExpanded = {};
+        this.isAddingNote = false;
+        this.isAddingContact = false;
+
+        if (this.panel) {
+            this.panel.dataset.loaded = 'false';
+            const contentEl = document.getElementById('contextPanelContent');
+            if (contentEl) {
+                contentEl.innerHTML = '<div class="context-loading"><div class="spinner"></div></div>';
+            }
+        }
+
+        this.activeMode = this.loadStoredMode();
         this.updateModeButtons();
+
         if (this.isOpen) {
             this.loadContext();
         }

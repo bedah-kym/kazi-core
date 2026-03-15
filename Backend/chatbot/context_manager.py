@@ -81,39 +81,46 @@ class ContextManager:
                 ),
             })
             
-            # 3. GLOBAL/CROSS-ROOM CONTEXT (The "Memory" across rooms)
-            # Find high-priority or 'insight' notes from other rooms involving these participants
-            # For simplicity in this MVP: We fetch notes created by the room creator in *any* room
-            # that are marked 'high' priority or 'insight' type.
-            
-            # Determine "Key User" (usually room creator or owner)
-            key_user = None
-            """
-            if chatroom.name.startswith('private_'):
-                # Private room logic (if applicable)
-                pass """
-            
-            # Use the first admin or just standard cross-room fetch based on workspace if we had it.
-            # Here we'll search notes created by participants of this room in OTHER rooms.
-            participants = chatroom.participants.all()
-            users = [m.User for m in participants]
-            
-            global_notes = RoomNote.objects.filter(
-                created_by__in=users,
-                priority='high'
-            ).exclude(room_context=context_obj).order_by('-created_at')[:3]
-            
-            if global_notes:
-                context_data['global_notes'] = [ContextManager._format_note(n) for n in global_notes]
-            
+            # 3. LINKED ROOM CONTEXT (opt-in only)
+            linked_contexts = list(context_obj.related_rooms.all())
+            if linked_contexts:
+                linked_notes = RoomNote.objects.filter(
+                    room_context__in=linked_contexts,
+                    is_private=False,
+                    is_archived=False,
+                ).order_by('-created_at')[:5]
+                if linked_notes:
+                    context_data['linked_notes'] = [ContextManager._format_note(n) for n in linked_notes]
+
+                # Linked room summaries
+                linked_summaries = []
+                for lc in linked_contexts[:3]:
+                    ls = lc.daily_summaries.order_by('-date').first()
+                    if ls:
+                        linked_summaries.append({"room_id": lc.chatroom_id, "summary": ls.summary[:500]})
+                if linked_summaries:
+                    context_data['linked_room_summaries'] = linked_summaries
+
             # 4. Get User Contacts (top 15 by recency)
+            participants = chatroom.participants.all()
             try:
                 participant_users = [m.User for m in participants]
-                contacts = Contact.objects.filter(
+                contacts = list(Contact.objects.filter(
                     user__in=participant_users
                 ).filter(
                     Q(room__isnull=True) | Q(room=chatroom)
-                ).order_by('-updated_at')[:15]
+                ).order_by('-updated_at')[:15])
+
+                # Include contacts from linked rooms
+                if linked_contexts:
+                    linked_chatroom_ids = [lc.chatroom_id for lc in linked_contexts]
+                    existing_ids = [c.id for c in contacts]
+                    linked_contacts = Contact.objects.filter(
+                        user__in=participant_users,
+                        room_id__in=linked_chatroom_ids,
+                    ).exclude(id__in=existing_ids).order_by('-updated_at')[:10]
+                    contacts.extend(linked_contacts)
+
                 if contacts:
                     context_data['contacts'] = [
                         {
@@ -236,11 +243,19 @@ class ContextManager:
             if data.get('latest_daily_summary'):
                 prompt_parts.append(f"DAILY SUMMARY:\n{data['latest_daily_summary']}")
             
-            # Add Global/Cross-Room Notes
-            if data.get('global_notes'):
-                prompt_parts.append("RELEVANT MEMORY (From other chats):")
-                for note in data['global_notes']:
-                    prompt_parts.append(f"- [MEMORY] {note['content']}")
+            # Add Linked Room Notes
+            if data.get('linked_notes'):
+                prompt_parts.append("LINKED ROOM CONTEXT:")
+                for note in data['linked_notes']:
+                    prompt_parts.append(
+                        f"- [#{note['id']}] [{note['type'].upper()}] {note['content']}"
+                    )
+
+            # Add Linked Room Summaries
+            if data.get('linked_room_summaries'):
+                prompt_parts.append("LINKED ROOM SUMMARIES:")
+                for ls in data['linked_room_summaries']:
+                    prompt_parts.append(f"- Room {ls['room_id']}: {ls['summary']}")
             
             # Add User Contacts
             if data.get('contacts'):
@@ -274,19 +289,20 @@ class ContextManager:
             return ""
 
     @staticmethod
-    def add_note(chatroom, note_type, content, created_by, tags=None, priority='medium'):
+    def add_note(chatroom, note_type, content, created_by, tags=None, priority='medium', is_private=False):
         """
         Manually add a note to the context
         """
         context, _ = RoomContext.objects.get_or_create(chatroom=chatroom)
-        
+
         note = RoomNote.objects.create(
             room_context=context,
             note_type=note_type,
             content=content,
             created_by=created_by,
             tags=tags or [],
-            priority=priority
+            priority=priority,
+            is_private=is_private,
         )
         return note
 
@@ -442,6 +458,7 @@ class ContextManager:
             "content": note.content,
             "priority": note.priority,
             "status": status,
+            "is_private": note.is_private,
             "created_at": note.created_at.isoformat(),
             "tags": note.tags,
         }

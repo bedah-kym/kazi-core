@@ -10,7 +10,9 @@
       "Bash(git status:*)",
       "Bash(git check-ignore:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(find:*)",
+      "Bash(git push:*)"
     ]
   }
 }

@@ -311,7 +311,17 @@ class LLMClient:
             else:
                 body["system"] = system
         if tools:
-            body["tools"] = tools
+            if use_prompt_cache and tools:
+                # Mark the last tool with cache_control so the entire
+                # system prompt + tool definitions block is cached together.
+                cached_tools = [dict(t) for t in tools]
+                last = cached_tools[-1]
+                # Only add cache_control to regular tool defs (not server tools)
+                if "input_schema" in last:
+                    last["cache_control"] = {"type": "ephemeral"}
+                body["tools"] = cached_tools
+            else:
+                body["tools"] = tools
 
         async with httpx.AsyncClient(timeout=120.0) as client:
             response = await client.post(
@@ -378,7 +388,14 @@ class LLMClient:
             else:
                 body["system"] = system
         if tools:
-            body["tools"] = tools
+            if use_prompt_cache and tools:
+                cached_tools = [dict(t) for t in tools]
+                last = cached_tools[-1]
+                if "input_schema" in last:
+                    last["cache_control"] = {"type": "ephemeral"}
+                body["tools"] = cached_tools
+            else:
+                body["tools"] = tools
 
         async with httpx.AsyncClient(timeout=120.0) as client:
             async with client.stream(

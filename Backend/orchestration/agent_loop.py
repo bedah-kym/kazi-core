@@ -478,6 +478,7 @@ async def _run_sub_agent(
                 temperature=0.3,
                 max_tokens=4096,
                 user_id=context.get("user_id"),
+                use_prompt_cache=True,
             )
         except Exception as exc:
             return {"status": "error", "message": f"Sub-agent LLM error: {exc}"}

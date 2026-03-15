@@ -5,6 +5,7 @@ Supports Cross-Room context sharing for high-priority notes.
 """
 import logging
 import json
+import math
 from datetime import datetime, date, timedelta
 from django.utils import timezone
 from .models import RoomContext, RoomNote, AIConversation, DocumentUpload
@@ -32,10 +33,8 @@ class ContextManager:
             # 1. Get Local Room Context
             context_obj, created = RoomContext.objects.get_or_create(chatroom=chatroom)
             
-            # 2. Get Recent Local Notes
-            local_notes = RoomNote.objects.filter(
-                room_context=context_obj
-            ).order_by('-created_at')[:5] # Last 5 active notes
+            # 2. Get Ranked Local Notes
+            local_notes = ContextManager._get_ranked_notes(context_obj)
             
             # Format Local Data
             context_data = {
@@ -207,7 +206,10 @@ class ContextManager:
             if data['recent_notes']:
                 prompt_parts.append("IMPORTANT NOTES:")
                 for note in data['recent_notes']:
-                    prompt_parts.append(f"- [{note['type'].upper()}] {note['content']}")
+                    status = note.get('status', '')
+                    prompt_parts.append(
+                        f"- [#{note['id']}] [{note['type'].upper()}]{status} {note['content']}"
+                    )
 
             if data.get('latest_daily_summary'):
                 prompt_parts.append(f"DAILY SUMMARY:\n{data['latest_daily_summary']}")
@@ -325,14 +327,87 @@ class ContextManager:
         return filtered[:max_items]
 
     @staticmethod
+    def _get_ranked_notes(context_obj, limit=8):
+        """Fetch up to 30 non-archived notes, score them, return top `limit`."""
+        candidates = list(
+            RoomNote.objects.filter(
+                room_context=context_obj,
+                is_archived=False,
+            ).order_by('-created_at')[:30]
+        )
+        if not candidates:
+            return []
+
+        now = timezone.now()
+        priority_scores = {"high": 1.0, "medium": 0.6, "low": 0.3}
+        type_boosts = {
+            "decision": 0.3,
+            "insight": 0.25,
+            "action_item": 0.15,
+            "reminder": 0.1,
+            "reference": 0.1,
+            "written": 0.1,
+        }
+
+        scored = []
+        for note in candidates:
+            age_days = max((now - note.created_at).total_seconds() / 86400, 0)
+            touch_ref = note.last_accessed_at or note.updated_at or note.created_at
+            untouched_days = max((now - touch_ref).total_seconds() / 86400, 0)
+
+            priority_val = priority_scores.get(note.priority, 0.3)
+            recency_val = math.exp(-0.099 * age_days)
+            type_boost = type_boosts.get(note.note_type, 0.1)
+
+            # Staleness penalty
+            staleness = 0.0
+            if note.note_type == "action_item" and not note.is_completed:
+                if untouched_days > 14:
+                    staleness = -0.3
+                elif untouched_days > 7:
+                    staleness = -0.15
+
+            # Completion factor
+            completion = 0.0
+            if note.is_completed and note.completed_at:
+                completed_age = (now - note.completed_at).total_seconds() / 86400
+                if completed_age < 1:
+                    completion = 0.2
+                else:
+                    completion = -0.4
+
+            score = (
+                priority_val * 0.30
+                + recency_val * 0.35
+                + type_boost * 0.20
+                + staleness
+                + completion * 0.15
+            )
+            scored.append((score, note))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [note for _, note in scored[:limit]]
+
+    @staticmethod
     def _format_note(note):
+        now = timezone.now()
+        status = ""
+        if note.is_completed:
+            status = " (completed)"
+        elif note.note_type == "action_item" and not note.is_completed:
+            touch_ref = note.last_accessed_at or note.updated_at or note.created_at
+            untouched_days = int((now - touch_ref).total_seconds() / 86400)
+            if untouched_days > 7:
+                status = f" (stale {untouched_days}d)"
+
         return {
             "id": note.id,
             "type": note.note_type,
             "content": note.content,
             "priority": note.priority,
+            "status": status,
             "created_at": note.created_at.isoformat(),
-            "tags": note.tags
+            "tags": note.tags,
         }
 
     @staticmethod

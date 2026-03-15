@@ -106,6 +106,22 @@ async def execute_tool(
     start_time = time.monotonic()
     action = resolve_action_alias(tool_name)
 
+    # 0. Internal memory tools (no connector needed)
+    from orchestration.memory_tools import _MEMORY_TOOL_MAP
+    if action in _MEMORY_TOOL_MAP:
+        try:
+            result = await _MEMORY_TOOL_MAP[action](tool_input, context)
+        except Exception as exc:
+            logger.error("Memory tool error %s: %s", action, exc, exc_info=True)
+            return {"status": "error", "message": f"Memory tool failed: {str(exc)}"}
+        elapsed = round(time.monotonic() - start_time, 2)
+        logger.info("Memory tool %s executed in %ss", action, elapsed)
+        if not isinstance(result, dict):
+            result = {"status": "success", "data": result}
+        if "status" not in result:
+            result["status"] = "success"
+        return result
+
     # 1. Validate action exists
     action_def = get_action_definition(action)
     if not action_def:

@@ -79,6 +79,31 @@ with the most important details (price, time, rating) highlighted.
 - If you cannot complete a task, explain what you accomplished and what remains.
 """
 
+_MEMORY_RULES = """\
+## Memory management
+
+You have memory tools to manage notes in this conversation:
+- **create_note**: Record decisions, action items, insights, or references for future recall.
+- **complete_note**: Mark a note as done when the task is finished.
+- **update_note**: Update a note's content or priority when things change.
+- **archive_note**: Archive a note that is no longer relevant. Its knowledge is preserved in long-term memory.
+- **search_notes**: Search past notes by keyword when the user asks about something from before.
+
+### When to use memory tools
+- Create a note when the user makes a decision, sets a goal, or asks you to remember something.
+- Complete a note when you finish an action item or the user confirms it is done.
+- Archive a note when it is clearly outdated or the user says to forget it.
+- Update priority when urgency changes.
+- Search notes when the user references past conversations, bookings, or decisions.
+
+### Note IDs
+Notes in the context have IDs like [#142]. Use these IDs with complete_note, update_note, and archive_note.
+
+### Stale notes
+Notes marked "(stale Xd)" have not been touched in X days. If a stale action item is clearly \
+abandoned, offer to archive it. If unsure, ask the user before archiving.
+"""
+
 
 # --------------------------------------------------------------------------- #
 #  Prompt assembly                                                            #
@@ -113,6 +138,7 @@ def build_system_prompt(
     sections.append(_TOOL_RULES)
     sections.append(_SAFETY_RULES)
     sections.append(_RESPONSE_RULES)
+    sections.append(_MEMORY_RULES)
 
     # Contextual memory
     if context_prompt:

@@ -160,4 +160,76 @@ async def update_memory_state(
             "summary_len": len(summary),
         },
     )
+
+    # Bridge: persist significant entities to RoomContext.memory_facts
+    entities = state.get("entities") or {}
+    if entities:
+        try:
+            await _persist_entities_to_db(context, entities)
+        except Exception:
+            pass  # Non-critical; Redis state is already saved
+
     return state
+
+
+async def _persist_entities_to_db(
+    context: Dict[str, Any], entities: Dict[str, str]
+) -> None:
+    """Upsert key entities into RoomContext.memory_facts for long-term persistence."""
+    room_id = context.get("room_id")
+    if not room_id:
+        return
+
+    trivial_values = {"", "None", "null", "none"}
+
+    def _upsert():
+        from chatbot.models import RoomContext
+
+        try:
+            ctx = RoomContext.objects.get(chatroom_id=room_id)
+        except RoomContext.DoesNotExist:
+            return
+
+        facts = list(ctx.memory_facts or [])
+        facts_by_key = {}
+        for i, fact in enumerate(facts):
+            if isinstance(fact, dict) and fact.get("key"):
+                facts_by_key[fact["key"]] = i
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        changed = False
+
+        for key, value in entities.items():
+            if not value or str(value).strip() in trivial_values:
+                continue
+            if key in facts_by_key:
+                idx = facts_by_key[key]
+                if facts[idx].get("value") != value:
+                    facts[idx]["value"] = value
+                    facts[idx]["updated_at"] = now_iso
+                    changed = True
+            else:
+                facts.append({
+                    "key": key,
+                    "value": value,
+                    "confidence": 0.8,
+                    "updated_at": now_iso,
+                })
+                changed = True
+
+        if not changed:
+            return
+
+        # Cap at 30 entries, trim lowest-confidence
+        if len(facts) > 30:
+            facts.sort(
+                key=lambda f: float(f.get("confidence", 0)) if isinstance(f, dict) else 0,
+                reverse=True,
+            )
+            facts = facts[:30]
+
+        ctx.memory_facts = facts
+        ctx.memory_updated_at = datetime.now(timezone.utc)
+        ctx.save(update_fields=["memory_facts", "memory_updated_at"])
+
+    await sync_to_async(_upsert)()

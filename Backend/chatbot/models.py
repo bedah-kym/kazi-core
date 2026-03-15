@@ -246,15 +246,18 @@ class RoomNote(models.Model):
     # Status tracking
     is_completed = models.BooleanField(default=False)
     completed_at = models.DateTimeField(null=True, blank=True)
-    
+    is_archived = models.BooleanField(default=False)
+    last_accessed_at = models.DateTimeField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+
     class Meta:
         ordering = ['-created_at']
         indexes = [
             models.Index(fields=['room_context', '-created_at']),
             models.Index(fields=['note_type', 'is_completed']),
+            models.Index(fields=['is_archived', 'priority', 'note_type']),
         ]
     
     def __str__(self):

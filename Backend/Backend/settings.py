@@ -606,4 +606,8 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'payments.tasks.process_recurring_invoices',
         'schedule': crontab(hour=1, minute=0),
     },
+    'sweep-memory-notes': {
+        'task': 'chatbot.tasks.sweep_memory_notes',
+        'schedule': 21600.0,  # Every 6 hours
+    },
 }

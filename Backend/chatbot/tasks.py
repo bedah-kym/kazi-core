@@ -1145,6 +1145,129 @@ def refresh_room_context_summary(self, room_id, message_id=None, message_delta=1
         return {"status": "error", "reason": str(exc)}
 
 
+@shared_task(ignore_result=True)
+def sweep_memory_notes():
+    """
+    Periodic sweep of RoomNote lifecycle:
+    1. Priority decay for untouched action_items (7d high→medium, 14d medium→low)
+    2. Auto-archive low-priority action_items/reminders untouched 30d
+    3. Archive completed notes older than 7d
+    4. Cap memory_episodes at 50 per room
+    Never auto-archive: decisions, insights, references, written notes.
+    """
+    now = timezone.now()
+    day7 = now - timedelta(days=7)
+    day14 = now - timedelta(days=14)
+    day30 = now - timedelta(days=30)
+
+    # Protected types that should never be auto-archived
+    protected_types = {"decision", "insight", "reference", "written"}
+
+    updated_priority = 0
+    archived_count = 0
+    episodes_trimmed = 0
+
+    try:
+        # 1. Priority decay for action_items
+        # high → medium after 7d untouched
+        decay_high = RoomNote.objects.filter(
+            note_type="action_item",
+            is_archived=False,
+            is_completed=False,
+            priority="high",
+            updated_at__lt=day7,
+        )
+        updated_priority += decay_high.update(priority="medium")
+
+        # medium → low after 14d untouched
+        decay_medium = RoomNote.objects.filter(
+            note_type="action_item",
+            is_archived=False,
+            is_completed=False,
+            priority="medium",
+            updated_at__lt=day14,
+        )
+        updated_priority += decay_medium.update(priority="low")
+
+        # 2. Auto-archive: low-priority action_items/reminders untouched 30d
+        stale_notes = list(RoomNote.objects.filter(
+            note_type__in=["action_item", "reminder"],
+            is_archived=False,
+            is_completed=False,
+            priority="low",
+            updated_at__lt=day30,
+        ).select_related("room_context"))
+
+        for note in stale_notes:
+            _archive_note_to_episode(note, "auto-archived: stale 30d")
+            archived_count += 1
+
+        # 3. Archive completed notes older than 7d
+        completed_old = list(RoomNote.objects.filter(
+            is_completed=True,
+            is_archived=False,
+            completed_at__lt=day7,
+        ).select_related("room_context"))
+
+        for note in completed_old:
+            if note.note_type in protected_types:
+                continue
+            _archive_note_to_episode(note, "auto-archived: completed >7d")
+            archived_count += 1
+
+        # 4. Cap memory_episodes at 50 per room
+        from chatbot.models import RoomContext as RC
+        for ctx in RC.objects.filter(memory_episodes__len__gt=50) if hasattr(RC.objects, 'filter') else []:
+            pass  # JSONField length filtering not standard; handled below
+
+        for ctx in RoomContext.objects.exclude(memory_episodes=[]):
+            episodes = ctx.memory_episodes or []
+            if len(episodes) > 50:
+                ctx.memory_episodes = episodes[-50:]
+                ctx.save(update_fields=["memory_episodes"])
+                episodes_trimmed += 1
+
+        logger.info(
+            "sweep_memory_notes: priority_decayed=%d archived=%d episodes_trimmed=%d",
+            updated_priority, archived_count, episodes_trimmed,
+        )
+        return {
+            "status": "success",
+            "priority_decayed": updated_priority,
+            "archived": archived_count,
+            "episodes_trimmed": episodes_trimmed,
+        }
+    except Exception as exc:
+        logger.error("sweep_memory_notes failed: %s", exc, exc_info=True)
+        return {"status": "error", "reason": str(exc)}
+
+
+def _archive_note_to_episode(note, reason=""):
+    """Compress a note into episodic memory and mark as archived."""
+    ctx = note.room_context
+    episode = {
+        "summary": f"[{note.get_note_type_display()}] {note.content}"[:300],
+        "date": note.created_at.strftime("%Y-%m-%d"),
+        "importance": note.priority,
+        "updated_at": timezone.now().isoformat(),
+    }
+    if reason:
+        episode["summary"] += f" ({reason})"
+        episode["summary"] = episode["summary"][:300]
+
+    episodes = list(ctx.memory_episodes or [])
+    episodes.append(episode)
+    if len(episodes) > 50:
+        episodes = episodes[-50:]
+    ctx.memory_episodes = episodes
+    ctx.memory_updated_at = timezone.now()
+    ctx.save(update_fields=["memory_episodes", "memory_updated_at"])
+
+    note.is_archived = True
+    note.last_accessed_at = timezone.now()
+    note.save(update_fields=["is_archived", "last_accessed_at", "updated_at"])
+
+
 def _encode_base64(data: bytes) -> str:
     return b64encode(data).decode("utf-8").rstrip("=") + "=" * (-len(data) % 4)
 

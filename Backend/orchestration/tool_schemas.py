@@ -102,6 +102,10 @@ def get_tool_definitions(
 
         tools.append(build_tool_definition(action_def))
 
+    # Append internal memory tools
+    from orchestration.memory_tools import MEMORY_TOOL_DEFINITIONS
+    tools.extend(MEMORY_TOOL_DEFINITIONS)
+
     return tools
 
 

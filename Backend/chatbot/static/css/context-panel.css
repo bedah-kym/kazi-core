@@ -784,6 +784,11 @@
     vertical-align: middle;
 }
 
+.contact-scope-icon {
+    font-size: 0.65rem;
+    vertical-align: middle;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
     .context-panel {

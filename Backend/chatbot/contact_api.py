@@ -140,6 +140,7 @@ def search_contacts(request):
             "email": c.email,
             "phone": c.phone,
             "label": c.label,
+            "room_id": c.room_id,
         }
         for c in qs
     ]

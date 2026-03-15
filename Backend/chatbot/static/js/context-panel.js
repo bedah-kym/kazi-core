@@ -306,10 +306,11 @@ class ContextPanel {
         }
         return contacts.map(c => {
             const info = [c.email, c.phone].filter(Boolean).join(' / ') || 'No info';
+            const globalIcon = !c.room_id ? '<i class="fas fa-globe text-muted ms-1 contact-scope-icon" title="All rooms"></i>' : '';
             return `
                 <div class="contact-item" data-contact-id="${c.id}">
                     <div class="contact-item-main">
-                        <div class="contact-item-name">${this.escapeHtml(c.name)}</div>
+                        <div class="contact-item-name">${this.escapeHtml(c.name)}${globalIcon}</div>
                         <div class="contact-item-info">${this.escapeHtml(info)}</div>
                     </div>
                     <div class="contact-item-actions">
@@ -364,6 +365,12 @@ class ContextPanel {
                     <div class="mb-3">
                         <input type="text" class="form-control form-control-sm" id="contactLabel" placeholder="Label (e.g. colleague, client)">
                     </div>
+                    <div class="form-check mb-3">
+                        <input type="checkbox" class="form-check-input" id="contactGlobal">
+                        <label class="form-check-label small" for="contactGlobal">
+                            <i class="fas fa-globe me-1"></i> Available in all rooms
+                        </label>
+                    </div>
                     <button type="submit" class="btn btn-primary btn-sm w-100" data-submit-contact>
                         <i class="fas fa-save me-1"></i> Save Contact
                     </button>
@@ -394,7 +401,7 @@ class ContextPanel {
                 },
                 body: JSON.stringify({
                     name, email, phone, label,
-                    room_id: this.roomId,
+                    room_id: document.getElementById('contactGlobal')?.checked ? null : this.roomId,
                 }),
             });
             if (!response.ok) throw new Error('Failed to save contact');

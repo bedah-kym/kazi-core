@@ -746,10 +746,21 @@ async def run_agent_loop(
             })
             break
 
-        # ---- Call LLM ------------------------------------------------ #
+        # ---- Call LLM (streaming) ------------------------------------ #
         selected_model = _select_model(user_message, state.iteration)
+
+        # Accumulators for the streamed response
+        content_blocks: List[Dict[str, Any]] = []
+        collected_text: List[str] = []
+        active_tool_blocks: Dict[int, Dict[str, Any]] = {}
+        tool_json_accum: Dict[int, str] = {}
+        stop_reason = "end_turn"
+        response_usage: Dict[str, Any] = {}
+        block_index = -1
+        is_streaming_text = False
+
         try:
-            response = await llm.create_message(
+            async for event in llm.stream_message(
                 messages=state.messages,
                 system=system,
                 tools=tools if tools else None,
@@ -758,31 +769,63 @@ async def run_agent_loop(
                 user_id=user_id,
                 model=selected_model,
                 use_prompt_cache=True,
-            )
+            ):
+                etype = event.get("type", "")
+
+                if etype == "text":
+                    # Stream text deltas to the user in real-time
+                    delta = event.get("text", "")
+                    if delta:
+                        collected_text.append(delta)
+                        if not is_streaming_text:
+                            is_streaming_text = True
+                        yield AgentEvent("text_delta", {"text": delta})
+
+                elif etype == "tool_use_start":
+                    # A tool call is starting
+                    is_streaming_text = False
+                    block_index += 1
+
+                elif etype == "tool_use_end":
+                    # Tool call fully received
+                    tc_block = {
+                        "type": "tool_use",
+                        "id": event.get("id", ""),
+                        "name": event.get("name", ""),
+                        "input": event.get("input", {}),
+                    }
+                    content_blocks.append(tc_block)
+
+                elif etype == "message_done":
+                    stop_reason = event.get("stop_reason", "end_turn")
+                    response_usage = event.get("usage", {})
+
         except Exception as exc:
-            logger.error("Agent loop LLM call failed: %s", exc, exc_info=True)
+            logger.error("Agent loop LLM stream failed: %s", exc, exc_info=True)
             yield AgentEvent("error", {"message": f"LLM error: {exc}"})
             break
 
-        content_blocks = response.get("content", [])
-        stop_reason = response.get("stop_reason", "end_turn")
+        # Build the full text block for conversation history
+        full_text = "".join(collected_text)
+        if full_text:
+            content_blocks.insert(0, {"type": "text", "text": full_text})
 
-        # Track token usage for this iteration
-        iter_tokens = _get_response_tokens(response)
+        # Track token usage
+        iter_tokens = int(response_usage.get("input_tokens", 0)) + int(response_usage.get("output_tokens", 0))
         state.tokens_used += iter_tokens
 
-        # Warn user when approaching budget
         if (
             not state.budget_warning_sent
             and state.tokens_used >= LOOP_TOKEN_BUDGET * LOOP_TOKEN_WARNING_RATIO
         ):
             state.budget_warning_sent = True
-            yield AgentEvent("text", {
+            yield AgentEvent("text_delta", {
                 "text": "\n\n*(Running low on my thinking budget for this request.)*\n\n",
             })
 
-        # Track web search usage from this response
-        search_count = _count_search_uses(response)
+        # Track web search usage
+        server_tool_use = response_usage.get("server_tool_use", {})
+        search_count = int(server_tool_use.get("web_search_requests", 0))
         if search_count > 0:
             _record_search_usage(user_id, search_count)
             record_event("web_search_used", {
@@ -794,15 +837,6 @@ async def run_agent_loop(
 
         # Append the assistant message to the conversation
         state.messages.append({"role": "assistant", "content": content_blocks})
-
-        # ---- Extract text (reasoning / final answer) ----------------- #
-        text = _extract_text(content_blocks)
-        if text:
-            if stop_reason == "tool_use":
-                # LLM is explaining what it's about to do (thinking)
-                yield AgentEvent("thinking", {"text": text})
-            else:
-                yield AgentEvent("text", {"text": text})
 
         # ---- If LLM is done talking, exit the loop ------------------- #
         if stop_reason == "end_turn":

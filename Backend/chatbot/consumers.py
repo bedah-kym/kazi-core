@@ -1185,6 +1185,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             ):
                                 if event.kind == "text":
                                     await broadcast_chunk(event.data.get("text", ""))
+                                elif event.kind == "text_delta":
+                                    await broadcast_chunk(event.data.get("text", ""))
                                 elif event.kind == "thinking":
                                     await emit_progress("thinking", "started", "Reasoning…")
                                     await broadcast_chunk(event.data.get("text", ""))
@@ -1221,6 +1223,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                 memory_summary=mem_summary,
                             ):
                                 if event.kind == "text":
+                                    await broadcast_chunk(event.data.get("text", ""))
+                                elif event.kind == "text_delta":
                                     await broadcast_chunk(event.data.get("text", ""))
                                 elif event.kind == "thinking":
                                     await emit_progress("thinking", "started", "Reasoning…")

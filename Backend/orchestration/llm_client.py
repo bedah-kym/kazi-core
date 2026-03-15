@@ -343,6 +343,8 @@ class LLMClient:
         temperature: float = 0.7,
         max_tokens: int = 4096,
         user_id: Optional[int] = None,
+        model: Optional[str] = None,
+        use_prompt_cache: bool = False,
     ):
         """
         Stream from Anthropic Messages API with tool_use support.
@@ -358,14 +360,23 @@ class LLMClient:
             raise Exception("Anthropic API key is not configured.")
 
         body: Dict[str, Any] = {
-            "model": self.claude_model,
+            "model": model or self.claude_model,
             "max_tokens": max_tokens,
             "temperature": temperature,
             "messages": messages,
             "stream": True,
         }
         if system:
-            body["system"] = system
+            if use_prompt_cache:
+                body["system"] = [
+                    {
+                        "type": "text",
+                        "text": system,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ]
+            else:
+                body["system"] = system
         if tools:
             body["tools"] = tools
 

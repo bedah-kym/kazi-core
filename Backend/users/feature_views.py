@@ -1,11 +1,14 @@
 """
 Wallet, Reminders, and Settings views with workspace guards
 """
-from django.shortcuts import render
+from django.shortcuts import render, redirect
 from django.contrib.auth.decorators import login_required
+from django.contrib import messages
 from django.utils import timezone
+from datetime import timedelta
 from users.decorators import workspace_required
 from users.models import Wallet
+from users.forms import UserForm, UserProfileForm
 from chatbot.models import Reminder
 
 
@@ -23,26 +26,18 @@ def reminders(request):
     user_reminders = Reminder.objects.filter(
         user=request.user
     ).order_by('-created_at')
-    
+
     context = {
         'reminders': user_reminders,
         'workspace': request.user.workspace,
     }
-    
+
     return render(request, 'users/reminders.html', context)
 
 
-from django.contrib import messages
-from django.shortcuts import redirect
-from datetime import timedelta
-from users.forms import UserForm, UserProfileForm, GoalProfileForm
-from users.models import GoalProfile
-
 @workspace_required
 def settings(request):
-    """
-    Settings and integrations page
-    """
+    """Unified settings page with profile, AI, capabilities, integrations, workspace."""
     workspace = request.user.workspace
     profile = request.user.profile
     prefs = profile.notification_preferences or {}
@@ -109,174 +104,96 @@ def settings(request):
     }
 
     if request.method == 'POST':
-        mode = request.POST.get('capability_mode', prefs.get('capability_mode', 'custom'))
-        mode = mode if mode in capability_presets or mode == 'custom' else 'custom'
-        prefs.update(capability_defaults)
-        prefs["capability_mode"] = mode
+        section = request.POST.get('section', '')
 
-        if mode in capability_presets:
-            prefs.update(capability_presets[mode])
-        else:
-            prefs["proactive_assistant_enabled"] = request.POST.get('proactive_assistant_enabled') == 'on'
-            prefs["ai_voice_enabled"] = request.POST.get('ai_voice_enabled') == 'on'
-            prefs["manager_llm_enabled"] = request.POST.get('manager_llm_enabled') == 'on'
-            prefs["allow_web_search"] = request.POST.get('allow_web_search') == 'on'
-            prefs["allow_travel"] = request.POST.get('allow_travel') == 'on'
-            prefs["allow_payments"] = request.POST.get('allow_payments') == 'on'
-            prefs["allow_reminders"] = request.POST.get('allow_reminders') == 'on'
-            prefs["allow_whatsapp"] = request.POST.get('allow_whatsapp') == 'on'
-            prefs["allow_email"] = request.POST.get('allow_email') == 'on'
-            prefs["allow_calendar"] = request.POST.get('allow_calendar') == 'on'
-            prefs["nudge_frequency"] = request.POST.get('nudge_frequency', prefs.get('nudge_frequency', 'low'))
+        if section == 'profile':
+            user_form = UserForm(request.POST, instance=request.user)
+            profile_form = UserProfileForm(request.POST, request.FILES, instance=profile)
+            if user_form.is_valid() and profile_form.is_valid():
+                user_form.save()
+                profile_form.save()
+                messages.success(request, 'Profile updated successfully!')
+            return redirect('/accounts/settings/#profile')
 
-        snooze_hours_raw = request.POST.get('proactive_snooze_hours', '0')
-        try:
-            snooze_hours = int(snooze_hours_raw)
-        except (TypeError, ValueError):
-            snooze_hours = 0
-        if snooze_hours > 0:
-            prefs["proactive_snooze_until"] = (timezone.now() + timedelta(hours=snooze_hours)).isoformat()
-        else:
-            prefs.pop("proactive_snooze_until", None)
+        elif section == 'ai':
+            profile.ai_personalization_enabled = request.POST.get('ai_personalization_enabled') == 'on'
+            profile.save(update_fields=['ai_personalization_enabled'])
+            messages.success(request, 'AI settings updated.')
+            return redirect('/accounts/settings/#ai')
 
-        profile.notification_preferences = prefs
-        profile.save(update_fields=['notification_preferences'])
-        messages.success(request, 'Capability settings updated.')
+        elif section == 'capabilities':
+            mode = request.POST.get('capability_mode', prefs.get('capability_mode', 'custom'))
+            mode = mode if mode in capability_presets or mode == 'custom' else 'custom'
+            prefs.update(capability_defaults)
+            prefs["capability_mode"] = mode
+
+            if mode in capability_presets:
+                prefs.update(capability_presets[mode])
+            else:
+                prefs["proactive_assistant_enabled"] = request.POST.get('proactive_assistant_enabled') == 'on'
+                prefs["ai_voice_enabled"] = request.POST.get('ai_voice_enabled') == 'on'
+                prefs["manager_llm_enabled"] = request.POST.get('manager_llm_enabled') == 'on'
+                prefs["allow_web_search"] = request.POST.get('allow_web_search') == 'on'
+                prefs["allow_travel"] = request.POST.get('allow_travel') == 'on'
+                prefs["allow_payments"] = request.POST.get('allow_payments') == 'on'
+                prefs["allow_reminders"] = request.POST.get('allow_reminders') == 'on'
+                prefs["allow_whatsapp"] = request.POST.get('allow_whatsapp') == 'on'
+                prefs["allow_email"] = request.POST.get('allow_email') == 'on'
+                prefs["allow_calendar"] = request.POST.get('allow_calendar') == 'on'
+                prefs["nudge_frequency"] = request.POST.get('nudge_frequency', prefs.get('nudge_frequency', 'low'))
+
+            snooze_hours_raw = request.POST.get('proactive_snooze_hours', '0')
+            try:
+                snooze_hours = int(snooze_hours_raw)
+            except (TypeError, ValueError):
+                snooze_hours = 0
+            if snooze_hours > 0:
+                prefs["proactive_snooze_until"] = (timezone.now() + timedelta(hours=snooze_hours)).isoformat()
+            else:
+                prefs.pop("proactive_snooze_until", None)
+
+            profile.notification_preferences = prefs
+            profile.save(update_fields=['notification_preferences'])
+            messages.success(request, 'Capability settings updated.')
+            return redirect('/accounts/settings/#capabilities')
+
+        elif section == 'workspace':
+            ws_name = request.POST.get('workspace_name', '').strip()
+            if ws_name:
+                workspace.name = ws_name
+                workspace.save(update_fields=['name'])
+                messages.success(request, 'Workspace updated.')
+            return redirect('/accounts/settings/#workspace')
+
         return redirect('users:settings')
-    
-    # Get integration status
+
+    # GET: prepare forms and context
+    user_form = UserForm(instance=request.user)
+    profile_form = UserProfileForm(instance=profile)
+
     from .models import UserIntegration, CalendlyProfile
-    
-    # Check Calendly (Legacy model)
     try:
         calendly_connected = request.user.calendly.is_connected
     except (CalendlyProfile.DoesNotExist, AttributeError):
         calendly_connected = False
 
-    # Check other integrations
     integrations = UserIntegration.objects.filter(user=request.user, is_connected=True).values_list('integration_type', flat=True)
     gmail_integration = UserIntegration.objects.filter(
-        user=request.user,
-        integration_type='gmail',
-        is_connected=True
+        user=request.user, integration_type='gmail', is_connected=True
     ).first()
     gmail_address = (gmail_integration.metadata or {}).get('gmail_address') if gmail_integration else None
-    
+
     context = {
         'workspace': workspace,
-        'active_tab': 'integrations',
+        'user_form': user_form,
+        'profile_form': profile_form,
         'calendly_connected': calendly_connected,
         'whatsapp_connected': 'whatsapp' in integrations,
         'intasend_connected': 'intasend' in integrations,
         'gmail_connected': 'gmail' in integrations,
         'gmail_address': gmail_address,
         'capability_prefs': {**capability_defaults, **prefs},
+        'ai_personalization_enabled': profile.ai_personalization_enabled,
     }
-    
+
     return render(request, 'users/settings.html', context)
-
-
-@workspace_required
-def profile_settings(request):
-    """
-    Profile settings page
-    """
-    user = request.user
-    if request.method == 'POST':
-        user_form = UserForm(request.POST, instance=user)
-        profile_form = UserProfileForm(request.POST, request.FILES, instance=user.profile)
-        
-        if user_form.is_valid() and profile_form.is_valid():
-            user_form.save()
-            profile_form.save()
-            messages.success(request, 'Profile updated successfully!')
-            return redirect('users:profile_settings')
-    else:
-        user_form = UserForm(instance=user)
-        profile_form = UserProfileForm(instance=user.profile)
-    
-    context = {
-        'user_form': user_form,
-        'profile_form': profile_form,
-        'workspace': request.user.workspace,
-        'active_tab': 'profile',
-    }
-    return render(request, 'users/profile_settings.html', context)
-
-
-@workspace_required
-def goals_settings(request):
-    """
-    Goals and AI personalization page
-    """
-    workspace = request.user.workspace
-    # Ensure goal profile exists
-    goal_profile, created = GoalProfile.objects.get_or_create(workspace=workspace)
-    
-    if request.method == 'POST':
-        form = GoalProfileForm(request.POST, instance=goal_profile)
-        if form.is_valid():
-            form.save()
-            messages.success(request, 'Goals updated successfully! AI will use this to personalize your experience.')
-            return redirect('users:goals_settings')
-    else:
-        form = GoalProfileForm(instance=goal_profile)
-    
-    context = {
-        'form': form,
-        'workspace': workspace,
-        'active_tab': 'goals',
-    }
-    return render(request, 'users/goals.html', context)
-
-
-@workspace_required
-def profile_settings(request):
-    """
-    Profile settings page
-    """
-    user = request.user
-    if request.method == 'POST':
-        user_form = UserForm(request.POST, instance=user)
-        profile_form = UserProfileForm(request.POST, request.FILES, instance=user.profile)
-        
-        if user_form.is_valid() and profile_form.is_valid():
-            user_form.save()
-            profile_form.save()
-            messages.success(request, 'Profile updated successfully!')
-            return redirect('users:profile_settings')
-    else:
-        user_form = UserForm(instance=user)
-        profile_form = UserProfileForm(instance=user.profile)
-    
-    context = {
-        'user_form': user_form,
-        'profile_form': profile_form,
-        'workspace': request.user.workspace,
-    }
-    return render(request, 'users/profile_settings.html', context)
-
-
-@workspace_required
-def goals_settings(request):
-    """
-    Goals and AI personalization page
-    """
-    workspace = request.user.workspace
-    # Ensure goal profile exists
-    goal_profile, created = GoalProfile.objects.get_or_create(workspace=workspace)
-    
-    if request.method == 'POST':
-        form = GoalProfileForm(request.POST, instance=goal_profile)
-        if form.is_valid():
-            form.save()
-            messages.success(request, 'Goals updated successfully! AI will use this to personalize your experience.')
-            return redirect('users:goals_settings')
-    else:
-        form = GoalProfileForm(instance=goal_profile)
-    
-    context = {
-        'form': form,
-        'workspace': workspace,
-    }
-    return render(request, 'users/goals.html', context)

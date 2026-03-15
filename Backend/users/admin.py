@@ -5,7 +5,7 @@ from django.utils.html import format_html
 from import_export import resources
 from import_export.admin import ImportExportModelAdmin
 from .models import (
-    UserProfile, Workspace, Wallet, WalletTransaction, GoalProfile,
+    UserProfile, Workspace, Wallet, WalletTransaction,
     TrialApplication, TrialInvite
 )
 
@@ -85,41 +85,6 @@ class UserProfileAdmin(admin.ModelAdmin):
         )
     onboarding_badge.short_description = 'Onboarding'
 
-
-@admin.register(GoalProfile)
-class GoalProfileAdmin(admin.ModelAdmin):
-    list_display = ['workspace_link', 'industry', 'experience_level', 'target_revenue', 'ai_enabled_badge']
-    list_filter = ['experience_level', 'industry', 'ai_personalization_enabled']
-    search_fields = ['workspace__name', 'workspace__owner__email', 'skills', 'goals']
-    readonly_fields = ['created_at', 'updated_at']
-    ordering = ['-created_at']
-    autocomplete_fields = ['workspace']
-
-    fieldsets = (
-        ('Workspace', {'fields': ('workspace',)}),
-        ('Goals', {'fields': ('goals', 'custom_goals')}),
-        ('Skills', {'fields': ('industry', 'skills', 'experience_level')}),
-        ('Needs', {'fields': ('needs', 'custom_needs')}),
-        ('Use Cases', {'fields': ('use_cases',)}),
-        ('Roadmap', {'fields': ('roadmap',)}),
-        ('Targets', {'fields': ('target_revenue', 'target_followers', 'target_clients', 'target_email_subscribers')}),
-        ('AI', {'fields': ('ai_personalization_enabled',)}),
-        ('Timestamps', {'fields': ('created_at', 'updated_at'), 'classes': ('collapse',)}),
-    )
-
-    def workspace_link(self, obj):
-        return obj.workspace.name
-    workspace_link.short_description = 'Workspace'
-
-    def ai_enabled_badge(self, obj):
-        color = '#27ae60' if obj.ai_personalization_enabled else '#95a5a6'
-        status = 'Enabled' if obj.ai_personalization_enabled else 'Disabled'
-        return format_html(
-            '<span style="background-color: {}; color: white; padding: 3px 8px; border-radius: 3px;">{}</span>',
-            color,
-            status
-        )
-    ai_enabled_badge.short_description = 'AI Personalization'
 
 
 @admin.register(Workspace)

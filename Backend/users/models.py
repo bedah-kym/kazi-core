@@ -119,12 +119,16 @@ class UserProfile(models.Model):
 	social_links = models.JSONField(default=dict, blank=True,
 		help_text='{"twitter": "@handle", "linkedin": "url", "github": "url", "portfolio": "url"}')
 	
-	# Onboarding tracking (NEW)
+	# DEPRECATED: Use Workspace.onboarding_completed instead (kept for migration compat)
 	onboarding_completed = models.BooleanField(default=False)
 	onboarding_step = models.IntegerField(default=0,
-		help_text="Current onboarding step (0-6)")
+		help_text="DEPRECATED - Current onboarding step (0-6)")
 	
-	# Preferences (NEW)
+	# AI Personalization (moved from GoalProfile)
+	ai_personalization_enabled = models.BooleanField(default=True,
+		help_text="Allow AI to use profile data for personalized suggestions")
+
+	# Preferences
 	notification_preferences = models.JSONField(default=dict, blank=True,
 		help_text='{"email_notifications": true, "push_notifications": false, "digest_frequency": "daily"}')
 	
@@ -174,76 +178,6 @@ class UserProfile(models.Model):
 		
 		return self.social_links
 
-
-class GoalProfile(models.Model):
-	"""
-	AI personalization engine: User goals, skills, needs, and roadmap
-	"""
-	workspace = models.OneToOneField('Workspace', on_delete=models.CASCADE, related_name='goals')
-	
-	# Professional Goals
-	goals = models.JSONField(default=list, blank=True,
-		help_text='["grow_audience", "increase_revenue", "book_more_clients", etc.]')
-	custom_goals = models.TextField(blank=True, help_text="Free-form custom goals")
-	
-	# Skills & Expertise
-	industry = models.CharField(max_length=100, blank=True,
-		help_text="Primary industry (Design, Dev, Marketing, etc.)")
-	skills = models.JSONField(default=list, blank=True,
-		help_text='["React", "SEO", "Copywriting", "B2B Sales"]')
-	experience_level = models.CharField(max_length=20, choices=[
-		('beginner', 'Beginner'),
-		('intermediate', 'Intermediate'),
-		('expert', 'Expert'),
-	], default='intermediate')
-	
-	# Current Needs (What user wants help with)
-	needs = models.JSONField(default=list, blank=True,
-		help_text='["content_ideas", "engagement_strategies", "lead_generation", etc.]')
-	custom_needs = models.TextField(blank=True)
-	
-	# Use Cases (How they use KwikChat)
-	use_cases = models.JSONField(default=list, blank=True,
-		help_text='["client_management", "team_collaboration", "social_monitoring", etc.]')
-	
-	# Brand Roadmap (Timeline-based goals)
-	roadmap = models.JSONField(default=list, blank=True,
-		help_text='[{"quarter": "Q1 2025", "goals": ["Launch newsletter"], "status": "in_progress"}]')
-	
-	# Target Metrics
-	target_revenue = models.DecimalField(max_digits=10, decimal_places=2,
-		null=True, blank=True, help_text="Revenue goal (e.g., $10,000 MRR)")
-	target_followers = models.IntegerField(null=True, blank=True,
-		help_text="Social media follower target")
-	target_clients = models.IntegerField(null=True, blank=True,
-		help_text="Client acquisition target")
-	target_email_subscribers = models.IntegerField(null=True, blank=True)
-	
-	# AI Context
-	ai_personalization_enabled = models.BooleanField(default=True,
-		help_text="Allow AI to use goals for personalized suggestions")
-	
-	updated_at = models.DateTimeField(auto_now=True)
-	created_at = models.DateTimeField(auto_now_add=True)
-	
-	def __str__(self):
-		return f"Goals for {self.workspace.name}"
-	
-	def get_active_goals(self):
-		"""Return goals formatted for AI context"""
-		return {
-			'professional_goals': self.goals,
-			'custom_goals': self.custom_goals,
-			'skills': self.skills,
-			'needs': self.needs,
-			'roadmap': [r for r in self.roadmap if r.get('status') != 'completed'],
-			'targets': {
-				'revenue': float(self.target_revenue) if self.target_revenue else None,
-				'followers': self.target_followers,
-				'clients': self.target_clients,
-				'email_subscribers': self.target_email_subscribers
-			}
-		}
 
 
 class Workspace(models.Model):

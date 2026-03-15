@@ -222,23 +222,23 @@
         <div class="onboarding-progress">
             <div class="progress-steps">
                 <div class="progress-step {% if step == 1 %}active{% elif step > 1 %}completed{% endif %}">
-                    <div class="progress-step-circle">{% if step > 1 %}<i class="fas fa-check"></i>{% else %}1{% endif%}
-                    </div>
+                    <div class="progress-step-circle">{% if step > 1 %}<i class="fas fa-check"></i>{% else %}1{% endif %}</div>
                     <div class="progress-step-label">Account Type</div>
                 </div>
                 <div class="progress-step {% if step == 2 %}active{% elif step > 2 %}completed{% endif %}">
-                    <div class="progress-step-circle">{% if step > 2 %}<i class="fas fa-check"></i>{% else %}2{% endif%}
-                    </div>
-                    <div class="progress-step-label">Workspace</div>
+                    <div class="progress-step-circle">{% if step > 2 %}<i class="fas fa-check"></i>{% else %}2{% endif %}</div>
+                    <div class="progress-step-label">Your Profile</div>
                 </div>
                 <div class="progress-step {% if step == 3 %}active{% elif step > 3 %}completed{% endif %}">
-                    <div class="progress-step-circle">{% if step > 3 %}<i class="fas fa-check"></i>{% else %}3{% endif%}
-                    </div>
-                    <div class="progress-step-label">Plan</div>
+                    <div class="progress-step-circle">{% if step > 3 %}<i class="fas fa-check"></i>{% else %}3{% endif %}</div>
+                    <div class="progress-step-label">Workspace</div>
                 </div>
                 <div class="progress-step {% if step == 4 %}active{% elif step > 4 %}completed{% endif %}">
-                    <div class="progress-step-circle">{% if step > 4 %}<i class="fas fa-check"></i>{% else %}4{% endif%}
-                    </div>
+                    <div class="progress-step-circle">{% if step > 4 %}<i class="fas fa-check"></i>{% else %}4{% endif %}</div>
+                    <div class="progress-step-label">Plan</div>
+                </div>
+                <div class="progress-step {% if step == 5 %}active{% elif step > 5 %}completed{% endif %}">
+                    <div class="progress-step-circle">{% if step > 5 %}<i class="fas fa-check"></i>{% else %}5{% endif %}</div>
                     <div class="progress-step-label">Integrations</div>
                 </div>
             </div>
@@ -246,7 +246,7 @@
 
         <!-- Onboarding Card -->
         <div class="onboarding-card">
-            <form method="post" id="onboardingForm">
+            <form method="post" id="onboardingForm" enctype="multipart/form-data">
                 {% csrf_token %}
 
                 <!-- Step 1: Account Type -->
@@ -276,6 +276,57 @@
                 <input type="hidden" name="account_type" id="accountTypeInput" value="personal">
                 {% elif step == 2 %}
                 <div class="onboarding-header">
+                    <h1 class="onboarding-title">Tell us about yourself</h1>
+                    <p class="onboarding-subtitle">Help Mathia personalize your experience</p>
+                </div>
+
+                <div class="text-center mb-4">
+                    <div style="position:relative;width:96px;height:96px;margin:0 auto;cursor:pointer;" onclick="document.getElementById('avatarFile').click()">
+                        <img id="avatarPreview" src="https://ui-avatars.com/api/?name={{ user.first_name|default:'U' }}&background=4f8cff&color=fff&size=96"
+                            style="width:96px;height:96px;border-radius:50%;object-fit:cover;border:3px solid #e5e7eb;">
+                        <div style="position:absolute;inset:0;border-radius:50%;background:rgba(0,0,0,0.3);display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .2s;color:#fff;font-size:1.2rem;"
+                            onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=0">
+                            <i class="fas fa-camera"></i>
+                        </div>
+                    </div>
+                    <input type="file" id="avatarFile" name="avatar" accept="image/*" style="display:none"
+                        onchange="if(this.files[0]){document.getElementById('avatarPreview').src=URL.createObjectURL(this.files[0])}">
+                    <p class="text-muted small mt-2">Click to add a photo</p>
+                </div>
+
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <label class="form-label">First Name</label>
+                        <input type="text" name="first_name" class="form-control"
+                            value="{{ user.first_name }}" placeholder="First name">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Last Name</label>
+                        <input type="text" name="last_name" class="form-control"
+                            value="{{ user.last_name }}" placeholder="Last name">
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Role</label>
+                    <input type="text" name="role" class="form-control"
+                        placeholder="e.g. Founder, Designer, Developer">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Industry</label>
+                    <select name="industry" class="form-control">
+                        <option value="">Select your industry</option>
+                        <option value="Design">Design</option>
+                        <option value="Development">Development</option>
+                        <option value="Marketing">Marketing</option>
+                        <option value="Consulting">Consulting</option>
+                        <option value="Finance">Finance</option>
+                        <option value="Education">Education</option>
+                        <option value="Other">Other</option>
+                    </select>
+                </div>
+
+                {% elif step == 3 %}
+                <div class="onboarding-header">
                     <h1 class="onboarding-title">Name your Workspace</h1>
                     <p class="onboarding-subtitle">This will be your home base</p>
                 </div>
@@ -285,8 +336,8 @@
                         placeholder="My Awesome Brand">
                 </div>
 
-                <!-- Step 3: Plan Selection -->
-                {% elif step == 3 %}
+                <!-- Step 4: Plan Selection -->
+                {% elif step == 4 %}
                 <div class="onboarding-header">
                     <h1 class="onboarding-title">Choose your plan</h1>
                     <p class="onboarding-subtitle">Start free, upgrade anytime</p>
@@ -318,8 +369,8 @@
                 </div>
                 <input type="hidden" name="plan" id="planInput" value="free">
 
-                <!-- Step 4: Integrations -->
-                {% elif step == 4 %}
+                <!-- Step 5: Integrations -->
+                {% elif step == 5 %}
                 <div class="onboarding-header">
                     <h1 class="onboarding-title">Connect your tools</h1>
                     <p class="onboarding-subtitle">You can skip this and set up later</p>
@@ -357,7 +408,7 @@
                     {% endif %}
 
                     <button type="submit" class="btn btn-primary">
-                        {% if step == 4 %}
+                        {% if step == 5 %}
                         Finish <i class="fas fa-check ms-2"></i>
                         {% else %}
                         Next <i class="fas fa-arrow-right ms-2"></i>

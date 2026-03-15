@@ -92,12 +92,59 @@ def onboarding(request):
             account_type = request.POST.get('account_type', 'personal')
             request.session['onboarding_account_type'] = account_type
             return redirect(reverse('users:onboarding') + '?step=2')
-        
+
         elif step == 2:
-            # Create workspace
+            # Save profile info
+            first_name = request.POST.get('first_name', '').strip()
+            last_name = request.POST.get('last_name', '').strip()
+            role = request.POST.get('role', '').strip()
+            industry = request.POST.get('industry', '').strip()
+
+            if first_name:
+                request.user.first_name = first_name
+            if last_name:
+                request.user.last_name = last_name
+            request.user.save(update_fields=['first_name', 'last_name'])
+
+            profile = request.user.profile
+            if role:
+                profile.role = role
+            if industry:
+                profile.industry = industry
+
+            # Handle avatar upload
+            avatar_file = request.FILES.get('avatar')
+            if avatar_file:
+                try:
+                    import io
+                    from PIL import Image
+                    from django.core.files.base import ContentFile
+
+                    img = Image.open(avatar_file)
+                    if img.mode in ('RGBA', 'P'):
+                        img = img.convert('RGB')
+                    img.thumbnail((256, 256), Image.LANCZOS)
+                    buf = io.BytesIO()
+                    img.save(buf, format='WEBP', quality=85)
+                    buf.seek(0)
+                    filename = f"avatar_{request.user.id}.webp"
+                    if profile.avatar:
+                        try:
+                            profile.avatar.delete(save=False)
+                        except Exception:
+                            pass
+                    profile.avatar.save(filename, ContentFile(buf.read()), save=False)
+                except Exception:
+                    pass  # Skip avatar if processing fails
+
+            profile.save()
+            return redirect(reverse('users:onboarding') + '?step=3')
+
+        elif step == 3:
+            # Create workspace (was step 2)
             workspace_name = request.POST.get('workspace_name', '')
             account_type = request.session.get('onboarding_account_type') or 'personal'
-            
+
             workspace, created = Workspace.objects.get_or_create(
                 user=request.user,
                 defaults={
@@ -107,30 +154,30 @@ def onboarding(request):
                     'plan': 'free'
                 }
             )
-            
+
             if not created:
                 workspace.name = workspace_name
                 workspace.account_type = account_type
                 workspace.save()
-            
-            return redirect(reverse('users:onboarding') + '?step=3')
-        
-        elif step == 3:
-            # Save plan selection
+
+            return redirect(reverse('users:onboarding') + '?step=4')
+
+        elif step == 4:
+            # Save plan selection (was step 3)
             plan = request.POST.get('plan', 'free')
-            
+
             workspace = Workspace.objects.get(owner=request.user)
             workspace.plan = plan
             workspace.save()
-            
-            return redirect(reverse('users:onboarding') + '?step=4')
-        
-        elif step == 4:
-            # Complete onboarding
+
+            return redirect(reverse('users:onboarding') + '?step=5')
+
+        elif step == 5:
+            # Complete onboarding (was step 4)
             workspace = Workspace.objects.get(owner=request.user)
             workspace.onboarding_completed = True
             workspace.save()
-            
+
             messages.success(request, 'Welcome to Mathia! Your workspace is ready.')
             return redirect('users:dashboard')
     

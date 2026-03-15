@@ -1,11 +1,13 @@
 from django.urls import path
 from django.contrib.auth import views as auth_views
+from django.views.generic import RedirectView
 from . import views
 from . import dashboard_views
 from . import frontend_views
 from . import feature_views
 from . import auth_views as custom_auth
 from . import integrations_views
+from . import avatar_views
 
 app_name='users'
 urlpatterns = [
@@ -20,8 +22,8 @@ urlpatterns = [
     path('reminders/', feature_views.reminders, name='reminders'),
     path('reminders/create/', frontend_views.create_reminder, name='create_reminder'),
     path('settings/', feature_views.settings, name='settings'),
-    path('settings/profile/', feature_views.profile_settings, name='profile_settings'),
-    path('settings/goals/', feature_views.goals_settings, name='goals_settings'),
+    path('settings/profile/', RedirectView.as_view(url='/accounts/settings/#profile', permanent=False), name='profile_settings'),
+    path('settings/goals/', RedirectView.as_view(url='/accounts/settings/#ai', permanent=False), name='goals_settings'),
     path('rooms/list/', dashboard_views.list_rooms, name='list_rooms'),
     
     # Integrations
@@ -32,6 +34,9 @@ urlpatterns = [
     path('integrations/gmail/callback/', integrations_views.gmail_callback, name='gmail_callback'),
     path('integrations/gmail/disconnect/', integrations_views.disconnect_gmail, name='disconnect_gmail'),
     path('integrations/disconnect/<str:integration_type>/', integrations_views.disconnect_integration, name='disconnect_integration'),
+
+    # Avatar
+    path('avatar/upload/', avatar_views.avatar_upload, name='avatar_upload'),
 
     # Marketing / value pages
     path('why/', views.why_mathia, name='why_mathia'),

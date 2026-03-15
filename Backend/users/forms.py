@@ -4,7 +4,7 @@ from django.core.exceptions import ValidationError
 from django.contrib.auth import get_user_model
 import json
 import re
-from .models import UserProfile, GoalProfile, TrialApplication
+from .models import UserProfile, TrialApplication
 
 User = get_user_model()
 
@@ -315,94 +315,6 @@ class UserProfileForm(forms.ModelForm):
         if commit:
             instance.save()
         return instance
-
-class GoalProfileForm(forms.ModelForm):
-    goals = forms.CharField(
-        required=False,
-        label='Professional goals',
-        widget=forms.Textarea(attrs={
-            'rows': 4,
-            'class': 'form-input',
-            'placeholder': 'Increase revenue\nBook more clients\nLaunch a new offer'
-        })
-    )
-    skills = forms.CharField(
-        required=False,
-        label='Skills & expertise',
-        widget=forms.Textarea(attrs={
-            'rows': 3,
-            'class': 'form-input',
-            'placeholder': 'Brand strategy, Python, Client success'
-        })
-    )
-    needs = forms.CharField(
-        required=False,
-        label='Where do you want help?',
-        widget=forms.Textarea(attrs={
-            'rows': 3,
-            'class': 'form-input',
-            'placeholder': 'Lead generation\nClient follow-ups\nWeekly reporting'
-        })
-    )
-    use_cases = forms.CharField(
-        required=False,
-        label='How will you use Mathia?',
-        widget=forms.Textarea(attrs={
-            'rows': 3,
-            'class': 'form-input',
-            'placeholder': 'Travel planning, Invoicing, Calendar scheduling'
-        })
-    )
-    roadmap = forms.CharField(
-        required=False,
-        label='Roadmap (optional)',
-        widget=forms.Textarea(attrs={
-            'rows': 4,
-            'class': 'form-input',
-            'placeholder': 'Q1 2026: Launch newsletter, Hire a VA\nQ2 2026: Expand into new market'
-        })
-    )
-
-    class Meta:
-        model = GoalProfile
-        fields = ['goals', 'custom_goals', 'industry', 'skills', 
-                 'experience_level', 'needs', 'custom_needs', 'use_cases', 
-                 'roadmap', 'target_revenue', 'target_followers', 
-                 'target_clients', 'target_email_subscribers', 'ai_personalization_enabled']
-        widgets = {
-            'custom_goals': forms.Textarea(attrs={'rows': 2, 'class': 'form-input'}),
-            'custom_needs': forms.Textarea(attrs={'rows': 2, 'class': 'form-input'}),
-        }
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        for field in self.fields.values():
-            if isinstance(field.widget, forms.CheckboxInput):
-                field.widget.attrs.setdefault('class', 'form-check-input')
-                continue
-            field.widget.attrs.setdefault('class', 'form-input')
-
-        if self.instance:
-            self.initial.setdefault('goals', _format_list_value(self.instance.goals))
-            self.initial.setdefault('skills', _format_list_value(self.instance.skills))
-            self.initial.setdefault('needs', _format_list_value(self.instance.needs))
-            self.initial.setdefault('use_cases', _format_list_value(self.instance.use_cases))
-            self.initial.setdefault('roadmap', _format_roadmap_value(self.instance.roadmap))
-
-    def clean_goals(self):
-        return _normalize_list_value(self.cleaned_data.get('goals'))
-
-    def clean_skills(self):
-        return _normalize_list_value(self.cleaned_data.get('skills'))
-
-    def clean_needs(self):
-        return _normalize_list_value(self.cleaned_data.get('needs'))
-
-    def clean_use_cases(self):
-        return _normalize_list_value(self.cleaned_data.get('use_cases'))
-
-    def clean_roadmap(self):
-        return _parse_roadmap_value(self.cleaned_data.get('roadmap'))
 
 
 class TrialApplicationForm(forms.ModelForm):

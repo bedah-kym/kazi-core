@@ -75,25 +75,29 @@ def home(request, room_name):
         
         # Determine the display name
         display_name = "Unknown Room"
-        avatar_url = "https://bootdey.com/img/Content/avatar/avatar1.png" # Default
-        
+        avatar_url = "https://ui-avatars.com/api/?name=U&background=4f8cff&color=fff&size=128"
+
         # Check if it's a "General" room with Mathia
         mathia_member = next((m for m in members if m.User.username == 'mathia'), None)
         other_members = [m for m in members if m.User != request.user]
-        
-        if mathia_member and len(members) <= 2: 
-            # It's likely a 1-on-1 with Mathia (General Room)
+
+        if mathia_member and len(members) <= 2:
             display_name = "General (AI)"
-            avatar_url = "https://bootdey.com/img/Content/avatar/avatar8.png" # Robot-ish avatar if available
+            avatar_url = "/static/img/mathia-avatar.svg"
         elif len(other_members) == 0:
              display_name = "Private Room (You)"
         elif len(other_members) == 1:
             display_name = other_members[0].User.username
+            try:
+                avatar_url = other_members[0].User.profile.get_avatar_url()
+            except Exception:
+                pass
         else:
-            # Group chat - list first few names
             display_name = ", ".join([m.User.username for m in other_members[:2]])
             if len(other_members) > 2:
                 display_name += f" +{len(other_members)-2}"
+            import urllib.parse
+            avatar_url = f"https://ui-avatars.com/api/?name={urllib.parse.quote(display_name[:2])}&background=4f8cff&color=fff&size=128"
         
         chatrooms_data.append({
             'id': room.id,
@@ -114,6 +118,17 @@ def home(request, room_name):
         current_room_name = "General (AI)"
     is_ai_room = _is_ai_only_room_members(room_members)
 
+    # Current room avatar
+    if other_member and other_member.User.username == 'mathia':
+        current_room_avatar = "/static/img/mathia-avatar.svg"
+    elif other_member:
+        try:
+            current_room_avatar = other_member.User.profile.get_avatar_url()
+        except Exception:
+            current_room_avatar = "https://ui-avatars.com/api/?name=U&background=4f8cff&color=fff&size=128"
+    else:
+        current_room_avatar = "https://ui-avatars.com/api/?name=U&background=4f8cff&color=fff&size=128"
+
     return render(
         request, "chatbot/chatbase.html",
         {
@@ -123,6 +138,7 @@ def home(request, room_name):
             "chatrooms": chatrooms_data,  # Passing processed data
             "room_member": current_room_name,
             "is_ai_room": is_ai_room,
+            "room_avatar": current_room_avatar,
         }
     )
 

@@ -215,13 +215,60 @@ Client receives ai_stream frames
 
 ---
 
-### RETIRED Components
+### 12. Contacts System (`orchestration/contact_tools.py` + `chatbot/contact_api.py`)
 
-| Component | Replacement |
-|-----------|-------------|
-| `workflow_planner.py` (ad-hoc planning) | Agent loop — LLM plans dynamically step-by-step |
-| `data_synthesizer.py` | Agent loop — LLM synthesizes responses natively |
-| `manager_verifier.py` | Agent loop — self-verification via observation |
+**Purpose:** User contact management with agent tool integration and REST API.
+
+**Agent Tools (internal, no connector needed):**
+| Tool | Risk | Description |
+|------|------|-------------|
+| `lookup_contact` | Low | Search contacts by name; falls back to workspace members if none found |
+| `save_contact` | Low | Create contact with dedup by email/phone; source: `ai_extracted` |
+
+**REST API:**
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/contacts/?room_id=X` | GET | List contacts (global + room-scoped + linked rooms) |
+| `/api/contacts/` | POST | Create contact (manual source) |
+| `/api/contacts/<id>/` | PATCH | Update contact fields |
+| `/api/contacts/<id>/` | DELETE | Delete contact (ownership verified) |
+| `/api/contacts/search/?q=&room_id=` | GET | Autocomplete search (name/email/phone, max 10) |
+
+**Scoping:** Contacts can be global (`room=null`) or room-scoped. Room-scoped contacts are visible in linked rooms. Global/room toggle available at creation time.
+
+**Deduplication:** `save_contact` checks existing contacts by email then phone before creating.
+
+---
+
+### 13. Room Linking (`chatbot/linked_rooms_api.py`)
+
+**Purpose:** Bidirectional room linking for shared context across conversations.
+
+**Model:** `RoomContext.related_rooms` — ManyToMany self-referential field.
+
+**REST API:**
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/rooms/<room_id>/linked/` | GET | List linked rooms + linkable rooms |
+| `/api/rooms/<room_id>/linked/` | POST | Link a room (body: `{target_room_id}`) |
+| `/api/rooms/<room_id>/linked/<target_id>/` | DELETE | Unlink a room |
+
+**Behavior:**
+- Links are **bidirectional** — linking A→B also links B→A
+- Notes from linked rooms appear under "LINKED ROOM CONTEXT" in agent prompts
+- `RoomNote.is_private` field excludes sensitive notes from linked room sharing
+- Contacts from linked rooms are accessible via contact search
+- User must be participant in both rooms to create a link
+
+---
+
+### RETIRED / FALLBACK Components
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| `workflow_planner.py` | **Fallback** | Active when `AGENT_LOOP_ENABLED=False`; ~1740 lines with confidence gates |
+| `data_synthesizer.py` | Retired | Agent loop — LLM synthesizes responses natively |
+| `manager_verifier.py` | Retired | Agent loop — self-verification via observation |
 
 ---
 
@@ -415,6 +462,7 @@ Single source of truth for all 40+ supported actions. Each entry includes:
 - **Payments** (6): create_invoice, create_payment_link, check_payments, check_balance, list_transactions, withdraw
 - **Calendar** (2): schedule_meeting, check_availability
 - **Utilities** (5): search_info, get_weather, search_gif, convert_currency, set_reminder
+- **Contacts** (2): lookup_contact, save_contact
 - **System** (1): check_quotas
 
 ---
@@ -508,7 +556,7 @@ Message → Redis buffer → Batch (10 msgs) → Celery task → HF toxic-bert �
 | **Consumer & Streaming** | |
 | `Backend/chatbot/consumers.py` | WebSocket handler, agent loop integration (~2200 lines) |
 | `Backend/chatbot/context_manager.py` | 3-tier memory system |
-| `Backend/chatbot/models.py` | 12 DB models (chat, context, memory) |
+| `Backend/chatbot/models.py` | 13 DB models (chat, context, memory, contacts) |
 | `Backend/chatbot/tasks.py` | Celery tasks (moderation, voice, reminders) |
 | **Orchestration (Legacy/Support)** | |
 | `Backend/orchestration/intent_parser.py` | NL → JSON intent parsing (classic mode fallback) |
@@ -520,7 +568,11 @@ Message → Redis buffer → Batch (10 msgs) → Celery task → HF toxic-bert �
 | `Backend/orchestration/user_preferences.py` | Localization, style preferences |
 | `Backend/orchestration/contracts.py` | Standardized response format |
 | `Backend/orchestration/models.py` | ActionReceipt audit model |
+| `Backend/orchestration/contact_tools.py` | Contact agent tools (lookup, save) with dedup |
 | `Backend/orchestration/connectors/` | All service connectors (tools the agent calls) |
+| **Contacts & Room Linking** | |
+| `Backend/chatbot/contact_api.py` | REST CRUD + search for contacts |
+| `Backend/chatbot/linked_rooms_api.py` | Bidirectional room linking API |
 | **Workflows** | |
 | `Backend/workflows/temporal_integration.py` | Temporal workflow definitions + agent handoff |
 | `Backend/workflows/activity_executors.py` | Step execution with connector routing |

@@ -4,7 +4,7 @@ Django signals to auto-create related models
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.contrib.auth import get_user_model
-from .models import UserProfile, Workspace, GoalProfile
+from .models import UserProfile, Workspace
 
 User = get_user_model()
 
@@ -66,15 +66,3 @@ def save_user_profile(sender, instance, **kwargs):
         instance.profile.save()
 
 
-@receiver(post_save, sender=Workspace)
-def create_goal_profile(sender, instance, created, **kwargs):
-    """Auto-create GoalProfile when Workspace is created"""
-    if created:
-        GoalProfile.objects.create(workspace=instance)
-
-
-@receiver(post_save, sender=Workspace)
-def save_goal_profile(sender, instance, **kwargs):
-    """Save GoalProfile when Workspace is saved"""
-    if hasattr(instance, 'goals'):
-        instance.goals.save()

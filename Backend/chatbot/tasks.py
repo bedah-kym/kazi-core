@@ -1363,8 +1363,7 @@ def _proactive_allowed(user) -> bool:
         except Exception:
             pass
     try:
-        goal_profile = getattr(user.workspace, "goals", None)
-        if goal_profile and not goal_profile.ai_personalization_enabled:
+        if hasattr(user, 'profile') and not user.profile.ai_personalization_enabled:
             return False
     except Exception:
         pass

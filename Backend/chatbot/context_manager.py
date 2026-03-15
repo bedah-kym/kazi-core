@@ -7,8 +7,9 @@ import logging
 import json
 import math
 from datetime import datetime, date, timedelta
+from django.db.models import Q
 from django.utils import timezone
-from .models import RoomContext, RoomNote, AIConversation, DocumentUpload
+from .models import RoomContext, RoomNote, AIConversation, DocumentUpload, Contact
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +106,28 @@ class ContextManager:
             if global_notes:
                 context_data['global_notes'] = [ContextManager._format_note(n) for n in global_notes]
             
-            # 4. Get Processed Documents Context
+            # 4. Get User Contacts (top 15 by recency)
+            try:
+                participant_users = [m.User for m in participants]
+                contacts = Contact.objects.filter(
+                    user__in=participant_users
+                ).filter(
+                    Q(room__isnull=True) | Q(room=chatroom)
+                ).order_by('-updated_at')[:15]
+                if contacts:
+                    context_data['contacts'] = [
+                        {
+                            "id": c.id,
+                            "name": c.name,
+                            "email": c.email,
+                            "phone": c.phone,
+                        }
+                        for c in contacts
+                    ]
+            except Exception as e:
+                logger.error(f"Error fetching contacts: {e}")
+
+            # 5. Get Processed Documents Context
             # Fetch the 3 most recent successfully processed documents for this room
             docs = DocumentUpload.objects.filter(
                 chatroom=chatroom,
@@ -220,6 +242,20 @@ class ContextManager:
                 for note in data['global_notes']:
                     prompt_parts.append(f"- [MEMORY] {note['content']}")
             
+            # Add User Contacts
+            if data.get('contacts'):
+                contact_lines = []
+                for c in data['contacts']:
+                    parts = [c['name']]
+                    if c.get('email'):
+                        parts.append(c['email'])
+                    if c.get('phone'):
+                        parts.append(c['phone'])
+                    contact_lines.append(" | ".join(parts))
+                prompt_parts.append("USER CONTACTS:")
+                for line in contact_lines:
+                    prompt_parts.append(f"- {line}")
+
             # Add Document Context
             if data.get('documents'):
                 prompt_parts.append("REFERENCED DOCUMENTS:")

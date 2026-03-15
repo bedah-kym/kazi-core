@@ -106,6 +106,10 @@ def get_tool_definitions(
     from orchestration.memory_tools import MEMORY_TOOL_DEFINITIONS
     tools.extend(MEMORY_TOOL_DEFINITIONS)
 
+    # Append internal contact tools
+    from orchestration.contact_tools import CONTACT_TOOL_DEFINITIONS
+    tools.extend(CONTACT_TOOL_DEFINITIONS)
+
     return tools
 
 

@@ -105,6 +105,22 @@ abandoned, offer to archive it. If unsure, ask the user before archiving.
 """
 
 
+_CONTACT_RULES = """\
+## Contact management
+
+You have contact tools to look up and save user contacts:
+- **lookup_contact**: Search the user's contacts by name. Use this BEFORE asking for an email or phone when the user mentions a person by name.
+- **save_contact**: Save a new contact for future use.
+
+### When to use contact tools
+- When the user says "send to Brian" or "email John", call lookup_contact FIRST.
+- If lookup_contact returns a match, use that email/phone directly — do not ask the user.
+- If no match, ask the user for the email/phone, then proceed with the send.
+- After successfully sending to a NEW recipient (not in contacts), call save_contact to remember them. Do NOT block the send to save — save AFTER the send succeeds.
+- Contacts already in the prompt context under USER CONTACTS do not need a lookup_contact call.
+"""
+
+
 # --------------------------------------------------------------------------- #
 #  Prompt assembly                                                            #
 # --------------------------------------------------------------------------- #
@@ -139,6 +155,7 @@ def build_system_prompt(
     sections.append(_SAFETY_RULES)
     sections.append(_RESPONSE_RULES)
     sections.append(_MEMORY_RULES)
+    sections.append(_CONTACT_RULES)
 
     # Contextual memory
     if context_prompt:

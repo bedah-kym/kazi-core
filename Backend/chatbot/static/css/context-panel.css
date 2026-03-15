@@ -576,6 +576,170 @@
     }
 }
 
+/* ================================================================
+   Accordion Sections
+   ================================================================ */
+
+.context-section {
+    border-bottom: 1px solid hsl(var(--border));
+}
+
+.context-section:last-child {
+    border-bottom: none;
+}
+
+.context-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.75rem 0.5rem;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.15s;
+}
+
+.context-section-header:hover {
+    background: hsl(var(--accent));
+}
+
+.context-section-header-left {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.context-section-icon {
+    font-size: 0.8rem;
+    color: hsl(var(--muted-foreground));
+    width: 1rem;
+    text-align: center;
+}
+
+.context-section-label {
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: hsl(var(--foreground));
+}
+
+.section-toggle {
+    font-size: 0.65rem;
+    color: hsl(var(--muted-foreground));
+    transition: transform 0.2s ease;
+}
+
+.context-section-header.expanded .section-toggle {
+    transform: rotate(180deg);
+}
+
+.context-section-body {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.25s ease;
+}
+
+.context-section-body.expanded {
+    max-height: 2000px; /* large enough for content */
+}
+
+.context-section-content {
+    padding: 0 0.5rem 0.75rem;
+}
+
+/* ================================================================
+   Contact Items
+   ================================================================ */
+
+.contact-search-row {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.contact-search {
+    flex: 1;
+    font-size: 0.8rem;
+    background: hsl(var(--background));
+    border-color: hsl(var(--border));
+    color: hsl(var(--foreground));
+}
+
+.contact-search:focus {
+    border-color: hsl(var(--ring));
+    box-shadow: 0 0 0 2px hsl(var(--ring) / 0.2);
+}
+
+.contact-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.5rem 0.25rem;
+    border-bottom: 1px solid hsl(var(--border));
+    transition: background 0.15s;
+}
+
+.contact-item:last-child {
+    border-bottom: none;
+}
+
+.contact-item:hover {
+    background: hsl(var(--accent));
+}
+
+.contact-item-main {
+    flex: 1;
+    min-width: 0;
+}
+
+.contact-item-name {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: hsl(var(--foreground));
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.contact-item-info {
+    font-size: 0.75rem;
+    color: hsl(var(--muted-foreground));
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.contact-item-actions {
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+.contact-item:hover .contact-item-actions {
+    opacity: 1;
+}
+
+.contact-action-btn {
+    padding: 0.15rem 0.35rem;
+    font-size: 0.7rem;
+    color: hsl(var(--muted-foreground));
+}
+
+.contact-action-btn:hover {
+    color: hsl(var(--destructive));
+}
+
+/* ================================================================
+   Contact Add Form
+   ================================================================ */
+
+.contact-add-form {
+    padding: 0.75rem;
+    background: hsl(var(--card));
+    border: 1px solid hsl(var(--border));
+    border-radius: var(--radius);
+    margin-top: 0.5rem;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
     .context-panel {

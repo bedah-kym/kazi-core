@@ -302,6 +302,35 @@ class DailySummary(models.Model):
         return f"Summary for Room {self.room_context.chatroom.id} on {self.date}"
 
 
+class Contact(models.Model):
+    SOURCE_CHOICES = [
+        ('manual', 'Manual'),
+        ('ai_extracted', 'AI Extracted'),
+    ]
+    user = models.ForeignKey(user, on_delete=models.CASCADE, related_name='contacts')
+    room = models.ForeignKey(Chatroom, on_delete=models.CASCADE, null=True, blank=True,
+                             related_name='contacts', help_text="Null = global contact")
+    name = models.CharField(max_length=200)
+    email = models.EmailField(blank=True, default='')
+    phone = models.CharField(max_length=20, blank=True, default='')
+    label = models.CharField(max_length=100, blank=True, default='',
+                             help_text="E.g. 'colleague', 'client', 'friend'")
+    source = models.CharField(max_length=15, choices=SOURCE_CHOICES, default='manual')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['name']
+        indexes = [
+            models.Index(fields=['user', 'name']),
+            models.Index(fields=['user', 'email']),
+            models.Index(fields=['user', 'phone']),
+        ]
+
+    def __str__(self):
+        return f"{self.name} ({self.email or self.phone or 'no info'})"
+
+
 class DocumentUpload(models.Model):
     """
     Track document uploads for rate limiting and quota management

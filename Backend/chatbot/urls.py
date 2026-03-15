@@ -2,6 +2,7 @@
 from django.urls import path
 from . import views
 from . import context_api
+from . import contact_api
 from . import message_actions
 from . import voice_views
 
@@ -19,6 +20,11 @@ urlpatterns = [
     path('api/rooms/<int:room_id>/context/', context_api.get_room_context, name='room-context'),
     path('api/rooms/<int:room_id>/notes/', context_api.add_note, name='add-note'),
     
+    # Contact API
+    path('api/contacts/', contact_api.list_create_contacts, name='contacts-list'),
+    path('api/contacts/<int:contact_id>/', contact_api.update_delete_contact, name='contact-detail'),
+    path('api/contacts/search/', contact_api.search_contacts, name='contacts-search'),
+
     # Message Actions API
     path('api/rooms/<int:room_id>/messages/<int:message_id>/pin/', message_actions.pin_message_to_notes, name='pin-message'),
     path('api/rooms/<int:room_id>/messages/<int:message_id>/reply/', message_actions.reply_to_message, name='reply-message'),

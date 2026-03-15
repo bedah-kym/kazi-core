@@ -106,7 +106,23 @@ async def execute_tool(
     start_time = time.monotonic()
     action = resolve_action_alias(tool_name)
 
-    # 0. Internal memory tools (no connector needed)
+    # 0a. Internal contact tools (no connector needed)
+    from orchestration.contact_tools import _CONTACT_TOOL_MAP
+    if action in _CONTACT_TOOL_MAP:
+        try:
+            result = await _CONTACT_TOOL_MAP[action](tool_input, context)
+        except Exception as exc:
+            logger.error("Contact tool error %s: %s", action, exc, exc_info=True)
+            return {"status": "error", "message": f"Contact tool failed: {str(exc)}"}
+        elapsed = round(time.monotonic() - start_time, 2)
+        logger.info("Contact tool %s executed in %ss", action, elapsed)
+        if not isinstance(result, dict):
+            result = {"status": "success", "data": result}
+        if "status" not in result:
+            result["status"] = "success"
+        return result
+
+    # 0b. Internal memory tools (no connector needed)
     from orchestration.memory_tools import _MEMORY_TOOL_MAP
     if action in _MEMORY_TOOL_MAP:
         try:

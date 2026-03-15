@@ -272,27 +272,47 @@ class ReferenceResolver:
         return None
 
     async def _get_user_contacts(self) -> List[Dict]:
-        """Get user's team/contacts (workspace members + custom contacts)."""
+        """Get user's contacts from Contact model first, then fall back to workspace members."""
         try:
-            from chatbot.models import Chatroom
+            from chatbot.models import Contact, Chatroom
+            from django.db.models import Q
 
             def _fetch():
-                # Get workspace members
+                # 1. Try dedicated Contact model first
+                qs = Contact.objects.filter(user_id=self.user_id)
+                if self.room_id:
+                    qs = qs.filter(Q(room__isnull=True) | Q(room_id=self.room_id))
+                else:
+                    qs = qs.filter(room__isnull=True)
+
                 contacts = []
-                rooms = Chatroom.objects.filter(
-                    participants__member__member__workspace=self.workspace
-                ).distinct()
+                for c in qs[:20]:
+                    contacts.append({
+                        'name': c.name,
+                        'email': c.email or '',
+                        'phone': c.phone or '',
+                        'id': c.id,
+                    })
 
-                for room in rooms:
-                    for member in room.participants.all():
-                        if member.member.id != self.user_id:
-                            contacts.append({
-                                'name': member.member.get_full_name() or member.member.username,
-                                'email': member.member.email,
-                                'id': member.member.id,
-                            })
+                # 2. Fall back to workspace members if no dedicated contacts
+                if not contacts:
+                    try:
+                        rooms = Chatroom.objects.filter(
+                            participants__member__member__workspace=self.workspace
+                        ).distinct()
 
-                return list({c['email']: c for c in contacts}.values())  # Deduplicate by email
+                        for room in rooms:
+                            for member in room.participants.all():
+                                if member.member.id != self.user_id:
+                                    contacts.append({
+                                        'name': member.member.get_full_name() or member.member.username,
+                                        'email': member.member.email,
+                                        'id': member.member.id,
+                                    })
+                    except Exception:
+                        pass
+
+                return list({c.get('email', c.get('name', '')): c for c in contacts}.values())
 
             return await sync_to_async(_fetch)()
         except Exception:

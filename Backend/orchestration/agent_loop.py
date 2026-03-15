@@ -738,6 +738,9 @@ async def run_agent_loop(
 
         state.iteration += 1
 
+        # Emit thinking event so frontend shows reasoning in timeline
+        yield AgentEvent("thinking", {"text": ""})
+
         # Token budget check
         if state.tokens_used >= LOOP_TOKEN_BUDGET:
             yield AgentEvent("error", {

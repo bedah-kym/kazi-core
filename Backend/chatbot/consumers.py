@@ -877,8 +877,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             current_time = time.time()
                             joined_text = "".join(stream_state['buffer'])
                             
-                            # Send if buffer > 20 chars OR > 0.2s passed OR is_final
-                            if len(joined_text) > 20 or (current_time - stream_state['last_send']) > 0.2 or is_final:
+                            # Send if buffer > 6 chars OR > 0.08s passed OR is_final
+                            if len(joined_text) > 6 or (current_time - stream_state['last_send']) > 0.08 or is_final:
                                 if joined_text or is_final:
                                     try:
                                         await self.channel_layer.group_send(
@@ -1189,7 +1189,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                     await broadcast_chunk(event.data.get("text", ""))
                                 elif event.kind == "thinking":
                                     await emit_progress("thinking", "started", "Reasoning…")
-                                    await broadcast_chunk(event.data.get("text", ""))
                                 elif event.kind == "tool_start":
                                     tool = event.data.get("name", "action")
                                     await emit_progress("executing", "started", f"Running {tool.replace('_', ' ')}…")
@@ -1228,7 +1227,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                     await broadcast_chunk(event.data.get("text", ""))
                                 elif event.kind == "thinking":
                                     await emit_progress("thinking", "started", "Reasoning…")
-                                    await broadcast_chunk(event.data.get("text", ""))
                                 elif event.kind == "tool_start":
                                     tool = event.data.get("name", "action")
                                     await emit_progress("executing", "started", f"Running {tool.replace('_', ' ')}…")

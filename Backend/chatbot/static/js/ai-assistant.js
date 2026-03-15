@@ -604,18 +604,37 @@ class MathiaAssistant {
 
             chatList.appendChild(msgListTag);
             streamContainer = msgListTag;
+            // Initialize raw text accumulator
+            streamContainer._rawText = '';
+            streamContainer._renderTimer = null;
         }
 
-        // Append chunk to content (use innnerText to avoid HTML injection but keep line breaks)
-        const contentDiv = streamContainer.querySelector('.stream-content');
-        contentDiv.innerText += chunk;
+        // Accumulate raw text
+        streamContainer._rawText = (streamContainer._rawText || '') + chunk;
 
-        // Scroll to bottom
-        const chatList = this.getCurrentMessageList();
-        if (chatList) chatList.scrollTop = chatList.scrollHeight;
+        // Debounced markdown render — every 80ms or on final
+        if (streamContainer._renderTimer) clearTimeout(streamContainer._renderTimer);
 
-        // DO NOT remove ai-stream-container class here. 
-        // We need it so ai_message_saved can find and remove it later.
+        const doRender = () => {
+            const contentDiv = streamContainer.querySelector('.stream-content');
+            if (!contentDiv) return;
+            const raw = streamContainer._rawText || '';
+            // Render markdown if marked is available, otherwise plain text
+            if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
+                contentDiv.innerHTML = DOMPurify.sanitize(marked.parse(raw));
+            } else if (typeof marked !== 'undefined') {
+                contentDiv.innerHTML = marked.parse(raw);
+            } else {
+                contentDiv.innerText = raw;
+            }
+            this._scrollToBottom();
+        };
+
+        if (isFinal) {
+            doRender();
+        } else {
+            streamContainer._renderTimer = setTimeout(doRender, 80);
+        }
     }
 
     displayAIMessage(messageData) {

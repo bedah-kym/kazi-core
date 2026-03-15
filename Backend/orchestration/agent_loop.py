@@ -749,21 +749,10 @@ async def run_agent_loop(
             })
             break
 
-        # ---- Call LLM (streaming) ------------------------------------ #
+        # ---- Call LLM ------------------------------------------------ #
         selected_model = _select_model(user_message, state.iteration)
-
-        # Accumulators for the streamed response
-        content_blocks: List[Dict[str, Any]] = []
-        collected_text: List[str] = []
-        active_tool_blocks: Dict[int, Dict[str, Any]] = {}
-        tool_json_accum: Dict[int, str] = {}
-        stop_reason = "end_turn"
-        response_usage: Dict[str, Any] = {}
-        block_index = -1
-        is_streaming_text = False
-
         try:
-            async for event in llm.stream_message(
+            response = await llm.create_message(
                 messages=state.messages,
                 system=system,
                 tools=tools if tools else None,
@@ -772,49 +761,17 @@ async def run_agent_loop(
                 user_id=user_id,
                 model=selected_model,
                 use_prompt_cache=True,
-            ):
-                etype = event.get("type", "")
-
-                if etype == "text":
-                    # Stream text deltas to the user in real-time
-                    delta = event.get("text", "")
-                    if delta:
-                        collected_text.append(delta)
-                        if not is_streaming_text:
-                            is_streaming_text = True
-                        yield AgentEvent("text_delta", {"text": delta})
-
-                elif etype == "tool_use_start":
-                    # A tool call is starting
-                    is_streaming_text = False
-                    block_index += 1
-
-                elif etype == "tool_use_end":
-                    # Tool call fully received
-                    tc_block = {
-                        "type": "tool_use",
-                        "id": event.get("id", ""),
-                        "name": event.get("name", ""),
-                        "input": event.get("input", {}),
-                    }
-                    content_blocks.append(tc_block)
-
-                elif etype == "message_done":
-                    stop_reason = event.get("stop_reason", "end_turn")
-                    response_usage = event.get("usage", {})
-
+            )
         except Exception as exc:
-            logger.error("Agent loop LLM stream failed: %s", exc, exc_info=True)
+            logger.error("Agent loop LLM call failed: %s", exc, exc_info=True)
             yield AgentEvent("error", {"message": f"LLM error: {exc}"})
             break
 
-        # Build the full text block for conversation history
-        full_text = "".join(collected_text)
-        if full_text:
-            content_blocks.insert(0, {"type": "text", "text": full_text})
+        content_blocks = response.get("content", [])
+        stop_reason = response.get("stop_reason", "end_turn")
 
         # Track token usage
-        iter_tokens = int(response_usage.get("input_tokens", 0)) + int(response_usage.get("output_tokens", 0))
+        iter_tokens = _get_response_tokens(response)
         state.tokens_used += iter_tokens
 
         if (
@@ -827,8 +784,7 @@ async def run_agent_loop(
             })
 
         # Track web search usage
-        server_tool_use = response_usage.get("server_tool_use", {})
-        search_count = int(server_tool_use.get("web_search_requests", 0))
+        search_count = _count_search_uses(response)
         if search_count > 0:
             _record_search_usage(user_id, search_count)
             record_event("web_search_used", {
@@ -840,6 +796,15 @@ async def run_agent_loop(
 
         # Append the assistant message to the conversation
         state.messages.append({"role": "assistant", "content": content_blocks})
+
+        # ---- Stream text in small chunks for typing effect ----------- #
+        text = _extract_text(content_blocks)
+        if text:
+            # Simulate streaming by chunking the text into small pieces
+            chunk_size = 12  # ~3 words per chunk
+            for i in range(0, len(text), chunk_size):
+                yield AgentEvent("text_delta", {"text": text[i:i + chunk_size]})
+                await asyncio.sleep(0.02)  # 20ms between chunks
 
         # ---- If LLM is done talking, exit the loop ------------------- #
         if stop_reason == "end_turn":

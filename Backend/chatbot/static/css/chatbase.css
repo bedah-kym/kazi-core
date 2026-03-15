@@ -479,11 +479,29 @@ body.chat-page {
 }
 
 .my-message {
-    background: #3e4757;
+    background: linear-gradient(135deg, #3e4757 0%, #4a5568 100%);
     color: white;
     margin-left: auto;
     border-bottom-right-radius: 5px;
-    box-shadow: 8px 8px 13px rgba(0, 0, 0, 0.2);
+    box-shadow: 0 4px 14px rgba(62, 71, 87, 0.25);
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    animation: msgSendIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.my-message:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 18px rgba(62, 71, 87, 0.3);
+}
+
+@keyframes msgSendIn {
+    from {
+        opacity: 0;
+        transform: translateX(12px) scale(0.97);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0) scale(1);
+    }
 }
 
 .other-message {
@@ -491,7 +509,16 @@ body.chat-page {
     color: #333;
     margin-right: auto;
     border-bottom-left-radius: 5px;
-    box-shadow: 8px 8px 13px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="dark"] .my-message {
+    background: linear-gradient(135deg, #2d3748 0%, #4a5568 100%);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
+[data-theme="dark"] .my-message:hover {
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
 }
 
 [data-theme="dark"] .other-message {

@@ -366,24 +366,37 @@ class MathiaAssistant {
             return;
         }
 
-        // NEW: Handle saved message after streaming completes
+        // Handle saved message after streaming completes — smooth transition
         if (data.command === 'ai_message_saved') {
             console.log('AI message saved event received');
             this.isThinking = false;
+            this._stepCount = 0;
 
-            // Remove ALL temporary AI states from THIS room
             const chatList = this.getCurrentMessageList();
-            if (chatList) {
-                // Remove any streaming containers
-                chatList.querySelectorAll('.ai-stream-container').forEach(el => el.remove());
-                // Remove any thinking indicators
-                chatList.querySelectorAll('.mathia-thinking').forEach(el => el.remove());
-            }
+            if (!chatList) return;
 
-            // Use createMessage() for proper markdown rendering and dropdown
-            if (typeof createMessage === 'function') {
-                const roomId = window.currentRoomId || (typeof roomName !== 'undefined' ? roomName : null);
-                createMessage(data.message, roomId);
+            // Remove thinking indicators
+            chatList.querySelectorAll('.mathia-thinking').forEach(el => el.remove());
+
+            // Morph stream container → saved message with crossfade
+            const streamEl = chatList.querySelector('.ai-stream-container');
+            if (streamEl) {
+                streamEl.classList.add('morphing');
+                setTimeout(() => {
+                    streamEl.remove();
+                    if (typeof createMessage === 'function') {
+                        const roomId = window.currentRoomId || (typeof roomName !== 'undefined' ? roomName : null);
+                        createMessage(data.message, roomId);
+                        // Add morph-in animation to the new message
+                        const newMsg = chatList.lastElementChild;
+                        if (newMsg) newMsg.classList.add('morph-in');
+                    }
+                }, 300); // matches morphOut animation duration
+            } else {
+                if (typeof createMessage === 'function') {
+                    const roomId = window.currentRoomId || (typeof roomName !== 'undefined' ? roomName : null);
+                    createMessage(data.message, roomId);
+                }
             }
             return;
         }
@@ -413,55 +426,142 @@ class MathiaAssistant {
     }
     handleOrchestrationStep(event) {
         if (!event) return;
-        const statusEl = this.getOrchestrationStatusContainer();
-        if (!statusEl) return;
-
-        const parts = [];
-        if (event.phase) parts.push(event.phase);
-        if (event.state) parts.push(event.state);
-        let summary = parts.join(' - ');
-        if (event.message) {
-            summary = summary ? `${summary} - ${event.message}` : event.message;
-        }
-
-        const content = statusEl.querySelector('.mathia-progress-text');
-        if (content) content.textContent = summary;
-        statusEl.classList.add('active');
-
         const phase = (event.phase || '').toLowerCase();
         const state = (event.state || '').toLowerCase();
-        const isDone = phase === 'done' || state === 'completed' || state === 'failed';
-        if (isDone) {
-            statusEl.classList.add('done');
-            window.setTimeout(() => {
-                statusEl.classList.remove('active');
-                statusEl.classList.remove('done');
-            }, 1200);
-        } else {
-            statusEl.classList.remove('done');
+        const message = event.message || '';
+
+        // Map phase/state to a tool step in the timeline
+        if (phase === 'executing' && state === 'started') {
+            // New tool starting — add a running step
+            const toolName = message.replace(/^Running\s*/i, '').replace(/…$/, '').trim();
+            this._addTimelineStep(toolName, 'running');
+        } else if (phase === 'executing' && (state === 'completed' || state === 'failed')) {
+            // Tool finished — mark the last running step
+            const status = state === 'completed' ? 'success' : 'error';
+            this._completeLastStep(status, message);
+        } else if (phase === 'thinking' && state === 'started') {
+            this._addTimelineStep('Reasoning', 'thinking');
+        } else if (phase === 'validating') {
+            this._addTimelineStep(message || 'Checking safety', state === 'started' ? 'running' : 'success');
+            if (state !== 'started') this._completeLastStep('success', message);
+        } else if (phase === 'planning' && state === 'started') {
+            this._addTimelineStep('Planning', 'thinking');
+        } else if (phase === 'planning' && state === 'completed') {
+            this._completeLastStep('success', message);
+        } else if (phase === 'done') {
+            this._completeAllSteps();
         }
     }
 
-    getOrchestrationStatusContainer() {
-        let statusEl = document.getElementById('mathia-progress-status');
-        if (statusEl) return statusEl;
+    _getOrCreateTimeline() {
+        const streamContainer = document.querySelector('.ai-stream-container');
+        if (!streamContainer) return null;
 
-        const anchor = document.querySelector('.chat-message');
-        if (!anchor || !anchor.parentElement) return null;
+        let timeline = streamContainer.querySelector('.mathia-tool-timeline');
+        if (!timeline) {
+            const msgDiv = streamContainer.querySelector('.message.mathia-message');
+            if (!msgDiv) return null;
+            const contentDiv = msgDiv.querySelector('.stream-content');
+            timeline = document.createElement('div');
+            timeline.className = 'mathia-tool-timeline';
+            msgDiv.insertBefore(timeline, contentDiv);
+        }
+        return timeline;
+    }
 
-        statusEl = document.createElement('div');
-        statusEl.id = 'mathia-progress-status';
-        statusEl.className = 'mathia-progress-status';
-        statusEl.innerHTML = `
-            <div class="mathia-progress-badge">
-                <i class="fas fa-robot"></i>
-                <span>Mathia</span>
+    _getStepIcon(status) {
+        switch (status) {
+            case 'running':  return '<i class="fas fa-spinner"></i>';
+            case 'thinking': return '<i class="fas fa-brain"></i>';
+            case 'success':  return '<i class="fas fa-check"></i>';
+            case 'error':    return '<i class="fas fa-times"></i>';
+            default:         return '<i class="fas fa-circle"></i>';
+        }
+    }
+
+    _addTimelineStep(label, status) {
+        // If thinking step exists and is still running, complete it first
+        if (status !== 'thinking') {
+            const timeline = this._getOrCreateTimeline();
+            if (timeline) {
+                const thinkingStep = timeline.querySelector('.mathia-step.thinking-step');
+                if (thinkingStep && thinkingStep.classList.contains('running')) {
+                    const icon = thinkingStep.querySelector('.mathia-step-icon');
+                    if (icon) {
+                        icon.className = 'mathia-step-icon success';
+                        icon.innerHTML = this._getStepIcon('success');
+                    }
+                    thinkingStep.classList.remove('running');
+                    thinkingStep.classList.add('completed');
+                }
+            }
+        }
+
+        const timeline = this._getOrCreateTimeline();
+        if (!timeline) return;
+
+        this._stepCount = (this._stepCount || 0) + 1;
+
+        const step = document.createElement('div');
+        step.className = `mathia-step ${status === 'running' || status === 'thinking' ? 'running' : ''}`;
+        if (status === 'thinking') step.classList.add('thinking-step');
+        step.style.animationDelay = `${(this._stepCount - 1) * 0.08}s`;
+        step.innerHTML = `
+            <div class="mathia-step-icon ${status}">
+                ${this._getStepIcon(status)}
             </div>
-            <div class="mathia-progress-text"></div>
+            <div class="mathia-step-body">
+                <div class="mathia-step-label">${label || 'Processing'}</div>
+                <div class="mathia-step-detail">${status === 'running' ? 'In progress…' : status === 'thinking' ? 'Analyzing…' : ''}</div>
+            </div>
         `;
 
-        anchor.parentElement.insertBefore(statusEl, anchor);
-        return statusEl;
+        timeline.appendChild(step);
+        this._scrollToBottom();
+    }
+
+    _completeLastStep(status, detail) {
+        const timeline = this._getOrCreateTimeline();
+        if (!timeline) return;
+
+        const steps = timeline.querySelectorAll('.mathia-step.running');
+        const lastStep = steps[steps.length - 1];
+        if (!lastStep) return;
+
+        lastStep.classList.remove('running');
+        lastStep.classList.add('completed');
+
+        const icon = lastStep.querySelector('.mathia-step-icon');
+        if (icon) {
+            icon.className = `mathia-step-icon ${status}`;
+            icon.innerHTML = this._getStepIcon(status);
+        }
+
+        const detailEl = lastStep.querySelector('.mathia-step-detail');
+        if (detailEl && detail) {
+            detailEl.textContent = detail;
+        }
+    }
+
+    _completeAllSteps() {
+        this._stepCount = 0;
+        const timeline = this._getOrCreateTimeline();
+        if (!timeline) return;
+
+        timeline.querySelectorAll('.mathia-step.running').forEach(step => {
+            step.classList.remove('running');
+            step.classList.add('completed');
+            const icon = step.querySelector('.mathia-step-icon');
+            if (icon) {
+                icon.className = 'mathia-step-icon success';
+                icon.innerHTML = this._getStepIcon('success');
+            }
+        });
+    }
+
+    _scrollToBottom() {
+        const chatList = this.getCurrentMessageList();
+        if (chatList) chatList.scrollTop = chatList.scrollHeight;
     }
     checkForTrigger(data) {
         if (data.command !== 'new_message') return;

@@ -2015,16 +2015,152 @@ body[data-message-density="compact"] .message {
     }
 }
 
+/* ============================================
+   AGENTIC TOOL TIMELINE & PROGRESS
+   ============================================ */
+
+/* Container for tool steps inside the stream message */
+.mathia-tool-timeline {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin: 8px 0 12px;
+    padding: 0;
+    position: relative;
+}
+
+/* Vertical connector line */
+.mathia-tool-timeline::before {
+    content: '';
+    position: absolute;
+    left: 13px;
+    top: 20px;
+    bottom: 20px;
+    width: 2px;
+    background: linear-gradient(180deg, rgba(102,126,234,0.3) 0%, rgba(102,126,234,0.1) 100%);
+    border-radius: 1px;
+}
+
+/* Individual step card */
+.mathia-step {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 8px 12px;
+    border-radius: 10px;
+    position: relative;
+    z-index: 1;
+    animation: stepSlideIn 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    opacity: 0;
+}
+
+@keyframes stepSlideIn {
+    from { opacity: 0; transform: translateY(8px) scale(0.97); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Step status icon */
+.mathia-step-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    flex-shrink: 0;
+    transition: all 0.3s ease;
+}
+
+.mathia-step-icon.running {
+    background: rgba(102,126,234,0.15);
+    color: #667eea;
+    animation: iconPulse 1.5s ease-in-out infinite;
+}
+
+.mathia-step-icon.success {
+    background: rgba(46,204,113,0.15);
+    color: #2ecc71;
+}
+
+.mathia-step-icon.error {
+    background: rgba(231,76,60,0.15);
+    color: #e74c3c;
+}
+
+.mathia-step-icon.thinking {
+    background: rgba(102,126,234,0.1);
+    color: #667eea;
+    animation: iconPulse 2s ease-in-out infinite;
+}
+
+@keyframes iconPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(102,126,234,0.3); }
+    50%      { box-shadow: 0 0 0 6px rgba(102,126,234,0); }
+}
+
+/* Step content */
+.mathia-step-body {
+    flex: 1;
+    min-width: 0;
+}
+
+.mathia-step-label {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: #334155;
+    line-height: 1.3;
+}
+
+[data-theme="dark"] .mathia-step-label {
+    color: #e2e8f0;
+}
+
+.mathia-step-detail {
+    font-size: 0.72rem;
+    color: #94a3b8;
+    margin-top: 1px;
+    line-height: 1.3;
+}
+
+/* Shimmer effect for running steps */
+.mathia-step.running {
+    background: linear-gradient(90deg, transparent 0%, rgba(102,126,234,0.05) 50%, transparent 100%);
+    background-size: 200% 100%;
+    animation: stepSlideIn 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards,
+               shimmer 2s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+    0%   { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+.mathia-step.completed {
+    opacity: 0.85;
+}
+
+/* Spinner icon for running state */
+.mathia-step-icon.running i.fa-spinner {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+}
+
+/* Old progress status — kept for backward compat, restyled */
 .mathia-progress-status {
     display: none;
     align-items: center;
     gap: 8px;
-    margin: 8px 12px;
-    padding: 8px 12px;
-    border-radius: 10px;
-    background: #eef2ff;
-    color: #2f2f2f;
-    font-size: 0.9rem;
+    margin: 0;
+    padding: 6px 12px;
+    border-radius: 8px;
+    background: transparent;
+    color: #64748b;
+    font-size: 0.78rem;
 }
 
 .mathia-progress-status.active {
@@ -2032,22 +2168,182 @@ body[data-message-density="compact"] .message {
 }
 
 .mathia-progress-status.done {
-    opacity: 0.7;
+    opacity: 0.5;
+    transition: opacity 0.4s ease;
 }
 
 .mathia-progress-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 2px 8px;
-    border-radius: 999px;
-    background: #dfe6ff;
-    font-size: 0.75rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.02em;
+    display: none; /* Hidden — timeline cards replace this */
 }
 
 .mathia-progress-text {
     font-weight: 500;
+}
+
+/* ============================================
+   STREAM → SAVED MESSAGE TRANSITION
+   ============================================ */
+
+.ai-stream-container.morphing {
+    animation: morphOut 0.35s ease forwards;
+}
+
+@keyframes morphOut {
+    from { opacity: 1; transform: scale(1); }
+    to   { opacity: 0; transform: scale(0.98); }
+}
+
+.mathia-message-item.morph-in {
+    animation: morphIn 0.35s ease forwards;
+}
+
+@keyframes morphIn {
+    from { opacity: 0; transform: scale(0.98); }
+    to   { opacity: 1; transform: scale(1); }
+}
+
+/* ============================================
+   MOBILE FIXES — Progress & Messages
+   ============================================ */
+
+@media (max-width: 768px) {
+    .mathia-tool-timeline {
+        margin: 6px 0 8px;
+    }
+
+    .mathia-tool-timeline::before {
+        left: 11px;
+    }
+
+    .mathia-step {
+        padding: 6px 8px;
+        gap: 8px;
+    }
+
+    .mathia-step-icon {
+        width: 22px;
+        height: 22px;
+        font-size: 10px;
+    }
+
+    .mathia-step-label {
+        font-size: 0.78rem;
+    }
+
+    .mathia-step-detail {
+        font-size: 0.68rem;
+    }
+
+    /* Fix message bubbles overflowing on small screens */
+    .message.other-message {
+        max-width: 92% !important;
+        word-break: break-word;
+    }
+
+    .message.my-message {
+        max-width: 85% !important;
+        word-break: break-word;
+    }
+
+    /* Ensure stream content doesn't overflow */
+    .stream-content {
+        overflow-wrap: break-word;
+        word-break: break-word;
+        max-width: 100%;
+    }
+
+    /* Tables in messages should scroll horizontally */
+    .mathia-content table {
+        display: block;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        max-width: 100%;
+        font-size: 0.82rem;
+    }
+
+    /* Code blocks shouldn't blow out width */
+    .mathia-content pre {
+        overflow-x: auto;
+        max-width: calc(100vw - 80px);
+        font-size: 0.8rem;
+    }
+
+    /* Input area — give more breathing room */
+    .chat-message {
+        padding: 8px 10px !important;
+    }
+
+    .chat-message .form-control {
+        font-size: 16px !important; /* Prevents iOS zoom */
+        min-height: 42px;
+    }
+
+    /* Progress status compact on mobile */
+    .mathia-progress-status {
+        font-size: 0.72rem;
+        padding: 4px 8px;
+    }
+
+    /* Thinking indicator should stay visible above mobile keyboard */
+    .mathia-thinking {
+        position: relative;
+        z-index: 10;
+    }
+
+    /* AI error messages */
+    .ai-error {
+        font-size: 0.85rem;
+        padding: 8px;
+    }
+}
+
+/* Extra small screens (iPhone SE, etc.) */
+@media (max-width: 375px) {
+    .mathia-badge {
+        font-size: 0.7em !important;
+        padding: 3px 7px !important;
+    }
+
+    .mathia-step-label {
+        font-size: 0.74rem;
+    }
+
+    .mathia-step-icon {
+        width: 20px;
+        height: 20px;
+        font-size: 9px;
+    }
+
+    .quick-prompts-list {
+        grid-template-columns: 1fr !important;
+    }
+
+    .quick-prompt-btn {
+        font-size: 0.82em !important;
+        padding: 10px 12px !important;
+    }
+
+    .message.other-message,
+    .message.my-message {
+        max-width: 95% !important;
+        font-size: 0.9rem;
+    }
+}
+
+/* Dark mode for tool timeline */
+[data-theme="dark"] .mathia-tool-timeline::before {
+    background: linear-gradient(180deg, rgba(138,159,245,0.3) 0%, rgba(138,159,245,0.05) 100%);
+}
+
+[data-theme="dark"] .mathia-step.running {
+    background: linear-gradient(90deg, transparent 0%, rgba(138,159,245,0.08) 50%, transparent 100%);
+    background-size: 200% 100%;
+}
+
+[data-theme="dark"] .mathia-step-detail {
+    color: #64748b;
+}
+
+[data-theme="dark"] .mathia-progress-status {
+    color: #94a3b8;
 }

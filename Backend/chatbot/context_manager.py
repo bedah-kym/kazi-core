@@ -6,12 +6,28 @@ Supports Cross-Room context sharing for high-priority notes.
 import logging
 import json
 import math
+import re
 from datetime import datetime, date, timedelta
 from django.db.models import Q
 from django.utils import timezone
 from .models import RoomContext, RoomNote, AIConversation, DocumentUpload, Contact
 
 logger = logging.getLogger(__name__)
+
+# Patterns that look like prompt injection attempts embedded in note content.
+_NOTE_INJECTION_RE = re.compile(
+    r"|".join([
+        r"ignore\s+(all|previous|system|developer)\s+instructions",
+        r"you\s+are\s+now\s+(in|a)\b",
+        r"new\s+instructions?:",
+        r"<\s*system\s*>",
+        r"IMPORTANT:\s*override",
+        r"reveal\s+(the|your)\s+(llm|model|system\s*prompt)",
+        r"act\s+as\s+(if|though)\s+you\s+are",
+        r"disregard\s+(all|any)\s+(previous|prior)",
+    ]),
+    re.IGNORECASE,
+)
 
 class ContextManager:
     """
@@ -180,8 +196,8 @@ class ContextManager:
             for item in data.get("memory_facts") or []:
                 if not isinstance(item, dict):
                     continue
-                key = str(item.get("key") or "").strip()
-                value = str(item.get("value") or "").strip()
+                key = ContextManager._sanitize_note_content(str(item.get("key") or "").strip())
+                value = ContextManager._sanitize_note_content(str(item.get("value") or "").strip())
                 if not key or not value:
                     continue
                 line = f"- {key}: {value}"
@@ -200,8 +216,8 @@ class ContextManager:
             for item in data.get("memory_preferences") or []:
                 if not isinstance(item, dict):
                     continue
-                key = str(item.get("key") or "").strip()
-                value = str(item.get("value") or "").strip()
+                key = ContextManager._sanitize_note_content(str(item.get("key") or "").strip())
+                value = ContextManager._sanitize_note_content(str(item.get("value") or "").strip())
                 if not key or not value:
                     continue
                 pref_lines.append(f"- {key}: {value}")
@@ -213,7 +229,7 @@ class ContextManager:
             for item in data.get("memory_episodes") or []:
                 if not isinstance(item, dict):
                     continue
-                summary = str(item.get("summary") or "").strip()
+                summary = ContextManager._sanitize_note_content(str(item.get("summary") or "").strip())
                 if not summary:
                     continue
                 details = []
@@ -380,11 +396,18 @@ class ContextManager:
 
     @staticmethod
     def _get_ranked_notes(context_obj, limit=8):
-        """Fetch up to 30 non-archived notes, score them, return top `limit`."""
+        """Fetch up to 30 non-archived notes, score them, return top `limit`.
+        Excludes completed notes older than 1 day — they add noise without value
+        and will be archived by the sweep task anyway.
+        """
+        one_day_ago = timezone.now() - timedelta(days=1)
         candidates = list(
             RoomNote.objects.filter(
                 room_context=context_obj,
                 is_archived=False,
+            ).exclude(
+                is_completed=True,
+                completed_at__lt=one_day_ago,
             ).order_by('-created_at')[:30]
         )
         if not candidates:
@@ -441,6 +464,14 @@ class ContextManager:
         return [note for _, note in scored[:limit]]
 
     @staticmethod
+    def _sanitize_note_content(text):
+        """Strip prompt-injection patterns from note content before it enters the system prompt."""
+        if _NOTE_INJECTION_RE.search(text):
+            logger.warning("Potential injection in note content, filtering (note starts: %s)", text[:80])
+            text = _NOTE_INJECTION_RE.sub("[FILTERED]", text)
+        return text
+
+    @staticmethod
     def _format_note(note):
         now = timezone.now()
         status = ""
@@ -455,7 +486,7 @@ class ContextManager:
         return {
             "id": note.id,
             "type": note.note_type,
-            "content": note.content,
+            "content": ContextManager._sanitize_note_content(note.content),
             "priority": note.priority,
             "status": status,
             "is_private": note.is_private,

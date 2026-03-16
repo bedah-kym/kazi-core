@@ -3,6 +3,7 @@ from django.utils import timezone
 from django.core.cache import cache
 import logging
 import json
+import re
 from datetime import datetime, timedelta
 from base64 import b64decode, b64encode
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -915,6 +916,47 @@ def _merge_memory_by_key(existing, incoming, key_field, max_items=25):
     return merged_list[:max_items]
 
 
+_DEDUP_STOPWORDS = {
+    'the', 'a', 'an', 'and', 'or', 'is', 'are', 'am', 'was', 'were',
+    'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did',
+    'will', 'would', 'could', 'should', 'may', 'might', 'must', 'can',
+    'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'from', 'as',
+    'it', 'this', 'that', 'these', 'those', 'i', 'you', 'he', 'she',
+    'we', 'they', 'my', 'your', 'his', 'her', 'its', 'our', 'their',
+}
+
+
+def _tokenize_for_dedup(text):
+    """Extract meaningful word set for similarity comparison."""
+    return {
+        w.lower() for w in re.findall(r'\b\w+\b', text)
+        if w.lower() not in _DEDUP_STOPWORDS and len(w) > 1
+    }
+
+
+def _is_duplicate_note(content, note_type, recent_notes):
+    """Return True if content is too similar to an existing recent note of the same type.
+
+    Uses Jaccard similarity with a 0.6 threshold — catches rephrasings like
+    'Flight to Nairobi booked' vs 'Booked flight to Nairobi'.
+    """
+    incoming_words = _tokenize_for_dedup(content)
+    if not incoming_words:
+        return False
+
+    for existing_content, existing_type in recent_notes:
+        if existing_type != note_type:
+            continue
+        existing_words = _tokenize_for_dedup(existing_content)
+        if not existing_words:
+            continue
+        overlap = len(incoming_words & existing_words)
+        union = len(incoming_words | existing_words)
+        if union > 0 and (overlap / union) >= 0.6:
+            return True
+    return False
+
+
 @shared_task(bind=True, max_retries=2, default_retry_delay=60, ignore_result=True)
 def refresh_room_context_summary(self, room_id, message_id=None, message_delta=1):
     """
@@ -1077,6 +1119,15 @@ def refresh_room_context_summary(self, room_id, message_id=None, message_delta=1
         created_notes = 0
         allowed_types = {"decision", "action_item", "insight", "reminder", "reference"}
         allowed_priorities = {"low", "medium", "high"}
+
+        # Pre-fetch recent notes for similarity-based dedup
+        recent_notes_for_dedup = list(
+            RoomNote.objects.filter(
+                room_context=context,
+                created_at__gte=now - timedelta(days=7),
+            ).values_list("content", "note_type")
+        )
+
         for note in notes[:8]:
             if not isinstance(note, dict):
                 continue
@@ -1089,12 +1140,9 @@ def refresh_room_context_summary(self, room_id, message_id=None, message_delta=1
             priority = str(note.get("priority") or "medium").strip()
             if priority not in allowed_priorities:
                 priority = "medium"
-            if RoomNote.objects.filter(
-                room_context=context,
-                content=content,
-                note_type=note_type,
-                created_at__gte=now - timedelta(days=7)
-            ).exists():
+            # Similarity-based dedup: skip if a recent note of the same type
+            # has high word-overlap (Jaccard > 0.6) with the incoming content
+            if _is_duplicate_note(content, note_type, recent_notes_for_dedup):
                 continue
             RoomNote.objects.create(
                 room_context=context,
@@ -1105,6 +1153,8 @@ def refresh_room_context_summary(self, room_id, message_id=None, message_delta=1
                 priority=priority,
                 tags=note.get("tags") if isinstance(note.get("tags"), list) else [],
             )
+            # Track within-batch dedup so later notes in this loop don't duplicate this one
+            recent_notes_for_dedup.append((content, note_type))
             created_notes += 1
 
         daily_summary, created = DailySummary.objects.get_or_create(

@@ -12,7 +12,9 @@
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(find:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(pip install:*)",
+      "Bash(PYTHONIOENCODING=utf-8 DJANGO_DEBUG=true python manage.py makemigrations users --name invite_chain_system 2>&1)"
     ]
   }
 }

@@ -345,9 +345,12 @@
                                     <li>
                                         <h6 class="dropdown-header">Chat Actions</h6>
                                     </li>
+
+                                    {% if can_invite %}
                                     <li><a class="dropdown-item invite-user-action" data-bs-toggle="modal"
                                             data-bs-target="#inviteUserModal"><i
                                                 class="fas fa-user-plus me-2"></i>Invite User</a></li>
+                                    {% endif %}
                                     <li><button class="dropdown-item" type="button"
                                             onclick="document.getElementById('searchToggle').click();"><i
                                                 class="fas fa-search me-2"></i>Search</button></li>
@@ -401,10 +404,12 @@
                             </div>
                             <!-- Desktop: chat action buttons -->
                             <div class="d-none d-lg-flex align-items-center">
+                                {% if can_invite %}
                                 <button class="btn btn-light me-2 invite-user-action" data-bs-toggle="modal"
                                     data-bs-target="#inviteUserModal" title="Invite User">
                                     <i class="fas fa-user-plus"></i>
                                 </button>
+                                {% endif %}
                                 <button class="btn btn-light me-2" id="searchToggle" title="Search in chat">
                                     <i class="fas fa-search"></i>
                                 </button>
@@ -744,12 +749,50 @@
         window.currentRoomId = window.roomName || null;
         window.otherUser = '{{ room_member|default:"" }}';
         window.isAiOnlyRoom = {{ is_ai_room|yesno:"true,false" }};
+        window.canInvite = {{ can_invite|yesno:"true,false" }};
 
         // Legacy support for older scripts
         var roomName = window.roomName;
         var username = window.usernameGlobal;
         var otherUser = window.otherUser;
         var isAiOnlyRoom = window.isAiOnlyRoom;
+
+        // Invite user handler
+        function handleInviteUser(event) {
+            event.preventDefault();
+            var email = document.getElementById('inviteEmail').value.trim();
+            var msgEl = document.getElementById('inviteMessage');
+            if (!email) return;
+
+            msgEl.innerHTML = '<span class="text-muted">Sending invite...</span>';
+            var csrfToken = document.querySelector('[name=csrfmiddlewaretoken]')?.value || '';
+
+            fetch('{% url "chatbot:invite_user" %}', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'X-CSRFToken': csrfToken
+                },
+                body: 'room_id=' + encodeURIComponent(window.currentRoomId) + '&email=' + encodeURIComponent(email)
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.status === 'success') {
+                    msgEl.innerHTML = '<span class="text-success"><i class="fas fa-check me-1"></i>' + data.message + '</span>';
+                    document.getElementById('inviteEmail').value = '';
+                    setTimeout(function() {
+                        var modal = bootstrap.Modal.getInstance(document.getElementById('inviteUserModal'));
+                        if (modal) modal.hide();
+                        msgEl.innerHTML = '';
+                    }, 1500);
+                } else {
+                    msgEl.innerHTML = '<span class="text-danger"><i class="fas fa-exclamation-circle me-1"></i>' + (data.message || 'Invite failed') + '</span>';
+                }
+            })
+            .catch(function() {
+                msgEl.innerHTML = '<span class="text-danger">Network error. Please try again.</span>';
+            });
+        }
     </script>
 
     <script src="{% static 'js/main.js'%}"></script>

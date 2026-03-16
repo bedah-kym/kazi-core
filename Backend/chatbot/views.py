@@ -117,6 +117,8 @@ def home(request, room_name):
     if other_member and other_member.User.username == 'mathia':
         current_room_name = "General (AI)"
     is_ai_room = _is_ai_only_room_members(room_members)
+    # Invites allowed in private/group rooms — not in AI-only rooms
+    can_invite = not is_ai_room
 
     # Current room avatar
     if other_member and other_member.User.username == 'mathia':
@@ -138,6 +140,7 @@ def home(request, room_name):
             "chatrooms": chatrooms_data,  # Passing processed data
             "room_member": current_room_name,
             "is_ai_room": is_ai_room,
+            "can_invite": can_invite,
             "room_avatar": current_room_avatar,
         }
     )

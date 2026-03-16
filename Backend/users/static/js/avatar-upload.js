@@ -39,42 +39,46 @@
         reader.readAsDataURL(file);
     });
 
-    function openCropperModal(imageSrc) {
-        // Create modal if it doesn't exist
-        if (!document.getElementById('avatarCropModal')) {
-            const modalHtml = `
-            <div class="modal fade" id="avatarCropModal" tabindex="-1">
-                <div class="modal-dialog modal-dialog-centered">
-                    <div class="modal-content">
-                        <div class="modal-header">
-                            <h5 class="modal-title">Crop Avatar</h5>
-                            <button type="button" class="btn-close" data-bs-dismiss="modal" data-avatar-cancel></button>
-                        </div>
-                        <div class="modal-body" style="max-height:400px;overflow:hidden;">
-                            <img id="cropperImage" style="max-width:100%;display:block;" />
-                        </div>
-                        <div class="modal-footer">
-                            <button type="button" class="btn btn-light" data-bs-dismiss="modal" data-avatar-cancel>Cancel</button>
-                            <button type="button" class="btn btn-primary" data-avatar-save>
-                                <i class="fas fa-check me-1"></i>Save
-                            </button>
-                        </div>
+    function ensureModalDOM() {
+        if (document.getElementById('avatarCropModal')) return;
+        const modalHtml = `
+        <div class="modal fade" id="avatarCropModal" tabindex="-1">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">Crop Avatar</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" data-avatar-cancel></button>
+                    </div>
+                    <div class="modal-body" style="max-height:400px;overflow:hidden;">
+                        <img id="cropperImage" style="max-width:100%;display:block;" />
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-light" data-bs-dismiss="modal" data-avatar-cancel>Cancel</button>
+                        <button type="button" class="btn btn-primary" data-avatar-save>
+                            <i class="fas fa-check me-1"></i>Save
+                        </button>
                     </div>
                 </div>
-            </div>`;
-            document.body.insertAdjacentHTML('beforeend', modalHtml);
-        }
+            </div>
+        </div>`;
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
 
-        const cropImg = document.getElementById('cropperImage');
-        cropImg.src = imageSrc;
+        // Bind save handler once (persistent)
+        document.querySelector('[data-avatar-save]').addEventListener('click', function() {
+            if (!cropperInstance) return;
+            const canvas = cropperInstance.getCroppedCanvas({
+                width: 256,
+                height: 256,
+            });
+            canvas.toBlob(function(blob) {
+                uploadAvatar(blob);
+            }, 'image/webp', 0.85);
+        });
 
-        cropperModal = new bootstrap.Modal(document.getElementById('avatarCropModal'));
-        cropperModal.show();
-
-        // Initialize Cropper after modal is shown
-        document.getElementById('avatarCropModal').addEventListener('shown.bs.modal', function onShown() {
-            this.removeEventListener('shown.bs.modal', onShown);
-            if (cropperInstance) cropperInstance.destroy();
+        // Bind shown event once — initializes Cropper each time modal opens
+        document.getElementById('avatarCropModal').addEventListener('shown.bs.modal', function() {
+            const cropImg = document.getElementById('cropperImage');
+            if (cropperInstance) { cropperInstance.destroy(); cropperInstance = null; }
             cropperInstance = new Cropper(cropImg, {
                 aspectRatio: 1,
                 viewMode: 1,
@@ -85,18 +89,21 @@
                 minCropBoxHeight: 64,
             });
         });
+    }
 
-        // Handle save
-        document.querySelector('[data-avatar-save]').onclick = function() {
-            if (!cropperInstance) return;
-            const canvas = cropperInstance.getCroppedCanvas({
-                width: 256,
-                height: 256,
-            });
-            canvas.toBlob(function(blob) {
-                uploadAvatar(blob);
-            }, 'image/webp', 0.85);
-        };
+    function openCropperModal(imageSrc) {
+        ensureModalDOM();
+
+        const cropImg = document.getElementById('cropperImage');
+        // Destroy any leftover cropper before swapping src
+        if (cropperInstance) { cropperInstance.destroy(); cropperInstance = null; }
+        cropImg.src = imageSrc;
+
+        // Reuse existing Modal instance to avoid stacked backdrops
+        if (!cropperModal) {
+            cropperModal = new bootstrap.Modal(document.getElementById('avatarCropModal'));
+        }
+        cropperModal.show();
     }
 
     function uploadAvatar(blob) {

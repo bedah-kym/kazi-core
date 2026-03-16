@@ -6,7 +6,7 @@ from import_export import resources
 from import_export.admin import ImportExportModelAdmin
 from .models import (
     UserProfile, Workspace, Wallet, WalletTransaction,
-    TrialApplication, TrialInvite
+    TrialApplication, TrialInvite, PlatformInvite
 )
 
 
@@ -40,8 +40,8 @@ class TrialInviteResource(resources.ModelResource):
 
 @admin.register(UserProfile)
 class UserProfileAdmin(admin.ModelAdmin):
-    list_display = ['user_display', 'user_type_badge', 'industry', 'onboarding_badge', 'created_at']
-    list_filter = ['user_type', 'industry', 'onboarding_completed', 'theme_preference']
+    list_display = ['user_display', 'user_type_badge', 'industry', 'invite_depth', 'invited_by_display', 'onboarding_badge', 'created_at']
+    list_filter = ['user_type', 'industry', 'onboarding_completed', 'theme_preference', 'invite_depth']
     search_fields = ['user__username', 'user__email', 'company_name', 'role']
     readonly_fields = ['created_at', 'updated_at']
     ordering = ['-created_at']
@@ -51,6 +51,7 @@ class UserProfileAdmin(admin.ModelAdmin):
         ('User', {'fields': ('user',)}),
         ('Profile Info', {'fields': ('bio', 'avatar', 'location', 'website')}),
         ('Professional', {'fields': ('user_type', 'industry', 'company_name', 'company_size', 'role')}),
+        ('Invite Chain', {'fields': ('invited_by', 'invite_depth')}),
         ('Social Links', {'fields': ('social_links', 'twitter_handle', 'linkedin_url', 'github_url')}),
         ('Preferences', {'fields': ('timezone', 'language', 'theme_preference', 'notification_preferences')}),
         ('Onboarding', {'fields': ('onboarding_completed', 'onboarding_step')}),
@@ -75,6 +76,12 @@ class UserProfileAdmin(admin.ModelAdmin):
         )
     user_type_badge.short_description = 'Type'
 
+    def invited_by_display(self, obj):
+        if obj.invited_by:
+            return obj.invited_by.email
+        return '-'
+    invited_by_display.short_description = 'Invited By'
+
     def onboarding_badge(self, obj):
         color = '#27ae60' if obj.onboarding_completed else '#e74c3c'
         status = 'Completed' if obj.onboarding_completed else 'Pending'
@@ -85,6 +92,23 @@ class UserProfileAdmin(admin.ModelAdmin):
         )
     onboarding_badge.short_description = 'Onboarding'
 
+
+@admin.register(PlatformInvite)
+class PlatformInviteAdmin(admin.ModelAdmin):
+    list_display = ['email', 'invited_by', 'invite_depth', 'status_badge', 'sent_at', 'activated_at', 'expires_at']
+    list_filter = ['status', 'invite_depth', 'sent_at']
+    search_fields = ['email', 'invited_by__username', 'invited_by__email']
+    readonly_fields = ['token', 'sent_at']
+    ordering = ['-sent_at']
+
+    def status_badge(self, obj):
+        colors = {'sent': '#f39c12', 'activated': '#27ae60', 'expired': '#e74c3c', 'revoked': '#95a5a6'}
+        color = colors.get(obj.status, '#3498db')
+        return format_html(
+            '<span style="background-color: {}; color: white; padding: 5px 10px; border-radius: 3px; text-transform: capitalize; font-weight: bold;">{}</span>',
+            color, obj.get_status_display()
+        )
+    status_badge.short_description = 'Status'
 
 
 @admin.register(Workspace)

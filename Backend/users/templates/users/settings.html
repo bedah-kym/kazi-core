@@ -216,6 +216,7 @@
                     <a class="nav-link" href="#ai"><i class="fas fa-brain me-2"></i>AI</a>
                     <a class="nav-link" href="#capabilities"><i class="fas fa-sliders-h me-2"></i>Capabilities</a>
                     <a class="nav-link" href="#integrations"><i class="fas fa-plug me-2"></i>Integrations</a>
+                    {% if can_send_invites %}<a class="nav-link" href="#invites"><i class="fas fa-envelope me-2"></i>Invites</a>{% endif %}
                     <a class="nav-link" href="#workspace"><i class="fas fa-briefcase me-2"></i>Workspace</a>
                 </nav>
             </div>
@@ -685,6 +686,66 @@
                     </div>
                 </div>
 
+                <!-- ===== INVITES (depth-0 only) ===== -->
+                {% if can_send_invites %}
+                <div id="invites" class="settings-section">
+                    <h3 class="mb-4">Invite People</h3>
+                    <p class="text-muted mb-3">You can invite up to 3 people to join Mathia. They'll be able to collaborate in rooms but won't be able to send their own platform invites.</p>
+
+                    <div class="mb-4">
+                        <span class="plan-badge" style="background: hsl(210,100%,95%); color: hsl(210,100%,35%);">
+                            {{ invites_remaining }} of 3 invites remaining
+                        </span>
+                    </div>
+
+                    {% if invites_remaining > 0 %}
+                    <div class="row g-2 mb-4">
+                        <div class="col">
+                            <input type="email" id="inviteEmail" class="form-input" placeholder="colleague@example.com">
+                        </div>
+                        <div class="col-auto">
+                            <button type="button" id="sendInviteBtn" class="btn btn-primary">
+                                <i class="fas fa-paper-plane me-2"></i>Send Invite
+                            </button>
+                        </div>
+                    </div>
+                    <div id="inviteAlert" class="alert d-none mb-3" role="alert"></div>
+                    {% endif %}
+
+                    {% if sent_invites %}
+                    <h6 class="text-muted text-uppercase fw-bold mb-3">Sent Invites</h6>
+                    <div class="table-responsive">
+                        <table class="table table-sm">
+                            <thead>
+                                <tr>
+                                    <th>Email</th>
+                                    <th>Status</th>
+                                    <th>Sent</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for inv in sent_invites %}
+                                <tr>
+                                    <td>{{ inv.email }}</td>
+                                    <td>
+                                        {% if inv.status == 'activated' %}
+                                        <span class="integration-status status-connected">Activated</span>
+                                        {% elif inv.is_expired %}
+                                        <span class="integration-status" style="background:hsl(0,70%,95%);color:hsl(0,70%,40%);">Expired</span>
+                                        {% else %}
+                                        <span class="integration-status" style="background:hsl(40,100%,95%);color:hsl(40,100%,30%);">Pending</span>
+                                        {% endif %}
+                                    </td>
+                                    <td class="text-muted">{{ inv.sent_at|date:"M d, Y" }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% endif %}
+                </div>
+                {% endif %}
+
                 <!-- ===== WORKSPACE ===== -->
                 <div id="workspace" class="settings-section">
                     <h3 class="mb-4">Workspace</h3>
@@ -812,6 +873,47 @@
             }
             window.addEventListener('scroll', onScroll);
             onScroll();
+
+            // Invite sending
+            const sendBtn = document.getElementById('sendInviteBtn');
+            if (sendBtn) {
+                sendBtn.addEventListener('click', function() {
+                    const emailInput = document.getElementById('inviteEmail');
+                    const alertDiv = document.getElementById('inviteAlert');
+                    const email = emailInput.value.trim();
+                    if (!email) return;
+
+                    sendBtn.disabled = true;
+                    fetch('{% url "users:send_platform_invite" %}', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/x-www-form-urlencoded',
+                            'X-CSRFToken': '{{ csrf_token }}'
+                        },
+                        body: 'email=' + encodeURIComponent(email)
+                    })
+                    .then(r => r.json())
+                    .then(data => {
+                        alertDiv.classList.remove('d-none', 'alert-danger', 'alert-success');
+                        if (data.ok) {
+                            alertDiv.classList.add('alert-success');
+                            alertDiv.textContent = 'Invite sent to ' + email + '! ' + data.remaining + ' remaining.';
+                            emailInput.value = '';
+                            setTimeout(() => location.reload(), 1500);
+                        } else {
+                            alertDiv.classList.add('alert-danger');
+                            alertDiv.textContent = data.error;
+                        }
+                        sendBtn.disabled = false;
+                    })
+                    .catch(() => {
+                        alertDiv.classList.remove('d-none', 'alert-success');
+                        alertDiv.classList.add('alert-danger');
+                        alertDiv.textContent = 'Something went wrong. Please try again.';
+                        sendBtn.disabled = false;
+                    });
+                });
+            }
         });
     </script>
 </body>

@@ -1,84 +1,322 @@
 {% load humanize %}
+{% load static %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Trial Applications</title>
+    <title>Trial Applications - Admin</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="{% static 'css/chatbase.css' %}" rel="stylesheet">
+    <link rel="icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
+    <style>
+        .admin-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+            background: hsl(var(--background));
+            min-height: 100vh;
+        }
+        .stat-card {
+            background: hsl(var(--card));
+            border: 1px solid hsl(var(--border));
+            border-radius: var(--radius);
+            padding: 1.25rem;
+            text-align: center;
+        }
+        .stat-card .stat-value {
+            font-size: 2rem;
+            font-weight: 700;
+            line-height: 1.2;
+        }
+        .stat-card .stat-label {
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: hsl(var(--muted-foreground));
+            margin-top: 0.25rem;
+        }
+        .app-card {
+            background: hsl(var(--card));
+            border: 1px solid hsl(var(--border));
+            border-radius: var(--radius);
+            padding: 1.25rem;
+            margin-bottom: 0.75rem;
+            transition: border-color 0.2s;
+        }
+        .app-card:hover {
+            border-color: hsl(var(--ring));
+        }
+        .badge-status {
+            padding: 0.3rem 0.7rem;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: capitalize;
+        }
+        .badge-pending { background: hsl(40,100%,95%); color: hsl(40,100%,30%); }
+        .badge-approved { background: hsl(140,60%,95%); color: hsl(140,60%,30%); }
+        .badge-rejected { background: hsl(0,70%,95%); color: hsl(0,70%,40%); }
+        .badge-sent { background: hsl(210,100%,95%); color: hsl(210,100%,35%); }
+        .badge-activated { background: hsl(140,60%,95%); color: hsl(140,60%,30%); }
+        .badge-expired { background: hsl(0,70%,95%); color: hsl(0,70%,40%); }
+        .dark-mode .badge-pending { background: hsl(40,100%,15%); color: hsl(40,100%,75%); }
+        .dark-mode .badge-approved { background: hsl(140,60%,15%); color: hsl(140,60%,75%); }
+        .dark-mode .badge-rejected { background: hsl(0,70%,15%); color: hsl(0,70%,75%); }
+        .dark-mode .badge-sent { background: hsl(210,100%,15%); color: hsl(210,100%,75%); }
+        .dark-mode .badge-activated { background: hsl(140,60%,15%); color: hsl(140,60%,75%); }
+        .dark-mode .badge-expired { background: hsl(0,70%,15%); color: hsl(0,70%,75%); }
+        .invite-link-box {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: hsl(var(--accent));
+            border: 1px solid hsl(var(--border));
+            border-radius: 6px;
+            padding: 0.4rem 0.75rem;
+            font-family: monospace;
+            font-size: 0.8rem;
+            word-break: break-all;
+        }
+        .copy-btn {
+            flex-shrink: 0;
+            border: none;
+            background: hsl(var(--primary));
+            color: hsl(var(--primary-foreground));
+            padding: 0.3rem 0.6rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        .copy-btn:hover { opacity: 0.85; }
+        .filter-pills a {
+            padding: 0.4rem 1rem;
+            border-radius: 20px;
+            text-decoration: none;
+            font-size: 0.85rem;
+            font-weight: 500;
+            color: hsl(var(--foreground));
+            border: 1px solid hsl(var(--border));
+            transition: all 0.2s;
+        }
+        .filter-pills a:hover { border-color: hsl(var(--ring)); }
+        .filter-pills a.active {
+            background: hsl(var(--primary));
+            color: hsl(var(--primary-foreground));
+            border-color: hsl(var(--primary));
+        }
+        .detail-row { font-size: 0.85rem; color: hsl(var(--muted-foreground)); }
+        .detail-row strong { color: hsl(var(--foreground)); }
+        .section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 1rem;
+        }
+    </style>
 </head>
-<body class="bg-light">
-<div class="container py-4">
-    <div class="d-flex justify-content-between align-items-center mb-3">
-        <h2 class="mb-0">Trial Applications</h2>
-        <a class="btn btn-outline-secondary" href="{% url 'users:dashboard' %}">Back to dashboard</a>
+<body>
+    <button class="dark-mode-toggle" id="darkModeToggle" aria-label="Toggle dark mode">
+        <i class="fas fa-moon"></i>
+    </button>
+
+    <div class="admin-container">
+        <!-- Messages -->
+        {% if messages %}
+        <div class="mb-3">
+            {% for message in messages %}
+            <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert" style="font-size:0.9rem;">
+                {{ message }}
+                <button type="button" class="btn-close btn-close-sm" data-bs-dismiss="alert"></button>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <!-- Header -->
+        <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
+            <div>
+                <h1 class="dashboard-title mb-1"><i class="fas fa-shield-alt me-2"></i>Trial Management</h1>
+                <p class="dashboard-subtitle mb-0">Review applications and manage invites</p>
+            </div>
+            <a href="{% url 'users:dashboard' %}" class="btn btn-outline-secondary">
+                <i class="fas fa-arrow-left me-2"></i>Dashboard
+            </a>
+        </div>
+
+        <!-- Stats -->
+        <div class="row g-3 mb-4">
+            <div class="col-6 col-md-3">
+                <div class="stat-card">
+                    <div class="stat-value">{{ applications|length }}</div>
+                    <div class="stat-label">Total Applications</div>
+                </div>
+            </div>
+            <div class="col-6 col-md-3">
+                <div class="stat-card">
+                    <div class="stat-value" style="color: hsl(40,100%,40%);">
+                        {% with pending_count=0 %}
+                        {% for app in applications %}{% if app.status == 'pending' %}{% with pending_count=pending_count|add:1 %}{% endwith %}{% endif %}{% endfor %}
+                        {{ pending_count }}
+                        {% endwith %}
+                    </div>
+                    <div class="stat-label">Pending</div>
+                </div>
+            </div>
+            <div class="col-6 col-md-3">
+                <div class="stat-card">
+                    <div class="stat-value" style="color: hsl(140,60%,35%);">{{ invites|length }}</div>
+                    <div class="stat-label">Invites Sent</div>
+                </div>
+            </div>
+            <div class="col-6 col-md-3">
+                <div class="stat-card">
+                    <div class="stat-value" style="color: hsl(210,100%,40%);">
+                        {% with active_count=0 %}
+                        {% for inv in invites %}{% if inv.status == 'activated' %}{% with active_count=active_count|add:1 %}{% endwith %}{% endif %}{% endfor %}
+                        {{ active_count }}
+                        {% endwith %}
+                    </div>
+                    <div class="stat-label">Activated</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- APPLICATIONS -->
+        <div class="section-header">
+            <h3 class="mb-0"><i class="fas fa-inbox me-2"></i>Applications</h3>
+            <div class="filter-pills d-flex gap-2 flex-wrap">
+                <a href="{% url 'users:trial_applications' %}" class="{% if not status_filter %}active{% endif %}">All</a>
+                <a href="?status=pending" class="{% if status_filter == 'pending' %}active{% endif %}">Pending</a>
+                <a href="?status=approved" class="{% if status_filter == 'approved' %}active{% endif %}">Approved</a>
+                <a href="?status=rejected" class="{% if status_filter == 'rejected' %}active{% endif %}">Rejected</a>
+            </div>
+        </div>
+
+        {% for app in applications %}
+        <div class="app-card">
+            <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
+                <div>
+                    <div class="d-flex align-items-center gap-2 mb-1">
+                        <h5 class="mb-0">{{ app.name }}</h5>
+                        <span class="badge-status badge-{{ app.status }}">{{ app.status }}</span>
+                    </div>
+                    <div class="detail-row">
+                        <strong>{{ app.email }}</strong>
+                        {% if app.company %} &middot; {{ app.company }}{% endif %}
+                        {% if app.role %} &middot; {{ app.role }}{% endif %}
+                    </div>
+                    <div class="detail-row mt-1">
+                        {% if app.industry %}<span class="me-3"><i class="fas fa-building me-1"></i>{{ app.industry }}</span>{% endif %}
+                        {% if app.team_size %}<span class="me-3"><i class="fas fa-users me-1"></i>{{ app.team_size }}</span>{% endif %}
+                        <span><i class="fas fa-clock me-1"></i>{{ app.created_at|naturaltime }}</span>
+                    </div>
+                </div>
+
+                <!-- Actions -->
+                <div class="d-flex gap-2 flex-shrink-0">
+                    {% if app.status == 'pending' %}
+                    <form method="post" action="{% url 'users:send_trial_invite' app.id %}" class="d-inline">
+                        {% csrf_token %}
+                        <button type="submit" class="btn btn-primary btn-sm">
+                            <i class="fas fa-paper-plane me-1"></i>Approve & Send
+                        </button>
+                    </form>
+                    <form method="post" action="{% url 'users:reject_trial_application' app.id %}" class="d-inline">
+                        {% csrf_token %}
+                        <button type="submit" class="btn btn-outline-danger btn-sm">
+                            <i class="fas fa-times me-1"></i>Reject
+                        </button>
+                    </form>
+                    {% elif app.status == 'approved' %}
+                    <span class="text-muted small"><i class="fas fa-check-circle me-1"></i>Invite sent</span>
+                    {% elif app.status == 'rejected' %}
+                    <form method="post" action="{% url 'users:send_trial_invite' app.id %}" class="d-inline">
+                        {% csrf_token %}
+                        <button type="submit" class="btn btn-outline-primary btn-sm">
+                            <i class="fas fa-undo me-1"></i>Reconsider & Send
+                        </button>
+                    </form>
+                    {% endif %}
+                </div>
+            </div>
+
+            {% if app.primary_use_case %}
+            <div class="detail-row mt-2">
+                <strong>Use case:</strong> {{ app.primary_use_case|truncatewords:40 }}
+            </div>
+            {% endif %}
+            {% if app.pain_points %}
+            <div class="detail-row">
+                <strong>Pain points:</strong> {{ app.pain_points|truncatewords:30 }}
+            </div>
+            {% endif %}
+            {% if app.current_stack %}
+            <div class="detail-row">
+                <strong>Stack:</strong> {{ app.current_stack }}
+            </div>
+            {% endif %}
+        </div>
+        {% empty %}
+        <div class="app-card text-center text-muted py-4">
+            <i class="fas fa-inbox fa-2x mb-2 d-block"></i>
+            No applications{% if status_filter %} with status "{{ status_filter }}"{% endif %}.
+        </div>
+        {% endfor %}
+
+        <!-- INVITES -->
+        <div class="section-header mt-5">
+            <h3 class="mb-0"><i class="fas fa-envelope-open-text me-2"></i>Invites</h3>
+        </div>
+
+        {% for inv in invites %}
+        <div class="app-card">
+            <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-2">
+                <div>
+                    <div class="d-flex align-items-center gap-2 mb-1">
+                        <h6 class="mb-0">{{ inv.email }}</h6>
+                        <span class="badge-status badge-{{ inv.status }}">{{ inv.status }}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="me-3"><i class="fas fa-paper-plane me-1"></i>Sent {{ inv.sent_at|naturaltime }}</span>
+                        {% if inv.sent_by %}<span class="me-3"><i class="fas fa-user me-1"></i>by {{ inv.sent_by.username }}</span>{% endif %}
+                        {% if inv.activated_at %}<span class="me-3"><i class="fas fa-check me-1"></i>Activated {{ inv.activated_at|naturaltime }}</span>{% endif %}
+                        {% if inv.trial_ends_at %}<span><i class="fas fa-calendar me-1"></i>Ends {{ inv.trial_ends_at|date:"M d, Y" }}</span>{% endif %}
+                    </div>
+                </div>
+            </div>
+            {% if inv.status == 'sent' and not inv.used %}
+            <div class="invite-link-box mt-2">
+                <span class="flex-grow-1" id="link-{{ inv.token|truncatechars:8 }}">{{ inv.register_url }}</span>
+                <button class="copy-btn" onclick="copyLink(this, '{{ inv.register_url }}')">
+                    <i class="fas fa-copy me-1"></i>Copy
+                </button>
+            </div>
+            {% endif %}
+        </div>
+        {% empty %}
+        <div class="app-card text-center text-muted py-4">
+            <i class="fas fa-envelope fa-2x mb-2 d-block"></i>
+            No invites sent yet.
+        </div>
+        {% endfor %}
     </div>
 
-    <div class="table-responsive mb-4">
-        <table class="table table-striped align-middle">
-            <thead>
-                <tr>
-                    <th>Name</th>
-                    <th>Email</th>
-                    <th>Use case</th>
-                    <th>Team</th>
-                    <th>When</th>
-                    <th>Status</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for app in applications %}
-                <tr>
-                    <td>{{ app.name }}</td>
-                    <td>{{ app.email }}</td>
-                    <td style="max-width:240px;">{{ app.primary_use_case|truncatewords:18 }}</td>
-                    <td>{{ app.team_size }} | {{ app.industry }}</td>
-                    <td>{{ app.created_at|naturaltime }}</td>
-                    <td class="text-capitalize">{{ app.status }}</td>
-                    <td>
-                        {% if user.is_superuser %}
-                        <a class="btn btn-sm btn-primary" href="{% url 'users:send_trial_invite' app.id %}">Send invite</a>
-                        {% else %}
-                        <span class="text-muted">Superuser only</span>
-                        {% endif %}
-                    </td>
-                </tr>
-                {% empty %}
-                <tr><td colspan="7" class="text-center text-muted py-3">No applications yet.</td></tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-
-    <h4>Invites</h4>
-    <div class="table-responsive">
-        <table class="table table-bordered align-middle">
-            <thead>
-                <tr>
-                    <th>Email</th>
-                    <th>Status</th>
-                    <th>Sent</th>
-                    <th>Activated</th>
-                    <th>Ends</th>
-                    <th>By</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for inv in invites %}
-                <tr>
-                    <td>{{ inv.email }}</td>
-                    <td class="text-capitalize">{{ inv.status }}</td>
-                    <td>{{ inv.sent_at|naturaltime }}</td>
-                    <td>{{ inv.activated_at|naturaltime }}</td>
-                    <td>{% if inv.trial_ends_at %}{{ inv.trial_ends_at|date:"Y-m-d" }}{% endif %}</td>
-                    <td>{{ inv.sent_by }}</td>
-                </tr>
-                {% empty %}
-                <tr><td colspan="6" class="text-center text-muted py-3">No invites yet.</td></tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-</div>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{% static 'js/main.js' %}"></script>
+    <script>
+        function copyLink(btn, url) {
+            navigator.clipboard.writeText(url).then(function() {
+                btn.innerHTML = '<i class="fas fa-check me-1"></i>Copied';
+                btn.style.background = 'hsl(140,60%,40%)';
+                setTimeout(function() {
+                    btn.innerHTML = '<i class="fas fa-copy me-1"></i>Copy';
+                    btn.style.background = '';
+                }, 2000);
+            });
+        }
+    </script>
 </body>
 </html>

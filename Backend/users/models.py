@@ -124,6 +124,12 @@ class UserProfile(models.Model):
 	onboarding_step = models.IntegerField(default=0,
 		help_text="DEPRECATED - Current onboarding step (0-6)")
 	
+	# Invite chain
+	invited_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True,
+		related_name='referred_users', help_text="User who invited this person")
+	invite_depth = models.PositiveIntegerField(default=0,
+		help_text="0 = admin-seeded (can send platform invites), 1+ = user-invited (room invites only)")
+
 	# AI Personalization (moved from GoalProfile)
 	ai_personalization_enabled = models.BooleanField(default=True,
 		help_text="Allow AI to use profile data for personalized suggestions")
@@ -388,6 +394,40 @@ class TrialInvite(models.Model):
 
     def __str__(self):
         return f"TrialInvite({self.email}, {self.status})"
+
+
+class PlatformInvite(models.Model):
+    STATUS_CHOICES = [
+        ('sent', 'Sent'),
+        ('activated', 'Activated'),
+        ('expired', 'Expired'),
+        ('revoked', 'Revoked'),
+    ]
+    invited_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_platform_invites')
+    email = models.EmailField()
+    token = models.CharField(max_length=64, unique=True, default=generate_trial_token)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='sent')
+    invite_depth = models.PositiveIntegerField(help_text="Depth of the invited user (inviter depth + 1)")
+    activated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='activated_platform_invites')
+    activated_at = models.DateTimeField(null=True, blank=True)
+    sent_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+
+    class Meta:
+        ordering = ['-sent_at']
+
+    def save(self, *args, **kwargs):
+        if not self.expires_at:
+            from datetime import timedelta
+            self.expires_at = timezone.now() + timedelta(days=7)
+        super().save(*args, **kwargs)
+
+    @property
+    def is_expired(self):
+        return self.status != 'activated' and timezone.now() > self.expires_at
+
+    def __str__(self):
+        return f"PlatformInvite({self.email}, {self.status})"
 
 
 class CorrectionSignal(models.Model):

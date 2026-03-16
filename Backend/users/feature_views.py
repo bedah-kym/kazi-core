@@ -7,7 +7,7 @@ from django.contrib import messages
 from django.utils import timezone
 from datetime import timedelta
 from users.decorators import workspace_required
-from users.models import Wallet
+from users.models import Wallet, PlatformInvite
 from users.forms import UserForm, UserProfileForm
 from chatbot.models import Reminder
 
@@ -183,6 +183,15 @@ def settings(request):
     ).first()
     gmail_address = (gmail_integration.metadata or {}).get('gmail_address') if gmail_integration else None
 
+    # Invite chain context
+    can_send_invites = profile.invite_depth == 0
+    sent_invites = []
+    invites_remaining = 0
+    if can_send_invites:
+        sent_invites = PlatformInvite.objects.filter(invited_by=request.user).order_by('-sent_at')
+        used_count = sent_invites.filter(status__in=['sent', 'activated']).count()
+        invites_remaining = max(0, 3 - used_count)
+
     context = {
         'workspace': workspace,
         'user_form': user_form,
@@ -194,6 +203,9 @@ def settings(request):
         'gmail_address': gmail_address,
         'capability_prefs': {**capability_defaults, **prefs},
         'ai_personalization_enabled': profile.ai_personalization_enabled,
+        'can_send_invites': can_send_invites,
+        'sent_invites': sent_invites,
+        'invites_remaining': invites_remaining,
     }
 
     return render(request, 'users/settings.html', context)

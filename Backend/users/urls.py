@@ -47,9 +47,13 @@ urlpatterns = [
     path('workflows/', views.workflows_library, name='workflows_library'),
     path('updates/', views.updates, name='updates'),
 
+    # Platform invites
+    path('invites/send/', views.send_platform_invite, name='send_platform_invite'),
+
     # Trial funnel
     path('trial/apply/', views.trial_apply, name='trial_apply'),
     path('trial/applications/', views.trial_applications, name='trial_applications'),
     path('trial/applications/<int:pk>/send/', views.send_trial_invite, name='send_trial_invite'),
+    path('trial/applications/<int:pk>/reject/', views.reject_trial_application, name='reject_trial_application'),
     path('trial/activate/<str:token>/', views.activate_trial, name='activate_trial'),
 ]

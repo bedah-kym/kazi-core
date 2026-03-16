@@ -135,6 +135,7 @@
 
             <form method="post">
                 {% csrf_token %}
+                {% if invite_token %}<input type="hidden" name="invite_token" value="{{ invite_token }}">{% endif %}
                 <div>
                     <label for="full_name">Full name</label>
                     <input type="text" id="full_name" name="full_name" required>

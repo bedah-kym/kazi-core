@@ -9,11 +9,50 @@ from django.contrib.auth.models import User
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.urls import reverse
-from users.models import Workspace
+from django.utils import timezone
+from users.models import Workspace, PlatformInvite, TrialInvite
+
+
+def _resolve_invite_token(token):
+    """Validate an invite token against PlatformInvite then TrialInvite.
+    Returns (invite_obj, invite_type) or (None, None)."""
+    if not token:
+        return None, None
+    # Check PlatformInvite first
+    try:
+        inv = PlatformInvite.objects.get(token=token, status='sent')
+        if inv.is_expired:
+            inv.status = 'expired'
+            inv.save(update_fields=['status'])
+            return None, None
+        return inv, 'platform'
+    except PlatformInvite.DoesNotExist:
+        pass
+    # Fallback to TrialInvite
+    try:
+        inv = TrialInvite.objects.get(token=token, status='sent', used=False)
+        return inv, 'trial'
+    except TrialInvite.DoesNotExist:
+        pass
+    return None, None
 
 
 def register(request):
-    """User registration view"""
+    """User registration view — invite-only."""
+    token = request.GET.get('invite', '') or request.POST.get('invite_token', '')
+    invite, invite_type = _resolve_invite_token(token)
+
+    # Gate: no valid token → redirect to trial application
+    if not invite:
+        if token:
+            messages.error(request, 'This invite link is invalid or has expired.')
+        else:
+            messages.info(request, 'Mathia is invite-only. Request access below.')
+        return redirect('users:trial_apply')
+
+    # Store token in session for social auth adapter
+    request.session['invite_token'] = token
+
     if request.method == 'POST':
         full_name = request.POST.get('full_name', '').strip()
         email = request.POST.get('email', '').strip().lower()
@@ -21,60 +60,87 @@ def register(request):
         password1 = request.POST.get('password1', '')
         password2 = request.POST.get('password2', '')
 
+        ctx = {'invite_token': token}
+
         if not full_name or not email or not username or not password1 or not password2:
             messages.error(request, 'All fields are required')
-            return render(request, 'users/register.html')
-        
-        # Validation
+            return render(request, 'users/register.html', ctx)
+
         if password1 != password2:
             messages.error(request, 'Passwords do not match')
-            return render(request, 'users/register.html')
+            return render(request, 'users/register.html', ctx)
 
         try:
             validate_password(password1)
         except ValidationError as exc:
             for error in exc.messages:
                 messages.error(request, error)
-            return render(request, 'users/register.html')
-        
+            return render(request, 'users/register.html', ctx)
+
         if User.objects.filter(username__iexact=username).exists():
             messages.error(request, 'Username already exists')
-            return render(request, 'users/register.html')
-        
+            return render(request, 'users/register.html', ctx)
+
         if User.objects.filter(email__iexact=email).exists():
             messages.error(request, 'Email already registered')
-            return render(request, 'users/register.html')
-        
+            return render(request, 'users/register.html', ctx)
+
         try:
-            # Create user
             user = User.objects.create_user(
                 username=username,
                 email=email,
                 password=password1
             )
-            
-            # Set full name
             names = full_name.split(' ', 1)
             user.first_name = names[0]
             if len(names) > 1:
                 user.last_name = names[1]
             user.save()
-            
-            # Login user with a known backend
+
+            # Mark invite as activated and set profile invite chain fields
+            _activate_invite(user, invite, invite_type)
+
             auth_user = authenticate(request, username=username, password=password1)
             if auth_user is not None:
                 login(request, auth_user)
             else:
                 login(request, user, backend='django.contrib.auth.backends.ModelBackend')
-            
-            # Redirect to onboarding
+
+            # Clear session token
+            request.session.pop('invite_token', None)
+
             return redirect('users:onboarding')
-            
+
         except Exception as e:
             messages.error(request, f'Error creating account: {str(e)}')
-            return render(request, 'users/register.html')
-    
-    return render(request, 'users/register.html')
+            return render(request, 'users/register.html', ctx)
+
+    return render(request, 'users/register.html', {'invite_token': token})
+
+
+def _activate_invite(user, invite, invite_type):
+    """Mark the invite as used and set profile invite chain fields."""
+    now = timezone.now()
+    profile = user.profile
+
+    if invite_type == 'platform':
+        invite.status = 'activated'
+        invite.activated_by = user
+        invite.activated_at = now
+        invite.save(update_fields=['status', 'activated_by', 'activated_at'])
+        profile.invited_by = invite.invited_by
+        profile.invite_depth = invite.invite_depth
+        profile.save(update_fields=['invited_by', 'invite_depth'])
+
+    elif invite_type == 'trial':
+        invite.used = True
+        invite.status = 'activated'
+        invite.activated_by = user
+        invite.activated_at = now
+        invite.save(update_fields=['used', 'status', 'activated_by', 'activated_at'])
+        # TrialInvite → admin-seeded, depth 0
+        profile.invite_depth = 0
+        profile.save(update_fields=['invite_depth'])
 
 
 @login_required

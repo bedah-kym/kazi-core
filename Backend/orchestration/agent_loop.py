@@ -900,9 +900,35 @@ async def run_agent_loop(
                         pass
                     await _record_receipt(tc["name"], tc["input"], result, context)
 
+            # ---- Append safe tool results to messages first ----------- #
+            tool_result_blocks = []
+            for tc, result in tool_results:
+                tool_result_blocks.append({
+                    "type": "tool_result",
+                    "tool_use_id": tc["id"],
+                    "content": _sanitize_tool_result(json.dumps(result, default=str)),
+                })
+
             # ---- Handle confirmation-required calls ------------------ #
             if confirm_calls:
-                # Only handle the first one; the LLM will call the rest after
+                # Add error results for all unexecuted confirm calls so
+                # every tool_use has a matching tool_result in the messages
+                for tc in confirm_calls[1:]:
+                    tool_result_blocks.append({
+                        "type": "tool_result",
+                        "tool_use_id": tc["id"],
+                        "content": "Skipped: another action requires confirmation first.",
+                        "is_error": True,
+                    })
+
+                # Flush all tool_result blocks before pausing
+                if tool_result_blocks:
+                    state.messages.append({
+                        "role": "user",
+                        "content": tool_result_blocks,
+                    })
+
+                # Only handle the first one; the LLM will re-call the rest after
                 tc = confirm_calls[0]
                 state.pending_tool = tc
                 state.paused_for_confirmation = True
@@ -921,15 +947,6 @@ async def run_agent_loop(
                 })
                 # Pause the loop — consumer will resume after user confirms
                 return
-
-            # ---- Append all tool results to messages for next iteration #
-            tool_result_blocks = []
-            for tc, result in tool_results:
-                tool_result_blocks.append({
-                    "type": "tool_result",
-                    "tool_use_id": tc["id"],
-                    "content": _sanitize_tool_result(json.dumps(result, default=str)),
-                })
 
             if tool_result_blocks:
                 state.messages.append({

@@ -1277,19 +1277,59 @@ def sweep_memory_notes():
                 ctx.save(update_fields=["memory_episodes"])
                 episodes_trimmed += 1
 
+        # 5. Prune stale memory_facts (>90 days old)
+        facts_pruned = 0
+        cutoff_iso = (now - timedelta(days=90)).isoformat()
+        for ctx in RoomContext.objects.exclude(memory_facts=[]).exclude(memory_facts__isnull=True):
+            if not ctx.memory_facts:
+                continue
+            original_len = len(ctx.memory_facts)
+            ctx.memory_facts = [
+                f for f in ctx.memory_facts
+                if isinstance(f, dict) and f.get("updated_at", "") >= cutoff_iso
+            ]
+            if len(ctx.memory_facts) < original_len:
+                ctx.memory_updated_at = now
+                ctx.save(update_fields=["memory_facts", "memory_updated_at"])
+                facts_pruned += original_len - len(ctx.memory_facts)
+
         logger.info(
-            "sweep_memory_notes: priority_decayed=%d archived=%d episodes_trimmed=%d",
-            updated_priority, archived_count, episodes_trimmed,
+            "sweep_memory_notes: priority_decayed=%d archived=%d episodes_trimmed=%d facts_pruned=%d",
+            updated_priority, archived_count, episodes_trimmed, facts_pruned,
         )
         return {
             "status": "success",
             "priority_decayed": updated_priority,
             "archived": archived_count,
             "episodes_trimmed": episodes_trimmed,
+            "facts_pruned": facts_pruned,
         }
     except Exception as exc:
         logger.error("sweep_memory_notes failed: %s", exc, exc_info=True)
         return {"status": "error", "reason": str(exc)}
+
+
+def _prune_related_facts(ctx, note):
+    """Remove memory_facts whose content strongly overlaps with an archived note."""
+    if not ctx.memory_facts:
+        return False
+    note_tokens = _tokenize_for_dedup(note.content)
+    if not note_tokens:
+        return False
+    surviving = []
+    for fact in ctx.memory_facts:
+        if not isinstance(fact, dict):
+            continue
+        fact_text = f"{fact.get('key', '')} {fact.get('value', '')}"
+        fact_tokens = _tokenize_for_dedup(fact_text)
+        # If >50% of fact tokens appear in the archived note, prune it
+        if fact_tokens and len(fact_tokens & note_tokens) / len(fact_tokens) > 0.5:
+            continue
+        surviving.append(fact)
+    if len(surviving) < len(ctx.memory_facts):
+        ctx.memory_facts = surviving
+        return True
+    return False
 
 
 def _archive_note_to_episode(note, reason=""):
@@ -1311,7 +1351,12 @@ def _archive_note_to_episode(note, reason=""):
         episodes = episodes[-50:]
     ctx.memory_episodes = episodes
     ctx.memory_updated_at = timezone.now()
-    ctx.save(update_fields=["memory_episodes", "memory_updated_at"])
+
+    # Prune memory_facts related to the archived note
+    update_fields = ["memory_episodes", "memory_updated_at"]
+    if _prune_related_facts(ctx, note):
+        update_fields.append("memory_facts")
+    ctx.save(update_fields=update_fields)
 
     note.is_archived = True
     note.last_accessed_at = timezone.now()

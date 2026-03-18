@@ -390,12 +390,14 @@ class MathiaAssistant {
                         // Add morph-in animation to the new message
                         const newMsg = chatList.lastElementChild;
                         if (newMsg) newMsg.classList.add('morph-in');
+                        this._scrollToBottom();
                     }
                 }, 300); // matches morphOut animation duration
             } else {
                 if (typeof createMessage === 'function') {
                     const roomId = window.currentRoomId || (typeof roomName !== 'undefined' ? roomName : null);
                     createMessage(data.message, roomId);
+                    this._scrollToBottom();
                 }
             }
             return;
@@ -559,9 +561,18 @@ class MathiaAssistant {
         });
     }
 
+    _isNearBottom(threshold = 150) {
+        const chatList = this.getCurrentMessageList();
+        if (!chatList) return true;
+        return (chatList.scrollHeight - chatList.scrollTop - chatList.clientHeight) < threshold;
+    }
+
     _scrollToBottom() {
         const chatList = this.getCurrentMessageList();
-        if (chatList) chatList.scrollTop = chatList.scrollHeight;
+        if (!chatList) return;
+        requestAnimationFrame(() => {
+            chatList.scrollTop = chatList.scrollHeight;
+        });
     }
     checkForTrigger(data) {
         if (data.command !== 'new_message') return;
@@ -612,13 +623,15 @@ class MathiaAssistant {
         // Accumulate raw text
         streamContainer._rawText = (streamContainer._rawText || '') + chunk;
 
-        // Debounced markdown render — every 80ms or on final
-        if (streamContainer._renderTimer) clearTimeout(streamContainer._renderTimer);
-
-        const doRender = () => {
+        // Render markdown — batched via requestAnimationFrame with dynamic throttle
+        const doRender = (force) => {
             const contentDiv = streamContainer.querySelector('.stream-content');
             if (!contentDiv) return;
             const raw = streamContainer._rawText || '';
+            const lastLen = streamContainer._lastRenderedLen || 0;
+            // Skip render if less than 40 new chars (reduces marked.parse calls for long responses)
+            if (!force && raw.length - lastLen < 40) return;
+            streamContainer._lastRenderedLen = raw.length;
             // Render markdown if marked is available, otherwise plain text
             if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
                 contentDiv.innerHTML = DOMPurify.sanitize(marked.parse(raw));
@@ -627,13 +640,18 @@ class MathiaAssistant {
             } else {
                 contentDiv.innerText = raw;
             }
-            this._scrollToBottom();
+            if (this._isNearBottom()) this._scrollToBottom();
         };
 
         if (isFinal) {
-            doRender();
-        } else {
-            streamContainer._renderTimer = setTimeout(doRender, 80);
+            if (streamContainer._rafId) cancelAnimationFrame(streamContainer._rafId);
+            doRender(true);
+        } else if (!streamContainer._rafPending) {
+            streamContainer._rafPending = true;
+            streamContainer._rafId = requestAnimationFrame(() => {
+                streamContainer._rafPending = false;
+                doRender(false);
+            });
         }
     }
 

@@ -2102,13 +2102,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
             "from":    event["from"],
         }))
 
-    async def ai_message_saved(self, event):
-        """AI message fully saved after streaming"""
-        await self.send_message({
-            "command": "ai_message_saved",
-            "message": event["message"]
-        })
-
     async def ai_voice_ready(self, event):
         """Mathia voice response is ready"""
         await self.send_message({

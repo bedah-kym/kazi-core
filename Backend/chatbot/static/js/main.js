@@ -189,6 +189,11 @@ function connectToChat(roomId) {
     // Initialize chat connection
     socket.onopen = function (e) {
         console.log('✅ WebSocket connection established for room ' + roomId);
+        // Clear existing messages on reconnect to prevent duplicates
+        const messagesList = document.getElementById(`messages-room-${roomId}`);
+        if (messagesList && messagesList.children.length > 0) {
+            messagesList.innerHTML = '';
+        }
         // Always fetch messages on open to ensure sync and hide loader
         FetchMessages(roomId);
     };
@@ -385,6 +390,11 @@ function createMessage(data, roomId, prepend = false) {
     const hasContent = data && typeof data.content === 'string' && data.content.trim() !== '';
     if (!data || !data.member || !data.timestamp || (!hasContent && !isVoiceMessage)) {
         console.error('Invalid message data:', data);
+        return;
+    }
+
+    // Dedup guard — skip if this message is already rendered in the DOM
+    if (data.id && document.getElementById(`message-${data.id}`)) {
         return;
     }
 
@@ -875,7 +885,9 @@ function scrollToLastMessage(roomId) {
     if (!targetRoom) return;
     const messagesList = document.getElementById(`messages-room-${targetRoom}`);
     if (messagesList) {
-        messagesList.scrollTop = messagesList.scrollHeight;
+        requestAnimationFrame(() => {
+            messagesList.scrollTop = messagesList.scrollHeight;
+        });
     }
 }
 

@@ -72,19 +72,19 @@ class ContextManager:
             memory_facts = ContextManager._filter_memory_entries(
                 context_obj.memory_facts,
                 max_items=6,
-                max_age_days=365,
+                max_age_days=90,
                 min_confidence=0.45,
             )
             memory_preferences = ContextManager._filter_memory_entries(
                 context_obj.memory_preferences,
                 max_items=6,
-                max_age_days=365,
+                max_age_days=180,
                 min_confidence=0.35,
             )
             memory_episodes = ContextManager._filter_memory_entries(
                 context_obj.memory_episodes,
                 max_items=4,
-                max_age_days=365,
+                max_age_days=180,
                 min_confidence=None,
             )
             context_data.update({
@@ -388,6 +388,8 @@ class ContextManager:
                 except (TypeError, ValueError):
                     pass
             entry_ts = ContextManager._entry_timestamp(entry)
+            if cutoff and not entry_ts:
+                continue  # No timestamp — treat as stale
             if cutoff and entry_ts and entry_ts < cutoff:
                 continue
             filtered.append(entry)

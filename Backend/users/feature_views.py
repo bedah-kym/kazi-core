@@ -113,7 +113,15 @@ def settings(request):
                 user_form.save()
                 profile_form.save()
                 messages.success(request, 'Profile updated successfully!')
-            return redirect('/accounts/settings/#profile')
+                return redirect('/accounts/settings/#profile')
+            else:
+                for form in (user_form, profile_form):
+                    for field, errors in form.errors.items():
+                        for error in errors:
+                            messages.error(request, f'{field}: {error}')
+                context['user_form'] = user_form
+                context['profile_form'] = profile_form
+                return render(request, 'users/settings.html', context)
 
         elif section == 'ai':
             profile.ai_personalization_enabled = request.POST.get('ai_personalization_enabled') == 'on'

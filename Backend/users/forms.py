@@ -207,7 +207,7 @@ class UserProfileForm(forms.ModelForm):
     class Meta:
         model = UserProfile
         fields = [
-            'bio', 'location', 'website', 'user_type', 'industry',
+            'bio', 'location', 'website', 'industry',
             'company_name', 'company_size', 'role', 'twitter_handle',
             'linkedin_url', 'github_url', 'theme_preference', 'avatar'
         ]

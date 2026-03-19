@@ -12,6 +12,7 @@ from temporalio import workflow, activity
 from temporalio.client import Client, Schedule, ScheduleActionStartWorkflow, ScheduleSpec, SchedulePolicy, ScheduleOverlapPolicy
 from temporalio.common import RetryPolicy
 
+from orchestration.security_policy import user_has_room_access
 from .activity_executors import execute_workflow_step
 from .utils import safe_eval_condition, compact_context
 from .models import WorkflowExecution
@@ -159,6 +160,22 @@ async def start_workflow_execution(
     client = await get_temporal_client()
     workflow_run_id = f"workflow-{workflow_obj.id}-{uuid.uuid4()}"
 
+    if not isinstance(trigger_data, dict):
+        raise ValueError("trigger_data must be a dictionary")
+
+    room_id = trigger_data.get("room_id")
+    if room_id is not None:
+        try:
+            room_id = int(room_id)
+        except (TypeError, ValueError):
+            raise ValueError("Invalid room_id in trigger_data")
+        allowed = await user_has_room_access(workflow_obj.user_id, room_id)
+        if not allowed:
+            raise PermissionError("Workflow user does not have access to trigger room_id")
+        trigger_data = dict(trigger_data)
+        trigger_data["room_id"] = room_id
+
+    execution = None
     if execution_id is None:
         def _create_execution():
             return WorkflowExecution.objects.create(
@@ -173,12 +190,24 @@ async def start_workflow_execution(
     else:
         execution = await sync_to_async(lambda: WorkflowExecution.objects.filter(id=execution_id).first())()
 
-    handle = await client.start_workflow(
-        DynamicUserWorkflow.run,
-        args=[workflow_obj.id, workflow_obj.definition, trigger_data, trigger_type, execution_id, workflow_obj.user_id],
-        id=workflow_run_id,
-        task_queue=settings.TEMPORAL_TASK_QUEUE,
-    )
+    try:
+        handle = await client.start_workflow(
+            DynamicUserWorkflow.run,
+            args=[workflow_obj.id, workflow_obj.definition, trigger_data, trigger_type, execution_id, workflow_obj.user_id],
+            id=workflow_run_id,
+            task_queue=settings.TEMPORAL_TASK_QUEUE,
+        )
+    except Exception as exc:
+        def _mark_failed():
+            if not execution:
+                return
+            execution.status = 'failed'
+            execution.error_message = str(exc)
+            execution.completed_at = timezone.now()
+            execution.save(update_fields=['status', 'error_message', 'completed_at', 'updated_at'])
+
+        await sync_to_async(_mark_failed)()
+        raise
 
     def _update_execution():
         if not execution:

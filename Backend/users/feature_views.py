@@ -103,6 +103,48 @@ def settings(request):
         },
     }
 
+    def _build_settings_context(user_form, profile_form):
+        """Build a full template context for settings page rendering."""
+        from .models import UserIntegration, CalendlyProfile
+
+        try:
+            calendly_connected = request.user.calendly.is_connected
+        except (CalendlyProfile.DoesNotExist, AttributeError):
+            calendly_connected = False
+
+        integrations = UserIntegration.objects.filter(
+            user=request.user, is_connected=True
+        ).values_list('integration_type', flat=True)
+        gmail_integration = UserIntegration.objects.filter(
+            user=request.user, integration_type='gmail', is_connected=True
+        ).first()
+        gmail_address = (gmail_integration.metadata or {}).get('gmail_address') if gmail_integration else None
+
+        # Invite chain context
+        can_send_invites = profile.invite_depth == 0
+        sent_invites = []
+        invites_remaining = 0
+        if can_send_invites:
+            sent_invites = PlatformInvite.objects.filter(invited_by=request.user).order_by('-sent_at')
+            used_count = sent_invites.filter(status__in=['sent', 'activated']).count()
+            invites_remaining = max(0, 3 - used_count)
+
+        return {
+            'workspace': workspace,
+            'user_form': user_form,
+            'profile_form': profile_form,
+            'calendly_connected': calendly_connected,
+            'whatsapp_connected': 'whatsapp' in integrations,
+            'intasend_connected': 'intasend' in integrations,
+            'gmail_connected': 'gmail' in integrations,
+            'gmail_address': gmail_address,
+            'capability_prefs': {**capability_defaults, **(profile.notification_preferences or {})},
+            'ai_personalization_enabled': profile.ai_personalization_enabled,
+            'can_send_invites': can_send_invites,
+            'sent_invites': sent_invites,
+            'invites_remaining': invites_remaining,
+        }
+
     if request.method == 'POST':
         section = request.POST.get('section', '')
 
@@ -119,8 +161,7 @@ def settings(request):
                     for field, errors in form.errors.items():
                         for error in errors:
                             messages.error(request, f'{field}: {error}')
-                context['user_form'] = user_form
-                context['profile_form'] = profile_form
+                context = _build_settings_context(user_form, profile_form)
                 return render(request, 'users/settings.html', context)
 
         elif section == 'ai':
@@ -178,42 +219,5 @@ def settings(request):
     # GET: prepare forms and context
     user_form = UserForm(instance=request.user)
     profile_form = UserProfileForm(instance=profile)
-
-    from .models import UserIntegration, CalendlyProfile
-    try:
-        calendly_connected = request.user.calendly.is_connected
-    except (CalendlyProfile.DoesNotExist, AttributeError):
-        calendly_connected = False
-
-    integrations = UserIntegration.objects.filter(user=request.user, is_connected=True).values_list('integration_type', flat=True)
-    gmail_integration = UserIntegration.objects.filter(
-        user=request.user, integration_type='gmail', is_connected=True
-    ).first()
-    gmail_address = (gmail_integration.metadata or {}).get('gmail_address') if gmail_integration else None
-
-    # Invite chain context
-    can_send_invites = profile.invite_depth == 0
-    sent_invites = []
-    invites_remaining = 0
-    if can_send_invites:
-        sent_invites = PlatformInvite.objects.filter(invited_by=request.user).order_by('-sent_at')
-        used_count = sent_invites.filter(status__in=['sent', 'activated']).count()
-        invites_remaining = max(0, 3 - used_count)
-
-    context = {
-        'workspace': workspace,
-        'user_form': user_form,
-        'profile_form': profile_form,
-        'calendly_connected': calendly_connected,
-        'whatsapp_connected': 'whatsapp' in integrations,
-        'intasend_connected': 'intasend' in integrations,
-        'gmail_connected': 'gmail' in integrations,
-        'gmail_address': gmail_address,
-        'capability_prefs': {**capability_defaults, **prefs},
-        'ai_personalization_enabled': profile.ai_personalization_enabled,
-        'can_send_invites': can_send_invites,
-        'sent_invites': sent_invites,
-        'invites_remaining': invites_remaining,
-    }
-
+    context = _build_settings_context(user_form, profile_form)
     return render(request, 'users/settings.html', context)

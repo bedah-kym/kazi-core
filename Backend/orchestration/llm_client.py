@@ -73,6 +73,91 @@ class LLMClient:
             return 0
         return max(1, len(text) // 4)
 
+    def _message_content_to_text(self, content: Any) -> str:
+        """Flatten Anthropic-style message content blocks into plain text."""
+        if isinstance(content, str):
+            return content
+        if not isinstance(content, list):
+            return str(content or "")
+
+        parts = []
+        for block in content:
+            if not isinstance(block, dict):
+                parts.append(str(block))
+                continue
+            block_type = block.get("type")
+            if block_type == "text":
+                parts.append(str(block.get("text", "")))
+            elif block_type == "tool_result":
+                payload = block.get("content", "")
+                if not isinstance(payload, str):
+                    payload = json.dumps(payload, default=str)
+                parts.append(f"[tool_result] {payload}")
+            elif block_type == "tool_use":
+                name = block.get("name", "tool")
+                tool_input = block.get("input", {})
+                parts.append(
+                    f"[tool_use request] {name} {json.dumps(tool_input, default=str)}"
+                )
+            else:
+                parts.append(str(block))
+        return "\n".join(part for part in parts if part)
+
+    def _messages_to_plain_text(self, messages: List[Dict[str, Any]]) -> str:
+        """Convert structured chat history to a plain transcript for fallback models."""
+        lines = []
+        for msg in messages:
+            role = str(msg.get("role", "user")).upper()
+            text = self._message_content_to_text(msg.get("content", ""))
+            if text:
+                lines.append(f"{role}: {text}")
+        return "\n\n".join(lines)
+
+    async def _create_hf_fallback_message(
+        self,
+        *,
+        messages: List[Dict[str, Any]],
+        system: str,
+        temperature: float,
+        max_tokens: int,
+        user_id: Optional[int],
+        model: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        """Fallback for create_message when Anthropic is unavailable."""
+        prompt = self._messages_to_plain_text(messages)
+        fallback_system = system or "You are Mathia, a helpful AI assistant."
+        if tools:
+            fallback_system += (
+                "\n\nTool execution is currently unavailable in this mode. "
+                "Answer directly, and briefly mention any missing external actions."
+            )
+
+        response_text = await self._call_huggingface(
+            fallback_system,
+            prompt,
+            temperature,
+            max_tokens,
+            False,
+            model_name=model or self._model_for("huggingface", "executor"),
+        )
+
+        input_tokens = self._estimate_tokens(fallback_system) + self._estimate_tokens(prompt)
+        output_tokens = self._estimate_tokens(response_text)
+        self._record_token_usage(input_tokens + output_tokens, user_id)
+
+        return {
+            "id": "hf-fallback-message",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": response_text}],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+            },
+        }
+
     def _get_user_token_budget(self, user_id: Optional[int]) -> Dict[str, int]:
         """
         Get token budget and current usage for a user.
@@ -276,8 +361,8 @@ class LLMClient:
             stop_reason: "end_turn" | "tool_use" | "max_tokens"
             usage: {input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens}
         """
-        if not self.anthropic_key:
-            raise Exception("Anthropic API key is not configured.")
+        if not self.anthropic_key and not self.hf_key:
+            raise Exception("No valid API keys configured for Anthropic or Hugging Face.")
 
         estimated_tokens = sum(
             self._estimate_tokens(
@@ -292,57 +377,77 @@ class LLMClient:
                 f"Please try again later."
             )
 
-        body: Dict[str, Any] = {
-            "model": model or self.claude_model,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "messages": messages,
-        }
-        if system:
-            if use_prompt_cache:
-                # Structured system prompt with cache_control for prompt caching
-                body["system"] = [
-                    {
-                        "type": "text",
-                        "text": system,
-                        "cache_control": {"type": "ephemeral"},
-                    }
-                ]
-            else:
-                body["system"] = system
-        if tools:
-            if use_prompt_cache and tools:
-                # Mark the last tool with cache_control so the entire
-                # system prompt + tool definitions block is cached together.
-                cached_tools = [dict(t) for t in tools]
-                last = cached_tools[-1]
-                # Only add cache_control to regular tool defs (not server tools)
-                if "input_schema" in last:
-                    last["cache_control"] = {"type": "ephemeral"}
-                body["tools"] = cached_tools
-            else:
-                body["tools"] = tools
+        if self.anthropic_key:
+            body: Dict[str, Any] = {
+                "model": model or self.claude_model,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "messages": messages,
+            }
+            if system:
+                if use_prompt_cache:
+                    # Structured system prompt with cache_control for prompt caching
+                    body["system"] = [
+                        {
+                            "type": "text",
+                            "text": system,
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ]
+                else:
+                    body["system"] = system
+            if tools:
+                if use_prompt_cache and tools:
+                    # Mark the last tool with cache_control so the entire
+                    # system prompt + tool definitions block is cached together.
+                    cached_tools = [dict(t) for t in tools]
+                    last = cached_tools[-1]
+                    # Only add cache_control to regular tool defs (not server tools)
+                    if "input_schema" in last:
+                        last["cache_control"] = {"type": "ephemeral"}
+                    body["tools"] = cached_tools
+                else:
+                    body["tools"] = tools
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.post(
-                self.anthropic_url,
-                headers={
-                    "x-api-key": self.anthropic_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                json=body,
-            )
-            if response.status_code != 200:
-                raise Exception(f"Anthropic Error {response.status_code}: {response.text}")
+            try:
+                async with httpx.AsyncClient(timeout=120.0) as client:
+                    response = await client.post(
+                        self.anthropic_url,
+                        headers={
+                            "x-api-key": self.anthropic_key,
+                            "anthropic-version": "2023-06-01",
+                            "content-type": "application/json",
+                        },
+                        json=body,
+                    )
+                    if response.status_code != 200:
+                        raise Exception(f"Anthropic Error {response.status_code}: {response.text}")
 
-            data = response.json()
+                    data = response.json()
 
-        output_tokens = data.get("usage", {}).get("output_tokens", 0)
-        input_tokens = data.get("usage", {}).get("input_tokens", 0)
-        self._record_token_usage(input_tokens + output_tokens, user_id)
+                output_tokens = data.get("usage", {}).get("output_tokens", 0)
+                input_tokens = data.get("usage", {}).get("input_tokens", 0)
+                self._record_token_usage(input_tokens + output_tokens, user_id)
 
-        return data
+                return data
+            except Exception as exc:
+                if not self.hf_key:
+                    raise
+                logger.warning(
+                    "Anthropic create_message failed; using Hugging Face fallback: %s",
+                    exc,
+                )
+
+        # Fallback path (no Anthropic key or Anthropic call failed)
+        return await self._create_hf_fallback_message(
+            messages=messages,
+            system=system,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            user_id=user_id,
+            model=model,
+            tools=tools,
+        )
 
     async def stream_message(
         self,
@@ -366,130 +471,171 @@ class LLMClient:
             {"type": "tool_use_end", "id": "...", "name": "...", "input": {...}}
             {"type": "message_done", "stop_reason": "...", "usage": {...}}
         """
-        if not self.anthropic_key:
-            raise Exception("Anthropic API key is not configured.")
+        if not self.anthropic_key and not self.hf_key:
+            raise Exception("No valid API keys configured for Anthropic or Hugging Face.")
 
-        body: Dict[str, Any] = {
-            "model": model or self.claude_model,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "messages": messages,
-            "stream": True,
-        }
-        if system:
-            if use_prompt_cache:
-                body["system"] = [
-                    {
-                        "type": "text",
-                        "text": system,
-                        "cache_control": {"type": "ephemeral"},
-                    }
-                ]
-            else:
-                body["system"] = system
-        if tools:
-            if use_prompt_cache and tools:
-                cached_tools = [dict(t) for t in tools]
-                last = cached_tools[-1]
-                if "input_schema" in last:
-                    last["cache_control"] = {"type": "ephemeral"}
-                body["tools"] = cached_tools
-            else:
-                body["tools"] = tools
-
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            async with client.stream(
-                "POST",
-                self.anthropic_url,
-                headers={
-                    "x-api-key": self.anthropic_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                json=body,
-            ) as response:
-                if response.status_code != 200:
-                    error_body = await response.aread()
-                    raise Exception(
-                        f"Anthropic Stream Error {response.status_code}: {error_body}"
-                    )
-
-                # Track active content blocks by index
-                active_blocks: Dict[int, Dict[str, Any]] = {}
-                accumulated_json: Dict[int, str] = {}
-
-                async for line in response.aiter_lines():
-                    if not line or not line.startswith("data: "):
-                        continue
-                    payload = line[6:]
-                    if payload.strip() == "[DONE]":
-                        break
-
-                    try:
-                        event = json.loads(payload)
-                    except Exception:
-                        continue
-
-                    event_type = event.get("type", "")
-
-                    if event_type == "content_block_start":
-                        idx = event.get("index", 0)
-                        block = event.get("content_block", {})
-                        active_blocks[idx] = block
-                        if block.get("type") == "tool_use":
-                            accumulated_json[idx] = ""
-                            yield {
-                                "type": "tool_use_start",
-                                "id": block.get("id", ""),
-                                "name": block.get("name", ""),
-                            }
-
-                    elif event_type == "content_block_delta":
-                        idx = event.get("index", 0)
-                        delta = event.get("delta", {})
-                        delta_type = delta.get("type", "")
-
-                        if delta_type == "text_delta":
-                            text = delta.get("text", "")
-                            if text:
-                                yield {"type": "text", "text": text}
-
-                        elif delta_type == "input_json_delta":
-                            partial = delta.get("partial_json", "")
-                            if idx in accumulated_json:
-                                accumulated_json[idx] += partial
-                            yield {
-                                "type": "tool_use_input",
-                                "partial_json": partial,
-                            }
-
-                    elif event_type == "content_block_stop":
-                        idx = event.get("index", 0)
-                        block = active_blocks.get(idx, {})
-                        if block.get("type") == "tool_use":
-                            raw_json = accumulated_json.pop(idx, "{}")
-                            try:
-                                parsed_input = json.loads(raw_json)
-                            except Exception:
-                                parsed_input = {}
-                            yield {
-                                "type": "tool_use_end",
-                                "id": block.get("id", ""),
-                                "name": block.get("name", ""),
-                                "input": parsed_input,
-                            }
-
-                    elif event_type == "message_delta":
-                        delta = event.get("delta", {})
-                        usage = event.get("usage", {})
-                        yield {
-                            "type": "message_done",
-                            "stop_reason": delta.get("stop_reason", ""),
-                            "usage": usage,
+        if self.anthropic_key:
+            body: Dict[str, Any] = {
+                "model": model or self.claude_model,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "messages": messages,
+                "stream": True,
+            }
+            if system:
+                if use_prompt_cache:
+                    body["system"] = [
+                        {
+                            "type": "text",
+                            "text": system,
+                            "cache_control": {"type": "ephemeral"},
                         }
+                    ]
+                else:
+                    body["system"] = system
+            if tools:
+                if use_prompt_cache and tools:
+                    cached_tools = [dict(t) for t in tools]
+                    last = cached_tools[-1]
+                    if "input_schema" in last:
+                        last["cache_control"] = {"type": "ephemeral"}
+                    body["tools"] = cached_tools
+                else:
+                    body["tools"] = tools
 
-                    elif event_type == "message_stop":
-                        pass  # Already handled via message_delta
+            try:
+                async with httpx.AsyncClient(timeout=120.0) as client:
+                    async with client.stream(
+                        "POST",
+                        self.anthropic_url,
+                        headers={
+                            "x-api-key": self.anthropic_key,
+                            "anthropic-version": "2023-06-01",
+                            "content-type": "application/json",
+                        },
+                        json=body,
+                    ) as response:
+                        if response.status_code != 200:
+                            error_body = await response.aread()
+                            raise Exception(
+                                f"Anthropic Stream Error {response.status_code}: {error_body}"
+                            )
+
+                        # Track active content blocks by index
+                        active_blocks: Dict[int, Dict[str, Any]] = {}
+                        accumulated_json: Dict[int, str] = {}
+
+                        async for line in response.aiter_lines():
+                            if not line or not line.startswith("data: "):
+                                continue
+                            payload = line[6:]
+                            if payload.strip() == "[DONE]":
+                                break
+
+                            try:
+                                event = json.loads(payload)
+                            except Exception:
+                                continue
+
+                            event_type = event.get("type", "")
+
+                            if event_type == "content_block_start":
+                                idx = event.get("index", 0)
+                                block = event.get("content_block", {})
+                                active_blocks[idx] = block
+                                if block.get("type") == "tool_use":
+                                    accumulated_json[idx] = ""
+                                    yield {
+                                        "type": "tool_use_start",
+                                        "id": block.get("id", ""),
+                                        "name": block.get("name", ""),
+                                    }
+
+                            elif event_type == "content_block_delta":
+                                idx = event.get("index", 0)
+                                delta = event.get("delta", {})
+                                delta_type = delta.get("type", "")
+
+                                if delta_type == "text_delta":
+                                    text = delta.get("text", "")
+                                    if text:
+                                        yield {"type": "text", "text": text}
+
+                                elif delta_type == "input_json_delta":
+                                    partial = delta.get("partial_json", "")
+                                    if idx in accumulated_json:
+                                        accumulated_json[idx] += partial
+                                    yield {
+                                        "type": "tool_use_input",
+                                        "partial_json": partial,
+                                    }
+
+                            elif event_type == "content_block_stop":
+                                idx = event.get("index", 0)
+                                block = active_blocks.get(idx, {})
+                                if block.get("type") == "tool_use":
+                                    raw_json = accumulated_json.pop(idx, "{}")
+                                    try:
+                                        parsed_input = json.loads(raw_json)
+                                    except Exception:
+                                        parsed_input = {}
+                                    yield {
+                                        "type": "tool_use_end",
+                                        "id": block.get("id", ""),
+                                        "name": block.get("name", ""),
+                                        "input": parsed_input,
+                                    }
+
+                            elif event_type == "message_delta":
+                                delta = event.get("delta", {})
+                                usage = event.get("usage", {})
+                                yield {
+                                    "type": "message_done",
+                                    "stop_reason": delta.get("stop_reason", ""),
+                                    "usage": usage,
+                                }
+
+                            elif event_type == "message_stop":
+                                pass  # Already handled via message_delta
+                return
+            except Exception as exc:
+                if not self.hf_key:
+                    raise
+                logger.warning(
+                    "Anthropic stream_message failed; using Hugging Face fallback: %s",
+                    exc,
+                )
+
+        # Fallback stream: text-only (no tool_use blocks)
+        fallback_prompt = self._messages_to_plain_text(messages)
+        fallback_system = system or "You are Mathia, a helpful AI assistant."
+        if tools:
+            fallback_system += (
+                "\n\nTool execution is currently unavailable in this mode. "
+                "Answer directly, and briefly mention any missing external actions."
+            )
+        collected_chunks: List[str] = []
+        async for chunk in self._stream_huggingface(
+            fallback_system,
+            fallback_prompt,
+            temperature,
+            max_tokens,
+            model_name=model or self._model_for("huggingface", "executor"),
+        ):
+            if chunk:
+                collected_chunks.append(chunk)
+                yield {"type": "text", "text": chunk}
+        input_tokens = self._estimate_tokens(fallback_system) + self._estimate_tokens(fallback_prompt)
+        output_tokens = self._estimate_tokens("".join(collected_chunks))
+        self._record_token_usage(input_tokens + output_tokens, user_id)
+        yield {
+            "type": "message_done",
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+            },
+        }
 
     # ------------------------------------------------------------------ #
     #  Original methods (kept for backward compatibility)                 #

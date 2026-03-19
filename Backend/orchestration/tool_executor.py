@@ -7,6 +7,7 @@ and returns a standardized result dict.
 """
 from __future__ import annotations
 
+import json
 import logging
 import time
 from typing import Any, Dict, Optional
@@ -17,7 +18,7 @@ from orchestration.action_catalog import (
     requires_confirmation,
     resolve_action_alias,
 )
-from orchestration.security_policy import sanitize_parameters, should_block_action
+from orchestration.security_policy import is_prompt_injection, sanitize_parameters, should_block_action
 
 logger = logging.getLogger(__name__)
 
@@ -156,8 +157,19 @@ async def execute_tool(
                 "message": f"The {action.replace('_', ' ')} capability is disabled in your settings.",
             }
 
-    # 3. Security check — block prompt injection in parameters
-    if should_block_action(action, tool_input):
+    # 3. Security check — block prompt injection for sensitive actions.
+    raw_query = context.get("raw_query") or context.get("user_message") or ""
+    if should_block_action(raw_query, action):
+        return {
+            "status": "error",
+            "message": "This request was blocked by the safety policy.",
+        }
+    # Additional guard when suspicious instructions are embedded directly in tool params.
+    try:
+        params_text = json.dumps(tool_input, default=str)
+    except Exception:
+        params_text = str(tool_input)
+    if is_prompt_injection(params_text) and is_high_risk_action(action):
         return {
             "status": "error",
             "message": "This request was blocked by the safety policy.",

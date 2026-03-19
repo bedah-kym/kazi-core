@@ -10,6 +10,7 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.urls import reverse
 from django.utils import timezone
+from uuid import uuid4
 from users.models import Workspace, PlatformInvite, TrialInvite
 
 
@@ -193,7 +194,8 @@ def onboarding(request):
                     buf = io.BytesIO()
                     img.save(buf, format='WEBP', quality=85)
                     buf.seek(0)
-                    filename = f"avatar_{request.user.id}.webp"
+                    # Use a versioned filename to avoid stale browser/CDN caches after updates.
+                    filename = f"avatar_{request.user.id}_{uuid4().hex[:12]}.webp"
                     if profile.avatar:
                         try:
                             profile.avatar.delete(save=False)

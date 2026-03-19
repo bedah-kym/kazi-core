@@ -1177,10 +1177,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                     "room_id": room_id,
                                     "username": member_username,
                                     "preferences": user_preferences,
+                                    "raw_query": query,
+                                    "user_message": query,
                                 },
                                 preferences=user_preferences,
                                 context_prompt=ctx_prompt,
-                                memory_summary="",
+                                memory_summary=mem_summary,
                                 history=history_msgs,
                             ):
                                 if event.kind == "text":

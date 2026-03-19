@@ -19,7 +19,13 @@ from orchestration.connectors.travel_transfers_connector import TravelTransfersC
 from orchestration.connectors.travel_events_connector import TravelEventsConnector
 from orchestration.mcp_router import SearchConnector, WeatherConnector, GiphyConnector, CurrencyConnector, ReminderConnector, CalendarConnector
 from orchestration.action_receipts import record_action_receipt, should_record_receipt
-from orchestration.action_catalog import get_supported_actions, resolve_action_alias
+from orchestration.action_catalog import (
+    get_action_definition,
+    get_capability_gate,
+    get_supported_actions,
+    resolve_action_alias,
+)
+from orchestration.security_policy import should_block_action, sanitize_parameters
 
 from .utils import resolve_parameters
 
@@ -254,7 +260,59 @@ def _enforce_withdraw_policy(params: Dict[str, Any], context: Dict[str, Any]) ->
 async def execute_workflow_step(step: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
     service = (step.get('service') or '').lower()
     action = resolve_action_alias(step.get('action'))
-    params = resolve_parameters(step.get('params', {}), context)
+    params = sanitize_parameters(resolve_parameters(step.get('params', {}), context))
+
+    async def _effective_preferences() -> Dict[str, Any]:
+        prefs = context.get("preferences")
+        if isinstance(prefs, dict):
+            return prefs
+        user_id = context.get("user_id")
+        if not user_id:
+            context["preferences"] = {}
+            return {}
+        try:
+            from orchestration.user_preferences import get_user_preferences
+            from asgiref.sync import sync_to_async
+
+            prefs = await sync_to_async(get_user_preferences)(user_id)
+        except Exception:
+            prefs = {}
+        if not isinstance(prefs, dict):
+            prefs = {}
+        context["preferences"] = prefs
+        return prefs
+
+    action_def = get_action_definition(action)
+    if not action_def:
+        return {"status": "error", "error": f"Unsupported workflow action: {action}"}
+
+    # Guard against mismatched service/action pairs in user-provided workflow JSON.
+    canonical_service = str(action_def.get("service") or "").lower()
+    service_aliases = {"mailgun": "gmail"}
+    normalized_service = service_aliases.get(service, service)
+    if normalized_service and canonical_service and normalized_service != canonical_service:
+        return {
+            "status": "error",
+            "error": f"Action '{action}' is not valid for service '{service}'.",
+        }
+
+    preferences = await _effective_preferences()
+    capability_gate = get_capability_gate(action)
+    if capability_gate and not preferences.get(capability_gate, True):
+        return {
+            "status": "error",
+            "error": (
+                f"This workflow step is blocked because '{capability_gate}' is disabled "
+                "in your settings."
+            ),
+        }
+
+    if should_block_action(params, action):
+        return {
+            "status": "error",
+            "error": "This workflow step was blocked by the safety policy.",
+        }
+
     depends_on = _normalize_depends_on(step.get("depends_on"))
     if depends_on:
         missing = [dep for dep in depends_on if not _dependency_ready(dep, context)]

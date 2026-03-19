@@ -1,6 +1,7 @@
 """Low-cost security policy helpers for prompt injection and tool abuse."""
 from __future__ import annotations
 
+import json
 import re
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -63,10 +64,21 @@ _HIGH_RISK_VERBS = re.compile(
 )
 
 
+def _to_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, default=str)
+    except Exception:
+        return str(value)
+
+
 def is_prompt_injection(message: Optional[str]) -> bool:
     if not message:
         return False
-    return bool(_INJECTION_RE.search(message))
+    return bool(_INJECTION_RE.search(_to_text(message)))
 
 
 def is_high_risk_message(message: Optional[str]) -> bool:
@@ -88,14 +100,21 @@ def should_block_action(message: Optional[str], action: Optional[str]) -> bool:
 
 
 def sanitize_parameters(params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    def _sanitize(value: Any) -> Any:
+        if isinstance(value, dict):
+            cleaned: Dict[str, Any] = {}
+            for key, nested in value.items():
+                if key in RESTRICTED_PARAM_KEYS:
+                    continue
+                cleaned[key] = _sanitize(nested)
+            return cleaned
+        if isinstance(value, list):
+            return [_sanitize(item) for item in value]
+        return value
+
     if not isinstance(params, dict):
         return {}
-    cleaned: Dict[str, Any] = {}
-    for key, value in params.items():
-        if key in RESTRICTED_PARAM_KEYS:
-            continue
-        cleaned[key] = value
-    return cleaned
+    return _sanitize(params)
 
 
 async def user_has_room_access(user_id: Optional[int], room_id: Optional[int]) -> bool:
@@ -128,7 +147,7 @@ def sanitize_steps(steps: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
 def should_refuse_sensitive_request(message: Optional[str]) -> bool:
     if not message:
         return False
-    lowered = message.lower()
+    lowered = _to_text(message).lower()
     # Deterministic refusal for system prompt / admin / data exfiltration requests.
     refusal_patterns = [
         r"\bsystem\s+prompt\b",

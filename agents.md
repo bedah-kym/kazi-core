@@ -9,6 +9,36 @@ A legacy "classic" pipeline (Parse → Route → Execute) is retained as a fallb
 
 ---
 
+## Delivery Sweep Status (Updated 2026-03-19)
+
+### Phase 1 — Profile & Settings Reliability (Completed)
+- Fixed profile/bio image updates by using unique avatar filenames and accepting `image/jpg` in upload handling.
+- Fixed settings profile form failure path where invalid submissions could hit an undefined context variable.
+- Files: `Backend/users/avatar_views.py`, `Backend/users/auth_views.py`, `Backend/users/feature_views.py`.
+
+### Phase 2 — Memory & Invite Consistency (Completed)
+- Fixed agent memory summary propagation so `memory_summary` is passed into `run_agent_loop`.
+- Fixed invite sending flow to avoid persisting invites when outbound email fails.
+- Files: `Backend/chatbot/consumers.py`, `Backend/users/views.py`.
+
+### Phase 3 — Agent Runtime Hardening (Completed)
+- Added capability + approval override propagation in preferences used by agent orchestration.
+- Added HuggingFace fallback paths in LLM client for both sync and streaming calls.
+- Blocked sub-agent execution of tools that require explicit confirmation (must be done in main loop).
+- Files: `Backend/orchestration/user_preferences.py`, `Backend/orchestration/llm_client.py`, `Backend/orchestration/agent_loop.py`.
+
+### Phase 4 — Security & Workflow Hardening (Completed)
+- Hardened prompt-injection detection and recursive parameter sanitization.
+- Corrected tool safety check wiring and added parameter-level high-risk injection guard.
+- Enforced workflow action/service validation, capability gates, trigger/room access checks, and Temporal failure state updates.
+- Added connector-level robustness fixes and regression tests for security policy behavior.
+- Files: `Backend/orchestration/security_policy.py`, `Backend/orchestration/tool_executor.py`, `Backend/workflows/activity_executors.py`, `Backend/workflows/views.py`, `Backend/workflows/temporal_integration.py`, `Backend/orchestration/tests.py`, `Backend/orchestration/connectors/invoice_connector.py`, `Backend/orchestration/connectors/intersend_connector.py`, `Backend/chatbot/consumers.py`, `Backend/orchestration/agent_loop.py`.
+
+### Next
+- Phase 5 planned: regression harness + reliability normalization + observability completion.
+
+---
+
 ## System Architecture
 
 ```

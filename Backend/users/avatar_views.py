@@ -1,12 +1,13 @@
 """Avatar upload endpoint with server-side processing."""
 import io
+from uuid import uuid4
 from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse
 from django.views.decorators.http import require_POST
 from PIL import Image
 
 MAX_AVATAR_SIZE = 5 * 1024 * 1024  # 5MB
-ALLOWED_TYPES = {'image/jpeg', 'image/png', 'image/webp', 'image/gif'}
+ALLOWED_TYPES = {'image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif'}
 
 
 @login_required
@@ -44,7 +45,8 @@ def avatar_upload(request):
     buf.seek(0)
 
     from django.core.files.base import ContentFile
-    filename = f"avatar_{request.user.id}.webp"
+    # Use a versioned filename to avoid stale browser/CDN caches after updates.
+    filename = f"avatar_{request.user.id}_{uuid4().hex[:12]}.webp"
     profile = request.user.profile
 
     # Delete old avatar file if it exists

@@ -120,9 +120,13 @@ class InvoiceConnector(BaseConnector):
 
         status_bits = []
         if email_status:
-            status_bits.append("Email sent." if email_status.get("status") == "sent" else "Email not sent.")
+            status_bits.append(
+                "Email sent." if email_status.get("status") in ("sent", "success") else "Email not sent."
+            )
         if whatsapp_status:
-            status_bits.append("WhatsApp sent." if whatsapp_status.get("status") == "sent" else "WhatsApp not sent.")
+            status_bits.append(
+                "WhatsApp sent." if whatsapp_status.get("status") in ("sent", "success") else "WhatsApp not sent."
+            )
         status_text = " ".join(status_bits).strip() or "Share the payment link with the payer."
 
         return {

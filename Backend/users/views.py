@@ -10,8 +10,11 @@ from django.views.decorators.http import require_POST
 from datetime import timedelta
 from django.core.mail import send_mail
 from django.urls import reverse
+import logging
 from .forms import CustomAuthenticationForm, TrialApplicationForm
 from .models import TrialApplication, TrialInvite, PlatformInvite, Workspace
+
+logger = logging.getLogger(__name__)
 
 class CustomLoginView(LoginView):
     form_class = CustomAuthenticationForm
@@ -267,16 +270,25 @@ def send_platform_invite(request):
     invite_url = request.build_absolute_uri(
         reverse('users:register') + f'?invite={invite.token}'
     )
-    send_mail(
-        subject=f"{request.user.get_full_name() or request.user.username} invited you to Mathia",
-        message=(
-            f"You've been invited to join Mathia by {request.user.get_full_name() or request.user.username}.\n\n"
-            f"Create your account: {invite_url}\n\n"
-            "This link expires in 7 days."
-        ),
-        from_email=None,
-        recipient_list=[email],
-    )
+    try:
+        send_mail(
+            subject=f"{request.user.get_full_name() or request.user.username} invited you to Mathia",
+            message=(
+                f"You've been invited to join Mathia by {request.user.get_full_name() or request.user.username}.\n\n"
+                f"Create your account: {invite_url}\n\n"
+                "This link expires in 7 days."
+            ),
+            from_email=None,
+            recipient_list=[email],
+        )
+    except Exception as exc:
+        logger.error("Platform invite email send failed for %s: %s", email, exc, exc_info=True)
+        # Roll back invite creation so quota/dedup are not consumed on delivery failure.
+        invite.delete()
+        return JsonResponse(
+            {'error': 'Invite could not be sent right now. Please try again.'},
+            status=502,
+        )
 
     return JsonResponse({
         'ok': True,

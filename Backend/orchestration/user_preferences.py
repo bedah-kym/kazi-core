@@ -9,6 +9,9 @@ _ALLOWED_DIRECTNESS = {"direct", "neutral", "polite"}
 _ALLOWED_DATE_ORDERS = {"DMY", "MDY", "YMD"}
 _ALLOWED_TIME_FORMATS = {"24h", "12h"}
 _ALLOWED_CAPABILITY_MODES = {"custom", "conserve", "balanced", "max"}
+_ALLOWED_NUDGE_FREQUENCIES = {"off", "low", "medium", "high"}
+_TRUTHY_VALUES = {"1", "true", "yes", "on"}
+_FALSY_VALUES = {"0", "false", "no", "off"}
 
 _REGION_LOCALE_FALLBACKS = {
     "America": "en-US",
@@ -39,6 +42,36 @@ def _normalize_choice(value: Any, allowed: set, default: str) -> str:
         if candidate == option:
             return option
     return default
+
+
+def _coerce_bool(value: Any, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    candidate = _coerce_str(value).lower()
+    if candidate in _TRUTHY_VALUES:
+        return True
+    if candidate in _FALSY_VALUES:
+        return False
+    return default
+
+
+def _normalize_approval_overrides(value: Any) -> Dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    normalized: Dict[str, str] = {}
+    for action, policy in value.items():
+        action_name = _coerce_str(action)
+        policy_name = _coerce_str(policy).lower()
+        if not action_name:
+            continue
+        if policy_name not in {"auto", "always"}:
+            continue
+        normalized[action_name] = policy_name
+    return normalized
 
 
 def _pull_pref(raw_prefs: Optional[Dict[str, Any]], key: str) -> Optional[Any]:
@@ -126,6 +159,15 @@ def normalize_preferences(
         _ALLOWED_CAPABILITY_MODES,
         "custom",
     )
+    nudge_frequency = _normalize_choice(
+        _pull_pref(raw_prefs, "nudge_frequency"),
+        _ALLOWED_NUDGE_FREQUENCIES,
+        "low",
+    )
+
+    approval_overrides = _normalize_approval_overrides(
+        _pull_pref(raw_prefs, "approval_overrides")
+    )
 
     return {
         "tone": tone,
@@ -139,6 +181,23 @@ def normalize_preferences(
         "language": _coerce_str(language),
         "timezone": _coerce_str(timezone_name),
         "location": _coerce_str(location),
+        # Capability controls (used by agent tool filtering and executor gates)
+        "proactive_assistant_enabled": _coerce_bool(
+            _pull_pref(raw_prefs, "proactive_assistant_enabled"), True
+        ),
+        "nudge_frequency": nudge_frequency,
+        "proactive_snooze_until": _coerce_str(_pull_pref(raw_prefs, "proactive_snooze_until")),
+        "ai_voice_enabled": _coerce_bool(_pull_pref(raw_prefs, "ai_voice_enabled"), False),
+        "manager_llm_enabled": _coerce_bool(_pull_pref(raw_prefs, "manager_llm_enabled"), True),
+        "allow_web_search": _coerce_bool(_pull_pref(raw_prefs, "allow_web_search"), True),
+        "allow_travel": _coerce_bool(_pull_pref(raw_prefs, "allow_travel"), True),
+        "allow_payments": _coerce_bool(_pull_pref(raw_prefs, "allow_payments"), True),
+        "allow_reminders": _coerce_bool(_pull_pref(raw_prefs, "allow_reminders"), True),
+        "allow_whatsapp": _coerce_bool(_pull_pref(raw_prefs, "allow_whatsapp"), True),
+        "allow_email": _coerce_bool(_pull_pref(raw_prefs, "allow_email"), True),
+        "allow_calendar": _coerce_bool(_pull_pref(raw_prefs, "allow_calendar"), True),
+        # Approval overrides for confirmation policy (e.g. {"send_email": "auto"})
+        "approval_overrides": approval_overrides,
     }
 
 

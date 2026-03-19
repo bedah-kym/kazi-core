@@ -3,7 +3,7 @@ import logging
 import os
 from django.conf import settings
 from ..base_connector import BaseConnector
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from users.models import WalletTransaction
 from payments.services import WalletService
 import uuid
@@ -125,7 +125,10 @@ class IntersendPayConnector(BaseConnector):
         except Exception as e:
             return {"status": "error", "message": f"User has no wallet configured: {str(e)}"}
 
-        amount = Decimal(str(amount))
+        try:
+            amount = Decimal(str(amount))
+        except (InvalidOperation, TypeError, ValueError):
+            return {"status": "error", "message": "Invalid amount"}
         if amount <= Decimal('0'):
             return {"status": "error", "message": "Invalid amount"}
 

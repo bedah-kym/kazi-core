@@ -498,7 +498,18 @@ async def _run_sub_agent(
             tool_calls = _extract_tool_calls(content_blocks)
             result_blocks = []
             for tc in tool_calls:
-                result = await _execute_with_timeout(tc["name"], tc["input"], context)
+                # Sub-agents cannot pause for confirmation; block high-risk actions.
+                risk = get_tool_risk_info(tc["name"], preferences)
+                if risk.get("requires_confirmation"):
+                    result = {
+                        "status": "error",
+                        "message": (
+                            f"{tc['name']} requires explicit user confirmation. "
+                            "Please ask in the main conversation before executing it."
+                        ),
+                    }
+                else:
+                    result = await _execute_with_timeout(tc["name"], tc["input"], context)
                 sub_tool_log.append({
                     "name": tc["name"],
                     "input": tc["input"],
@@ -618,6 +629,9 @@ async def run_agent_loop(
         confirmed_tool: True if the user just confirmed a pending tool.
     """
     llm = get_llm_client()
+    if user_message:
+        context.setdefault("user_message", user_message)
+        context.setdefault("raw_query", user_message)
     user_id = context.get("user_id")
     room_id = context.get("room_id")
     user_caps = preferences or {}

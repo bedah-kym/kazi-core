@@ -1,6 +1,7 @@
 (() => {
     const unreadBadge = document.getElementById('unreadRoomsBadge');
     const remindersBadge = document.getElementById('pendingRemindersBadge');
+    const unreadNotificationsBadge = document.getElementById('unreadNotificationsBadge');
     const totalBadge = document.getElementById('notificationTotalBadge');
     const mobileUnread = document.getElementById('unreadRoomsBadgeMobile');
     const mobileReminders = document.getElementById('pendingRemindersBadgeMobile');
@@ -19,6 +20,7 @@
 
     let lastUnread = parseCount(menuButton?.dataset?.unread || unreadBadge.textContent);
     let lastReminders = parseCount(menuButton?.dataset?.reminders || remindersBadge.textContent);
+    let lastUnreadNotifications = 0;
     let lastTotal = lastUnread + lastReminders;
     let lastMarkedRoom = null;
     let lastMarkedAt = 0;
@@ -54,6 +56,8 @@
 
     const updateUnifiedBadge = (count) => {
         unreadNotifCount = count;
+        lastUnreadNotifications = count;
+        if (unreadNotificationsBadge) unreadNotificationsBadge.textContent = count;
         // Unified count is added to the total badge alongside legacy counts
         const total = lastUnread + lastReminders + count;
         updateBadgeVisibility(totalBadge, total);
@@ -142,14 +146,24 @@
         // Click to mark read
         item.addEventListener('click', (e) => {
             if (e.target.closest('.notif-dismiss')) return;
+            const wasUnread = item.classList.contains('bg-light');
             markNotificationRead(n.id);
+            if (wasUnread) {
+                unreadNotifCount = Math.max(0, unreadNotifCount - 1);
+                updateUnifiedBadge(unreadNotifCount);
+            }
             item.classList.remove('bg-light');
         });
 
         // Dismiss button
         item.querySelector('.notif-dismiss').addEventListener('click', (e) => {
             e.stopPropagation();
+            const wasUnread = item.classList.contains('bg-light');
             dismissNotification(n.id);
+            if (wasUnread) {
+                unreadNotifCount = Math.max(0, unreadNotifCount - 1);
+                updateUnifiedBadge(unreadNotifCount);
+            }
             item.remove();
             checkEmptyState();
         });
@@ -233,7 +247,9 @@
                             checkEmptyState();
                         }
                     } else if (data.type === 'ack') {
-                        if (data.action === 'mark_all_read') {
+                        if (Object.prototype.hasOwnProperty.call(data, 'unread_count')) {
+                            updateUnifiedBadge(parseCount(data.unread_count));
+                        } else if (data.action === 'mark_all_read') {
                             unreadNotifCount = 0;
                             updateUnifiedBadge(0);
                         }
@@ -315,7 +331,7 @@
 
     const fetchCounts = () => {
         const currentRoom = window.currentRoomId || '';
-        fetch(`/chatbot/api/notifications/status/?exclude_room_id=${currentRoom}`, {
+        fetch(`/notifications/api/counts/?exclude_room_id=${currentRoom}`, {
             credentials: 'same-origin',
         })
             .then((res) => (res.ok ? res.json() : null))
@@ -323,14 +339,21 @@
                 if (!payload) return;
                 const unread = parseCount(payload.unread_rooms);
                 const reminders = parseCount(payload.pending_reminders);
+                const unreadNotifications = parseCount(payload.unread_notifications);
 
-                if (unread > lastUnread || reminders > lastReminders) {
+                if (
+                    unread > lastUnread ||
+                    reminders > lastReminders ||
+                    unreadNotifications > lastUnreadNotifications
+                ) {
                     playSound();
                 }
 
                 lastUnread = unread;
                 lastReminders = reminders;
+                lastUnreadNotifications = unreadNotifications;
                 updateCounts(unread, reminders);
+                updateUnifiedBadge(unreadNotifications);
             })
             .catch(() => {});
     };

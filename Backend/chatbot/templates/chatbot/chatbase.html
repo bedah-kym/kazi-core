@@ -392,13 +392,14 @@
                                         <div class="notification-summary px-3 py-2 border-bottom d-flex align-items-center gap-3" style="font-size: 0.85rem;">
                                             <span><span class="badge notification-chip me-1" id="unreadRoomsBadge">{{ unread_rooms }}</span> Unread rooms</span>
                                             <span><span class="badge notification-chip me-1" id="pendingRemindersBadge">{{ pending_reminders }}</span> Reminders</span>
+                                            <span><span class="badge notification-chip me-1" id="unreadNotificationsBadge">0</span> Alerts</span>
                                         </div>
                                         <div id="notificationList" class="notification-list" style="max-height: 350px; overflow-y: auto;">
                                             <div class="text-center text-muted p-3" id="noNotifications">No notifications</div>
                                         </div>
                                         <div class="dropdown-divider mb-0"></div>
                                         <a class="dropdown-item text-center py-2" href="{% url 'users:reminders' %}">
-                                            <i class="fas fa-bell me-2"></i>View All
+                                            <i class="fas fa-clock me-2"></i>View Reminders
                                         </a>
                                     </div>
                                 </div>

@@ -14,7 +14,11 @@
       "Bash(find:*)",
       "Bash(git push:*)",
       "Bash(pip install:*)",
-      "Bash(PYTHONIOENCODING=utf-8 DJANGO_DEBUG=true python manage.py makemigrations users --name invite_chain_system 2>&1)"
+      "Bash(PYTHONIOENCODING=utf-8 DJANGO_DEBUG=true python manage.py makemigrations users --name invite_chain_system 2>&1)",
+      "Bash(git:*)",
+      "Bash(ls:*)",
+      "Bash(PYTHONIOENCODING=utf-8 DJANGO_DEBUG=1 python manage.py test orchestration.tests notifications.tests.NotifyMatrixNormalizationTests tests.test_agentic tests.test_agentic_scenarios -v2 2>&1)",
+      "Bash(PYTHONIOENCODING=utf-8 DJANGO_DEBUG=1 python manage.py test notifications.tests -v2 2>&1)"
     ]
   }
 }

@@ -48,22 +48,44 @@ class NotificationConsumer(AsyncJsonWebsocketConsumer):
 
         if action == "mark_read":
             nid = content.get("id")
+            try:
+                nid = int(nid)
+            except (TypeError, ValueError):
+                nid = None
             if nid:
                 await NotificationService.amark_read(self.user.id, nid)
+                unread_count = await NotificationService.aget_unread_count(self.user.id)
                 await self.send_json(
-                    {"type": "ack", "action": "mark_read", "id": nid}
+                    {
+                        "type": "ack",
+                        "action": "mark_read",
+                        "id": nid,
+                        "unread_count": unread_count,
+                    }
                 )
 
         elif action == "mark_all_read":
             await NotificationService.amark_all_read(self.user.id)
-            await self.send_json({"type": "ack", "action": "mark_all_read"})
+            await self.send_json(
+                {"type": "ack", "action": "mark_all_read", "unread_count": 0}
+            )
 
         elif action == "dismiss":
             nid = content.get("id")
+            try:
+                nid = int(nid)
+            except (TypeError, ValueError):
+                nid = None
             if nid:
                 await NotificationService.adismiss(self.user.id, nid)
+                unread_count = await NotificationService.aget_unread_count(self.user.id)
                 await self.send_json(
-                    {"type": "ack", "action": "dismiss", "id": nid}
+                    {
+                        "type": "ack",
+                        "action": "dismiss",
+                        "id": nid,
+                        "unread_count": unread_count,
+                    }
                 )
 
     # ------------------------------------------------------------------ #

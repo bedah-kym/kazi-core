@@ -167,7 +167,8 @@ def settings(request):
             'sent_invites': sent_invites,
             'invites_remaining': invites_remaining,
             'notify_matrix': notify_matrix,
-            'notify_channels': sorted(_NOTIFY_CHANNELS),
+            # Preserve table column order: In-App, Email, WhatsApp.
+            'notify_channels': ['in_app', 'email', 'whatsapp'],
             'notify_event_labels': notify_event_labels,
         }
 

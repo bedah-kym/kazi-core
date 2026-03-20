@@ -9,7 +9,7 @@ A legacy "classic" pipeline (Parse → Route → Execute) is retained as a fallb
 
 ---
 
-## Delivery Sweep Status (Updated 2026-03-19)
+## Delivery Sweep Status (Updated 2026-03-20)
 
 ### Phase 1 — Profile & Settings Reliability (Completed)
 - Fixed profile/bio image updates by using unique avatar filenames and accepting `image/jpg` in upload handling.
@@ -34,8 +34,24 @@ A legacy "classic" pipeline (Parse → Route → Execute) is retained as a fallb
 - Added connector-level robustness fixes and regression tests for security policy behavior.
 - Files: `Backend/orchestration/security_policy.py`, `Backend/orchestration/tool_executor.py`, `Backend/workflows/activity_executors.py`, `Backend/workflows/views.py`, `Backend/workflows/temporal_integration.py`, `Backend/orchestration/tests.py`, `Backend/orchestration/connectors/invoice_connector.py`, `Backend/orchestration/connectors/intersend_connector.py`, `Backend/chatbot/consumers.py`, `Backend/orchestration/agent_loop.py`.
 
+### Phase 5 — Unified Notification Service (Completed)
+- Built new `notifications` Django app with unified `Notification` model covering payments, reminders, messages, and system events.
+- Added `NotificationService` dispatch layer: checks per-event/per-channel preference matrix → creates DB row → pushes via WebSocket → queues Celery tasks for email/WhatsApp.
+- Added per-user `NotificationConsumer` WebSocket (`ws/notifications/`) for real-time delivery, separate from ChatConsumer.
+- Added granular notification preferences (`notify_matrix`) extending existing `notification_preferences` JSONField — per-event-type x per-channel (in_app, email, WhatsApp).
+- Integrated at 3 payment events, reminder delivery, and 3 chat message broadcast points (text/file/voice) with offline user detection and 5-min debounce.
+- Added REST API: list (paginated/filterable), counts, mark-read, mark-all-read, dismiss.
+- Upgraded frontend: WebSocket-first notification delivery with poll fallback, scrollable notification center dropdown, mark-all-read button.
+- Added notification preferences UI tab in settings with per-event grouped checkboxes.
+- Files: `Backend/notifications/` (new app), `Backend/Backend/settings.py`, `Backend/Backend/asgi.py`, `Backend/Backend/urls.py`, `Backend/chatbot/consumers.py`, `Backend/chatbot/tasks.py`, `Backend/chatbot/static/js/notifications.js`, `Backend/chatbot/templates/chatbot/chatbase.html`, `Backend/orchestration/user_preferences.py`, `Backend/payments/services.py`, `Backend/users/feature_views.py`, `Backend/users/templates/users/settings.html`.
+
+### Phase 5b — Test Suite Fixes (Completed)
+- Fixed injection regex in `agent_loop.py` and `security_policy.py` — multi-qualifier strings like "ignore all previous instructions" were not matched.
+- Aligned 3 scenario test assertions with actual streaming event kinds (`text_delta` instead of `text`).
+- All 61 critical tests passing (orchestration, notifications, agentic unit + scenario tests).
+
 ### Next
-- Phase 5 planned: regression harness + reliability normalization + observability completion.
+- Phase 6 planned: data migration to backfill `PaymentNotification` → `Notification`, remove dual-write once stable.
 
 ---
 
@@ -100,6 +116,28 @@ Orchestration Decision Gate
      │
      ▼
 Client receives ai_stream frames
+
+┌──────────────────────────────────────────────────────┐
+│           NOTIFICATION SERVICE                        │
+│                                                      │
+│  NotificationService.notify(user, event, title, ...) │
+│     │                                                │
+│     ├── Load notify_matrix from user preferences     │
+│     ├── in_app? → Notification.objects.create()      │
+│     │             → push to ws/notifications/ group  │
+│     ├── email?  → deliver_notification_email.delay() │
+│     └── whatsapp? → deliver_notification_whatsapp()  │
+│                                                      │
+│  Integration points:                                 │
+│     ├── payments/services.py (deposit/withdraw/inv)  │
+│     ├── chatbot/tasks.py (reminder delivery)         │
+│     └── chatbot/consumers.py (offline msg notify)    │
+│                                                      │
+│  NotificationConsumer (ws/notifications/)             │
+│     ├── Per-user channel group                       │
+│     ├── Real-time push on notification.push event    │
+│     └── Client actions: mark_read, dismiss           │
+└──────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -292,6 +330,58 @@ Client receives ai_stream frames
 
 ---
 
+### 14. Notification Service (`notifications/`)
+
+**Purpose:** Unified notification dispatch across all event types with per-user real-time WebSocket delivery, granular preferences, and multi-channel output.
+
+**Model:** `Notification` — unified record for payments, reminders, messages, system events.
+- `event_type`: `payment.deposit`, `payment.withdrawal`, `payment.invoice`, `payment.error`, `reminder.due`, `message.unread`, `message.mention`, `system.info`, `system.warning`
+- `severity`: info, success, warning, error
+- Typed nullable FKs: `related_invoice`, `related_journal`, `related_reminder`, `related_room`, `related_message`
+- State: `is_read`, `read_at`, `is_dismissed`
+- Delivery tracking: `delivered_ws`, `delivered_email`, `delivered_whatsapp`
+
+**Service:** `NotificationService.notify(user, event_type, title, body, severity, related_*)`
+1. Load user's `notify_matrix` for the event type
+2. If `in_app` → create DB row → push via WebSocket group `notifications_{user.id}`
+3. If `email` → queue `deliver_notification_email` Celery task (Mailgun/Gmail)
+4. If `whatsapp` → queue `deliver_notification_whatsapp` Celery task (Twilio)
+
+**WebSocket Consumer:** `NotificationConsumer` at `ws/notifications/`
+- Per-user channel group, separate from ChatConsumer
+- On connect: send initial `unread_count`
+- Client actions: `mark_read`, `mark_all_read`, `dismiss`
+- Multiple tabs = same group = all receive events
+
+**Preferences:** `notify_matrix` inside existing `UserProfile.notification_preferences` JSONField:
+```json
+{
+    "notify_matrix": {
+        "payment.deposit": {"in_app": true, "email": true, "whatsapp": false},
+        "message.unread": {"in_app": true, "email": false, "whatsapp": false},
+        ...
+    }
+}
+```
+
+**REST API:**
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/notifications/api/` | GET | List (paginated, filterable by event_type, unread_only) |
+| `/notifications/api/counts/` | GET | Unified + legacy counts |
+| `/notifications/api/<id>/read/` | POST | Mark single read |
+| `/notifications/api/read-all/` | POST | Mark all read |
+| `/notifications/api/<id>/dismiss/` | POST | Dismiss |
+
+**Integration Points:**
+- `payments/services.py` — deposit (line 270), withdrawal (line 310), invoice paid (line 434)
+- `chatbot/tasks.py` — reminder delivery after status='sent'
+- `chatbot/consumers.py` — text/file/voice message broadcast → `notify_room_message()` for offline users (5-min debounce via Redis)
+
+**Frontend:** `notifications.js` — WebSocket-first with 30s poll fallback, scrollable notification center dropdown, sound alerts, mark-read/dismiss via WebSocket.
+
+---
+
 ### RETIRED / FALLBACK Components
 
 | Component | Status | Notes |
@@ -473,6 +563,7 @@ All inherit from `BaseTravelConnector` (`base_travel_connector.py`) which provid
 | Time format | 24h, 12h | 24h (12h for US) |
 | Currency | USD, KES, EUR, etc. | Inferred from location |
 | Capability mode | custom, conserve, balanced, max | balanced |
+| Notification matrix | per-event-type x per-channel (in_app, email, whatsapp) | See defaults in `_DEFAULT_NOTIFY_MATRIX` |
 
 ---
 
@@ -609,11 +700,21 @@ Message → Redis buffer → Batch (10 msgs) → Celery task → HF toxic-bert �
 | `Backend/workflows/workflow_agent.py` | Conversational workflow creation |
 | `Backend/workflows/models.py` | Workflow, trigger, execution models |
 | `Backend/workflows/tasks.py` | Celery deferred workflow replay |
+| **Notifications** | |
+| `Backend/notifications/models.py` | Unified Notification model (all event types) |
+| `Backend/notifications/services.py` | NotificationService dispatch (preferences → DB → WS → email/WhatsApp) |
+| `Backend/notifications/consumers.py` | Per-user NotificationConsumer WebSocket |
+| `Backend/notifications/tasks.py` | Celery tasks for email/WhatsApp delivery |
+| `Backend/notifications/views.py` | REST API (list, counts, mark-read, dismiss) |
+| `Backend/notifications/urls.py` | URL routing under `/notifications/` |
+| `Backend/notifications/routing.py` | WebSocket URL patterns |
 | **Domain** | |
 | `Backend/payments/models.py` | Double-entry ledger, invoices |
-| `Backend/payments/services.py` | Ledger, wallet, invoice services |
+| `Backend/payments/services.py` | Ledger, wallet, invoice services + notification dispatch |
 | `Backend/travel/models.py` | Itinerary, items, bookings |
 | `Backend/users/models.py` | Profiles, wallets, Calendly OAuth |
 | **Tests** | |
-| `Backend/tests/test_agentic.py` | 30+ unit tests for agentic components |
-| `Backend/tests/test_agentic_scenarios.py` | 11 end-to-end scenario tests |
+| `Backend/orchestration/tests.py` | 7 tests: action catalog, security policy, parameter sanitization |
+| `Backend/orchestration/test_agentic.py` | 39 unit tests for agentic components (tool schemas, executor, prompts, model selection, token tracking, web search) |
+| `Backend/orchestration/test_agentic_scenarios.py` | 11 end-to-end scenario tests (tool chains, error recovery, confirmation, injection protection) |
+| `Backend/notifications/tests.py` | 6 tests: notify_matrix normalization + NotificationService integration |

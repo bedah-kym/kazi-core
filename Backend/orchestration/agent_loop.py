@@ -235,7 +235,7 @@ def _get_result_injection_re():
     if _RESULT_INJECTION_RE is None:
         import re
         patterns = [
-            r"ignore\s+(all|previous|system)\s+instructions",
+            r"ignore\s+(all\s+|previous\s+|system\s+)*instructions",
             r"you\s+are\s+now\s+(in|a)\b",
             r"new\s+instructions?:",
             r"<\s*system\s*>",

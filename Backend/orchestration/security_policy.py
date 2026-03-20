@@ -43,7 +43,7 @@ RESTRICTED_PARAM_KEYS = {
 }
 
 _INJECTION_PATTERNS = [
-    r"ignore\s+(all|previous|system|developer)\s+instructions",
+    r"ignore\s+(all\s+|previous\s+|system\s+|developer\s+)*instructions",
     r"(system|developer)\s+prompt",
     r"jailbreak",
     r"bypass\s+(safety|filters|policy|guard)",

@@ -812,6 +812,15 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 await self.send_chat_message(content)
                 logger.info("=== NEW MESSAGE SUCCESS ===")
 
+                # Notify offline room participants
+                try:
+                    from notifications.services import NotificationService
+                    await sync_to_async(NotificationService.notify_room_message)(
+                        member_user, current_chat, message, self.room_group_name,
+                    )
+                except Exception as e:
+                    logger.debug(f"Room notification dispatch skipped: {e}")
+
                 # Queue room context refresh for summary/notes
                 try:
                     await self.schedule_context_summary(room_id, message.id)
@@ -1938,6 +1947,16 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 "message": message_json
             }
             await self.send_chat_message(content)
+
+            # Notify offline room participants
+            try:
+                from notifications.services import NotificationService
+                await sync_to_async(NotificationService.notify_room_message)(
+                    member_user, current_chat, message, self.room_group_name,
+                )
+            except Exception as e:
+                logger.debug(f"Room notification dispatch skipped: {e}")
+
         except Exception as e:
             logger.error(f"Error in file_message: {str(e)}")
             await self.send_chat_message({
@@ -2088,6 +2107,15 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 "message": message_json
             }
             await self.send_chat_message(content)
+
+            # Notify offline room participants
+            try:
+                from notifications.services import NotificationService
+                await sync_to_async(NotificationService.notify_room_message)(
+                    member_user, current_chat, message, self.room_group_name,
+                )
+            except Exception as e:
+                logger.debug(f"Room notification dispatch skipped: {e}")
 
         except Exception as e:
             logger.error(f"Error in voice_message: {str(e)}")

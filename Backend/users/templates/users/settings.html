@@ -215,6 +215,7 @@
                     <a class="nav-link active" href="#profile"><i class="fas fa-user me-2"></i>Profile</a>
                     <a class="nav-link" href="#ai"><i class="fas fa-brain me-2"></i>AI</a>
                     <a class="nav-link" href="#capabilities"><i class="fas fa-sliders-h me-2"></i>Capabilities</a>
+                    <a class="nav-link" href="#notifications"><i class="fas fa-bell me-2"></i>Notifications</a>
                     <a class="nav-link" href="#integrations"><i class="fas fa-plug me-2"></i>Integrations</a>
                     {% if can_send_invites %}<a class="nav-link" href="#invites"><i class="fas fa-envelope me-2"></i>Invites</a>{% endif %}
                     <a class="nav-link" href="#workspace"><i class="fas fa-briefcase me-2"></i>Workspace</a>
@@ -541,6 +542,54 @@
 
                         <button type="submit" class="btn btn-primary">
                             <i class="fas fa-save me-2"></i>Save Capabilities
+                        </button>
+                    </form>
+                </div>
+
+                <!-- ===== NOTIFICATIONS ===== -->
+                <div id="notifications" class="settings-section">
+                    <h3 class="mb-4">Notification Preferences</h3>
+                    <p class="text-muted mb-3">Choose how you want to be notified for each event type.</p>
+                    <form method="post">
+                        {% csrf_token %}
+                        <input type="hidden" name="section" value="notifications">
+                        <div class="table-responsive">
+                            <table class="table table-sm align-middle">
+                                <thead>
+                                    <tr>
+                                        <th style="min-width:180px">Event</th>
+                                        <th class="text-center">In-App</th>
+                                        <th class="text-center">Email</th>
+                                        <th class="text-center">WhatsApp</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for event_type, channels in notify_matrix.items %}
+                                    <tr>
+                                        <td>
+                                            {% with label=notify_event_labels|default_if_none:"" %}
+                                                {% for key, val in notify_event_labels.items %}
+                                                    {% if key == event_type %}{{ val }}{% endif %}
+                                                {% endfor %}
+                                            {% endwith %}
+                                        </td>
+                                        {% for channel in notify_channels %}
+                                            <td class="text-center">
+                                                <input type="checkbox" class="form-check-input"
+                                                    name="notif__{{ event_type }}__{{ channel }}"
+                                                    {% for ch_name, ch_val in channels.items %}
+                                                        {% if ch_name == channel and ch_val %}checked{% endif %}
+                                                    {% endfor %}
+                                                >
+                                            </td>
+                                        {% endfor %}
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="fas fa-save me-2"></i>Save Notification Preferences
                         </button>
                     </form>
                 </div>

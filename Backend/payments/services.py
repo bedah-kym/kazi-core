@@ -273,6 +273,19 @@ class WalletService:
             notification_type='SUCCESS'
         )
 
+        try:
+            from notifications.services import NotificationService
+            NotificationService.notify(
+                user=user,
+                event_type="payment.deposit",
+                title="Deposit Successful",
+                body=f"{user_credit} KES credited to your wallet (Platform fee: {platform_fee} KES)",
+                severity="success",
+                related_journal=tx,
+            )
+        except Exception:
+            pass
+
         logger.info(f"Processed deposit for {user.username}: {user_credit} KES credited")
         return tx
 
@@ -312,6 +325,19 @@ class WalletService:
             message=f"Withdrawal of {amount} KES processed",
             notification_type='INFO'
         )
+
+        try:
+            from notifications.services import NotificationService
+            NotificationService.notify(
+                user=user,
+                event_type="payment.withdrawal",
+                title="Withdrawal Processed",
+                body=f"{amount} KES withdrawn from your wallet",
+                severity="info",
+                related_journal=tx,
+            )
+        except Exception:
+            pass
 
         return tx
 
@@ -437,5 +463,19 @@ class InvoiceService:
             notification_type='SUCCESS',
             related_invoice=invoice
         )
+
+        try:
+            from notifications.services import NotificationService
+            NotificationService.notify(
+                user=invoice.issuer,
+                event_type="payment.invoice",
+                title="Invoice Paid",
+                body=f"{invoice.amount} KES received",
+                severity="success",
+                related_invoice=invoice,
+                related_journal=tx,
+            )
+        except Exception:
+            pass
 
         return tx

@@ -74,6 +74,38 @@ def _normalize_approval_overrides(value: Any) -> Dict[str, str]:
     return normalized
 
 
+_DEFAULT_NOTIFY_MATRIX: Dict[str, Dict[str, bool]] = {
+    "payment.deposit":    {"in_app": True, "email": True,  "whatsapp": False},
+    "payment.withdrawal": {"in_app": True, "email": True,  "whatsapp": False},
+    "payment.invoice":    {"in_app": True, "email": True,  "whatsapp": False},
+    "payment.error":      {"in_app": True, "email": True,  "whatsapp": True},
+    "reminder.due":       {"in_app": True, "email": True,  "whatsapp": False},
+    "message.unread":     {"in_app": True, "email": False, "whatsapp": False},
+    "message.mention":    {"in_app": True, "email": True,  "whatsapp": False},
+    "system.info":        {"in_app": True, "email": False, "whatsapp": False},
+    "system.warning":     {"in_app": True, "email": True,  "whatsapp": False},
+}
+
+_NOTIFY_CHANNELS = {"in_app", "email", "whatsapp"}
+
+
+def _normalize_notify_matrix(value: Any) -> Dict[str, Dict[str, bool]]:
+    """Normalize the per-event-type notification channel matrix.
+
+    Fills in defaults for any missing event types or channels so
+    downstream code can always do ``matrix[event_type][channel]``.
+    """
+    raw = value if isinstance(value, dict) else {}
+    result: Dict[str, Dict[str, bool]] = {}
+    for event_type, defaults in _DEFAULT_NOTIFY_MATRIX.items():
+        user_prefs = raw.get(event_type) if isinstance(raw.get(event_type), dict) else {}
+        result[event_type] = {
+            ch: _coerce_bool(user_prefs.get(ch), defaults[ch])
+            for ch in _NOTIFY_CHANNELS
+        }
+    return result
+
+
 def _pull_pref(raw_prefs: Optional[Dict[str, Any]], key: str) -> Optional[Any]:
     if not isinstance(raw_prefs, dict):
         return None
@@ -198,6 +230,10 @@ def normalize_preferences(
         "allow_calendar": _coerce_bool(_pull_pref(raw_prefs, "allow_calendar"), True),
         # Approval overrides for confirmation policy (e.g. {"send_email": "auto"})
         "approval_overrides": approval_overrides,
+        # Per-event-type notification channel matrix
+        "notify_matrix": _normalize_notify_matrix(
+            _pull_pref(raw_prefs, "notify_matrix")
+        ),
     }
 
 

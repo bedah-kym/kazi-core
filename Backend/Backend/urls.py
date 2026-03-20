@@ -33,6 +33,7 @@ urlpatterns = [
     path('api/workflows/', include('workflows.urls')),
     path('travel/', include('travel.urls')),  # Travel Planning UI
     path('payments/', include('payments.urls')),  # Payment System
+    path('notifications/', include('notifications.urls')),
     path('auth/', obtain_auth_token),
     path('api-auth/', include('rest_framework.urls')),
     path('uploads/', upload_file, name='upload_file'),

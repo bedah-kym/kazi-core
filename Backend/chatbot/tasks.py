@@ -679,6 +679,21 @@ def _deliver_reminder(reminder: Reminder) -> bool:
         else:
             cache.incr(rl_key)
             cache.expire(rl_key, 60 * 60 * 12)
+
+        try:
+            from notifications.services import NotificationService
+            NotificationService.notify(
+                user=reminder.user,
+                event_type="reminder.due",
+                title="Reminder",
+                body=reminder.content,
+                severity="info",
+                related_reminder=reminder,
+                related_room=reminder.room,
+            )
+        except Exception:
+            pass
+
         return True
 
     reminder.status = 'failed'

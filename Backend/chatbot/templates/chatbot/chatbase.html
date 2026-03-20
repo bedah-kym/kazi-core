@@ -382,19 +382,23 @@
                                         <i class="fas fa-bell"></i>
                                         <span class="notification-badge" id="notificationTotalBadge">{{ total_notifications }}</span>
                                     </button>
-                                    <div class="dropdown-menu dropdown-menu-end notification-menu shadow-sm">
-                                        <div class="dropdown-header">Notifications</div>
-                                        <div class="notification-item">
-                                            <span class="notification-label">Unread rooms</span>
-                                            <span class="badge notification-chip" id="unreadRoomsBadge">{{ unread_rooms }}</span>
+                                    <div class="dropdown-menu dropdown-menu-end notification-menu shadow-sm" style="width: 360px; max-height: 500px;">
+                                        <div class="dropdown-header d-flex justify-content-between align-items-center">
+                                            <span>Notifications</span>
+                                            <button class="btn btn-sm btn-link p-0" onclick="window.notificationCenter && window.notificationCenter.markAllRead()">
+                                                Mark all read
+                                            </button>
                                         </div>
-                                        <div class="notification-item">
-                                            <span class="notification-label">Reminders</span>
-                                            <span class="badge notification-chip" id="pendingRemindersBadge">{{ pending_reminders }}</span>
+                                        <div class="notification-summary px-3 py-2 border-bottom d-flex align-items-center gap-3" style="font-size: 0.85rem;">
+                                            <span><span class="badge notification-chip me-1" id="unreadRoomsBadge">{{ unread_rooms }}</span> Unread rooms</span>
+                                            <span><span class="badge notification-chip me-1" id="pendingRemindersBadge">{{ pending_reminders }}</span> Reminders</span>
                                         </div>
-                                        <div class="dropdown-divider"></div>
-                                        <a class="dropdown-item" href="{% url 'users:reminders' %}">
-                                            <i class="fas fa-bell me-2"></i>Open Reminders
+                                        <div id="notificationList" class="notification-list" style="max-height: 350px; overflow-y: auto;">
+                                            <div class="text-center text-muted p-3" id="noNotifications">No notifications</div>
+                                        </div>
+                                        <div class="dropdown-divider mb-0"></div>
+                                        <a class="dropdown-item text-center py-2" href="{% url 'users:reminders' %}">
+                                            <i class="fas fa-bell me-2"></i>View All
                                         </a>
                                     </div>
                                 </div>

@@ -129,6 +129,29 @@ def settings(request):
             used_count = sent_invites.filter(status__in=['sent', 'activated']).count()
             invites_remaining = max(0, 3 - used_count)
 
+        # Build normalized notify_matrix for template
+        from orchestration.user_preferences import _DEFAULT_NOTIFY_MATRIX, _NOTIFY_CHANNELS
+        raw_matrix = (profile.notification_preferences or {}).get('notify_matrix', {})
+        notify_matrix = {}
+        for event_type, defaults in _DEFAULT_NOTIFY_MATRIX.items():
+            user_event = raw_matrix.get(event_type, {}) if isinstance(raw_matrix.get(event_type), dict) else {}
+            notify_matrix[event_type] = {
+                ch: user_event.get(ch, defaults[ch]) for ch in _NOTIFY_CHANNELS
+            }
+
+        # Build human-readable labels for event types
+        notify_event_labels = {
+            'payment.deposit': 'Deposit Received',
+            'payment.withdrawal': 'Withdrawal Processed',
+            'payment.invoice': 'Invoice Paid',
+            'payment.error': 'Payment Error',
+            'reminder.due': 'Reminder Due',
+            'message.unread': 'Unread Message',
+            'message.mention': 'Mentioned in Chat',
+            'system.info': 'System Info',
+            'system.warning': 'System Warning',
+        }
+
         return {
             'workspace': workspace,
             'user_form': user_form,
@@ -143,6 +166,9 @@ def settings(request):
             'can_send_invites': can_send_invites,
             'sent_invites': sent_invites,
             'invites_remaining': invites_remaining,
+            'notify_matrix': notify_matrix,
+            'notify_channels': sorted(_NOTIFY_CHANNELS),
+            'notify_event_labels': notify_event_labels,
         }
 
     if request.method == 'POST':
@@ -205,6 +231,22 @@ def settings(request):
             profile.save(update_fields=['notification_preferences'])
             messages.success(request, 'Capability settings updated.')
             return redirect('/accounts/settings/#capabilities')
+
+        elif section == 'notifications':
+            # Build notify_matrix from form checkboxes:
+            # Each checkbox name is like "notif__payment.deposit__email"
+            from orchestration.user_preferences import _DEFAULT_NOTIFY_MATRIX, _NOTIFY_CHANNELS
+            matrix = {}
+            for event_type in _DEFAULT_NOTIFY_MATRIX:
+                matrix[event_type] = {}
+                for channel in _NOTIFY_CHANNELS:
+                    key = f"notif__{event_type}__{channel}"
+                    matrix[event_type][channel] = request.POST.get(key) == 'on'
+            prefs["notify_matrix"] = matrix
+            profile.notification_preferences = prefs
+            profile.save(update_fields=['notification_preferences'])
+            messages.success(request, 'Notification preferences updated.')
+            return redirect('/accounts/settings/#notifications')
 
         elif section == 'workspace':
             ws_name = request.POST.get('workspace_name', '').strip()

@@ -107,6 +107,7 @@ INSTALLED_APPS = [
     'travel',
     'payments',
     'workflows',
+    'notifications',
     'rest_framework',
     'rest_framework.authtoken',
     'django_celery_beat',

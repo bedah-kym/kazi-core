@@ -24,6 +24,7 @@ class LLMClient:
     def __init__(self):
         self.anthropic_key = getattr(settings, 'ANTHROPIC_API_KEY', os.environ.get('ANTHROPIC_API_KEY'))
         self.hf_key = getattr(settings, 'HF_API_TOKEN', os.environ.get('HF_API_TOKEN'))
+        self._agent_name = getattr(settings, 'KAZI_AGENT_NAME', 'Kazi')
 
         # Models
         self.claude_model = "claude-sonnet-4-6"
@@ -126,7 +127,8 @@ class LLMClient:
     ) -> Dict[str, Any]:
         """Fallback for create_message when Anthropic is unavailable."""
         prompt = self._messages_to_plain_text(messages)
-        fallback_system = system or "You are Mathia, a helpful AI assistant."
+        _agent = getattr(self, "_agent_name", "Kazi")
+        fallback_system = system or f"You are {_agent}, a helpful AI assistant."
         if tools:
             fallback_system += (
                 "\n\nTool execution is currently unavailable in this mode. "
@@ -608,7 +610,8 @@ class LLMClient:
 
         # Fallback stream: text-only (no tool_use blocks)
         fallback_prompt = self._messages_to_plain_text(messages)
-        fallback_system = system or "You are Mathia, a helpful AI assistant."
+        _agent = getattr(self, "_agent_name", "Kazi")
+        fallback_system = system or f"You are {_agent}, a helpful AI assistant."
         if tools:
             fallback_system += (
                 "\n\nTool execution is currently unavailable in this mode. "

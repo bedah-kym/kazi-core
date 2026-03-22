@@ -1,0 +1,39 @@
+name: Feature Request
+description: Propose an improvement or new capability
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What user or system problem does this solve?
+      placeholder: "As a ..., I need ..., so that ..."
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the expected behavior and UX/API impact.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches and why they are less suitable.
+  - type: textarea
+    id: impact
+    attributes:
+      label: Scope and impact
+      description: Mention affected modules, migrations, security, or rollout concerns.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submission checks
+      options:
+        - label: I searched existing issues and discussions.
+          required: true
+        - label: I can help test or validate this feature.
+          required: false

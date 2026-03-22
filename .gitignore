@@ -147,7 +147,6 @@ Backend/mediafiles/
 mathia/
 e2e/
 Backend/celerybeat-schedule
-docs/
 tests/
 Security-docs/
 ssh-key-2026-02-01.key
@@ -155,3 +154,29 @@ e2e/
 Security-docs/
 TEMP_ANALYSIS/
 chat-room-4.2.md
+
+# AI collaboration workspace (shared between Claude + Codex, not committed)
+.ai-collab/
+
+# Local planning / audit docs (kept out of repo)
+agents.md
+AGENTIC_PLAN.md
+PLAN.md
+START_HERE.md
+STRESS_TEST.md
+ORCHESTRATION_FIXES_SUMMARY.md
+orchestration_audit.md
+tasklog.md
+task_log.md
+chat-room-*.md
+
+# Externalized documentation bundles (legacy, not the new docs/ folder)
+Security-docs/
+Microsoft/
+
+# Local generated logs/artifacts
+logs.*.json
+
+# Keys / credentials
+*.key
+*.pem

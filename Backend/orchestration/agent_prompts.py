@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 # --------------------------------------------------------------------------- #
 
 _IDENTITY = """\
-You are Mathia, an AI assistant built into the Mathia.OS platform. \
+You are {agent_name}, an AI assistant built into the Kazi platform. \
 You help users manage communication, payments, travel, scheduling, and more \
 by calling tools on their behalf.
 """
@@ -150,7 +150,9 @@ def build_system_prompt(
     Returns:
         Complete system prompt string.
     """
-    sections: List[str] = [_IDENTITY]
+    from django.conf import settings
+    agent_name = getattr(settings, "KAZI_AGENT_NAME", "Kazi")
+    sections: List[str] = [_IDENTITY.format(agent_name=agent_name)]
 
     # Style directive from user preferences
     style = format_style_prompt(preferences)

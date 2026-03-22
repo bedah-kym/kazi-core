@@ -8,16 +8,26 @@ to the LLM so it can natively call tools.
 from __future__ import annotations
 
 import logging
-from copy import deepcopy
 from typing import Any, Dict, List, Optional
 
 from orchestration.action_catalog import (
-    ACTION_CATALOG,
     get_action_definition,
-    get_capability_gate,
+    iter_action_definitions,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _ensure_dynamic_connector_actions() -> None:
+    """
+    Ensure plugin connectors are discovered before building tool schemas.
+    This allows dynamically registered connector actions to be visible to the LLM.
+    """
+    try:
+        from orchestration.connector_registry import discover_connectors
+        discover_connectors()
+    except Exception as exc:
+        logger.debug("Dynamic connector discovery skipped: %s", exc)
 
 
 def _build_input_schema(action_def: Dict[str, Any]) -> Dict[str, Any]:
@@ -87,7 +97,9 @@ def get_tool_definitions(
     excluded = set(exclude_actions or [])
     tools: List[Dict[str, Any]] = []
 
-    for action_def in ACTION_CATALOG:
+    _ensure_dynamic_connector_actions()
+
+    for action_def in iter_action_definitions():
         action_name = action_def["action"]
 
         # Skip excluded actions
@@ -119,7 +131,8 @@ def get_tool_names(
     """Return just the action names available to a user."""
     capabilities = user_capabilities or {}
     names: List[str] = []
-    for action_def in ACTION_CATALOG:
+    _ensure_dynamic_connector_actions()
+    for action_def in iter_action_definitions():
         gate = action_def.get("capability_gate")
         if gate and capabilities:
             if not capabilities.get(gate, True):

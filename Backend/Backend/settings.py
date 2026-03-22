@@ -325,6 +325,9 @@ GMAIL_OAUTH_CLIENT_SECRET = os.environ.get('GMAIL_OAUTH_CLIENT_SECRET') or os.en
 GMAIL_OAUTH_REDIRECT_URI = os.environ.get('GMAIL_OAUTH_REDIRECT_URI', '')
 GMAIL_SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send'
 
+# Kazi platform
+KAZI_AGENT_NAME = os.environ.get('KAZI_AGENT_NAME', 'Kazi')
+
 # LLM cost guards
 LLM_MAX_TOKENS = int(os.environ.get('LLM_MAX_TOKENS', 700))  # hard ceiling per call
 LLM_PROMPT_CHAR_LIMIT = int(os.environ.get('LLM_PROMPT_CHAR_LIMIT', 4000))  # truncate user prompt to this many chars

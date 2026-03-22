@@ -23,69 +23,10 @@ from orchestration.security_policy import is_prompt_injection, sanitize_paramete
 logger = logging.getLogger(__name__)
 
 # Lazy-loaded singleton for the connector map
-_connector_map: Optional[Dict[str, Any]] = None
-
-
 def _get_connector_map() -> Dict[str, Any]:
-    """Lazy-load the connector map from MCPRouter (avoids circular imports)."""
-    global _connector_map
-    if _connector_map is not None:
-        return _connector_map
-
-    from orchestration.connectors.whatsapp_connector import WhatsAppConnector
-    from orchestration.connectors.intersend_connector import IntersendPayConnector
-    from orchestration.connectors.gmail_connector import GmailConnector
-    from orchestration.connectors.quota_connector import QuotaConnector
-    from orchestration.connectors.payment_connector import ReadOnlyPaymentConnector
-    from orchestration.connectors.invoice_connector import InvoiceConnector
-    from orchestration.connectors.travel_buses_connector import TravelBusesConnector
-    from orchestration.connectors.travel_hotels_connector import TravelHotelsConnector
-    from orchestration.connectors.travel_flights_connector import TravelFlightsConnector
-    from orchestration.connectors.travel_transfers_connector import TravelTransfersConnector
-    from orchestration.connectors.travel_events_connector import TravelEventsConnector
-    from orchestration.connectors.itinerary_connector import ItineraryConnector
-
-    # Import inline connectors from mcp_router
-    from orchestration.mcp_router import (
-        CalendarConnector,
-        SearchConnector,
-        WeatherConnector,
-        GiphyConnector,
-        CurrencyConnector,
-        ReminderConnector,
-    )
-
-    _connector_map = {
-        "schedule_meeting": CalendarConnector(),
-        "check_availability": CalendarConnector(),
-        "check_payments": ReadOnlyPaymentConnector(),
-        "search_info": SearchConnector(),
-        "get_weather": WeatherConnector(),
-        "search_gif": GiphyConnector(),
-        "convert_currency": CurrencyConnector(),
-        "send_message": WhatsAppConnector(),
-        "send_whatsapp": WhatsAppConnector(),
-        "send_email": GmailConnector(),
-        "set_reminder": ReminderConnector(),
-        "check_quotas": QuotaConnector(),
-        "check_balance": ReadOnlyPaymentConnector(),
-        "list_transactions": ReadOnlyPaymentConnector(),
-        "check_invoice_status": ReadOnlyPaymentConnector(),
-        "create_invoice": InvoiceConnector(),
-        "create_payment_link": IntersendPayConnector(),
-        "withdraw": IntersendPayConnector(),
-        "check_status": IntersendPayConnector(),
-        "search_buses": TravelBusesConnector(),
-        "search_hotels": TravelHotelsConnector(),
-        "search_flights": TravelFlightsConnector(),
-        "search_transfers": TravelTransfersConnector(),
-        "search_events": TravelEventsConnector(),
-        "create_itinerary": ItineraryConnector(),
-        "view_itinerary": ItineraryConnector(),
-        "add_to_itinerary": ItineraryConnector(),
-        "book_travel_item": ItineraryConnector(),
-    }
-    return _connector_map
+    """Lazy-load the connector map via auto-discovery registry."""
+    from orchestration.connector_registry import discover_connectors
+    return discover_connectors()
 
 
 async def execute_tool(

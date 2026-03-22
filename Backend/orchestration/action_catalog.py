@@ -454,6 +454,31 @@ for item in ACTION_CATALOG:
         _ALIAS_INDEX[str(alias).strip().lower()] = canonical
 
 
+def register_actions(entries: List[Dict[str, Any]]) -> None:
+    """
+    Dynamically register action catalog entries (from connector plugins).
+
+    This merges new entries into the catalog, updating indexes.
+    Existing actions with the same name are overwritten.
+    """
+    for entry in entries:
+        action_name = entry.get("action")
+        if not action_name:
+            continue
+        # Remove any existing entry with the same action name
+        for i, existing in enumerate(ACTION_CATALOG):
+            if existing["action"] == action_name:
+                ACTION_CATALOG[i] = entry
+                break
+        else:
+            ACTION_CATALOG.append(entry)
+        # Update indexes
+        _ACTION_INDEX[action_name] = entry
+        _ALIAS_INDEX[action_name] = action_name
+        for alias in entry.get("aliases") or []:
+            _ALIAS_INDEX[str(alias).strip().lower()] = action_name
+
+
 def resolve_action_alias(action: Optional[str]) -> str:
     if not action:
         return ""
@@ -581,4 +606,3 @@ def validate_router_mappings(
     missing = sorted(required - mapped)
     extra = sorted(mapped - required)
     return missing, extra
-

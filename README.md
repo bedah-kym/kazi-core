@@ -1,121 +1,137 @@
-# 🤖 Mathia.OS: The AI Operating System for One-Person Empires
+# Kazi Core
 
-**Manage Socials, Finance, Travel, and Documents in one unified intelligence.**
+Kazi Core is a self-hostable, open-source agentic engine.
+Bring your own tools, run on your own infrastructure, and keep your data in your stack.
 
-Mathia is not just a workspace—it's an **AI-powered Operating System** designed for **Lone Founders, Social Media Managers, and SMEs**. It gives you the leverage of a 10-person team through a single chat interface.
+## Why Kazi Core
 
----
+- ReAct-style agent loop (`think -> act -> observe`)
+- Pluggable connector system for custom tools
+- Built-in safety gates (risk levels, confirmation, sanitization)
+- Real-time streaming via WebSockets
+- Works with Anthropic and HuggingFace provider paths
 
-## 🚀 Core Pillars (The "OS" Modules)
+## Architecture
 
-### 1. 📢 Social Media Growth Engine (New)
-*Target: Social Media Managers & Growth Hackers*
-*   **Zero to Viral**: AI agent that plans, posts, and monitors growth across X (Twitter), LinkedIn, and Instagram.
-*   **Analytics**: Real-time feedback loops to optimize engagement.
-
-### 2. 💰 Enterprise Finance & Quickbooks
-*Target: SMEs & Freelancers*
-*   **Double-Entry Ledger**: ACID-compliant financial core for handling wallet balances (Debits/Credits).
-*   **Quickbooks Integration**: Automatically sync invoices and transaction data to Quickbooks.
-*   **Payments**: Native IntaSend support for M-Pesa STK Pushes and Card payments.
-
-### 3. 🧠 Productivity & Deep Notion
-*Target: Lone Founders*
-*   **Deep Integration**: Mathia lives inside your knowledge base. It can read/write to **Notion** pages and databases.
-*   **Task Orchestration**: "Organize my week" creates tasks in Notion and schedules reminders.
-
-### 4. ✈️ B2B Travel Planner
-*Target: Travel Agents & Trip Managers*
-*   **Agentic Planning**: Create detailed, day-by-day itineraries for clients.
-*   **Logistics**: Manage bookings and budgets for third parties.
-
----
-
-## 🛠️ Technical Stack
-
-Mathia.OS is built for scale and real-time agentic behavior.
-
-*   **Core**: Python 3.11, Django 5.0 (ASGI)
-*   **Real-time**: Django Channels, Redis (WebSockets)
-*   **AI Orchestration**: MCP Router (Model Context Protocol)
-*   **Database**: PostgreSQL 16
-*   **Async Tasks**: Celery & Celery Beat
-*   **Frontend**: HTML5/Bootstrap (served via Django)
-
----
-
-## ⚡ Quick Start (Docker)
-
-Get your OS running in minutes.
-
-1.  **Clone**
-    ```bash
-    git clone https://github.com/your-org/mathia.git
-    cd mathia
-    ```
-
-2.  **Env Setup**
-    ```bash
-    cp .env.example .env
-    # Add your API Keys (Anthropic, IntaSend, OpenWeather, etc.)
-    ```
-
-3.  **Launch**
-    ```bash
-    docker-compose up --build
-    ```
-
-4.  **Initialize**
-    ```bash
-    docker-compose exec web python Backend/manage.py migrate
-    ```
-
-Access the OS at: [http://localhost:8000](http://localhost:8000)
-
----
-
-## Railway Deployment
-
-This repo includes a `Dockerfile` and an entrypoint that runs migrations and `collectstatic` for the web service.
-
-1. Create a Railway project and connect this repo.
-2. Add PostgreSQL and Redis plugins (Railway injects `DATABASE_URL` and `REDIS_URL`).
-3. Set required environment variables:
-   - `DJANGO_SECRET_KEY`
-   - `DJANGO_DEBUG=false`
-   - `DJANGO_ALLOWED_HOSTS=yourapp.up.railway.app`
-   - `DJANGO_CSRF_TRUSTED_ORIGINS=https://yourapp.up.railway.app`
-4. (Optional) If you need uploads in production, enable R2:
-   - `R2_ENABLED=true` and all `R2_*` variables (see `Backend/Backend/settings.py`).
-
-Service start commands (use these in Railway service settings):
-```bash
-# web
-sh /app/scripts/railway/web.sh
-
-# celery worker
-sh /app/scripts/railway/celery_worker.sh
-
-# celery beat
-sh /app/scripts/railway/celery_beat.sh
-
-# temporal worker (only if you use Temporal)
-sh /app/scripts/railway/temporal_worker.sh
+```text
+Client (HTTP/WebSocket)
+  -> ChatConsumer
+    -> Context + memory assembly
+      -> Agent loop
+        -> Tool executor
+          -> Connector registry
+            -> Connectors (built-in + custom)
 ```
 
-For worker/beat/temporal services, set `SKIP_MIGRATIONS=1` to avoid repeated migrations.
+## Quick Start
 
----
-
-## 🧪 Testing the OS
-
-Run the diagnostic suite to verify all pillars:
+1. Clone:
 
 ```bash
-docker-compose exec web python Backend/manage.py test
-docker-compose exec web python Backend/verify_ledger.py
+git clone https://github.com/bedah-kym/kazi-core.git
+cd kazi-core
 ```
 
----
+2. Create `.env` in repo root:
 
-**© 2026 Mathia Project.**
+```bash
+DJANGO_SECRET_KEY=change-me
+DJANGO_DEBUG=true
+DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1
+DJANGO_CSRF_TRUSTED_ORIGINS=http://localhost:8000
+DATABASE_URL=postgres://kazi_user:kazi_password@db:5432/kazi_db
+REDIS_URL=redis://redis:6379/0
+CELERY_BROKER_URL=redis://redis:6379/0
+CELERY_RESULT_BACKEND=redis://redis:6379/0
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+3. Start services and initialize DB:
+
+```bash
+docker compose up --build -d db redis web celery_worker celery_beat
+docker compose exec web python Backend/manage.py migrate
+docker compose exec web python Backend/manage.py createsuperuser
+```
+
+4. Open `http://localhost:8000`.
+
+## Create a Connector
+
+Add a file under `Backend/orchestration/connectors/`:
+
+```python
+from orchestration.base_connector import BaseConnector
+
+
+class MyConnector(BaseConnector):
+    name = "my_service"
+    version = "0.1.0"
+    actions = ["do_something"]
+
+    def get_action_catalog_entries(self):
+        return [{
+            "action": "do_something",
+            "service": "my_service",
+            "description": "Does something useful",
+            "params": {
+                "input": {
+                    "type": "string",
+                    "required": True,
+                    "description": "Input value",
+                }
+            },
+            "risk_level": "low",
+        }]
+
+    async def execute(self, parameters, context):
+        return {"status": "success", "message": "Done", "data": {}}
+```
+
+Restart the app and the connector is auto-discovered.
+
+Docs:
+- `docs/quickstart.md`
+- `docs/architecture.md`
+- `docs/writing-a-connector.md`
+- `docs/connector-api-reference.md`
+
+## Development Checks
+
+```bash
+python Backend/manage.py check
+python Backend/manage.py test
+flake8 .
+bandit -r . -x ./tests,./venv --skip B101
+```
+
+## Repository Layout
+
+```text
+Backend/
+  orchestration/
+    agent_loop.py
+    tool_executor.py
+    base_connector.py
+    connector_registry.py
+    action_catalog.py
+    security_policy.py
+    llm_client.py
+    connectors/
+  chatbot/
+  notifications/
+  workflows/
+  users/
+```
+
+## Contributing
+
+See `CONTRIBUTING.md`.
+
+## Security
+
+See `SECURITY.md` for private vulnerability reporting.
+
+## License
+
+MIT. See `LICENSE`.

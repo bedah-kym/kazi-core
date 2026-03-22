@@ -461,17 +461,26 @@ def register_actions(entries: List[Dict[str, Any]]) -> None:
     This merges new entries into the catalog, updating indexes.
     Existing actions with the same name are overwritten.
     """
-    for entry in entries:
+    for raw_entry in entries:
+        entry = deepcopy(raw_entry)
         action_name = entry.get("action")
         if not action_name:
             continue
+        existing_entry: Optional[Dict[str, Any]] = None
         # Remove any existing entry with the same action name
         for i, existing in enumerate(ACTION_CATALOG):
             if existing["action"] == action_name:
+                existing_entry = existing
                 ACTION_CATALOG[i] = entry
                 break
         else:
             ACTION_CATALOG.append(entry)
+        if "router_required" not in entry:
+            if existing_entry is not None:
+                entry["router_required"] = existing_entry.get("router_required", True)
+            else:
+                # Dynamic/plugin-only actions should not be required in MCPRouter.
+                entry["router_required"] = False
         # Update indexes
         _ACTION_INDEX[action_name] = entry
         _ALIAS_INDEX[action_name] = action_name
@@ -602,7 +611,11 @@ def validate_router_mappings(
 ) -> Tuple[List[str], List[str]]:
     allowed_unmapped = set(resolve_action_alias(action) for action in (allow_unmapped or []))
     mapped = {resolve_action_alias(action) for action in mapped_actions if action}
-    required = set(get_supported_actions()) - allowed_unmapped
+    required = {
+        item["action"]
+        for item in ACTION_CATALOG
+        if item.get("router_required", True)
+    } - allowed_unmapped
     missing = sorted(required - mapped)
     extra = sorted(mapped - required)
     return missing, extra

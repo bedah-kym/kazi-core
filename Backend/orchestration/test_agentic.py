@@ -112,8 +112,14 @@ class AgentPromptsTests(SimpleTestCase):
     def test_build_system_prompt_includes_identity(self):
         from orchestration.agent_prompts import build_system_prompt
         prompt = build_system_prompt()
-        self.assertIn("Mathia", prompt)
+        self.assertIn("Kazi", prompt)
         self.assertIn("tools", prompt.lower())
+
+    @override_settings(KAZI_AGENT_NAME="KaziX")
+    def test_build_system_prompt_honors_custom_agent_name(self):
+        from orchestration.agent_prompts import build_system_prompt
+        prompt = build_system_prompt()
+        self.assertIn("KaziX", prompt)
 
     def test_build_system_prompt_includes_style(self):
         from orchestration.agent_prompts import build_system_prompt

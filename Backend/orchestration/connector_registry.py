@@ -11,6 +11,7 @@ import importlib
 import importlib.metadata
 import inspect
 import logging
+import os
 import pkgutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -20,6 +21,13 @@ logger = logging.getLogger(__name__)
 # Singleton caches
 _discovered_connectors: Optional[Dict[str, Any]] = None
 _registered_catalog_entries: List[Dict[str, Any]] = []
+
+
+def _env_flag_enabled(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def discover_connectors() -> Dict[str, Any]:
@@ -186,6 +194,14 @@ def _scan_connectors_directory() -> list:
 
     for module_info in pkgutil.iter_modules([str(connectors_dir)]):
         if module_info.name.startswith("_"):
+            continue
+        if (
+            module_info.name == "example_connector"
+            and not _env_flag_enabled("KAZI_ENABLE_EXAMPLE_CONNECTOR", default=False)
+        ):
+            logger.debug(
+                "Skipping example connector module; set KAZI_ENABLE_EXAMPLE_CONNECTOR=true to enable it."
+            )
             continue
         try:
             module = importlib.import_module(

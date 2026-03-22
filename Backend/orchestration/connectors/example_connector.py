@@ -1,5 +1,5 @@
 """
-Example connector — a minimal template for building Kazi plugins.
+Example connector - a minimal template for building Kazi plugins.
 
 This connector implements a simple "echo" action that returns whatever
 input it receives. Use it as a starting point for your own connectors.
@@ -9,7 +9,10 @@ To create your own connector:
 2. Update name, version, actions, and required_credentials
 3. Implement get_action_catalog_entries() with your action definitions
 4. Implement execute() with your logic
-5. Drop it in Backend/orchestration/connectors/ — it auto-registers
+5. Drop it in Backend/orchestration/connectors/ - it auto-registers
+
+By default this example connector is disabled in discovery.
+Set KAZI_ENABLE_EXAMPLE_CONNECTOR=true to enable it for local testing.
 
 See docs/writing-a-connector.md for the full guide.
 """

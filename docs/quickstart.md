@@ -10,8 +10,8 @@ Get Kazi running locally in under 5 minutes.
 ## 1. Clone and Configure
 
 ```bash
-git clone https://github.com/bedah-kym/django-chat.git
-cd django-chat
+git clone https://github.com/bedah-kym/kazi-core.git
+cd kazi-core
 ```
 
 Create a `.env` file in the project root:
@@ -22,7 +22,7 @@ DJANGO_SECRET_KEY=change-me-to-a-random-string
 DJANGO_DEBUG=true
 DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1
 DJANGO_CSRF_TRUSTED_ORIGINS=http://localhost:8000
-DATABASE_URL=postgres://mathia_user:mathia_password@db:5432/mathia_db
+DATABASE_URL=postgres://kazi_user:kazi_password@db:5432/kazi_db
 REDIS_URL=redis://redis:6379/0
 CELERY_BROKER_URL=redis://redis:6379/0
 CELERY_RESULT_BACKEND=redis://redis:6379/0

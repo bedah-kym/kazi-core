@@ -1,0 +1,72 @@
+name: "Connector Proposal"
+description: "Propose or contribute a new connector"
+title: "[Connector] "
+labels: ["connector", "enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for wanting to extend Kazi! Connectors are the fastest way to grow the ecosystem.
+        Fill this out so we can review your proposal quickly.
+
+  - type: input
+    id: service
+    attributes:
+      label: "Service name"
+      description: "What external service does this connect to?"
+      placeholder: "e.g. Stripe, Telegram, Notion, M-Pesa Daraja"
+    validations:
+      required: true
+
+  - type: textarea
+    id: actions
+    attributes:
+      label: "Actions"
+      description: "List the actions this connector will expose. One per line."
+      placeholder: |
+        send_payment
+        check_balance
+        list_transactions
+    validations:
+      required: true
+
+  - type: dropdown
+    id: risk
+    attributes:
+      label: "Highest risk level among your actions"
+      options:
+        - "low (read-only, no side effects)"
+        - "medium (sends messages, creates records)"
+        - "high (moves money, deletes data, irreversible)"
+    validations:
+      required: true
+
+  - type: textarea
+    id: credentials
+    attributes:
+      label: "Required credentials"
+      description: "What env vars or OAuth scopes does the connector need?"
+      placeholder: |
+        STRIPE_SECRET_KEY
+        STRIPE_WEBHOOK_SECRET
+    validations:
+      required: false
+
+  - type: dropdown
+    id: status
+    attributes:
+      label: "Contribution status"
+      options:
+        - "Just a proposal — someone else can build it"
+        - "I'm building it and will open a PR"
+        - "I have a working implementation ready"
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: "Anything else"
+      description: "API docs link, auth flow quirks, regional availability, related issues."
+    validations:
+      required: false

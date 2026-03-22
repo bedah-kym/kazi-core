@@ -1,15 +1,69 @@
 # Kazi Core
 
-Kazi Core is a self-hostable, open-source agentic engine.
-Bring your own tools, run on your own infrastructure, and keep your data in your stack.
+![Python](https://img.shields.io/badge/python-3.11-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+![CI](https://github.com/bedah-kym/kazi-core/actions/workflows/main.yml/badge.svg)
+![Status](https://img.shields.io/badge/status-early%20access-orange)
 
-## Why Kazi Core
+**Kazi Core** is a self-hostable, open-source agentic engine —
+built for teams who want AI agents that call their own tools,
+run on their own infrastructure, and keep their data in their own stack.
+No vendor lock-in. No data leaving your server.
 
-- ReAct-style agent loop (`think -> act -> observe`)
-- Pluggable connector system for custom tools
-- Built-in safety gates (risk levels, confirmation, sanitization)
-- Real-time streaming via WebSockets
-- Works with Anthropic and HuggingFace provider paths
+> **Kazi** is Swahili for *work*. The agent does work for you.
+
+---
+
+## What It Is
+
+Kazi Core gives you the backend runtime for tool-using AI agents:
+
+- A Django-based API/WebSocket service that receives user prompts
+- An orchestration loop that plans, executes tools, and returns grounded answers
+- A connector framework for plugging in your own services and internal systems
+
+## What It Is Not
+
+- Not a hosted SaaS product
+- Not a no-code workflow builder
+- Not tied to one model provider or one cloud
+
+---
+
+## Why Not LangChain, OpenAI Agents SDK, or the rest?
+
+Those tools are built for you to use *their* ecosystem.
+The APIs, the tooling, the billing, the data — it all flows back to a US company.
+You are a user, not an owner.
+
+**Kazi Core is built to be owned:**
+
+- Run it on your own server. Your data doesn't leave.
+- Plug in *your* payment rail — M-Pesa, Stripe, whatever your market uses.
+- Write connectors for *your* APIs, your local services, your language.
+- Security is in the core, not bolted on — prompt injection detection, risk levels, confirmation gates, and audit receipts ship out of the box.
+- Community governed. No VC deciding the roadmap.
+
+This matters more outside the US, where the big platforms aren't built for your market, your currency, or your infrastructure.
+
+---
+
+## Project Status
+
+**Early access — actively developed.**
+The agent loop, connector registry, and security layer are production-hardened.
+The `pip install kazi-core` extraction (standalone library, no Django required) is on the roadmap.
+Breaking changes are possible before v1.0.
+
+---
+
+## How Requests Flow
+
+1. User sends a message over HTTP/WebSocket.
+2. Kazi assembles context (history, memory, preferences).
+3. Agent loop decides whether to answer directly or call tools.
+4. Tool executor runs connector actions with safety checks.
+5. Results are summarized and streamed back to the user.
 
 ## Architecture
 
@@ -17,11 +71,16 @@ Bring your own tools, run on your own infrastructure, and keep your data in your
 Client (HTTP/WebSocket)
   -> ChatConsumer
     -> Context + memory assembly
-      -> Agent loop
-        -> Tool executor
-          -> Connector registry
-            -> Connectors (built-in + custom)
+      -> Agent loop (think -> act -> observe)
+        -> Tool executor (risk gates + confirmation)
+          -> Connector registry (auto-discovery)
+            -> Connectors (built-in + yours)
 ```
+
+Built-in connectors include travel, messaging, invoicing, and payment integrations.
+Disable what you don't need. Add what you do.
+
+---
 
 ## Quick Start
 
@@ -56,9 +115,11 @@ docker compose exec web python Backend/manage.py createsuperuser
 
 4. Open `http://localhost:8000`.
 
+---
+
 ## Create a Connector
 
-Add a file under `Backend/orchestration/connectors/`:
+Drop a file under `Backend/orchestration/connectors/` — it auto-registers on restart:
 
 ```python
 from orchestration.base_connector import BaseConnector
@@ -88,13 +149,56 @@ class MyConnector(BaseConnector):
         return {"status": "success", "message": "Done", "data": {}}
 ```
 
-Restart the app and the connector is auto-discovered.
+Full guide: [`docs/writing-a-connector.md`](docs/writing-a-connector.md)
 
-Docs:
-- `docs/quickstart.md`
-- `docs/architecture.md`
-- `docs/writing-a-connector.md`
-- `docs/connector-api-reference.md`
+---
+
+## Built-in Connectors
+
+| Connector | Actions | Service |
+|-----------|---------|---------|
+| Weather | `get_weather` | OpenWeather |
+| Currency | `convert_currency` | Exchange Rate API |
+| Search | `search_info` | Web search |
+| Gmail | `send_email` | Gmail API (OAuth) |
+| WhatsApp | `send_message` | Twilio |
+| Payments | `check_balance`, `list_transactions` | IntaSend |
+| Invoices | `create_invoice`, `create_payment_link` | IntaSend |
+| Calendar | `schedule_meeting`, `check_availability` | Calendly |
+| Travel | flights, hotels, buses, transfers, events | Amadeus |
+| Reminders | `set_reminder` | Built-in (Celery) |
+
+---
+
+## Repository Layout
+
+```text
+Backend/
+  orchestration/        # Agent core — start here
+    agent_loop.py       # ReAct engine
+    tool_executor.py    # Tool dispatch + safety gates
+    base_connector.py   # Connector interface
+    connector_registry.py  # Auto-discovery
+    action_catalog.py   # Tool definitions + risk levels
+    security_policy.py  # Injection detection, sanitization
+    llm_client.py       # LLM provider abstraction
+    connectors/         # Built-in connectors (add yours here)
+  chatbot/              # WebSocket consumers, memory, chat transport
+  notifications/        # Unified in-app, email, WhatsApp notifications
+  workflows/            # Workflow automation (Temporal)
+  users/                # Auth, profiles, quotas
+```
+
+## Tech Stack
+
+- Python 3.11, Django 5.x (ASGI)
+- Django Channels + Redis (WebSocket + real-time)
+- PostgreSQL
+- Celery + Celery Beat (async tasks + scheduling)
+- Temporal (optional — durable multi-step workflows)
+- Anthropic Claude + HuggingFace (LLM providers, bring your own)
+
+---
 
 ## Development Checks
 
@@ -105,33 +209,18 @@ flake8 .
 bandit -r . -x ./tests,./venv --skip B101
 ```
 
-## Repository Layout
-
-```text
-Backend/
-  orchestration/
-    agent_loop.py
-    tool_executor.py
-    base_connector.py
-    connector_registry.py
-    action_catalog.py
-    security_policy.py
-    llm_client.py
-    connectors/
-  chatbot/
-  notifications/
-  workflows/
-  users/
-```
+---
 
 ## Contributing
 
-See `CONTRIBUTING.md`.
+Contributions welcome — connectors especially.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for setup and PR expectations.
 
 ## Security
 
-See `SECURITY.md` for private vulnerability reporting.
+Do not open public issues for vulnerabilities.
+See [`SECURITY.md`](SECURITY.md) for private disclosure.
 
 ## License
 
-MIT. See `LICENSE`.
+MIT. See [`LICENSE`](LICENSE).

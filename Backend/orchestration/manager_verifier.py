@@ -1,26 +1,26 @@
-"""Deterministic manager verifier for ad-hoc workflow plans."""
+"""
+Deterministic manager verifier — stub module.
+
+The full verifier (dependency ordering, missing-param detection, plan fixing)
+is available in Kazi Pro. This stub passes steps through unchanged.
+"""
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
 import copy
-
-from workflows.capabilities import SYSTEM_CAPABILITIES
-from orchestration.user_preferences import format_date_hint, format_time_hint
-
-_AUTO_EMAIL_SUMMARY_TOKEN = "__AUTO_SUMMARY__"
-_DELIVERY_ACTIONS = {"send_email", "send_message"}
-_OPTION_PARAM_HINTS = ("item_id", "option", "selection")
+from typing import Any, Dict, List, Optional
 
 
 class ManagerVerifier:
     """
-    Deterministic plan verifier and fixer.
-    Runs before execution to catch missing params and bad ordering.
+    Stub verifier that approves all plans without rewriting them.
+
+    The full ManagerVerifier rewrites step ordering, resolves dependencies,
+    normalises parameter aliases, and catches missing required params.
+    Available in Kazi Pro.
     """
 
     def __init__(self, capabilities: Optional[Dict[str, Any]] = None):
-        self.capabilities = capabilities or SYSTEM_CAPABILITIES
-        self._cap_index = self._build_cap_index(self.capabilities)
+        self.capabilities = capabilities or {}
 
     def review_steps(
         self,
@@ -35,59 +35,11 @@ class ManagerVerifier:
                 "steps": [],
                 "missing_fields": [],
             }
-
-        steps = copy.deepcopy(steps)
-        steps = self._reorder_booking_steps(steps)
-        steps = self._reorder_delivery_steps(steps)
-        steps = self._ensure_step_ids(steps)
-        dependency_check = self._apply_dependency_defaults(steps)
-        if dependency_check.get("verdict") == "ask_user":
-            return dependency_check
-        steps = dependency_check.get("steps") or steps
-        steps = self._reorder_by_dependencies(steps)
-
-        missing: List[Tuple[str, str]] = []
-        for step in steps:
-            service = step.get("service")
-            action = step.get("action")
-            action_def = self._cap_index.get(service, {}).get(action)
-            if not action_def:
-                return {
-                    "verdict": "ask_user",
-                    "reason": "unknown_action",
-                    "assistant_message": "I couldn't map one of the actions. Please rephrase with explicit steps.",
-                    "steps": steps,
-                    "missing_fields": [],
-                }
-
-            params = step.get("params") or {}
-            if not isinstance(params, dict):
-                params = {}
-            params = self._normalize_param_aliases(params, action)
-            if action == "send_email":
-                params = self._ensure_email_subject(params)
-            params = self._coerce_param_types(params, action_def.get("params") or {})
-            step["params"] = params
-
-            for param_name, param_def in (action_def.get("params") or {}).items():
-                if param_def.get("required") and not params.get(param_name):
-                    missing.append((step.get("id") or action or "step", param_name))
-
-        if missing:
-            first_missing = missing[0][1]
-            return {
-                "verdict": "ask_user",
-                "reason": "missing_param",
-                "assistant_message": self._missing_param_message(first_missing, preferences=preferences),
-                "steps": steps,
-                "missing_fields": missing,
-            }
-
         return {
             "verdict": "approve",
             "reason": "approved",
             "assistant_message": "",
-            "steps": steps,
+            "steps": copy.deepcopy(steps),
             "missing_fields": [],
         }
 
@@ -108,293 +60,4 @@ class ManagerVerifier:
         if errors:
             joined = "; ".join(errors[:3])
             return f"I hit a snag while running the workflow. {joined}"
-
-        if isinstance(workflow_definition, dict):
-            expected_steps = []
-            for step in workflow_definition.get("steps", []):
-                if not isinstance(step, dict):
-                    continue
-                step_id = step.get("id") or step.get("action")
-                if step_id:
-                    expected_steps.append(step_id)
-            missing = [step_id for step_id in expected_steps if step_id not in execution_result]
-            if missing:
-                joined = ", ".join(missing[:3])
-                return (
-                    "I could not confirm results for every step. "
-                    f"Missing results for: {joined}. Want me to retry or adjust?"
-                )
         return None
-
-    def _reorder_booking_steps(self, steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Ensure search steps run before booking when item_id is missing.
-        """
-        if len(steps) < 2:
-            return steps
-
-        def _is_search(step: Dict[str, Any]) -> bool:
-            return str(step.get("action") or "").startswith("search_")
-
-        for idx, step in enumerate(list(steps)):
-            if step.get("action") != "book_travel_item":
-                continue
-            params = step.get("params") or {}
-            if params.get("item_id"):
-                continue
-            for later_idx in range(idx + 1, len(steps)):
-                if _is_search(steps[later_idx]):
-                    steps[idx], steps[later_idx] = steps[later_idx], steps[idx]
-                    break
-        return steps
-
-    def _ensure_step_ids(self, steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        seen = set()
-        for idx, step in enumerate(steps, start=1):
-            step_id = step.get("id") or f"step_{idx}"
-            base = step_id
-            counter = 1
-            while step_id in seen:
-                counter += 1
-                step_id = f"{base}_{counter}"
-            step["id"] = step_id
-            seen.add(step_id)
-        return steps
-
-    def _reorder_delivery_steps(self, steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        if len(steps) < 2:
-            return steps
-
-        delivery_actions = {"send_email", "send_message"}
-
-        def _needs_results(step: Dict[str, Any]) -> bool:
-            action = step.get("action")
-            params = step.get("params") or {}
-            if action == "send_email":
-                text = params.get("text") or ""
-                if not text or text == _AUTO_EMAIL_SUMMARY_TOKEN:
-                    return True
-                lowered = str(text).lower()
-                return any(token in lowered for token in ("results", "summary", "options", "details"))
-            if action == "send_message":
-                message = params.get("message") or ""
-                if not message:
-                    return True
-                lowered = str(message).lower()
-                return any(token in lowered for token in ("results", "summary", "options", "details"))
-            return False
-
-        delayed = []
-        ordered = []
-        for step in steps:
-            action = step.get("action")
-            if action in delivery_actions and _needs_results(step):
-                delayed.append(step)
-            else:
-                ordered.append(step)
-
-        if not delayed:
-            return steps
-        return ordered + delayed
-
-    def _reorder_by_dependencies(self, steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        if len(steps) < 2:
-            return steps
-        moved = True
-        max_passes = len(steps) * len(steps)
-        passes = 0
-        while moved and passes < max_passes:
-            passes += 1
-            moved = False
-            index_map = {step.get("id"): idx for idx, step in enumerate(steps)}
-            for idx, step in enumerate(list(steps)):
-                deps = step.get("depends_on") or []
-                if not deps:
-                    continue
-                max_dep_index = max(index_map.get(dep, -1) for dep in deps)
-                if max_dep_index >= idx:
-                    steps.pop(idx)
-                    insert_at = min(max_dep_index + 1, len(steps))
-                    steps.insert(insert_at, step)
-                    moved = True
-                    break
-        return steps
-
-    def _apply_dependency_defaults(self, steps: List[Dict[str, Any]]) -> Dict[str, Any]:
-        index_map = {step.get("id"): idx for idx, step in enumerate(steps)}
-        for idx, step in enumerate(steps):
-            depends_on = step.get("depends_on")
-            if isinstance(depends_on, str):
-                depends_on = [depends_on]
-            if depends_on is None:
-                depends_on = []
-            if not isinstance(depends_on, list):
-                return {
-                    "verdict": "ask_user",
-                    "assistant_message": "I couldn't understand the step dependencies. Please rephrase the request.",
-                    "steps": steps,
-                }
-            cleaned_deps = [d.strip() for d in depends_on if isinstance(d, str) and d.strip()]
-            unknown = [d for d in cleaned_deps if d not in index_map]
-            if unknown:
-                return {
-                    "verdict": "ask_user",
-                    "assistant_message": "One of the steps depended on a missing step. Please rephrase.",
-                    "steps": steps,
-                }
-            if step.get("id") in cleaned_deps:
-                return {
-                    "verdict": "ask_user",
-                    "assistant_message": "A step cannot depend on itself. Please rephrase the request.",
-                    "steps": steps,
-                }
-            if cleaned_deps:
-                step["depends_on"] = cleaned_deps
-            action = step.get("action")
-            params = step.get("params") or {}
-            if not isinstance(params, dict):
-                params = {}
-            params = self._normalize_param_aliases(params, action)
-            if action in ("book_travel_item", "add_to_itinerary") and self._needs_option_context(params):
-                if not cleaned_deps:
-                    search_id = self._find_last_search_step_id(steps, idx)
-                    if not search_id:
-                        return {
-                            "verdict": "ask_user",
-                            "assistant_message": (
-                                "I need to run a travel search first so you can pick an option. "
-                                "What should I search for?"
-                            ),
-                            "steps": steps,
-                        }
-                    step["depends_on"] = [search_id]
-            if self._needs_results_for_delivery(action, params) and not cleaned_deps:
-                result_id = self._find_last_result_step_id(steps, idx)
-                if not result_id:
-                    return {
-                        "verdict": "ask_user",
-                        "assistant_message": (
-                            "I can send the results, but I need to gather them first. "
-                            "What should I search for?"
-                        ),
-                        "steps": steps,
-                    }
-                step["depends_on"] = [result_id]
-            step["params"] = params
-
-        for step in steps:
-            if "depends_on" in step and not step["depends_on"]:
-                step.pop("depends_on", None)
-
-        return {"verdict": "approve", "steps": steps}
-
-    def _needs_results_for_delivery(self, action: Optional[str], params: Dict[str, Any]) -> bool:
-        if action == "send_email":
-            text = params.get("text") or ""
-            if not text or text == _AUTO_EMAIL_SUMMARY_TOKEN:
-                return True
-            lowered = str(text).lower()
-            return any(token in lowered for token in ("result", "option", "summary", "detail"))
-        if action == "send_message":
-            message = params.get("message") or ""
-            if not message:
-                return True
-            lowered = str(message).lower()
-            return any(token in lowered for token in ("result", "option", "summary", "detail"))
-        return False
-
-    def _needs_option_context(self, params: Dict[str, Any]) -> bool:
-        for key, value in params.items():
-            if key in _OPTION_PARAM_HINTS or key.endswith("_id"):
-                if isinstance(value, int):
-                    return True
-                if isinstance(value, str) and value.strip().isdigit():
-                    return True
-        return False
-
-    def _find_last_search_step_id(self, steps: List[Dict[str, Any]], idx: int) -> Optional[str]:
-        for prev in reversed(steps[:idx]):
-            action = str(prev.get("action") or "")
-            if action.startswith("search_"):
-                return prev.get("id")
-        return None
-
-    def _find_last_result_step_id(self, steps: List[Dict[str, Any]], idx: int) -> Optional[str]:
-        for prev in reversed(steps[:idx]):
-            action = prev.get("action")
-            if action in _DELIVERY_ACTIONS:
-                continue
-            return prev.get("id")
-        return None
-
-    def _coerce_param_types(self, params: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, Any]:
-        normalized = dict(params)
-        for key, spec in schema.items():
-            if key not in normalized:
-                continue
-            value = normalized[key]
-            expected = spec.get("type")
-            if expected == "integer":
-                if isinstance(value, str) and value.isdigit():
-                    normalized[key] = int(value)
-            elif expected == "number":
-                if isinstance(value, str):
-                    try:
-                        normalized[key] = float(value)
-                    except ValueError:
-                        pass
-        return normalized
-
-    def _normalize_param_aliases(self, params: Dict[str, Any], action: Optional[str]) -> Dict[str, Any]:
-        normalized = dict(params)
-        alias_map = {}
-        if action == "send_email":
-            alias_map = {
-                "body": "text",
-                "message": "text",
-                "recipient": "to",
-                "email": "to",
-            }
-        elif action == "send_message":
-            alias_map = {
-                "text": "message",
-                "phone": "phone_number",
-            }
-        for source, target in alias_map.items():
-            if source in normalized and target not in normalized:
-                value = normalized.get(source)
-                if value is not None and value != "":
-                    normalized[target] = value
-        return normalized
-
-    def _ensure_email_subject(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        if params.get("text") == _AUTO_EMAIL_SUMMARY_TOKEN and not params.get("subject"):
-            params["subject"] = "Your results"
-        return params
-
-    def _build_cap_index(self, capabilities: Dict[str, Any]) -> Dict[str, Dict[str, Dict[str, Any]]]:
-        index: Dict[str, Dict[str, Dict[str, Any]]] = {}
-        for service in capabilities.get("integrations", []):
-            service_name = service.get("service")
-            if not service_name:
-                continue
-            index[service_name] = {}
-            for action in service.get("actions", []):
-                action_name = action.get("name")
-                if not action_name:
-                    continue
-                index[service_name][action_name] = action
-        return index
-
-    def _missing_param_message(
-        self,
-        param: str,
-        preferences: Optional[Dict[str, Any]] = None,
-    ) -> str:
-        label = param.replace("_", " ")
-        suffix = ""
-        if "date" in param:
-            suffix = f" ({format_date_hint(preferences)})"
-        elif "time" in param:
-            suffix = f" (e.g., {format_time_hint(preferences)})"
-        return f"I still need {label}{suffix} to proceed."

@@ -1,0 +1,47 @@
+name: Bug Report
+description: Report a reproducible bug
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please include enough detail for maintainers to reproduce.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Clear description of the bug and expected behavior.
+      placeholder: "When I do X, Y happens. I expected Z."
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Provide exact, minimal steps.
+      placeholder: |
+        1. Go to ...
+        2. Click ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or stack traces
+      description: Paste relevant logs, tracebacks, screenshots, or request IDs.
+      render: shell
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Example: local docker, Railway, OS, browser, Python version.
+      placeholder: "Windows 11, Docker, Python 3.11, Chrome 124"
+    validations:
+      required: true
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Any related issue, workaround, or suspected root cause.

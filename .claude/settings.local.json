@@ -18,7 +18,8 @@
       "Bash(git:*)",
       "Bash(ls:*)",
       "Bash(PYTHONIOENCODING=utf-8 DJANGO_DEBUG=1 python manage.py test orchestration.tests notifications.tests.NotifyMatrixNormalizationTests tests.test_agentic tests.test_agentic_scenarios -v2 2>&1)",
-      "Bash(PYTHONIOENCODING=utf-8 DJANGO_DEBUG=1 python manage.py test notifications.tests -v2 2>&1)"
+      "Bash(PYTHONIOENCODING=utf-8 DJANGO_DEBUG=1 python manage.py test notifications.tests -v2 2>&1)",
+      "Bash(wc -l c:/Users/user/Desktop/Dev2/MATHIA-PROJECT/Backend/orchestration/*.py)"
     ]
   }
 }

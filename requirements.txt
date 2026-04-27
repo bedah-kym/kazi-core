@@ -22,7 +22,7 @@ django-redis>=5.4.0
 # Networking & Security
 requests>=2.32.0
 urllib3>=2.2.0
-cryptography>=42.0.0
+cryptography>=47.0.0
 pyOpenSSL>=24.0.0
 service-identity>=24.1.0
 twisted[tls]>=24.3.0

@@ -1,47 +1,39 @@
 # Security Policy
 
-## Supported Versions
-
-Security fixes are currently provided for the active default branch only.
-
-| Branch | Supported |
-|--------|-----------|
-| `main` | Yes |
-| Other branches/tags | No |
-
 ## Reporting a Vulnerability
 
-Please do not report security vulnerabilities in public GitHub issues.
+Do not open a public issue for security vulnerabilities.
 
-Use one of these private channels:
+Use one of these private channels instead:
 
-1. GitHub Security Advisory (preferred):
-   open a private report in the repository's "Security" tab.
-2. If advisory reporting is unavailable, contact maintainers privately through
-   the contact channel listed in the repository profile.
+- Open a GitHub Security Advisory in this repository
+- Email the maintainer directly if a security contact is listed in the repo profile
 
 Include:
 
-- Affected component and file path(s)
-- Impact and attack scenario
-- Reproduction steps or proof of concept
-- Suggested remediation if available
+- A short description of the issue
+- Affected files, endpoints, or workflows
+- Steps to reproduce
+- Impact assessment
+- Suggested remediation, if you have one
 
-## Response Targets
+## Response Expectations
 
-- Initial acknowledgment: within 72 hours
-- Triage decision: within 7 days
-- Fix timeline: depends on severity and exploitability
+- Initial acknowledgment target: within 72 hours
+- Triage and reproduction: best effort based on severity
+- Fix coordination: private until a patch or mitigation is available
 
-## Disclosure Process
+## Scope
 
-- We validate and triage the report.
-- We prepare and test a patch.
-- We coordinate disclosure timing with the reporter.
-- We publish remediation details after a fix is available.
+Please report issues involving:
+
+- Authentication or authorization bypass
+- Prompt injection or tool-execution safety failures
+- Sensitive data exposure
+- Payment or webhook validation flaws
+- Remote code execution, SSRF, or credential leakage
 
 ## Safe Harbor
 
-We support good-faith security research.
-Do not access or modify data that does not belong to you, and do not disrupt
-service availability while testing.
+If you act in good faith, avoid privacy violations and service disruption, and
+do not exfiltrate user data, your research will be treated as authorized.

@@ -147,7 +147,8 @@ Backend/mediafiles/
 mathia/
 e2e/
 Backend/celerybeat-schedule
-tests/
+Backend/telemetry/*.jsonl
+/tests/
 Security-docs/
 ssh-key-2026-02-01.key
 e2e/
@@ -169,11 +170,11 @@ orchestration_audit.md
 tasklog.md
 task_log.md
 chat-room-*.md
-
-# Externalized documentation bundles (legacy, not the new docs/ folder)
+frontend/
+# Externalized documentation bundles and local vendor folders
 Security-docs/
 Microsoft/
-
+docs/
 # Local generated logs/artifacts
 logs.*.json
 

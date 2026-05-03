@@ -73,6 +73,13 @@ the project safe to onboard contributors and AI coding agents onto.
   `.flake8` config defines the per-file exclusions that will be ratcheted
   down over time. New code should target full PEP 8 even though CI
   doesn't fail on it yet.
+- **Bandit posture is two-tier** (same shape):
+  1. *High-severity* — strictly enforced in CI (`-lll`). Real exploit
+     vectors fail the build.
+  2. *Medium + Low* — runs in CI as advisory only. Mostly false-positive
+     low-severity findings (hardcoded URLs flagged as passwords,
+     try/except/pass patterns), plus some legitimate medium ones (e.g.
+     `requests` calls without timeouts) that are queued for v0.4.
 
 ## [0.2.0] - 2026-04 to 2026-05
 

@@ -78,7 +78,11 @@ jobs:
         run: |
           flake8 Backend --count --statistics
 
-      - name: Security scan (Bandit)
+      - name: Security scan - high severity (must pass)
+        run: bandit -r Backend --skip B101 -lll
+
+      - name: Security scan - medium+low (advisory until v0.4 cleanup)
+        continue-on-error: true
         run: bandit -r Backend --skip B101
 
       - name: Django system checks

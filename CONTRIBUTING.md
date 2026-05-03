@@ -80,7 +80,7 @@ Note: some SQLite test environments may fail on JSON SQL functions. PostgreSQL-b
 - [ ] Problem and solution are clearly described
 - [ ] Tests added/updated for changed behavior
 - [ ] Security implications considered (auth, access control, data handling)
-- [ ] Docs updated (`README.md`, `agents.md`, or `docs/*`) if needed
+- [ ] Docs updated (`README.md`, `AGENTS.md`, or `docs/*`) if needed
 - [ ] No unrelated file churn
 
 ## Review Expectations

@@ -162,7 +162,7 @@ chat-room-4.2.md
 .ai-collab/
 
 # Local planning / audit docs (kept out of repo)
-agents.md
+# NOTE: AGENTS.md (uppercase) is committed — it is the agent guide for the OSS repo.
 AGENTIC_PLAN.md
 PLAN.md
 START_HERE.md

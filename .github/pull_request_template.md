@@ -34,6 +34,6 @@ Validation details:
 ## Checklist
 
 - [ ] Tests added/updated for changed behavior
-- [ ] Docs updated (`README.md`, `agents.md`, or `docs/*`) if needed
+- [ ] Docs updated (`README.md`, `AGENTS.md`, or `docs/*`) if needed
 - [ ] Security considerations reviewed (auth, permissions, input sanitization)
 - [ ] No unrelated changes included

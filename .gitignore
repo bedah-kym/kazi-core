@@ -149,6 +149,8 @@ e2e/
 Backend/celerybeat-schedule
 Backend/telemetry/*.jsonl
 /tests/
+Backend/tests/local_*.py
+Backend/tests/manual_*.py
 Security-docs/
 ssh-key-2026-02-01.key
 e2e/

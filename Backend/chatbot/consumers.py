@@ -140,6 +140,79 @@ class ChatConsumer(AsyncWebsocketConsumer):
         # 7. Accept connection
         await self.accept()
 
+        # 8. Broadcast online status to ALL other users
+        await self.channel_layer.group_send(
+            self.room_group_name,
+            {
+                "type": "presence_update",
+                "user": user,
+                "status": "online",
+                "last_seen": current_time,
+            }
+        )
+
+        # 9. Small delay to ensure broadcast propagates
+        try:
+            await asyncio.sleep(0.2)
+        except Exception:
+            pass
+
+        # 10. Build FRESH presence snapshot
+        presence = []
+        try:
+            participants = await self.get_chatroom_participants(current_chat)
+
+            # Re-read Redis to get absolute latest state
+            raw_online = await sync_to_async(redis.smembers)(key)
+            online_set = set(u.decode() if isinstance(u, bytes) else u for u in raw_online)
+
+            logger.debug(f"Building presence for {user}: {len(participants)} participants, {len(online_set)} online")
+
+            for member in participants:
+                try:
+                    # CRITICAL: Must wrap DB access in sync_to_async
+                    uname = await sync_to_async(lambda m: m.User.username)(member)
+                except Exception as e:
+                    logger.error(f"Could not get username from member: {e}")
+                    continue
+
+                # Check if user is in the online set
+                is_online = uname in online_set
+
+                # Fetch last_seen from Redis
+                ls = await sync_to_async(redis.get)(f"lastseen:{uname}")
+                if isinstance(ls, bytes):
+                    try:
+                        ls = ls.decode()
+                    except Exception:
+                        ls = None
+
+                # Force current connecting user to online status
+                if uname == user:
+                    is_online = True
+                    ls = current_time
+
+                status = 'online' if is_online else 'offline'
+                presence.append({
+                    "user": uname,
+                    "status": status,
+                    "last_seen": ls,
+                })
+
+                logger.debug(f"Presence: {uname} -> {status}")
+
+        except Exception as e:
+            logger.error(f"Error building presence snapshot: {e}")
+            logger.error(traceback.format_exc())
+
+        logger.info(f"Sending presence snapshot to {user}: {len(presence)} users")
+
+        # 11. Send snapshot to the newly connected user
+        await self.send(text_data=json.dumps({
+            "command": "presence_snapshot",
+            "presence": presence,
+        }))
+
     async def schedule_context_summary(self, room_id, message_id):
         min_messages = getattr(settings, "CONTEXT_SUMMARY_MIN_MESSAGES", 6)
         min_minutes = getattr(settings, "CONTEXT_SUMMARY_MIN_MINUTES", 10)
@@ -210,79 +283,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
         from .tasks import schedule_idle_nudge
         schedule_idle_nudge.delay(room_id, user_id)
 
-        # 8. Broadcast online status to ALL other users
-        await self.channel_layer.group_send(
-            self.room_group_name,
-            {
-                "type": "presence_update",
-                "user": user,
-                "status": "online",
-                "last_seen": current_time,
-            }
-        )
-
-        # 9. Small delay to ensure broadcast propagates
-        try:
-            await asyncio.sleep(0.2)
-        except Exception:
-            pass
-
-        # 10. Build FRESH presence snapshot
-        presence = []
-        try:
-            participants = await self.get_chatroom_participants(current_chat)
-            
-            # Re-read Redis to get absolute latest state
-            raw_online = await sync_to_async(redis.smembers)(key)
-            online_set = set(u.decode() if isinstance(u, bytes) else u for u in raw_online)
-            
-            logger.debug(f"Building presence for {user}: {len(participants)} participants, {len(online_set)} online")
-            
-            for member in participants:
-                try:
-                    # CRITICAL: Must wrap DB access in sync_to_async
-                    uname = await sync_to_async(lambda m: m.User.username)(member)
-                except Exception as e:
-                    logger.error(f"Could not get username from member: {e}")
-                    continue
-                
-                # Check if user is in the online set
-                is_online = uname in online_set
-                
-                # Fetch last_seen from Redis
-                ls = await sync_to_async(redis.get)(f"lastseen:{uname}")
-                if isinstance(ls, bytes):
-                    try:
-                        ls = ls.decode()
-                    except Exception:
-                        ls = None
-                
-                # Force current connecting user to online status
-                if uname == user:
-                    is_online = True
-                    ls = current_time
-                
-                status = 'online' if is_online else 'offline'
-                presence.append({
-                    "user": uname, 
-                    "status": status, 
-                    "last_seen": ls
-                })
-                
-                logger.debug(f"Presence: {uname} -> {status}")
-            
-        except Exception as e:
-            logger.error(f"Error building presence snapshot: {e}")
-            logger.error(traceback.format_exc())
-
-        logger.info(f"Sending presence snapshot to {user}: {len(presence)} users")
-
-        # 11. Send snapshot to the newly connected user
-        await self.send(text_data=json.dumps({
-            "command": "presence_snapshot",
-            "presence": presence,
-        }))
-        
     async def presence_update(self, event):
         logger.debug(f"presence_update received by {self.scope['user'].username}: {event}")
         
@@ -1027,7 +1027,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                 logger.warning(f"Proactive signal update skipped: {exc}")
 
                         async def _execute_intent(intent):
-                            nonlocal summary_text_for_cache, should_cache_summary
                             await emit_progress("validating", "started", "Checking safety and required details.")
                             _log_telemetry("intent_execute", {
                                 "user_id": member_user.id,
@@ -1176,7 +1175,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
                         async def _handle_agent_loop(query: str, history: str, ctx_prompt: str, mem_summary: str):
                             """Run the agentic loop and map AgentEvents to WebSocket frames."""
-                            nonlocal summary_text_for_cache, should_cache_summary
                             await emit_progress("planning", "started", "Thinking…")
                             history_msgs = _history_to_messages(history)
                             async for event in run_agent_loop(
@@ -1220,7 +1218,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
                         async def _handle_agent_resume(ctx_prompt: str, mem_summary: str):
                             """Resume a paused agent loop after user confirms."""
-                            nonlocal summary_text_for_cache, should_cache_summary
                             async for event in resume_after_confirmation(
                                 context={
                                     "user_id": member_user.id,

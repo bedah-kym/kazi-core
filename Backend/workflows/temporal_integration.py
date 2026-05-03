@@ -198,11 +198,13 @@ async def start_workflow_execution(
             task_queue=settings.TEMPORAL_TASK_QUEUE,
         )
     except Exception as exc:
+        error_message = str(exc)
+
         def _mark_failed():
             if not execution:
                 return
             execution.status = 'failed'
-            execution.error_message = str(exc)
+            execution.error_message = error_message
             execution.completed_at = timezone.now()
             execution.save(update_fields=['status', 'error_message', 'completed_at', 'updated_at'])
 

@@ -39,7 +39,7 @@ def discover_connectors() -> Dict[str, Any]:
 
     New-style connectors override legacy ones if there's a conflict.
     """
-    global _discovered_connectors, _registered_catalog_entries
+    global _discovered_connectors
 
     if _discovered_connectors is not None:
         return _discovered_connectors

@@ -37,6 +37,25 @@ the project safe to onboard contributors and AI coding agents onto.
   instead of the orphan, git-ignored `agents.md`.
 - Removed `agents.md` from `.gitignore` so the agent guide can actually be
   committed.
+- **`chatbot/consumers.py` — `ChatConsumer.connect`/`schedule_idle_nudge_if_needed`**:
+  the presence-broadcast block (steps 8–11: group_send presence_update,
+  build presence snapshot, send snapshot to newly connected user) had been
+  misplaced into `schedule_idle_nudge_if_needed`, where its references to
+  `current_time`, `current_chat`, `redis`, and `key` were undefined. The
+  function crashed on every successful idle-nudge schedule, and new
+  connections never got a real-time presence snapshot. Moved the block
+  back to `connect()` after `await self.accept()` where every variable
+  resolves correctly.
+- **`workflows/temporal_integration.py`** — the closure inside the
+  `except Exception as exc:` handler referenced `exc` after Python had
+  already cleared the binding. Captured the message into a stable
+  `error_message` local before defining the closure.
+- **`orchestration/connector_registry.py`** — removed an unused
+  `_registered_catalog_entries` from a `global` declaration where it was
+  never assigned (kept the legitimate use in `reset_registry`).
+- Removed two stray `nonlocal summary_text_for_cache, should_cache_summary`
+  declarations in `consumers.py` where the names were only read, never
+  rebound.
 
 ### Operational notes
 - Local Python 3.14 is not supported by all dependencies (e.g. some

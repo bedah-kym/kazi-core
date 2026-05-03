@@ -1,6 +1,5 @@
 <div align="center">
-  <img src="assets/kazi_core_logo.png" alt="Kazi Core Engine Mascot" width="180"/>
-  
+  <img src="assets/kazi-core.png" alt="Kazi Core Engine Mascot" width="200"/> 
   <h1>Kazi Core</h1>
   
   <p>

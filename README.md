@@ -1,7 +1,5 @@
 <div align="center">
   <img src="assets/kazi_core_logo.png" alt="Kazi Core Engine Mascot" width="180"/>
-
-https://github.com/bedah-kym/kazi-core
   
   <h1>Kazi Core</h1>
   

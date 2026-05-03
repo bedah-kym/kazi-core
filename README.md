@@ -1,21 +1,26 @@
-# Kazi Core
+<div align="center">
+  <img src="assets/kazi_core_logo.png" alt="Kazi Core Engine Mascot" width="180"/>
+  
+  <h1>Kazi Core</h1>
+  
+  <p>
+    <img src="https://img.shields.io/badge/python-3.11%20%7C%203.12-blue" alt="Python" />
+    <img src="https://img.shields.io/badge/license-MIT-green" alt="License" />
+    <img src="https://github.com/bedah-kym/kazi-core/actions/workflows/main.yml/badge.svg" alt="CI" />
+    <a href="https://codecov.io/gh/bedah-kym/kazi-core"><img src="https://codecov.io/gh/bedah-kym/kazi-core/branch/main/graph/badge.svg" alt="codecov" /></a>
+    <img src="https://img.shields.io/badge/status-early%20access-orange" alt="Status" />
+  </p>
 
-![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)
-![License](https://img.shields.io/badge/license-MIT-green)
-![CI](https://github.com/bedah-kym/kazi-core/actions/workflows/main.yml/badge.svg)
-[![codecov](https://codecov.io/gh/bedah-kym/kazi-core/branch/main/graph/badge.svg)](https://codecov.io/gh/bedah-kym/kazi-core)
-![Status](https://img.shields.io/badge/status-early%20access-orange)
+  <p><strong>A self-hostable, open-source orchestration engine.</strong></p>
+</div>
 
-**Kazi Core** is a self-hostable, open-source agentic engine —
-built for teams who want AI agents that call their own tools,
-run on their own infrastructure, and keep their data in their own stack.
-No vendor lock-in. No data leaving your server.
+**Kazi Core** is built for teams who want AI agents that call their own tools, run on their own infrastructure, and keep their data in their own stack. **No vendor lock-in. No data leaving your server.**
 
-> **Kazi** is Swahili for *work*. The agent does work for you.
+> 💡 **Kazi** is Swahili for *work*. The engine does the heavy lifting for you.
 
 ---
 
-## Why Kazi?
+## ❓ Why Kazi?
 
 Most agent frameworks give you a loop and a prompt.
 Kazi gives you the loop, the memory, the security, the payments, the contacts,
@@ -24,7 +29,7 @@ all self-hosted, all yours.
 
 Here's what ships out of the box:
 
-### Your agent remembers
+### 🧠 Your agent remembers
 
 Kazi has a **3-tier memory system** that actually persists across conversations:
 
@@ -36,7 +41,7 @@ The agent doesn't just respond — it *learns*. It tracks preferences like your 
 tone (formal? direct? friendly?), date format (DD/MM or MM/DD), currency, verbosity,
 and 12+ other dimensions. Over time, it adapts to how *you* communicate.
 
-### Your rooms talk to each other
+### 💬 Your rooms talk to each other
 
 **Room linking** lets you connect chat rooms so context flows between them.
 A decision logged in your "Q1 Planning" room is visible to the agent in your
@@ -45,20 +50,20 @@ resolve across linked rooms automatically.
 
 Say *"email the client from that other thread"* — Kazi knows who you mean.
 
-### Your contacts live in the agent
+### 📇 Your contacts live in the agent
 
 Kazi has a **first-class contact system** the agent can read, write, and deduplicate.
 Contacts are extracted from conversations automatically. When you say *"send John the invoice"*,
 the agent looks up John's email, resolves ambiguity, and fills in the blanks — no copy-pasting.
 
-### Every action has a receipt
+### 🧾 Every action has a receipt
 
 Sensitive actions (sending emails, moving money, booking travel) generate
 **audit receipts** — sanitized logs of what happened, what parameters were used,
 and whether the action is reversible. Users can review what the agent did
 and undo what it shouldn't have.
 
-### Security is in the bones
+### 🛡️ Security is in the bones
 
 - **Prompt injection detection** — regex-based, zero-latency, catches common attacks before they reach the LLM
 - **Parameter sanitization** — strips api_key, token, password, and other restricted fields from every tool call
@@ -66,7 +71,7 @@ and undo what it shouldn't have.
 - **Room-scoped access control** — users can only act within their own chatrooms
 - **AES-256-GCM encryption** — optional per-room message encryption at rest
 
-### Notifications across every channel
+### 🔔 Notifications across every channel
 
 One unified system routes events to **in-app** (real-time WebSocket push),
 **email**, or **WhatsApp** — based on user preferences. Payments, reminders,
@@ -75,7 +80,7 @@ Built-in debounce prevents notification spam.
 
 ---
 
-## What Else Ships
+## 📦 What Else Ships
 
 | Feature | What it does |
 |---------|-------------|
@@ -94,7 +99,7 @@ Built-in debounce prevents notification spam.
 
 ---
 
-## Why Not LangChain, OpenAI Agents SDK, or the rest?
+## ⚖️ Why Not LangChain, OpenAI Agents SDK, or the rest?
 
 Those tools are built for you to use *their* ecosystem.
 The APIs, the tooling, the billing, the data — it all flows back to a US company.
@@ -113,18 +118,24 @@ your market, your currency, or your infrastructure.
 
 ---
 
-## Project Status
+## 🚀 Project Status
 
-**v0.2.0 — full orchestration core is now open source.**
+**v0.3.0 — public OSS launch with hardened repo and signed releases.**
 
-The multi-step workflow planner, manager verifier, and durable execution engine
-are all included. No gated features, no "Pro" tier. Everything ships.
+The orchestration core is fully open source: multi-step workflow planner,
+manager verifier, durable execution on Temporal, agent loop, security policy,
+and action receipts. No gated features, no "Pro" tier — everything ships.
 
-Still early access — breaking changes are possible before v1.0.
+Container releases are **cosign-signed** (keyless via Sigstore) and ship
+**SBOM + SLSA provenance**. CI runs against real Postgres + Redis on
+Python 3.11 and 3.12.
+
+Still early access — breaking changes possible before v1.0. See
+[`CHANGELOG.md`](CHANGELOG.md) for what's in each release.
 
 ---
 
-## How Requests Flow
+## 🌊 How Requests Flow
 
 ```
 1. User sends a message over WebSocket
@@ -136,7 +147,7 @@ Still early access — breaking changes are possible before v1.0.
 7. Receipts are logged. Memory is updated. Preferences adjust.
 ```
 
-## Architecture
+## 🏗️ Architecture
 
 ```text
 Client (HTTP/WebSocket)
@@ -152,7 +163,7 @@ Client (HTTP/WebSocket)
 
 ---
 
-## Quick Start
+## ⚡ Quick Start
 
 1. Clone:
 
@@ -189,7 +200,7 @@ Full guide: [`docs/quickstart.md`](docs/quickstart.md)
 
 ---
 
-## Built-in Connectors
+## 🔌 Built-in Connectors
 
 | Connector | Actions | Service |
 |-----------|---------|---------|
@@ -208,7 +219,7 @@ Full guide: [`docs/quickstart.md`](docs/quickstart.md)
 
 ---
 
-## Create a Connector
+## 🛠️ Create a Connector
 
 Drop a file in `Backend/orchestration/connectors/` — it auto-registers on restart:
 
@@ -247,7 +258,7 @@ Full guide: [`docs/writing-a-connector.md`](docs/writing-a-connector.md)
 
 ---
 
-## Repository Layout
+## 📂 Repository Layout
 
 ```text
 Backend/
@@ -274,7 +285,7 @@ Backend/
   users/                # Auth, profiles, quotas, encryption
 ```
 
-## Tech Stack
+## 💻 Tech Stack
 
 - Python 3.11, Django 5.x (ASGI)
 - Django Channels + Redis (WebSocket + real-time)
@@ -285,7 +296,7 @@ Backend/
 
 ---
 
-## Docs
+## 📚 Docs
 
 - [`docs/quickstart.md`](docs/quickstart.md) — running in 5 minutes
 - [`docs/architecture.md`](docs/architecture.md) — how everything fits together
@@ -294,7 +305,7 @@ Backend/
 - [`AGENTS.md`](AGENTS.md) — guide for AI coding agents (Claude Code, Codex CLI, Cursor, etc.)
 - [`CHANGELOG.md`](CHANGELOG.md) — release history
 
-## Development Checks
+## ✅ Development Checks
 
 ```bash
 python Backend/manage.py check
@@ -303,16 +314,16 @@ flake8 Backend
 bandit -r Backend --skip B101
 ```
 
-## Contributing
+## 🤝 Contributing
 
 Contributions welcome — connectors especially.
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for setup and PR expectations.
 
-## Security
+## 🔒 Security
 
 Do not open public issues for vulnerabilities.
 See [`SECURITY.md`](SECURITY.md) for private disclosure.
 
-## License
+## 📄 License
 
 MIT. See [`LICENSE`](LICENSE).

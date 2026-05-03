@@ -6,7 +6,6 @@ from django.utils import timezone
 from channels.generic.websocket import AsyncWebsocketConsumer
 from django.core.files.storage import default_storage
 from django.core.files.base import ContentFile
-from .models import Message, Member, Chatroom
 from django.contrib.auth import get_user_model
 import os
 import uuid
@@ -843,8 +842,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
                 if should_route_ai:
                     logger.info(f"Step 16: @mathia detected! Starting orchestration...")
-                    
-                    from orchestration.intent_parser import parse_intent
+
                     from orchestration.mcp_router import route_intent
                     from orchestration.data_synthesizer import synthesize_response
                     

@@ -48,7 +48,6 @@ class LedgerAccount(models.Model):
     
     def get_balance(self):
         """Calculate current balance from ledger entries"""
-        from django.db.models import Sum, Q
         debits = self.entries.filter(dr_cr='DEBIT').aggregate(Sum('amount'))['amount__sum'] or Decimal('0.00')
         credits = self.entries.filter(dr_cr='CREDIT').aggregate(Sum('amount'))['amount__sum'] or Decimal('0.00')
         

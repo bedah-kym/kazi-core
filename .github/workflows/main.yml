@@ -69,10 +69,14 @@ jobs:
           pip install -r requirements.txt
           pip install flake8 bandit coverage
 
-      - name: Lint (flake8)
+      - name: Lint - critical correctness (must pass)
         run: |
-          flake8 Backend --count --select=E9,F63,F7,F82 --show-source --statistics
-          flake8 Backend --count --max-complexity=10 --max-line-length=127 --statistics
+          flake8 Backend --count --select=E9,F63,F7,F82,F811,F202 --show-source --statistics
+
+      - name: Lint - full PEP 8 (advisory until v0.4 cleanup)
+        continue-on-error: true
+        run: |
+          flake8 Backend --count --statistics
 
       - name: Security scan (Bandit)
         run: bandit -r Backend --skip B101

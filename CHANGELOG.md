@@ -62,6 +62,17 @@ the project safe to onboard contributors and AI coding agents onto.
   Twisted/Django stubs). The supported floor remains **3.11**, with 3.12
   validated in CI. Use the published Docker image or the supported floor
   for development.
+- **Lint posture is two-tier**:
+  1. *Critical correctness* (`E9,F63,F7,F82,F811,F202`) — strictly
+     enforced in CI. Catches syntax errors, undefined names, redefined
+     functions, and similar real bugs.
+  2. *Full PEP 8* (whitespace, blank lines, line length, unused imports,
+     complexity) — runs in CI as advisory only (`continue-on-error`).
+  This reflects reality: a large existing codebase carries cosmetic
+  drift. Tightening to strict-PEP-8 is a planned **v0.4** task; the
+  `.flake8` config defines the per-file exclusions that will be ratcheted
+  down over time. New code should target full PEP 8 even though CI
+  doesn't fail on it yet.
 
 ## [0.2.0] - 2026-04 to 2026-05
 

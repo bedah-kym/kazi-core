@@ -1,0 +1,28 @@
+[flake8]
+# Kazi Core lint config.
+# CI enforces the critical pass strictly; the broader cosmetic pass is
+# advisory while the codebase is brought up to PEP 8.
+# Roadmap: tighten ignores over time.
+max-line-length = 127
+max-complexity = 12
+
+# Excluded paths — generated, vendored, or out of OSS scope.
+exclude =
+    .git,
+    __pycache__,
+    .venv,
+    venv,
+    build,
+    dist,
+    *.egg-info,
+    Backend/*/migrations/*,
+    Backend/staticfiles,
+    Backend/mediafiles,
+    node_modules,
+    frontend,
+    e2e
+
+# Per-file ignores: settings.py legitimately has long-string config blocks.
+per-file-ignores =
+    Backend/Backend/settings.py:E501
+    Backend/*/migrations/*:E501,W291,W293

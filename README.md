@@ -1,8 +1,9 @@
 # Kazi Core
 
-![Python](https://img.shields.io/badge/python-3.11-blue)
+![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![CI](https://github.com/bedah-kym/kazi-core/actions/workflows/main.yml/badge.svg)
+[![codecov](https://codecov.io/gh/bedah-kym/kazi-core/branch/main/graph/badge.svg)](https://codecov.io/gh/bedah-kym/kazi-core)
 ![Status](https://img.shields.io/badge/status-early%20access-orange)
 
 **Kazi Core** is a self-hostable, open-source agentic engine —
@@ -290,6 +291,8 @@ Backend/
 - [`docs/architecture.md`](docs/architecture.md) — how everything fits together
 - [`docs/writing-a-connector.md`](docs/writing-a-connector.md) — build your first plugin
 - [`docs/connector-api-reference.md`](docs/connector-api-reference.md) — BaseConnector API
+- [`AGENTS.md`](AGENTS.md) — guide for AI coding agents (Claude Code, Codex CLI, Cursor, etc.)
+- [`CHANGELOG.md`](CHANGELOG.md) — release history
 
 ## Development Checks
 

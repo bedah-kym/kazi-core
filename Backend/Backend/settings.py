@@ -108,6 +108,7 @@ INSTALLED_APPS = [
     'payments',
     'workflows',
     'notifications',
+    'tests',
     'rest_framework',
     'rest_framework.authtoken',
     'django_celery_beat',

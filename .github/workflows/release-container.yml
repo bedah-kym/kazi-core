@@ -8,6 +8,8 @@ on:
 permissions:
   contents: read
   packages: write
+  id-token: write   # required for cosign keyless signing via OIDC
+  attestations: write
 
 jobs:
   build-and-push:
@@ -35,7 +37,8 @@ jobs:
             type=ref,event=tag
             type=raw,value=latest
 
-      - name: Build and push image
+      - name: Build and push image (with SBOM + provenance)
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -44,3 +47,19 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          sbom: true
+          provenance: mode=max
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign published image (keyless via Sigstore OIDC)
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          for tag in $TAGS; do
+            echo "Signing $tag@$DIGEST"
+            cosign sign --yes "${tag}@${DIGEST}"
+          done

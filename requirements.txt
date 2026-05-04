@@ -82,7 +82,7 @@ django-ratelimit>=4.1.0
 django-csp>=3.8.0
 django-auditlog>=3.0.0
 bleach>=6.1.0
-pycryptodome>=3.17.0
+pycryptodome>=3.23.0
 python-json-logger>=2.0.0
 
 # Development & Testing (Optional)

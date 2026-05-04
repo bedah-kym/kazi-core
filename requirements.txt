@@ -21,7 +21,7 @@ django-redis>=5.4.0
 
 # Networking & Security
 requests>=2.32.0
-urllib3>=2.2.0
+urllib3>=2.6.3
 cryptography>=42.0.0
 pyOpenSSL>=24.0.0
 service-identity>=24.1.0

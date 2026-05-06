@@ -132,6 +132,13 @@ Python 3.11 and 3.12.
 Still early access — breaking changes possible before v1.0. See
 [`CHANGELOG.md`](CHANGELOG.md) for what's in each release.
 
+**v0.4 in flight — the *legibility cycle*.** Scope: one extension path for
+connectors, a `KAZI_DEMO_MODE` for boot-without-keys, observability
+promoted to a headline feature, docs rewritten around five developer
+flows. A connector and domain-feature freeze is in effect for the cycle.
+See [`docs/v0.4-brief.md`](docs/v0.4-brief.md) and
+[`docs/v0.4-roadmap.md`](docs/v0.4-roadmap.md).
+
 ---
 
 ## 🌊 How Requests Flow

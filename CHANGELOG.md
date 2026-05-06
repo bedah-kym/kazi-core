@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Planning
+
+- **v0.4 brief and roadmap landed** as `docs/v0.4-brief.md` and
+  `docs/v0.4-roadmap.md`. v0.4 is the *legibility cycle*: collapse the
+  duplicate connector loading path, ship a `KAZI_DEMO_MODE`, promote
+  observability + the eval harness to headline features, and rewrite the
+  docs around the five developer flows (run, add a connector, add a
+  workflow, debug a run, deploy safely). A connector and domain-feature
+  freeze is in effect for the duration of the cycle. Carryover from v0.3
+  (strict PEP 8, bandit-medium cleanup) is tracked under Milestone 6 of
+  the roadmap.
+
 ## [0.3.0] - 2026-05-03
 
 Repository hardening release. No runtime feature changes — focus is on making

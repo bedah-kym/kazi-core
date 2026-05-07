@@ -43,7 +43,7 @@ Backend/
 docs/                      # Public docs (quickstart, architecture, connector guide)
 ```
 
-When in doubt, read `Backend/orchestration/mcp_router.py` and `Backend/orchestration/agent_loop.py` first — they show how everything wires together.
+When in doubt, read `Backend/orchestration/agent_loop.py` first — that's where the ReAct loop lives. Tool dispatch is handled by `Backend/orchestration/connector_registry.py` (the single source of truth — collapsed in v0.4 M2-1) and routed by `Backend/orchestration/mcp_router.py` (filename is legacy; the "MCP" predates Anthropic's Model Context Protocol and is being renamed to `tool_router.py` in v0.5 — see the deprecation note at the top of the file).
 
 ## 3. Setup commands
 

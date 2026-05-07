@@ -1,0 +1,38 @@
+{
+  "name": "Follow-up email demo",
+  "description": "The canonical Kazi demo: a two-step workflow where the first step runs automatically and the second pauses durably for human approval. Uses the echo connector so it runs end-to-end with no real credentials when KAZI_DEMO_MODE=true.",
+  "version": "1.0.0",
+  "steps": [
+    {
+      "id": "draft_follow_up",
+      "service": "echo",
+      "action": "echo",
+      "params": {
+        "message": "Drafting follow-up: \"Hi Alex, just confirming our meeting tomorrow at 10am.\""
+      },
+      "safe_to_replay": true,
+      "max_attempts": 1,
+      "timeout_seconds": 30
+    },
+    {
+      "id": "send_follow_up",
+      "service": "echo",
+      "action": "echo",
+      "params": {
+        "message": "Sending follow-up email to alex@example.com"
+      },
+      "requires_approval": true,
+      "approval_timeout_minutes": 60,
+      "on_timeout": "cancel",
+      "safe_to_replay": false,
+      "max_attempts": 1,
+      "timeout_seconds": 30,
+      "depends_on": ["draft_follow_up"]
+    }
+  ],
+  "triggers": [
+    {
+      "type": "manual"
+    }
+  ]
+}

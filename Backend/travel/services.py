@@ -22,18 +22,18 @@ class ItineraryBuilder:
     High-level service to compose itineraries from search results
     Uses LLM to generate natural summaries and recommendations
     """
-    
+
     def __init__(self):
         self.llm_client = get_llm_client()
         self.router = MCPRouter()
-    
-    async def create_from_searches(self, user_id: int, trip_name: str, 
-                                  origin: str, destination: str,
-                                  start_date: str, end_date: str,
-                                  search_results: Dict[str, List[Dict]]) -> Itinerary:
+
+    async def create_from_searches(self, user_id: int, trip_name: str,
+                                   origin: str, destination: str,
+                                   start_date: str, end_date: str,
+                                   search_results: Dict[str, List[Dict]]) -> Itinerary:
         """
         Create an itinerary from search results
-        
+
         Args:
             user_id: User creating the itinerary
             trip_name: Name of the trip
@@ -48,21 +48,21 @@ class ItineraryBuilder:
                 'transfers': [...],
                 'events': [...]
             }
-        
+
         Returns:
             Itinerary object with items added
         """
         from django.contrib.auth.models import User
-        
+
         user = await sync_to_async(User.objects.get)(id=user_id)
-        
+
         # Parse dates and make timezone-aware
         start = datetime.strptime(start_date, '%Y-%m-%d')
         end = datetime.strptime(end_date, '%Y-%m-%d')
         # Make timezone-aware (Django USE_TZ=True requires this)
         start = timezone.make_aware(start) if timezone.is_naive(start) else start
         end = timezone.make_aware(end) if timezone.is_naive(end) else end
-        
+
         def _coerce_item_datetime(value: Optional[str], fallback: datetime) -> datetime:
             if not value:
                 return fallback
@@ -87,15 +87,15 @@ class ItineraryBuilder:
             status='draft',
             metadata={'origin': origin, 'destination': destination}
         )
-        
+
         # Integrate LLM Composer
         from travel.llm_composer import LLMComposer
-        
+
         logger.info(f"Created itinerary {itinerary.id} for user {user_id}")
-        
+
         items_added = 0
         ai_success = False
-        
+
         # Try AI Composition first
         try:
             composer = LLMComposer()
@@ -105,14 +105,14 @@ class ItineraryBuilder:
                 'start_date': start_date,
                 'end_date': end_date
             }
-            
+
             ai_selected_items = await composer.compose_itinerary(trip_details, search_results)
-            
+
             if ai_selected_items:
                 for item_data in ai_selected_items:
                     # Determine type (fallback to guessing if _category missing)
                     cat = item_data.get('_category', 'other')
-                    
+
                     # Map category to item_type
                     if 'bus' in cat: item_type = 'bus'
                     elif 'flight' in cat: item_type = 'flight'
@@ -123,7 +123,7 @@ class ItineraryBuilder:
 
                     # Create Item
                     title = item_data.get('title') or item_data.get('name') or item_data.get('company') or f"{item_type.title()} Option"
-                    
+
                     notes = item_data.get('ai_reasoning', '')
                     start_dt = _coerce_item_datetime(
                         item_data.get('start_datetime') or item_data.get('date'),
@@ -139,24 +139,24 @@ class ItineraryBuilder:
                         price_ksh=item_data.get('price_ksh', 0),
                         status='planned',
                         metadata={
-                            'provider': item_data.get('provider', 'unknown'), 
+                            'provider': item_data.get('provider', 'unknown'),
                             'booking_url': item_data.get('booking_url'),
                             'ai_selected': True,
                             'ai_reasoning': notes,
                         }
                     )
                     items_added += 1
-                
+
                 ai_success = True
                 logger.info(f"AI Composer successfully added {items_added} items.")
-                
+
         except Exception as e:
             logger.error(f"AI Composition failed: {e}. Falling back to standard selection.")
-        
+
         # FALLBACK: Standard Top-N Logic if AI failed or returned nothing
         if not ai_success or items_added == 0:
             logger.info("Using standard Top-N selection fallback.")
-            
+
             # Add buses
             for bus in search_results.get('buses', [])[:3]:  # Add top 3 buses
                 start_dt = _coerce_item_datetime(bus.get('departure_datetime'), start)
@@ -171,12 +171,12 @@ class ItineraryBuilder:
                     metadata={'provider': 'buupass', 'booking_url': bus.get('booking_url')}
                 )
                 items_added += 1
-            
+
             # Add hotels
             for hotel in search_results.get('hotels', [])[:2]:  # Add top 2 hotels
                 nights = (end - start).days or 1
                 total_price = hotel.get('price_ksh', 0) * nights
-                
+
                 item = await sync_to_async(ItineraryItem.objects.create)(
                     itinerary=itinerary,
                     item_type='hotel',
@@ -189,7 +189,7 @@ class ItineraryBuilder:
                     metadata={'provider': 'booking', 'booking_url': hotel.get('booking_url'), 'nights': nights}
                 )
                 items_added += 1
-            
+
             # Add flights if available
             for flight in search_results.get('flights', [])[:1]:  # Add top flight
                 start_dt = _coerce_item_datetime(flight.get('departure_datetime'), start)
@@ -204,7 +204,7 @@ class ItineraryBuilder:
                     metadata={'provider': 'duffel', 'booking_url': flight.get('booking_url')}
                 )
                 items_added += 1
-            
+
             # Add transfers
             for transfer in search_results.get('transfers', [])[:1]:  # Add top transfer
                 start_dt = _coerce_item_datetime(transfer.get('travel_datetime'), start)
@@ -219,7 +219,7 @@ class ItineraryBuilder:
                     metadata={'provider': 'karibu', 'booking_url': transfer.get('booking_url')}
                 )
                 items_added += 1
-            
+
             # Add events
             for event in search_results.get('events', [])[:3]:  # Add top 3 events
                 start_dt = _coerce_item_datetime(event.get('start_datetime'), start)
@@ -234,23 +234,23 @@ class ItineraryBuilder:
                     metadata={'provider': 'eventbrite', 'booking_url': event.get('ticket_url')}
                 )
                 items_added += 1
-        
+
         logger.info(f"Added {items_added} items to itinerary {itinerary.id}")
-        
+
         return itinerary
-    
+
     async def generate_summary(self, itinerary_id: int) -> str:
         """
         Generate LLM-powered summary of an itinerary
         """
         itinerary = await sync_to_async(Itinerary.objects.select_related('user').get)(id=itinerary_id)
         items = await sync_to_async(lambda: list(itinerary.items.all()))()
-        
+
         # Build context
         item_summaries = []
         for item in items:
             item_summaries.append(f"- {item.title} (KES {item.price_ksh})")
-        
+
         prompt = f"""
         Generate a concise travel itinerary summary for this trip:
         
@@ -262,7 +262,7 @@ class ItineraryBuilder:
         
         Provide a brief, engaging summary (2-3 sentences) highlighting the key activities and approximate budget.
         """
-        
+
         try:
             summary = await self.llm_client.generate_text(
                 system_prompt="You are a helpful travel assistant.",
@@ -274,13 +274,13 @@ class ItineraryBuilder:
         except Exception as e:
             logger.error(f"Error generating summary: {str(e)}")
             return f"Trip to {itinerary.title} with {len(items)} planned items"
-    
+
     async def get_recommendations(self, itinerary_id: int, category: str) -> List[Dict]:
         """
         Get LLM-powered recommendations for an itinerary using RecommendationService
         """
         from travel.recommendation_service import RecommendationService
-        
+
         itinerary = await sync_to_async(Itinerary.objects.get)(id=itinerary_id)
         items = await sync_to_async(lambda: list(itinerary.items.values('title', 'item_type', 'start_datetime')))()
         context_items = []
@@ -292,9 +292,9 @@ class ItineraryBuilder:
 
         meta = itinerary.metadata if isinstance(itinerary.metadata, dict) else {}
         destination = meta.get('destination') or itinerary.title or "Unknown"
-        
+
         service = RecommendationService()
-        
+
         if category == 'dining':
             return await service.recommend_dining(destination)
         elif category == 'hidden_gems':
@@ -308,20 +308,20 @@ class ItineraryBuilder:
         Enrich itinerary with Visa and Weather info.
         """
         from travel.practical_service import VisaService, WeatherService
-        
+
         itinerary = await sync_to_async(Itinerary.objects.get)(id=itinerary_id)
-        
+
         # 1. Visa Check
         # Assume destination is always Kenya for this MVP, or parse from itinerary
-        destination_code = 'KE' 
+        destination_code = 'KE'
         visa_service = VisaService()
         visa_status = visa_service.check_requirements(user_passport_code, destination_code)
-        
+
         # 2. Weather
         weather_service = WeatherService()
         destination = (itinerary.metadata or {}).get('destination') or itinerary.title or "Nairobi"
         weather = await weather_service.get_trip_forecast(destination)
-        
+
         # Update Metadata
         meta = itinerary.metadata or {}
         meta['practical_info'] = {
@@ -329,10 +329,10 @@ class ItineraryBuilder:
             'passport_used': user_passport_code,
             'weather_forecast': weather
         }
-        
+
         itinerary.metadata = meta
         await sync_to_async(itinerary.save)()
-        
+
         return meta
 
 
@@ -341,12 +341,12 @@ class ExportService:
     Service to export itineraries in various formats
     Supports PDF, JSON, and iCalendar formats
     """
-    
+
     async def export_json(self, itinerary_id: int) -> Dict:
         """Export itinerary as JSON"""
         itinerary = await sync_to_async(Itinerary.objects.get)(id=itinerary_id)
         items = await sync_to_async(lambda: list(itinerary.items.all()))()
-        
+
         return {
             'title': itinerary.title,
             'description': itinerary.description,
@@ -369,12 +369,12 @@ class ExportService:
             'created_at': itinerary.created_at.isoformat(),
             'updated_at': itinerary.updated_at.isoformat()
         }
-    
+
     async def export_ical(self, itinerary_id: int) -> str:
         """Export itinerary as iCalendar format"""
         itinerary = await sync_to_async(Itinerary.objects.get)(id=itinerary_id)
         items = await sync_to_async(lambda: list(itinerary.items.all()))()
-        
+
         # Build iCal format
         ical_lines = [
             "BEGIN:VCALENDAR",
@@ -384,7 +384,7 @@ class ExportService:
             f"X-WR-CALNAME:{itinerary.title}",
             f"X-WR-TIMEZONE:Africa/Nairobi",
         ]
-        
+
         for item in items:
             if item.start_datetime:
                 event_date = item.start_datetime.strftime('%Y%m%d')
@@ -395,10 +395,10 @@ class ExportService:
                     f"DESCRIPTION:{item.description or ''}",
                     "END:VEVENT"
                 ])
-        
+
         ical_lines.append("END:VCALENDAR")
         return '\n'.join(ical_lines)
-    
+
     async def export_pdf(self, itinerary_id: int) -> bytes:
         """
         Export itinerary as PDF
@@ -409,28 +409,28 @@ class ExportService:
             from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
             from reportlab.lib.styles import getSampleStyleSheet
             from io import BytesIO
-            
+
             itinerary = await sync_to_async(Itinerary.objects.get)(id=itinerary_id)
             items = await sync_to_async(lambda: list(itinerary.items.all()))()
-            
+
             # Create PDF in memory
             pdf_buffer = BytesIO()
             doc = SimpleDocTemplate(pdf_buffer, pagesize=letter)
-            
+
             styles = getSampleStyleSheet()
             story = []
-            
+
             # Title
             story.append(Paragraph(f"<b>{itinerary.title}</b>", styles['Title']))
             story.append(Spacer(1, 12))
-            
+
             # Trip dates
             story.append(Paragraph(
                 f"<b>Trip Duration:</b> {itinerary.start_date.date()} to {itinerary.end_date.date()} ({itinerary.duration_days} days)",
                 styles['Normal']
             ))
             story.append(Spacer(1, 12))
-            
+
             # Items table
             data = [['Item', 'Type', 'Price (KES)', 'Status']]
             for item in items:
@@ -440,11 +440,11 @@ class ExportService:
                     f"KES {item.price_ksh:,.0f}",
                     item.status
                 ])
-            
+
             # Total
             total = sum(item.price_ksh for item in items)
             data.append(['', '', f"<b>Total: KES {total:,.0f}</b>", ''])
-            
+
             table = Table(data)
             table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), (0, 0, 0)),
@@ -455,12 +455,12 @@ class ExportService:
                 ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
                 ('GRID', (0, 0), (-1, -1), 1, (0, 0, 0)),
             ]))
-            
+
             story.append(table)
             doc.build(story)
-            
+
             return pdf_buffer.getvalue()
-        
+
         except ImportError:
             logger.warning("reportlab not installed, cannot generate PDF")
             return b'PDF export requires reportlab library'
@@ -471,20 +471,20 @@ class BookingOrchestrator:
     Service to manage bookings and redirect to partner booking pages
     Tracks confirmation codes and booking status
     """
-    
+
     async def get_booking_url(self, item_id: int, user_id: int) -> str:
         """
         Get booking URL for an itinerary item
         Adds affiliate parameters and tracking
         """
         item = await sync_to_async(ItineraryItem.objects.get)(id=item_id)
-        
+
         # Extract booking URL from metadata
         booking_url = item.metadata.get('booking_url', '')
-        
+
         # Add affiliate parameters based on provider
         provider = item.metadata.get('provider', '')
-        
+
         if provider == 'booking':
             # Add Booking.com affiliate ID
             affiliate_id = 'MATHIA-TRAVEL-2025'  # Placeholder
@@ -492,17 +492,17 @@ class BookingOrchestrator:
                 booking_url += f"&aid={affiliate_id}"
             else:
                 booking_url += f"?aid={affiliate_id}"
-        
+
         elif provider == 'buupass':
             # Add Buupass referral code
             if '?' in booking_url:
                 booking_url += f"&ref=MATHIA"
             else:
                 booking_url += f"?ref=MATHIA"
-        
+
         logger.info(f"Generated booking URL for item {item_id}: {booking_url}")
         return booking_url
-    
+
     async def record_booking(self, item_id: int, confirmation_code: str, booking_reference: str) -> BookingReference:
         """Record a completed booking"""
         item = await sync_to_async(ItineraryItem.objects.get)(id=item_id)
@@ -520,14 +520,14 @@ class BookingOrchestrator:
             booking_url=booking_url or item.booking_url or "https://amadeus.com",
             metadata={'booked_at': datetime.now().isoformat()}
         )
-        
+
         # Update item status
         item.status = 'booked'
         await sync_to_async(item.save)()
-        
+
         logger.info(f"Recorded booking for item {item_id}: {confirmation_code}")
         return booking_ref
-    
+
     async def get_booking_status(self, item_id: int) -> Dict:
         """Get booking status and confirmation details"""
         try:

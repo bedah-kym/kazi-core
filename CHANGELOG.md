@@ -96,6 +96,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   echo connector now lives at `examples/connectors/echo/echo_connector.py`.
 - `KAZI_ENABLE_EXAMPLE_CONNECTOR` is gone — `KAZI_DEMO_MODE` replaces it
   with a broader scope and a single flag for everything demo-related.
+- **Lint posture tightened — phase 1 of M6-1**:
+  - **Critical correctness set expanded** in
+    `.github/workflows/main.yml`. Now blocks on `E712` (`== True`),
+    `E722` (bare `except:`), `E731` (lambda assignment) in addition to
+    the previous `E9 / F63 / F7 / F82 / F811 / F202` set. All real-bug
+    findings under those rules are clean across `Backend/`.
+  - **Whitespace / indentation cleanup** swept across the codebase via
+    autopep8 (`W291 W292 W293 W391 W191 E101 E111 E117 E225 E231 E261
+    E265 E301 E302 E305 E306 E114 E122 E127 E128 E129 E251 E203 E303`).
+    Advisory PEP 8 findings dropped from ~2,461 to ~487 — a ~80%
+    reduction. The remaining findings (E501 long lines, F401 unused
+    imports, F841 unused locals, C901 complexity) need per-file
+    judgement and are the focus of v0.5 phase 2.
+  - **Real-bug fixes**: `temporal_integration.py` had two genuine
+    Python correctness bugs surfaced by the broader scan — F821
+    (undefined `exc` after the binding was cleared by Python's
+    except-block scoping rules) and F823 (referenced-before-assignment
+    on `runtime_state` shadowed by the inner closure). Both fixed.
 
 ### Planning
 

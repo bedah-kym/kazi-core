@@ -1,5 +1,6 @@
 from rest_framework import permissions
 
+
 class IsStaffEditorPermissions(permissions.DjangoModelPermissions):
     perms_map = {
         'GET': ['%(app_label)s.view_%(model_name)s'],
@@ -10,4 +11,3 @@ class IsStaffEditorPermissions(permissions.DjangoModelPermissions):
         'PATCH': ['%(app_label)s.change_%(model_name)s'],
         'DELETE': ['%(app_label)s.delete_%(model_name)s'],
     }
-

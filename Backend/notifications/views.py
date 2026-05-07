@@ -34,7 +34,7 @@ def notification_list(request):
         per_page = 20
 
     start = (page - 1) * per_page
-    notifications = list(qs[start : start + per_page])
+    notifications = list(qs[start: start + per_page])
 
     return JsonResponse(
         {

@@ -69,11 +69,21 @@ jobs:
           pip install -r requirements.txt
           pip install flake8 bandit coverage
 
+      # v0.4 M6-1 phase 1: critical set now includes the real-bug rules
+      # E712 (== True), E722 (bare except), E731 (lambda assign), in addition
+      # to the existing E9 (syntax) / F63 / F7 / F82 / F811 / F202 set.
+      # All seven blocking rules are now clean across Backend/.
       - name: Lint - critical correctness (must pass)
         run: |
-          flake8 Backend --count --select=E9,F63,F7,F82,F811,F202 --show-source --statistics
+          flake8 Backend --count --select=E9,F63,F7,F82,F811,F202,E712,E722,E731 --show-source --statistics
 
-      - name: Lint - full PEP 8 (advisory until v0.4 cleanup)
+      # v0.4 M6-1 phase 1: ~80% reduction in advisory findings (autopep8 sweep
+      # for whitespace / tabs / blank lines / inline-comment spacing). The
+      # remaining ~487 findings are mostly E501 long lines, F401 unused
+      # imports, F841 unused locals, and complexity (C901) — these need
+      # per-file judgement and land as v0.5 cleanups before this job flips
+      # to blocking.
+      - name: Lint - full PEP 8 (advisory until v0.5 cleanup completes)
         continue-on-error: true
         run: |
           flake8 Backend --count --statistics

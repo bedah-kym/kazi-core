@@ -282,4 +282,3 @@ class BookingReferenceAdmin(ImportExportModelAdmin):
             obj.get_status_display()
         )
     status_badge.short_description = 'Status'
-

@@ -15,12 +15,13 @@ from django.core.cache import cache
 
 logger = logging.getLogger(__name__)
 
+
 class LLMClient:
     """
     Unified client for LLM interactions.
     Prioritizes Anthropic (Claude) if available, falls back to Hugging Face.
     """
-    
+
     def __init__(self):
         self.anthropic_key = getattr(settings, 'ANTHROPIC_API_KEY', os.environ.get('ANTHROPIC_API_KEY'))
         self.hf_key = getattr(settings, 'HF_API_TOKEN', os.environ.get('HF_API_TOKEN'))
@@ -291,9 +292,9 @@ class LLMClient:
         raise Exception("No valid API keys configured for Anthropic or Hugging Face.")
 
     async def stream_text(
-        self, 
-        system_prompt: str, 
-        user_prompt: str, 
+        self,
+        system_prompt: str,
+        user_prompt: str,
         temperature: float = 0.7,
         max_tokens: int = 600,
         model_role: str = "default",
@@ -664,10 +665,10 @@ class LLMClient:
                     ]
                 }
             )
-            
+
             if response.status_code != 200:
                 raise Exception(f"Anthropic Error {response.status_code}: {response.text}")
-            
+
             data = response.json()
             return data["content"][0]["text"]
 
@@ -784,7 +785,7 @@ class LLMClient:
 
     async def _stream_huggingface(self, system_prompt: str, user_prompt: str, temperature: float, max_tokens: int, model_name: Optional[str] = None):
         """Stream from Hugging Face Router (OpenAI-compatible SSE)"""
-        
+
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
@@ -833,7 +834,7 @@ class LLMClient:
             return json.loads(text)
         except json.JSONDecodeError:
             pass
-            
+
         # 2. Strip markdown code blocks
         clean_text = text.strip()
         if "```json" in clean_text:
@@ -844,7 +845,7 @@ class LLMClient:
             parts = clean_text.split("```")
             if len(parts) > 1:
                 clean_text = parts[1]
-                
+
         # 3. Try finding first { and last }
         try:
             start = clean_text.find("{")
@@ -870,7 +871,7 @@ class LLMClient:
                         pass
         except Exception:
             pass
-            
+
         logger.error(f"Failed to extract JSON from: {text[:100]}...")
         return {}
 
@@ -936,19 +937,22 @@ class LLMClient:
         tail = prompt[-int(limit * 0.3):]
         return head + "\n...\n" + tail + suffix
 
+
 def extract_json(text: str) -> Dict:
     """
     Robust JSON extraction from LLM output.
     Handles markdown blocks, trailing text, etc.
     Wrapper for the class method or standalone logic.
     """
-    # Simply delegate to a temporary instance or duplicate logic 
+    # Simply delegate to a temporary instance or duplicate logic
     # to keep it importable as a utility function.
     return LLMClient().extract_json(text)
+
 
 # Singleton (thread-safe)
 _client = None
 _client_lock = threading.Lock()
+
 
 def get_llm_client() -> LLMClient:
     """Get or create the global LLM client instance (thread-safe)."""

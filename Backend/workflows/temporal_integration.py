@@ -98,6 +98,10 @@ async def update_execution_record(
     error_message: Optional[str] = None,
     runtime_state: Optional[Dict[str, Any]] = None,
 ) -> None:
+    # Capture into a stable local — the inner closure assigns to a name with
+    # the same identifier, which makes it look-before-it-writes inside _update.
+    runtime_state_arg = runtime_state or {}
+
     def _update():
         execution = WorkflowExecution.objects.filter(id=execution_id).first()
         if not execution:
@@ -115,14 +119,14 @@ async def update_execution_record(
             execution.error_message = error_message
             update_fields.append("error_message")
 
-        runtime_state = runtime_state or {}
-        pending_approval_id = runtime_state.get("pending_approval_id")
+        local_runtime_state = runtime_state_arg
+        pending_approval_id = local_runtime_state.get("pending_approval_id")
         for field in RUNTIME_STATE_FIELDS - {"pending_approval_id"}:
-            if field in runtime_state:
-                setattr(execution, field, runtime_state.get(field))
+            if field in local_runtime_state:
+                setattr(execution, field, local_runtime_state.get(field))
                 update_fields.append(field)
 
-        if "pending_approval_id" in runtime_state:
+        if "pending_approval_id" in local_runtime_state:
             if pending_approval_id:
                 execution.pending_approval = WorkflowApprovalRecord.objects.filter(id=pending_approval_id).first()
             else:
@@ -833,9 +837,14 @@ async def create_schedule_for_trigger(trigger_obj) -> None:
     try:
         await client.create_schedule(schedule_id, schedule)
     except Exception as exc:
+        # Capture into a local before defining the closure — Python clears the
+        # `exc` binding when the except block exits, so the closure would see
+        # NameError. Same pattern as the v0.3.0 fix elsewhere in this file.
+        error_message = str(exc)
+
         def _mark_unavailable():
             trigger_obj.schedule_status = "unavailable"
-            trigger_obj.schedule_last_error = str(exc)
+            trigger_obj.schedule_last_error = error_message
             trigger_obj.save(update_fields=["schedule_status", "schedule_last_error", "updated_at"])
 
         await sync_to_async(_mark_unavailable)()

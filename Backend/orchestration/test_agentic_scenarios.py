@@ -315,6 +315,7 @@ class Scenario7ConfirmationFlowTest(SimpleTestCase):
     def test_confirmation_pause(self, mock_cache, mock_exec, mock_get_llm):
         mock_cache.get.return_value = None
         saved_state = {}
+
         def mock_set(key, value, timeout=None):
             saved_state[key] = value
         mock_cache.set.side_effect = mock_set
@@ -373,6 +374,7 @@ class Scenario9CancelPendingTest(SimpleTestCase):
             pending_tool={"id": "t1", "name": "withdraw", "input": {"amount": 5000}},
         )
         saved = {}
+
         def mock_set(key, value, timeout=None):
             saved[key] = value
         mock_cache.set.side_effect = mock_set

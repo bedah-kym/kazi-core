@@ -7,11 +7,12 @@ from chatbot.models import DocumentUpload
 
 logger = logging.getLogger(__name__)
 
+
 class QuotaService:
     """
     Service to report user usage quotas for rate-limited features.
     """
-    
+
     # Define limits (centralized here for reference, though enforced elsewhere)
     LIMITS = {
         'search': 10,       # per day
@@ -28,11 +29,11 @@ class QuotaService:
         today = datetime.now().strftime("%Y-%m-%d")
         search_key = f"search_limit:{user_id}:{today}"
         search_used = cache.get(search_key, 0)
-        
+
         # 2. MCP Actions Limit (Hourly)
         action_key = f"mcp_rate:{user_id}"
         action_used = cache.get(action_key, 0)
-        
+
         # 3. Message Rate Limit (Minute)
         current_minute = datetime.now().strftime("%Y-%m-%d-%H-%M")
         msg_key = f"rate_limit:{user_id}:{current_minute}"
@@ -61,7 +62,7 @@ class QuotaService:
         return {
             "search": {
                 "name": "Online Searches",
-                "used": search_used, 
+                "used": search_used,
                 "limit": self.LIMITS['search'],
                 "unit": "per day",
                 "status": s_status,
@@ -70,7 +71,7 @@ class QuotaService:
             },
             "actions": {
                 "name": "AI Actions",
-                "used": action_used, 
+                "used": action_used,
                 "limit": self.LIMITS['actions'],
                 "unit": "per hour",
                 "status": a_status,
@@ -79,7 +80,7 @@ class QuotaService:
             },
             "messages": {
                 "name": "Chat Messages",
-                "used": msg_used, 
+                "used": msg_used,
                 "limit": self.LIMITS['messages'],
                 "unit": "per minute",
                 "status": m_status,

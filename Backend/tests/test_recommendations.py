@@ -18,9 +18,10 @@ MOCK_CONTEXT = [
     {'title': 'Snorkeling Tour', 'time': '2025-12-26 09:00:00'}
 ]
 
+
 async def test_recommendations():
     service = RecommendationService()
-    
+
     # Check keys
     if not service.llm_client.anthropic_key and not service.llm_client.hf_key:
         logger.warning("⚠️ No LLM Keys found. Recommendations might be empty.")

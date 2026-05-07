@@ -4,35 +4,39 @@ from base64 import b64encode
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from users.encryption import TokenEncryption
 
-user=get_user_model()
+user = get_user_model()
+
 
 class Member(models.Model):
-    User = models.ForeignKey(user,on_delete=models.CASCADE)
+    User = models.ForeignKey(user, on_delete=models.CASCADE)
     # persisted last seen timestamp (updated on disconnect)
     last_seen = models.DateTimeField(null=True, blank=True)
+
     def __str__(self):
         return self.User.username
 
+
 class Message(models.Model):
-    member = models.ForeignKey(Member,null=True,on_delete=models.CASCADE)
+    member = models.ForeignKey(Member, null=True, on_delete=models.CASCADE)
     content = models.TextField()
     timestamp = models.DateTimeField(null=False)
     parent = models.ForeignKey('self', null=True, blank=True, on_delete=models.SET_NULL, related_name='replies')
-    
+
     # Voice features
     is_voice = models.BooleanField(default=False)
     audio_url = models.CharField(max_length=500, blank=True, null=True)
     voice_transcript = models.TextField(blank=True, null=True)
-    has_ai_voice = models.BooleanField(default=False) # For AI-synthesized responses
+    has_ai_voice = models.BooleanField(default=False)  # For AI-synthesized responses
 
     def __str__(self):
         return f"{self.member}: {self.content[:30]}..."
-    
+
+
 class Chatroom(models.Model):
     participants = models.ManyToManyField(Member)
-    chats = models.ManyToManyField(Message,blank=True)
+    chats = models.ManyToManyField(Message, blank=True)
     encryption_key = models.TextField(blank=True)
-    
+
     def save(self, *args, **kwargs):
         # Generate a key for the room when it's first created
         if not self.encryption_key:
@@ -78,18 +82,18 @@ class ModerationBatch(models.Model):
         ('processed', 'Processed'),
         ('failed', 'Failed'),
     ]
-    
+
     room = models.ForeignKey(Chatroom, on_delete=models.CASCADE)
     message_ids = models.TextField()  # JSON array of message IDs
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     flagged_count = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     processed_at = models.DateTimeField(null=True, blank=True)
-    
+
     class Meta:
         ordering = ['-created_at']
         verbose_name_plural = "Moderation Batches"
-    
+
     def __str__(self):
         return f"Batch {self.id} - Room {self.room.id} - {self.status}"
 
@@ -102,13 +106,13 @@ class UserModerationStatus(models.Model):
     is_muted = models.BooleanField(default=False)
     last_flagged = models.DateTimeField(auto_now=True)
     muted_at = models.DateTimeField(null=True, blank=True)
-    
+
     class Meta:
         unique_together = ['user', 'room']
         ordering = ['-last_flagged']
         verbose_name = "User Moderation Status"
         verbose_name_plural = "User Moderation Statuses"
-    
+
     def __str__(self):
         status = "MUTED" if self.is_muted else f"Flags: {self.flag_count}"
         return f"{self.user.username} - Room {self.room.id} - {status}"
@@ -122,13 +126,13 @@ class AIConversation(models.Model):
     last_interaction = models.DateTimeField(auto_now=True)
     message_count = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
-    
+
     class Meta:
         unique_together = ['user', 'room']
         ordering = ['-last_interaction']
         verbose_name = "AI Conversation"
         verbose_name_plural = "AI Conversations"
-    
+
     def __str__(self):
         return f"AI Conv - {self.user.username} - Room {self.room.id} ({self.message_count} msgs)"
 
@@ -156,11 +160,11 @@ class Reminder(models.Model):
     scheduled_time = models.DateTimeField()
     priority = models.CharField(max_length=10, choices=PRIORITY_CHOICES, default='medium')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
-    
+
     # Delivery channels
     via_email = models.BooleanField(default=True)
     via_whatsapp = models.BooleanField(default=False)
-    
+
     created_at = models.DateTimeField(auto_now_add=True)
     sent_at = models.DateTimeField(null=True, blank=True)
     error_log = models.TextField(blank=True)
@@ -178,14 +182,14 @@ class RoomContext(models.Model):
     Tier 1: Hot storage (recent messages, active notes)
     """
     chatroom = models.OneToOneField(Chatroom, on_delete=models.CASCADE, related_name='context')
-    
+
     # Compressed context summary (LLM-generated)
     summary = models.TextField(blank=True, help_text="AI-generated summary of conversation")
-    
+
     # Key participants and entities mentioned
     participants = models.JSONField(default=list)  # ["John", "Sarah", "@mike"]
     entities = models.JSONField(default=dict)  # {"people": [...], "companies": [...], "projects": [...]}
-    
+
     # Active topics/themes
     active_topics = models.JSONField(default=list)  # ["project_launch", "budget_discussion"]
 
@@ -194,16 +198,16 @@ class RoomContext(models.Model):
     memory_preferences = models.JSONField(default=list)  # [{"key": "...", "value": "...", "confidence": 0.7, "updated_at": "..."}]
     memory_episodes = models.JSONField(default=list)  # [{"summary": "...", "date": "YYYY-MM-DD", "importance": "medium", "updated_at": "..."}]
     memory_updated_at = models.DateTimeField(null=True, blank=True)
-    
+
     # Link to related rooms (cross-room context)
     related_rooms = models.ManyToManyField('self', blank=True, symmetrical=False)
-    
+
     # Metadata
     message_count = models.IntegerField(default=0)
     last_compressed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+
     def __str__(self):
         return f"Context for Room {self.chatroom.id}"
 
@@ -220,29 +224,29 @@ class RoomNote(models.Model):
         ('reminder', 'Reminder'),
         ('written', 'Written Note'),
     ]
-    
+
     room_context = models.ForeignKey(RoomContext, on_delete=models.CASCADE, related_name='notes')
     note_type = models.CharField(max_length=20, choices=NOTE_TYPES)
     content = models.TextField()
-    
+
     # Who created it (AI or User)
     created_by = models.ForeignKey(user, on_delete=models.SET_NULL, null=True, blank=True)
     is_ai_generated = models.BooleanField(default=False)
-    
+
     # Importance/priority
     priority = models.CharField(max_length=10, choices=[
         ('low', 'Low'),
         ('medium', 'Medium'),
         ('high', 'High'),
     ], default='medium')
-    
+
     # Tags for searchability
     tags = models.JSONField(default=list)  # ["budget", "deadline", "client_meeting"]
-    
+
     # Linked message (if extracted from conversation)
     source_message_id = models.IntegerField(null=True, blank=True)
     source_message_content = models.TextField(blank=True, help_text="Full content of the pinned message")
-    
+
     # Status tracking
     is_completed = models.BooleanField(default=False)
     completed_at = models.DateTimeField(null=True, blank=True)
@@ -260,7 +264,7 @@ class RoomNote(models.Model):
             models.Index(fields=['note_type', 'is_completed']),
             models.Index(fields=['is_archived', 'priority', 'note_type']),
         ]
-    
+
     def __str__(self):
         return f"{self.get_note_type_display()}: {self.content[:50]}..."
 
@@ -271,34 +275,34 @@ class DailySummary(models.Model):
     """
     room_context = models.ForeignKey(RoomContext, on_delete=models.CASCADE, related_name='daily_summaries')
     date = models.DateField()
-    
+
     # AI-generated summary
     summary = models.TextField(help_text="What happened today in this room")
-    
+
     # Key highlights
     highlights = models.JSONField(default=list)  # ["Decided on Q1 budget", "John joined team"]
-    
+
     # Statistics
     message_count = models.IntegerField(default=0)
     participant_count = models.IntegerField(default=0)
     notes_created = models.IntegerField(default=0)
-    
+
     # Sentiment/tone (optional, AI-analyzed)
     sentiment = models.CharField(max_length=20, blank=True, choices=[
         ('positive', 'Positive'),
         ('neutral', 'Neutral'),
         ('negative', 'Negative'),
     ])
-    
+
     created_at = models.DateTimeField(auto_now_add=True)
-    
+
     class Meta:
         unique_together = ['room_context', 'date']
         ordering = ['-date']
         indexes = [
             models.Index(fields=['room_context', '-date']),
         ]
-    
+
     def __str__(self):
         return f"Summary for Room {self.room_context.chatroom.id} on {self.date}"
 
@@ -340,28 +344,28 @@ class DocumentUpload(models.Model):
         ('pdf', 'PDF'),
         ('image', 'Image'),
     ]
-    
+
     STATUS_CHOICES = [
         ('pending', 'Pending'),
         ('processing', 'Processing'),
         ('completed', 'Completed'),
         ('failed', 'Failed'),
     ]
-    
+
     user = models.ForeignKey(user, on_delete=models.CASCADE, related_name='document_uploads')
     chatroom = models.ForeignKey(Chatroom, on_delete=models.CASCADE, related_name='document_uploads')
     file_type = models.CharField(max_length=10, choices=FILE_TYPE_CHOICES)
     file_path = models.CharField(max_length=500)
     file_size = models.IntegerField(help_text="File size in bytes")
-    
+
     # AI Processing fields
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     processed_text = models.TextField(blank=True, help_text="Extracted text content from the document")
     extracted_metadata = models.JSONField(default=dict, blank=True, help_text="Metadata found during processing")
-    
+
     quota_window_start = models.DateTimeField(help_text="Start of the 10-hour quota window")
     uploaded_at = models.DateTimeField(auto_now_add=True)
-    
+
     class Meta:
         ordering = ['-uploaded_at']
         indexes = [
@@ -369,6 +373,6 @@ class DocumentUpload(models.Model):
             models.Index(fields=['chatroom', '-uploaded_at']),
             models.Index(fields=['status']),
         ]
-    
+
     def __str__(self):
         return f"{self.user.username} - {self.file_type} - {self.status} - {self.uploaded_at}"

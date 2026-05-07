@@ -5,6 +5,7 @@ from orchestration.llm_client import get_llm_client, extract_json
 
 logger = logging.getLogger(__name__)
 
+
 class FeedbackCollector:
     """
     Manages the post-trip feedback loop.
@@ -19,8 +20,8 @@ class FeedbackCollector:
         Generate a friendly message asking about specific parts of the trip.
         """
         # Create a summary of key activities to ask about
-        highlights = [item.get('title', 'trip') for item in items[:3]] # Ask about top 3 items
-        
+        highlights = [item.get('title', 'trip') for item in items[:3]]  # Ask about top 3 items
+
         prompt = f"""
         The user just finished a trip to '{itinerary_title}'.
         Key activities were: {', '.join(highlights)}.
@@ -33,7 +34,7 @@ class FeedbackCollector:
         
         Keep it short (under 50 words). Sound like a friend, not a survey.
         """
-        
+
         try:
             return await self.llm_client.generate_text(system_prompt="You are a friendly travel buddy.", user_prompt=prompt, temperature=0.7)
         except Exception as e:
@@ -58,7 +59,7 @@ class FeedbackCollector:
         }}
         If info is missing, infer from tone or use null/3.
         """
-        
+
         try:
             response = await self.llm_client.generate_text(system_prompt="You are a data extraction bot.", user_prompt=prompt, temperature=0.0, json_mode=True)
             return extract_json(response)

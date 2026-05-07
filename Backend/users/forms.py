@@ -8,6 +8,7 @@ from .models import UserProfile, TrialApplication
 
 User = get_user_model()
 
+
 def _normalize_list_value(value):
     if value is None:
         return []
@@ -29,10 +30,12 @@ def _normalize_list_value(value):
     text = str(value).strip()
     return [text] if text else []
 
+
 def _format_list_value(items):
     if not items:
         return ''
     return '\n'.join(str(item).strip() for item in items if str(item).strip())
+
 
 def _parse_roadmap_value(value):
     if value is None:
@@ -70,6 +73,7 @@ def _parse_roadmap_value(value):
         return entries
     return []
 
+
 def _format_roadmap_value(entries):
     if not entries:
         return ''
@@ -85,6 +89,8 @@ def _format_roadmap_value(entries):
         else:
             lines.append(str(timeframe))
     return '\n'.join(lines)
+
+
 class CustomAuthenticationForm(AuthenticationForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -121,6 +127,7 @@ class UserForm(forms.ModelForm):
     class Meta:
         model = User
         fields = ['first_name', 'last_name', 'email']
+
 
 class UserProfileForm(forms.ModelForm):
     assistant_tone = forms.ChoiceField(

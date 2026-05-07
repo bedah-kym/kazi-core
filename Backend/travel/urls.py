@@ -9,7 +9,7 @@ urlpatterns = [
     path('plan/', views.plan_trip_wizard, name='plan_trip'),
     path('itineraries/', views.itinerary_list, name='itinerary_list'),
     path('view/<int:itinerary_id>/', views.view_itinerary, name='view_itinerary'),
-    
+
     # Actions
     path('archive/<int:itinerary_id>/', views.archive_itinerary, name='archive_itinerary'),
     path('delete/<int:itinerary_id>/', views.delete_itinerary_view, name='delete_itinerary'),

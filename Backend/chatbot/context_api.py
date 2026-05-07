@@ -16,24 +16,24 @@ from chatbot.context_manager import ContextManager
 def get_room_context(request, room_id):
     """
     GET /api/rooms/<room_id>/context/
-    
+
     Returns AI-generated context, summary, and recent notes for a chatroom
     """
     try:
         chatroom = get_object_or_404(Chatroom, id=room_id)
-        
+
         # Verify user has access to this room
         if not Chatroom.objects.filter(id=room_id, participants__User=request.user).exists():
             return Response(
                 {"error": "You don't have access to this room"},
                 status=status.HTTP_403_FORBIDDEN
             )
-        
+
         # Get context using ContextManager
         context = ContextManager.get_context_for_ai(chatroom, lookback_hours=24)
-        
+
         return Response(context, status=status.HTTP_200_OK)
-        
+
     except Chatroom.DoesNotExist:
         return Response(
             {"error": "Chatroom not found"},
@@ -51,9 +51,9 @@ def get_room_context(request, room_id):
 def add_note(request, room_id):
     """
     POST /api/rooms/<room_id>/notes/
-    
+
     Create a manual note in the room context
-    
+
     Body:
     {
         "note_type": "decision" | "action_item" | "insight" | "reminder" | "written",
@@ -64,26 +64,26 @@ def add_note(request, room_id):
     """
     try:
         chatroom = get_object_or_404(Chatroom, id=room_id)
-        
+
         # Verify user has access to this room
         if not Chatroom.objects.filter(id=room_id, participants__User=request.user).exists():
             return Response(
                 {"error": "You don't have access to this room"},
                 status=status.HTTP_403_FORBIDDEN
             )
-        
+
         note_type = request.data.get('note_type', 'written')
         content = request.data.get('content', '')
         priority = request.data.get('priority', 'medium')
         tags = request.data.get('tags', [])
         is_private = request.data.get('is_private', False)
-        
+
         if not content:
             return Response(
                 {"error": "Content is required"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         # Create note using ContextManager
         note = ContextManager.add_note(
             chatroom=chatroom,
@@ -94,14 +94,14 @@ def add_note(request, room_id):
             priority=priority,
             is_private=is_private,
         )
-        
+
         return Response({
             "success": True,
             "note_id": note.id,
             "note_type": note.note_type,
             "content": note.content
         }, status=status.HTTP_201_CREATED)
-        
+
     except Exception as e:
         return Response(
             {"error": str(e)},

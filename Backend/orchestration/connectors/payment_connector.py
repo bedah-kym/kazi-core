@@ -13,37 +13,37 @@ class ReadOnlyPaymentConnector(BaseConnector):
     """
     AI-safe payment connector with read-only permissions
     """
-    
+
     async def execute(self, parameters: dict, context: dict) -> dict:
         """
         Execute read-only payment queries
-        
+
         Allowed actions:
         - check_balance
         - list_transactions
         - check_invoice_status
-        
+
         Forbidden actions (will return error):
         - create_invoice
         - withdraw
         - transfer
         """
         action = parameters.get("action")
-        
+
         # Whitelist of allowed actions
         ALLOWED_ACTIONS = ['check_balance', 'list_transactions', 'check_invoice_status', 'check_payments']
-        
+
         if action not in ALLOWED_ACTIONS:
             return {
                 "error": f"AI does not have permission for action: {action}",
                 "message": "Payment operations are restricted to read-only access for AI"
             }
-        
+
         from django.contrib.auth import get_user_model
         from asgiref.sync import sync_to_async
         User = get_user_model()
         user_id = context.get("user_id")
-        
+
         try:
             user = await sync_to_async(User.objects.get)(id=user_id)
         except Exception:
@@ -57,10 +57,10 @@ class ReadOnlyPaymentConnector(BaseConnector):
         elif action == "check_invoice_status":
             return await self.check_invoice_status(user, parameters.get("invoice_id"))
         elif action == "check_payments":
-             # Summary view: Balance + Last 3 transactions
+            # Summary view: Balance + Last 3 transactions
             balance_data = await self.check_balance(user)
             tx_data = await self.list_transactions(user, limit=3)
-            
+
             return {
                 "status": "success",
                 "balance": balance_data.get("balance", 0),
@@ -68,17 +68,17 @@ class ReadOnlyPaymentConnector(BaseConnector):
                 "recent_transactions": tx_data.get("transactions", []),
                 "message": f"Your balance is {balance_data.get('balance', 0)} {balance_data.get('currency', 'KES')}. Here are your last 3 transactions."
             }
-        
+
         return {"error": "Unknown action"}
-    
+
     async def check_balance(self, user) -> dict:
         """Get user's current wallet balance"""
         from payments.services import WalletService
         from asgiref.sync import sync_to_async
-        
+
         try:
             balance = await sync_to_async(WalletService.get_balance)(user)
-            
+
             return {
                 "status": "success",
                 "balance": float(balance),
@@ -88,20 +88,20 @@ class ReadOnlyPaymentConnector(BaseConnector):
         except Exception as e:
             logger.error(f"Error checking balance: {e}")
             return {"error": str(e)}
-    
+
     async def list_transactions(self, user, limit: int = 10) -> dict:
         """List recent transactions"""
         from asgiref.sync import sync_to_async
         from users.models import WalletTransaction
         from payments.services import WalletService
-        
+
         try:
             def _get_transactions():
                 wallet = WalletService.get_or_create_user_wallet(user)
                 recent_entries = WalletTransaction.objects.filter(
                     wallet=wallet
                 ).order_by('-created_at')[:limit]
-                
+
                 transactions = []
                 for entry in recent_entries:
                     amount = entry.amount if entry.type == 'CREDIT' else -entry.amount
@@ -111,11 +111,11 @@ class ReadOnlyPaymentConnector(BaseConnector):
                         'amount': float(amount),
                         'type': entry.get_type_display(),
                     })
-                
+
                 return transactions
-            
+
             transactions = await sync_to_async(_get_transactions)()
-            
+
             return {
                 "status": "success",
                 "transactions": transactions,
@@ -124,7 +124,7 @@ class ReadOnlyPaymentConnector(BaseConnector):
         except Exception as e:
             logger.error(f"Error listing transactions: {e}")
             return {"error": str(e)}
-    
+
     async def check_invoice_status(self, user, invoice_id: str) -> dict:
         """Check status of an invoice"""
         from payments.models import PaymentRequest
@@ -158,9 +158,9 @@ class ReadOnlyPaymentConnector(BaseConnector):
                     }
                 except PaymentRequest.DoesNotExist:
                     return None
-            
+
             invoice_data = await sync_to_async(_get_invoice_status)()
-            
+
             if invoice_data:
                 return {
                     "status": "success",
@@ -168,7 +168,7 @@ class ReadOnlyPaymentConnector(BaseConnector):
                 }
             else:
                 return {"error": "Invoice not found"}
-                
+
         except Exception as e:
             logger.error(f"Error checking invoice: {e}")
             return {"error": str(e)}

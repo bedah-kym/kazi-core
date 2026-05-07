@@ -10,17 +10,18 @@ import uuid
 
 logger = logging.getLogger(__name__)
 
+
 class IntersendPayConnector(BaseConnector):
     """
     Connector for IntaSend Pay (Kenya) - M-Pesa, Card, Bank using the official SDK.
     """
-    
+
     def __init__(self):
         self.publishable_key = os.environ.get('INTASEND_PUBLISHABLE_KEY')
         self.api_key = os.environ.get('INTASEND_API_KEY')
         self.is_test = os.environ.get('INTASEND_IS_TEST', 'True').lower() == 'true'
         self.config_error = ""
-        
+
         try:
             from intasend import IntaSend
             if not self.publishable_key or not self.api_key:
@@ -45,14 +46,14 @@ class IntersendPayConnector(BaseConnector):
         from asgiref.sync import sync_to_async
         User = get_user_model()
         user_id = context.get("user_id")
-        
+
         try:
             user = await sync_to_async(User.objects.get)(id=user_id)
         except Exception:
             return {"status": "error", "message": "User not found"}
-            
+
         action = parameters.get("action")
-        
+
         if action == "create_payment_link":
             return await sync_to_async(self.create_payment_link)(
                 amount=parameters.get("amount"),
@@ -80,7 +81,7 @@ class IntersendPayConnector(BaseConnector):
                 "message": "Payment provider is not configured. " + self.config_error,
                 "action_required": "configure_intasend",
             }
-        
+
         try:
             from intasend import APIService
 
@@ -89,7 +90,7 @@ class IntersendPayConnector(BaseConnector):
                 publishable_key=self.publishable_key,
                 test=self.is_test,
             )
-            
+
             # Using checkout API instead of paymentlinks because IntaSend sandbox returns 502 Bad Gateway
             response = service.collect.checkout(
                 amount=float(amount),
@@ -185,7 +186,7 @@ class IntersendPayConnector(BaseConnector):
                 "message": "Payment provider is not configured. " + self.config_error,
                 "action_required": "configure_intasend",
             }
-        
+
         try:
             service = self.intasend.collect
             result = service.status(invoice_id=invoice_id)

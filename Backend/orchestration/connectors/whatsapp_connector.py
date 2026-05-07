@@ -9,6 +9,7 @@ from asgiref.sync import sync_to_async
 
 logger = logging.getLogger(__name__)
 
+
 class WhatsAppConnector(BaseConnector):
     """
     Two-way sync with WhatsApp Business API (via Twilio or Meta Cloud API).
@@ -19,7 +20,7 @@ class WhatsAppConnector(BaseConnector):
         self.provider = os.environ.get('WHATSAPP_PROVIDER', 'twilio')
         self.account_sid = os.environ.get('TWILIO_ACCOUNT_SID')
         self.auth_token = os.environ.get('TWILIO_AUTH_TOKEN')
-        self.from_number = os.environ.get('TWILIO_FROM_NUMBER') # e.g., 'whatsapp:+254...'
+        self.from_number = os.environ.get('TWILIO_FROM_NUMBER')  # e.g., 'whatsapp:+254...'
 
         if self.account_sid and self.auth_token:
             self.client = Client(self.account_sid, self.auth_token)
@@ -54,7 +55,7 @@ class WhatsAppConnector(BaseConnector):
             )
             return {"status": "sent", "sid": message.sid}
         except Exception as e:
-             return {"status": "error", "message": str(e)}
+            return {"status": "error", "message": str(e)}
 
     async def execute(self, parameters: dict, context: dict) -> dict:
         """
@@ -75,7 +76,7 @@ class WhatsAppConnector(BaseConnector):
                 body=parameters.get("message") or f"Hello, here is your invoice: {parameters.get('payment_link')}"
             )
         elif action == "get_templates":
-            return {"status": "success", "templates": ["hello_world", "payment_reminder", "shipping_update"]} # Mock for now
+            return {"status": "success", "templates": ["hello_world", "payment_reminder", "shipping_update"]}  # Mock for now
 
         return {"status": "error", "message": f"Unknown WhatsApp action: {action}"}
 
@@ -89,9 +90,9 @@ class WhatsAppConnector(BaseConnector):
             return {"status": "error", "message": "phone_number and message are required"}
 
         if settings.DEBUG and not self.client:
-             # Mock mode for dev
-             logger.debug(f"[WhatsApp-Mock] Sending to {to}: {body}")
-             return {"status": "sent", "mock": True}
+            # Mock mode for dev
+            logger.debug(f"[WhatsApp-Mock] Sending to {to}: {body}")
+            return {"status": "sent", "mock": True}
 
         if self.provider == 'twilio' and self.client:
             try:

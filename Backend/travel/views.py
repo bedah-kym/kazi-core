@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 async def search_travel(request):
     """
     Search for travel items (buses, hotels, flights, transfers, events)
-    
+
     POST /api/travel/search/
     {
         "search_type": "buses|hotels|flights|transfers|events",
@@ -29,12 +29,12 @@ async def search_travel(request):
     """
     try:
         from orchestration.mcp_router import get_mcp_router
-        
+
         search_type = request.data.get('search_type')
         parameters = request.data.get('parameters', {})
-        
+
         router = get_mcp_router()
-        
+
         # Map search_type to connector action
         action_map = {
             'buses': 'search_buses',
@@ -43,27 +43,27 @@ async def search_travel(request):
             'transfers': 'search_transfers',
             'events': 'search_events',
         }
-        
+
         action = action_map.get(search_type)
         if not action:
             return Response(
                 {'error': f'Unknown search type: {search_type}'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         # Route to connector
         context = {
             'user_id': request.user.id,
             'room_id': request.data.get('room_id')
         }
-        
+
         result = await router.route(
             intent={'action': action, 'parameters': parameters},
             user_context=context
         )
-        
+
         return Response(result)
-        
+
     except Exception as e:
         logger.error(f"Search error: {e}")
         return Response(
@@ -83,7 +83,7 @@ def itinerary_list_api(request):
         itineraries = Itinerary.objects.filter(user=request.user)
         serializer = ItinerarySerializer(itineraries, many=True)
         return Response(serializer.data)
-    
+
     elif request.method == 'POST':
         serializer = ItinerarySerializer(data=request.data)
         if serializer.is_valid():
@@ -101,18 +101,18 @@ def itinerary_detail(request, itinerary_id):
     DELETE: Delete itinerary
     """
     itinerary = get_object_or_404(Itinerary, id=itinerary_id, user=request.user)
-    
+
     if request.method == 'GET':
         serializer = ItinerarySerializer(itinerary)
         return Response(serializer.data)
-    
+
     elif request.method == 'PUT':
         serializer = ItinerarySerializer(itinerary, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    
+
     elif request.method == 'DELETE':
         itinerary.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
@@ -126,12 +126,12 @@ def itinerary_items(request, itinerary_id):
     POST: Add item to itinerary
     """
     itinerary = get_object_or_404(Itinerary, id=itinerary_id, user=request.user)
-    
+
     if request.method == 'GET':
         items = itinerary.items.all().order_by('sort_order', 'start_datetime')
         serializer = ItineraryItemSerializer(items, many=True)
         return Response(serializer.data)
-    
+
     elif request.method == 'POST':
         data = request.data.copy()
         data['itinerary'] = itinerary.id
@@ -152,18 +152,18 @@ def search_events(request):
     try:
         location = request.query_params.get('location')
         category = request.query_params.get('category')
-        
+
         events = Event.objects.all()
-        
+
         if location:
             events = events.filter(location_country__icontains=location)
-        
+
         if category:
             events = events.filter(category__icontains=category)
-        
+
         serializer = EventSerializer(events, many=True)
         return Response(serializer.data)
-        
+
     except Exception as e:
         logger.error(f"Event search error: {e}")
         return Response(
@@ -171,9 +171,11 @@ def search_events(request):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
+
 # --- HTML Views ---
 from django.shortcuts import render, redirect
 from django.contrib.auth.decorators import login_required
+
 
 @login_required
 def plan_trip_wizard(request):
@@ -222,6 +224,7 @@ def plan_trip_wizard(request):
 
     return render(request, 'travel/plan_trip.html')
 
+
 @login_required
 def itinerary_list(request):
     """Render the Itinerary List (user-friendly UI)"""
@@ -238,6 +241,7 @@ def itinerary_list(request):
             'completed_count': completed_count,
         },
     )
+
 
 @login_required
 def view_itinerary(request, itinerary_id):

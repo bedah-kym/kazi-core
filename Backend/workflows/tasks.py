@@ -27,13 +27,16 @@ def _compute_backoff(attempts: int) -> int:
     delay = BASE_BACKOFF_SECONDS * (2 ** max(attempts - 1, 0))
     return min(delay, MAX_BACKOFF_SECONDS)
 
+
 def _temporal_guard_active() -> bool:
     return bool(cache.get(TEMPORAL_GUARD_KEY))
+
 
 def _set_temporal_guard() -> None:
     if TEMPORAL_GUARD_SECONDS <= 0:
         return
     cache.set(TEMPORAL_GUARD_KEY, True, timeout=TEMPORAL_GUARD_SECONDS)
+
 
 def _should_guard_temporal(exc: Exception) -> bool:
     if isinstance(exc, (ConnectionError, TimeoutError, OSError)):

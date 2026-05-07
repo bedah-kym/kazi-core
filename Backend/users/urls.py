@@ -9,14 +9,14 @@ from . import auth_views as custom_auth
 from . import integrations_views
 from . import avatar_views
 
-app_name='users'
+app_name = 'users'
 urlpatterns = [
     # Authentication
     path('login/', views.CustomLoginView.as_view(), name="login"),
     path('logout/', auth_views.LogoutView.as_view(template_name="users/logout.html"), name="logout"),
     path('register/', custom_auth.register, name='register'),
     path('onboarding/', custom_auth.onboarding, name='onboarding'),
-    
+
     # Frontend Pages (with workspace guards)
     path('dashboard/', dashboard_views.dashboard, name='dashboard'),
     path('reminders/', feature_views.reminders, name='reminders'),
@@ -25,7 +25,7 @@ urlpatterns = [
     path('settings/profile/', RedirectView.as_view(url='/accounts/settings/#profile', permanent=False), name='profile_settings'),
     path('settings/goals/', RedirectView.as_view(url='/accounts/settings/#ai', permanent=False), name='goals_settings'),
     path('rooms/list/', dashboard_views.list_rooms, name='list_rooms'),
-    
+
     # Integrations
     path('integrations/whatsapp/connect/', integrations_views.connect_whatsapp, name='connect_whatsapp'),
     path('integrations/mailgun/connect/', integrations_views.connect_mailgun, name='connect_mailgun'),

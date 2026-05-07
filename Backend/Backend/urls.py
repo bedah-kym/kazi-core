@@ -14,7 +14,7 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 from django.contrib import admin
-from django.urls import path,include
+from django.urls import path, include
 from rest_framework.urlpatterns import format_suffix_patterns
 from rest_framework.authtoken.views import obtain_auth_token
 from django.conf import settings
@@ -26,8 +26,8 @@ from users.views import landing_page
 urlpatterns = [
     path('', landing_page, name='landing'),  # Enterprise landing page
     path('admin/', admin.site.urls),
-    path('chatbot/',include('chatbot.urls')),
-    path('accounts/',include('users.urls')),
+    path('chatbot/', include('chatbot.urls')),
+    path('accounts/', include('users.urls')),
     path('accounts/', include('allauth.urls')),  # Social Auth URLs
     path('api/', include('Api.urls')),
     path('api/workflows/', include('workflows.urls')),

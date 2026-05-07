@@ -292,4 +292,3 @@ class TrialInviteAdmin(ImportExportModelAdmin):
             obj.trial_ends_at.strftime('%Y-%m-%d')
         )
     trial_ends_display.short_description = 'Trial Ends'
-

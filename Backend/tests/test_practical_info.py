@@ -14,10 +14,11 @@ from travel.practical_service import VisaService, WeatherService
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
 async def test_practical_info():
     logger.info("--- Testing VisaService ---")
     visa = VisaService()
-    
+
     # Check if dataset exists
     if not os.path.exists(visa.dataset_path):
         logger.error(f"❌ Dataset not found at: {visa.dataset_path}")
@@ -25,23 +26,23 @@ async def test_practical_info():
 
     # Test Cases (adjust based on known data in CSV)
     # Kenya (KE) is destination
-    
+
     # 1. Afghanistan (AF) -> Usually Visa Required (0)
     res = visa.check_requirements('AF', 'KE')
     logger.info(f"Passport AF -> KE: {res}")
-    
+
     # 2. Uganda (UG) -> Usually Visa Free (East Africa)
-    # Note: Dataset might encode this as -1 or specific days. 
+    # Note: Dataset might encode this as -1 or specific days.
     res = visa.check_requirements('UG', 'KE')
     logger.info(f"Passport UG -> KE: {res}")
-    
+
     # 3. UK (GB) -> Usually E-Visa or VOA?
     res = visa.check_requirements('GB', 'KE')
     logger.info(f"Passport GB -> KE: {res}")
 
     logger.info("\n--- Testing WeatherService ---")
     weather = WeatherService()
-    
+
     # Mock OpenWeatherMap call (function uses route_intent -> system fallback/API)
     # Since we can't easily guarantee API key here, we check for graceful response.
     res = await weather.get_trip_forecast("Mombasa")

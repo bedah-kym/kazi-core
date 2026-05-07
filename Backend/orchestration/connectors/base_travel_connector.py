@@ -24,21 +24,21 @@ class BaseTravelConnector(BaseConnector):
     Base class for all travel connectors
     Provides caching, retry logic, rate-limit handling
     """
-    
+
     PROVIDER_NAME = None  # Override in subclass (e.g., 'buupass', 'booking', 'duffel')
     CACHE_TTL_SECONDS = 3600  # 1 hour default
     MAX_RETRIES = 3
     RETRY_BACKOFF = 2  # seconds, exponential
     RATE_LIMIT_PER_HOUR = 100  # per provider per user
-    
+
     def __init__(self):
         super().__init__()
         self.redis = None
-        
+
     async def execute(self, parameters: Dict, context: Dict) -> Dict:
         """
         Execute travel search with caching and retry
-        
+
         Args:
             parameters: {
                 'search_type': 'buses|hotels|flights|transfers|events',
@@ -51,7 +51,7 @@ class BaseTravelConnector(BaseConnector):
                 ...
             }
             context: {user_id, room, ...}
-        
+
         Returns: {
             'status': 'success|error',
             'count': 5,
@@ -72,10 +72,10 @@ class BaseTravelConnector(BaseConnector):
                     'cached': False,
                     'message': f'Rate limit exceeded for {self.PROVIDER_NAME}. Max {self.RATE_LIMIT_PER_HOUR} requests/hour'
                 }
-            
+
             # Build cache key
             query_hash = self._hash_query(parameters)
-            
+
             # Check cache first
             cached_result = await self._get_cached_result(query_hash)
             if cached_result:
@@ -88,13 +88,13 @@ class BaseTravelConnector(BaseConnector):
                     'message': f'Results from {self.PROVIDER_NAME} (cached)',
                     'metadata': {'cache_age_seconds': cached_result.get('cache_age', 0)}
                 }
-            
+
             # Cache miss: fetch fresh data with retry
             logger.info(f"{self.PROVIDER_NAME}: Cache miss for {query_hash[:16]}, fetching fresh data")
-            
+
             result = None
             last_error = None
-            
+
             for attempt in range(self.MAX_RETRIES):
                 try:
                     result = await self._fetch(parameters, context)
@@ -110,7 +110,7 @@ class BaseTravelConnector(BaseConnector):
                         await asyncio.sleep(wait_time)
                     else:
                         logger.error(f"{self.PROVIDER_NAME}: All {self.MAX_RETRIES} attempts failed: {e}")
-            
+
             if not result:
                 return {
                     'status': 'error',
@@ -126,10 +126,10 @@ class BaseTravelConnector(BaseConnector):
                 action=parameters.get('action'),
                 result=result
             )
-            
+
             # Cache successful result
             await self._cache_result(query_hash, parameters, result)
-            
+
             return {
                 'status': 'success',
                 'count': len(result.get('results', [])),
@@ -138,7 +138,7 @@ class BaseTravelConnector(BaseConnector):
                 'message': f'Results from {self.PROVIDER_NAME}',
                 'metadata': result.get('metadata', {})
             }
-            
+
         except Exception as e:
             logger.error(f"{self.PROVIDER_NAME} execution error: {e}")
             return {
@@ -148,46 +148,46 @@ class BaseTravelConnector(BaseConnector):
                 'cached': False,
                 'message': f'Error: {str(e)}'
             }
-    
+
     async def _fetch(self, parameters: Dict, context: Dict) -> Dict:
         """
         Fetch data from API or scraper
         Override in subclass
-        
+
         Returns: {results: [...], metadata: {...}}
         """
         raise NotImplementedError(f"{self.__class__.__name__} must implement _fetch()")
-    
+
     def _hash_query(self, parameters: Dict) -> str:
         """Create deterministic hash of query parameters"""
         query_str = json.dumps(parameters, sort_keys=True, default=str)
         return hashlib.sha256(query_str.encode()).hexdigest()
-    
+
     async def _check_rate_limit(self, user_id: Optional[str]) -> bool:
         """Check if user/provider combo is within rate limits"""
         if not user_id:
             return True
-        
+
         try:
             redis = get_redis_connection('default')
             key = f"travel_rate:{self.PROVIDER_NAME}:{user_id}:hour"
             current = await sync_to_async(redis.get)(key)
             current = int(current) if current else 0
-            
+
             if current >= self.RATE_LIMIT_PER_HOUR:
                 return False
-            
+
             # Increment with 1 hour expiry
             pipe = redis.pipeline()
             pipe.incr(key)
             pipe.expire(key, 3600)
             await sync_to_async(pipe.execute)()
-            
+
             return True
         except Exception as e:
             logger.warning(f"Rate limit check failed (allowing): {e}")
             return True
-    
+
     async def _get_cached_result(self, query_hash: str) -> Optional[Dict]:
         """Get cached search result from database"""
         try:
@@ -197,11 +197,11 @@ class BaseTravelConnector(BaseConnector):
                     provider=self.PROVIDER_NAME,
                     expires_at__gt=timezone.now()
                 ).first()
-                
+
                 if cache_obj:
                     cache_obj.hit_count += 1
                     cache_obj.save(update_fields=['hit_count'])
-                    
+
                     age_seconds = (timezone.now() - cache_obj.created_at).total_seconds()
                     return {
                         'results': cache_obj.result_json.get('results', []),
@@ -209,12 +209,12 @@ class BaseTravelConnector(BaseConnector):
                         'metadata': cache_obj.result_json.get('metadata', {})
                     }
                 return None
-            
+
             return await sync_to_async(_get_cache)()
         except Exception as e:
             logger.warning(f"Cache retrieval failed: {e}")
             return None
-    
+
     async def _cache_result(self, query_hash: str, query_json: Dict, result: Dict):
         """Store search result in cache"""
         try:
@@ -231,12 +231,12 @@ class BaseTravelConnector(BaseConnector):
                         'hit_count': 0
                     }
                 )
-            
+
             await sync_to_async(_store_cache)()
             logger.info(f"Cached results for {self.PROVIDER_NAME}: {query_hash[:16]}")
         except Exception as e:
             logger.error(f"Cache storage failed: {e}")
-    
+
     async def _parallel_fetch(self, tasks: List) -> List[Dict]:
         """Helper to execute multiple async tasks in parallel"""
         try:

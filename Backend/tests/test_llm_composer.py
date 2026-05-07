@@ -39,31 +39,33 @@ TRIP_DETAILS = {
     'end_date': '2025-12-28'
 }
 
+
 async def test_llm_minify():
     logger.info("Testing Minification...")
     composer = LLMComposer()
     minified = composer._minify_results(MOCK_SEARCH_RESULTS)
-    
+
     assert len(minified['buses']) == 2
-    assert 'price_ksh' not in minified['buses'][0] # Should be 'price'
+    assert 'price_ksh' not in minified['buses'][0]  # Should be 'price'
     assert 'price' in minified['buses'][0]
     logger.info("✅ Minification passed")
 
+
 async def test_llm_composition():
     logger.info("Testing LLM Composition (Integration with Mock LLM)...")
-    
-    # We can't easily mock the internal LLM call without patching, 
-    # so we will rely on the real LLM client but check if it fails gracefully if no key 
+
+    # We can't easily mock the internal LLM call without patching,
+    # so we will rely on the real LLM client but check if it fails gracefully if no key
     # or succeeds if key exists.
-    
+
     composer = LLMComposer()
-    
+
     # Check keys
     if not composer.llm_client.anthropic_key and not composer.llm_client.hf_key:
         logger.warning("⚠️ No LLM Keys found. Expecting graceful failure/empty list.")
-    
+
     selected_items = await composer.compose_itinerary(TRIP_DETAILS, MOCK_SEARCH_RESULTS)
-    
+
     logger.info(f"LLM Selected {len(selected_items)} items")
     for item in selected_items:
         logger.info(f" - {item.get('title') or item.get('company') or item.get('name')}: {item.get('ai_reasoning')}")

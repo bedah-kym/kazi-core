@@ -23,6 +23,8 @@ from orchestration.security_policy import is_prompt_injection, sanitize_paramete
 logger = logging.getLogger(__name__)
 
 # Lazy-loaded singleton for the connector map
+
+
 def _get_connector_map() -> Dict[str, Any]:
     """Lazy-load the connector map via auto-discovery registry."""
     from orchestration.connector_registry import discover_connectors

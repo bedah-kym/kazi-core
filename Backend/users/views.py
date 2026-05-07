@@ -16,6 +16,7 @@ from .models import TrialApplication, TrialInvite, PlatformInvite, Workspace
 
 logger = logging.getLogger(__name__)
 
+
 class CustomLoginView(LoginView):
     form_class = CustomAuthenticationForm
     template_name = 'users/login.html'

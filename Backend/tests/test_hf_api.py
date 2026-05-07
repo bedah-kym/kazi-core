@@ -9,23 +9,24 @@ import httpx
 sys.path.insert(0, '/app/Backend')
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'Backend.settings')
 
+
 async def test_hf_api():
     hf_token = os.environ.get('HF_API_TOKEN', '')
-    
+
     print("=" * 60)
     print("HUGGING FACE API TEST")
     print("=" * 60)
-    
+
     if not hf_token:
         print("❌ HF_API_TOKEN not found in environment")
         return
-    
+
     print(f"✅ Token found: {hf_token[:8]}...")
-    
+
     # Test endpoint
     url = "https://router.huggingface.co/v1/chat/completions"
     model = "meta-llama/Llama-3.1-8B-Instruct"
-    
+
     payload = {
         "model": model,
         "messages": [
@@ -34,10 +35,10 @@ async def test_hf_api():
         "max_tokens": 50,
         "temperature": 0.1
     }
-    
+
     print(f"\n📡 Testing HF API at: {url}")
     print(f"📦 Model: {model}")
-    
+
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             print(f"\n⏳ Sending test request...")
@@ -49,9 +50,9 @@ async def test_hf_api():
                 },
                 json=payload
             )
-            
+
             print(f"\n📊 Response Status: {response.status_code}")
-            
+
             if response.status_code == 200:
                 data = response.json()
                 content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
@@ -60,7 +61,7 @@ async def test_hf_api():
             else:
                 print(f"❌ API Call Failed")
                 print(f"📋 Response: {response.text[:500]}")
-                
+
     except httpx.ConnectError as e:
         print(f"❌ Connection Error: {e}")
         print("   This suggests network/DNS issues within the container")
@@ -68,7 +69,7 @@ async def test_hf_api():
         print(f"❌ Timeout Error: Request took too long")
     except Exception as e:
         print(f"❌ Error: {type(e).__name__}: {e}")
-    
+
     print("\n" + "=" * 60)
 
 if __name__ == "__main__":

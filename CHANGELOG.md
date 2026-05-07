@@ -18,6 +18,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   job. Without `ANTHROPIC_API_KEY` configured, LLM-backed scenarios
   skip; the job still proves the harness wiring is healthy. Flip to
   blocking once planner-regression coverage matures.
+- **Five workflow-organized docs pages** [v0.4 M5-4 + M5-5]:
+  - `docs/run-locally.md` — boot in <10 minutes, no real API keys
+  - `docs/add-a-connector.md` — one file plus one test
+  - `docs/add-a-workflow.md` — author the JSON; let the runtime do
+    the rest
+  - `docs/operate-a-workflow.md` — approve, reject, rerun, replay
+  - `docs/deploy-safely.md` — production checklist
+  README's docs section is reorganized to surface these in order, with
+  the existing component-oriented pages demoted to "reference
+  material" below them.
 
 ### Changed
 
@@ -28,10 +38,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   six inline connectors. No behavior change — runtime imports keep
   working. Agents and contributors should now expect `tool_router.py`
   as the canonical name in v0.5.
-- **`AGENTS.md`** — the "read this first" pointer no longer recommends
-  `mcp_router.py` over `agent_loop.py`. The agent loop is the right
-  starting point; the router's deprecation note explains the file's
-  status.
+- **`AGENTS.md`** [v0.4 M5-6] — the "read this first" pointer no
+  longer recommends `mcp_router.py` over `agent_loop.py`. Repo map
+  updated to reflect the v0.4 shape (contracts/, examples/, scripts/,
+  eval/, kazi_trace, seed_demo_workflow). New "Demo mode (recommended
+  for AI agents exploring the repo)" entry in §3 promotes
+  `bash scripts/demo.sh` as the boot command for first contact.
+  Connector-add guidance now references the v0.4 contracts and the
+  connector freeze.
 
 ### Planning
 

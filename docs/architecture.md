@@ -113,6 +113,19 @@ Itinerary management and booking.
 
 ### Workflows (`workflows/`)
 Durable multi-step workflow execution via Temporal.
+
+Runtime additions in the current cycle:
+- Durable approval checkpoints for high-risk or explicitly gated steps
+- Execution detail records with current step, waiting reason, receipts, and replay hints
+- Operator controls for approve, reject, cancel, rerun, and schedule pause/resume
+- Deferred-run watchdog state with backoff and dead-letter reasons
+
+Typical operator flow:
+1. Start a workflow through the workflow API
+2. Inspect `WorkflowExecution` for `status`, `current_step`, and `pending_approval`
+3. Approve or reject a waiting step
+4. Review receipts and `result_summary`
+5. Rerun from the failed step only when the remaining steps are replay-safe
 Activity-based execution with retry and timeout policies.
 
 ## Data Flow Example

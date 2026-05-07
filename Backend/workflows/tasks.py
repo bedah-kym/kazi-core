@@ -10,6 +10,7 @@ import logging
 import os
 
 from .models import DeferredWorkflowExecution
+from .runtime import build_failure_summary
 from .temporal_integration import start_workflow_execution
 
 logger = logging.getLogger(__name__)
@@ -100,7 +101,9 @@ def replay_deferred_workflows(limit: int = None) -> Dict[str, int]:
         if not workflow_obj or workflow_obj.status != 'active':
             deferred.status = 'abandoned'
             deferred.last_error = 'Workflow missing or inactive'
-            deferred.save(update_fields=['status', 'last_error', 'updated_at'])
+            deferred.dead_letter_reason = 'workflow_inactive'
+            deferred.recovery_hint = 'Reactivate or restore the workflow, then create a new run.'
+            deferred.save(update_fields=['status', 'last_error', 'dead_letter_reason', 'recovery_hint', 'updated_at'])
             failed += 1
             continue
 
@@ -113,15 +116,20 @@ def replay_deferred_workflows(limit: int = None) -> Dict[str, int]:
             deferred.status = 'started'
             deferred.execution = execution
             deferred.last_error = None
-            deferred.save(update_fields=['status', 'execution', 'last_error', 'updated_at'])
+            deferred.recovery_hint = ''
+            deferred.dead_letter_reason = ''
+            deferred.save(update_fields=['status', 'execution', 'last_error', 'recovery_hint', 'dead_letter_reason', 'updated_at'])
             started += 1
         except Exception as exc:
             deferred.attempts += 1
             deferred.last_error = str(exc)
+            summary, recovery = build_failure_summary(step_id=None, error_message=str(exc))
+            deferred.recovery_hint = recovery
             if _should_guard_temporal(exc):
                 _set_temporal_guard()
             if deferred.attempts >= MAX_ATTEMPTS:
                 deferred.status = 'abandoned'
+                deferred.dead_letter_reason = summary
             else:
                 deferred.status = 'queued'
                 backoff = _compute_backoff(deferred.attempts)
@@ -131,6 +139,8 @@ def replay_deferred_workflows(limit: int = None) -> Dict[str, int]:
                 'attempts',
                 'last_error',
                 'next_attempt_at',
+                'recovery_hint',
+                'dead_letter_reason',
                 'updated_at'
             ])
             failed += 1

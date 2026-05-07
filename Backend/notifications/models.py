@@ -24,6 +24,10 @@ class Notification(models.Model):
         # System
         ("system.info", "System Info"),
         ("system.warning", "System Warning"),
+        # Workflow runtime
+        ("workflow.approval", "Workflow Approval Requested"),
+        ("workflow.failed", "Workflow Failed"),
+        ("workflow.deferred", "Workflow Deferred"),
     ]
 
     SEVERITY_CHOICES = [

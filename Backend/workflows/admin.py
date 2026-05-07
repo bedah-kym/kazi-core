@@ -2,7 +2,14 @@ from django.contrib import admin
 from django.utils.html import format_html
 from import_export import resources
 from import_export.admin import ImportExportModelAdmin
-from .models import WorkflowDraft, UserWorkflow, WorkflowExecution, WorkflowTrigger
+from .models import (
+    WorkflowApprovalRecord,
+    WorkflowDraft,
+    WorkflowExecution,
+    WorkflowImprovementSuggestion,
+    WorkflowTrigger,
+    UserWorkflow,
+)
 
 
 # Export Resources
@@ -17,6 +24,13 @@ class WorkflowExecutionResource(resources.ModelResource):
     class Meta:
         model = WorkflowExecution
         fields = ['id', 'workflow', 'status', 'started_at', 'completed_at']
+        export_order = fields
+
+
+class WorkflowApprovalRecordResource(resources.ModelResource):
+    class Meta:
+        model = WorkflowApprovalRecord
+        fields = ['id', 'workflow', 'execution', 'step_id', 'action', 'status', 'created_at']
         export_order = fields
 
 
@@ -58,10 +72,10 @@ class WorkflowDraftAdmin(admin.ModelAdmin):
 @admin.register(UserWorkflow)
 class UserWorkflowAdmin(ImportExportModelAdmin):
     resource_class = UserWorkflowResource
-    list_display = ['name', 'user', 'status_badge', 'execution_count', 'created_at']
+    list_display = ['name', 'user', 'status_badge', 'execution_count', 'created_at', 'last_executed_at']
     list_filter = ['status', 'created_at']
     search_fields = ['name', 'user__username', 'user__email', 'description']
-    readonly_fields = ['created_at', 'updated_at']
+    readonly_fields = ['created_at', 'updated_at', 'execution_count', 'last_executed_at']
     ordering = ['-created_at']
     autocomplete_fields = ['user']
     date_hierarchy = 'created_at'
@@ -71,7 +85,7 @@ class UserWorkflowAdmin(ImportExportModelAdmin):
             'fields': ('user', 'name', 'description')
         }),
         ('Configuration', {
-            'fields': ('status',)
+            'fields': ('status', 'execution_count', 'last_executed_at')
         }),
         ('Timestamps', {
             'fields': ('created_at', 'updated_at'),
@@ -108,7 +122,7 @@ class UserWorkflowAdmin(ImportExportModelAdmin):
 @admin.register(WorkflowExecution)
 class WorkflowExecutionAdmin(ImportExportModelAdmin):
     resource_class = WorkflowExecutionResource
-    list_display = ['id', 'workflow', 'status_badge', 'duration_display', 'started_at']
+    list_display = ['id', 'workflow', 'status_badge', 'current_step', 'waiting_on', 'duration_display', 'started_at']
     list_filter = ['status', 'started_at', 'completed_at']
     search_fields = ['workflow__name', 'id']
     readonly_fields = ['started_at', 'completed_at']
@@ -124,7 +138,20 @@ class WorkflowExecutionAdmin(ImportExportModelAdmin):
             'fields': ('trigger_type', 'trigger_data')
         }),
         ('Status', {
-            'fields': ('status', 'result', 'error_message')
+            'fields': (
+                'status',
+                'current_step',
+                'last_completed_step',
+                'waiting_on',
+                'pending_approval',
+                'attempts',
+                'receipt_ids',
+                'result_summary',
+                'failure_summary',
+                'recovery_suggestion',
+                'result',
+                'error_message',
+            )
         }),
         ('Timeline', {
             'fields': ('started_at', 'completed_at'),
@@ -135,6 +162,7 @@ class WorkflowExecutionAdmin(ImportExportModelAdmin):
         colors = {
             'pending': '#f39c12',
             'running': '#3498db',
+            'waiting': '#8e44ad',
             'completed': '#27ae60',
             'failed': '#e74c3c',
             'cancelled': '#95a5a6'
@@ -164,7 +192,7 @@ class WorkflowExecutionAdmin(ImportExportModelAdmin):
 
 @admin.register(WorkflowTrigger)
 class WorkflowTriggerAdmin(admin.ModelAdmin):
-    list_display = ['trigger_type_display', 'workflow', 'is_active_badge', 'created_at']
+    list_display = ['trigger_type_display', 'workflow', 'schedule_status_badge', 'is_active_badge', 'created_at']
     list_filter = ['created_at', 'trigger_type']
     search_fields = ['workflow__name', 'trigger_type']
     readonly_fields = ['created_at', 'updated_at', 'last_triggered_at', 'trigger_count']
@@ -184,6 +212,8 @@ class WorkflowTriggerAdmin(admin.ModelAdmin):
                 'schedule_cron',
                 'schedule_timezone',
                 'temporal_schedule_id',
+                'schedule_status',
+                'schedule_last_error',
                 'is_active',
             ),
             'classes': ('collapse',)
@@ -221,4 +251,38 @@ class WorkflowTriggerAdmin(admin.ModelAdmin):
             status
         )
     is_active_badge.short_description = 'Active'
+
+    def schedule_status_badge(self, obj):
+        colors = {
+            'active': '#27ae60',
+            'paused': '#f39c12',
+            'unavailable': '#e74c3c',
+            'deleted': '#95a5a6',
+        }
+        status = getattr(obj, 'schedule_status', 'active')
+        return format_html(
+            '<span style="background-color: {}; color: white; padding: 3px 8px; border-radius: 3px;">{}</span>',
+            colors.get(status, '#3498db'),
+            status.title(),
+        )
+    schedule_status_badge.short_description = 'Schedule'
+
+
+@admin.register(WorkflowApprovalRecord)
+class WorkflowApprovalRecordAdmin(ImportExportModelAdmin):
+    resource_class = WorkflowApprovalRecordResource
+    list_display = ['id', 'workflow', 'execution', 'step_id', 'action', 'status', 'expires_at', 'created_at']
+    list_filter = ['status', 'action', 'created_at']
+    search_fields = ['workflow__name', 'execution__id', 'step_id', 'action']
+    readonly_fields = ['created_at', 'reviewed_at']
+    autocomplete_fields = ['workflow', 'execution', 'requested_by', 'reviewed_by']
+
+
+@admin.register(WorkflowImprovementSuggestion)
+class WorkflowImprovementSuggestionAdmin(admin.ModelAdmin):
+    list_display = ['id', 'workflow', 'suggestion_type', 'status', 'created_at']
+    list_filter = ['status', 'suggestion_type', 'created_at']
+    search_fields = ['workflow__name', 'title', 'summary']
+    readonly_fields = ['created_at']
+    autocomplete_fields = ['workflow', 'execution', 'user']
 

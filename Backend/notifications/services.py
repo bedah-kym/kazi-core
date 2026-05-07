@@ -39,6 +39,9 @@ DEFAULT_NOTIFY_MATRIX: Dict[str, Dict[str, bool]] = {
     "message.mention":    {"in_app": True, "email": True,  "whatsapp": False},
     "system.info":        {"in_app": True, "email": False, "whatsapp": False},
     "system.warning":     {"in_app": True, "email": True,  "whatsapp": False},
+    "workflow.approval":  {"in_app": True, "email": True,  "whatsapp": True},
+    "workflow.failed":    {"in_app": True, "email": True,  "whatsapp": False},
+    "workflow.deferred":  {"in_app": True, "email": True,  "whatsapp": False},
 }
 
 

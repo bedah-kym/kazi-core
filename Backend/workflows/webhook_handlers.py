@@ -89,6 +89,7 @@ def _trigger_workflows_for_event(user_id: int, service: str, event: str, payload
         async_to_sync(start_workflow_execution)(
             trigger.workflow,
             trigger_data={
+                'trigger_id': trigger.id,
                 'event': event,
                 'payload': payload
             },

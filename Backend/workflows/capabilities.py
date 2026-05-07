@@ -6,6 +6,8 @@ from typing import Dict, Tuple
 
 from orchestration.action_catalog import build_capabilities_catalog
 
+from .runtime import APPROVAL_TIMEOUT_POLICIES
+
 
 SYSTEM_CAPABILITIES = build_capabilities_catalog()
 
@@ -34,7 +36,7 @@ def get_capabilities_prompt() -> str:
         '  "workflow_description": "...",',
         '  "triggers": [ ... ],',
         '  "steps": [',
-        '    {"id": "step_1", "service": "...", "action": "...", "params": {...}, "depends_on": ["step_0"], "condition": "..."}',
+        '    {"id": "step_1", "service": "...", "action": "...", "params": {...}, "depends_on": ["step_0"], "condition": "...", "requires_approval": false, "approval_message": "...", "approval_timeout_minutes": 60, "on_timeout": "cancel", "safe_to_replay": false, "timeout_seconds": 300, "max_attempts": 3}',
         "  ],",
         '  "policy": {"allowed_phone_numbers": [...], "max_withdraw_amount": 0} // only if withdrawals',
         "}",
@@ -137,6 +139,54 @@ def validate_workflow_definition(workflow_def: Dict) -> Tuple[bool, str]:
         if condition is not None and not isinstance(condition, str):
             return False, f"condition must be a string in step '{step_id}'"
 
+        requires_approval = step.get("requires_approval")
+        if requires_approval is not None and not isinstance(requires_approval, bool):
+            return False, f"requires_approval must be a boolean in step '{step_id}'"
+
+        approval_message = step.get("approval_message")
+        if approval_message is not None and not isinstance(approval_message, str):
+            return False, f"approval_message must be a string in step '{step_id}'"
+
+        approval_timeout = step.get("approval_timeout_minutes")
+        if approval_timeout is not None:
+            try:
+                approval_timeout = int(approval_timeout)
+            except (TypeError, ValueError):
+                return False, f"approval_timeout_minutes must be an integer in step '{step_id}'"
+            if approval_timeout <= 0:
+                return False, f"approval_timeout_minutes must be positive in step '{step_id}'"
+
+        on_timeout = step.get("on_timeout")
+        if on_timeout is not None and str(on_timeout).strip().lower() not in APPROVAL_TIMEOUT_POLICIES:
+            allowed = ", ".join(sorted(APPROVAL_TIMEOUT_POLICIES))
+            return False, f"on_timeout must be one of {allowed} in step '{step_id}'"
+
+        safe_to_replay = step.get("safe_to_replay")
+        if safe_to_replay is not None and not isinstance(safe_to_replay, bool):
+            return False, f"safe_to_replay must be a boolean in step '{step_id}'"
+
+        timeout_seconds = step.get("timeout_seconds")
+        if timeout_seconds is not None:
+            try:
+                timeout_seconds = int(timeout_seconds)
+            except (TypeError, ValueError):
+                return False, f"timeout_seconds must be an integer in step '{step_id}'"
+            if timeout_seconds <= 0:
+                return False, f"timeout_seconds must be positive in step '{step_id}'"
+
+        max_attempts = step.get("max_attempts")
+        if max_attempts is not None:
+            try:
+                max_attempts = int(max_attempts)
+            except (TypeError, ValueError):
+                return False, f"max_attempts must be an integer in step '{step_id}'"
+            if max_attempts <= 0:
+                return False, f"max_attempts must be positive in step '{step_id}'"
+
+        idempotency_key_source = step.get("idempotency_key_source")
+        if idempotency_key_source is not None and not isinstance(idempotency_key_source, str):
+            return False, f"idempotency_key_source must be a string in step '{step_id}'"
+
     if _requires_withdraw_policy(workflow_def):
         policy = workflow_def.get("policy") or {}
         if not policy.get("allowed_phone_numbers"):
@@ -153,4 +203,3 @@ def _requires_withdraw_policy(workflow_def: Dict) -> bool:
         if step.get("service") == "payments" and step.get("action") == "withdraw":
             return True
     return False
-

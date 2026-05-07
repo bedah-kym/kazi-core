@@ -78,6 +78,12 @@ class WorkflowTrigger(models.Model):
         ('schedule', 'Schedule'),
         ('manual', 'Manual'),
     ]
+    SCHEDULE_STATUS_CHOICES = [
+        ('active', 'Active'),
+        ('paused', 'Paused'),
+        ('unavailable', 'Unavailable'),
+        ('deleted', 'Deleted'),
+    ]
 
     workflow = models.ForeignKey(UserWorkflow, on_delete=models.CASCADE, related_name='registered_triggers')
     trigger_type = models.CharField(max_length=20, choices=TRIGGER_TYPE_CHOICES)
@@ -91,6 +97,8 @@ class WorkflowTrigger(models.Model):
     schedule_cron = models.CharField(max_length=100, null=True, blank=True)
     schedule_timezone = models.CharField(max_length=50, default='UTC')
     temporal_schedule_id = models.CharField(max_length=255, null=True, blank=True)
+    schedule_status = models.CharField(max_length=20, choices=SCHEDULE_STATUS_CHOICES, default='active')
+    schedule_last_error = models.TextField(null=True, blank=True)
 
     is_active = models.BooleanField(default=True)
     last_triggered_at = models.DateTimeField(null=True, blank=True)
@@ -113,6 +121,7 @@ class WorkflowExecution(models.Model):
     STATUS_CHOICES = [
         ('pending', 'Pending'),
         ('running', 'Running'),
+        ('waiting', 'Waiting'),
         ('completed', 'Completed'),
         ('failed', 'Failed'),
         ('cancelled', 'Cancelled'),
@@ -127,7 +136,22 @@ class WorkflowExecution(models.Model):
 
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     result = models.JSONField(null=True, blank=True)
+    result_summary = models.TextField(null=True, blank=True)
     error_message = models.TextField(null=True, blank=True)
+    current_step = models.CharField(max_length=120, null=True, blank=True)
+    last_completed_step = models.CharField(max_length=120, null=True, blank=True)
+    waiting_on = models.CharField(max_length=120, null=True, blank=True)
+    attempts = models.JSONField(default=dict, blank=True)
+    receipt_ids = models.JSONField(default=list, blank=True)
+    failure_summary = models.TextField(null=True, blank=True)
+    recovery_suggestion = models.TextField(null=True, blank=True)
+    pending_approval = models.ForeignKey(
+        'WorkflowApprovalRecord',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='active_executions',
+    )
 
     started_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True, blank=True)
@@ -160,6 +184,8 @@ class DeferredWorkflowExecution(models.Model):
     next_attempt_at = models.DateTimeField(null=True, blank=True)
     last_attempt_at = models.DateTimeField(null=True, blank=True)
     last_error = models.TextField(null=True, blank=True)
+    dead_letter_reason = models.TextField(null=True, blank=True)
+    recovery_hint = models.TextField(null=True, blank=True)
     execution = models.ForeignKey(
         WorkflowExecution,
         on_delete=models.SET_NULL,
@@ -179,3 +205,86 @@ class DeferredWorkflowExecution(models.Model):
 
     def __str__(self):
         return f"Deferred {self.id} ({self.status})"
+
+
+class WorkflowApprovalRecord(models.Model):
+    """Immutable review record for a workflow step that needed human approval."""
+
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+        ('timed_out', 'Timed Out'),
+        ('cancelled', 'Cancelled'),
+    ]
+
+    workflow = models.ForeignKey(UserWorkflow, on_delete=models.CASCADE, related_name='approval_records')
+    execution = models.ForeignKey(WorkflowExecution, on_delete=models.CASCADE, related_name='approval_records')
+    requested_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='requested_workflow_approvals')
+    reviewed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='reviewed_workflow_approvals',
+    )
+
+    step_id = models.CharField(max_length=120)
+    service = models.CharField(max_length=50, blank=True)
+    action = models.CharField(max_length=100)
+    approval_message = models.TextField(blank=True)
+    sanitized_params = models.JSONField(default=dict, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    review_comment = models.TextField(blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    expires_at = models.DateTimeField(null=True, blank=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['status', 'expires_at']),
+            models.Index(fields=['workflow', 'step_id']),
+        ]
+
+    def __str__(self):
+        return f"Approval {self.id} ({self.step_id} - {self.status})"
+
+
+class WorkflowImprovementSuggestion(models.Model):
+    """Suggested workflow edits derived from operator feedback or failures."""
+
+    STATUS_CHOICES = [
+        ('proposed', 'Proposed'),
+        ('dismissed', 'Dismissed'),
+        ('accepted', 'Accepted'),
+    ]
+
+    workflow = models.ForeignKey(UserWorkflow, on_delete=models.CASCADE, related_name='improvement_suggestions')
+    execution = models.ForeignKey(
+        WorkflowExecution,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='improvement_suggestions',
+    )
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='workflow_suggestions')
+
+    suggestion_type = models.CharField(max_length=50)
+    title = models.CharField(max_length=200)
+    summary = models.TextField()
+    proposed_changes = models.JSONField(default=dict, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='proposed')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', 'status']),
+            models.Index(fields=['workflow', 'status']),
+        ]
+
+    def __str__(self):
+        return f"Suggestion {self.id} ({self.suggestion_type})"

@@ -269,6 +269,12 @@ def _has_high_risk_step(steps: List[Dict[str, Any]]) -> bool:
     return False
 
 
+def _requires_durable_runtime(steps: List[Dict[str, Any]]) -> bool:
+    if _has_high_risk_step(steps):
+        return True
+    return any(bool(step.get("requires_approval")) for step in steps)
+
+
 def _normalize_service_action(step: Dict[str, Any]) -> Dict[str, Any]:
     service = str(step.get("service") or "").lower()
     action = str(step.get("action") or "").lower()
@@ -1944,7 +1950,9 @@ async def execute_adhoc_workflow(
     """
     trigger_data = trigger_data or {}
     wait_seconds = min(max(wait_seconds, 1), MAX_WAIT_SECONDS)
-    workflow_risk = "high" if _has_high_risk_step(definition.get("steps") or []) else "low"
+    steps = definition.get("steps") or []
+    workflow_risk = "high" if _has_high_risk_step(steps) else "low"
+    requires_durable_runtime = _requires_durable_runtime(steps)
 
     def _enrich(payload: Dict[str, Any]) -> Dict[str, Any]:
         enriched = dict(payload)
@@ -1970,6 +1978,26 @@ async def execute_adhoc_workflow(
     workflow_obj = await _create_adhoc_workflow(user_id, room_id, definition)
 
     if settings.TEMPORAL_DISABLED:
+        if requires_durable_runtime:
+            deferred_id = await _enqueue_deferred_execution(workflow_obj, user_id, room_id, trigger_data)
+            if deferred_id:
+                cache.set(idempotency_key, {"status": "queued"}, IDEMPOTENCY_TTL_SECONDS)
+                return _enrich({
+                    "status": "queued",
+                    "mode": "deferred",
+                    "workflow": workflow_obj,
+                    "execution": None,
+                    "result": {},
+                    "message": "Temporal is disabled. This approval-gated workflow was queued and will run when durable execution is back.",
+                })
+            return _enrich({
+                "status": "error",
+                "mode": "deferred",
+                "workflow": workflow_obj,
+                "execution": None,
+                "result": {},
+                "message": "Temporal is disabled and this workflow requires a durable approval flow.",
+            })
         logger.info("Temporal disabled; using inline execution.")
         result = await _run_inline(definition, user_id, trigger_data)
         cache.set(idempotency_key, {"status": "completed"}, IDEMPOTENCY_TTL_SECONDS)
@@ -1995,6 +2023,15 @@ async def execute_adhoc_workflow(
                 "execution": None,
                 "result": {},
                 "message": "Temporal is unavailable. Your request is queued and will run when it is back up.",
+            })
+        if requires_durable_runtime:
+            return _enrich({
+                "status": "error",
+                "mode": "deferred",
+                "workflow": workflow_obj,
+                "execution": None,
+                "result": {},
+                "message": "Temporal is unavailable and this workflow requires durable approvals, so it was not run inline.",
             })
         result = await _run_inline(definition, user_id, trigger_data)
         cache.set(idempotency_key, {"status": "completed"}, IDEMPOTENCY_TTL_SECONDS)
@@ -2028,6 +2065,17 @@ async def execute_adhoc_workflow(
             "error": completed.error_message,
         })
 
+    if completed and completed.status == "waiting":
+        cache.set(idempotency_key, {"status": "waiting"}, IDEMPOTENCY_TTL_SECONDS)
+        return _enrich({
+            "status": "waiting",
+            "mode": "temporal",
+            "workflow": workflow_obj,
+            "execution": completed,
+            "result": completed.result or {},
+            "message": "The workflow is waiting for human approval before it can continue.",
+        })
+
     cache.set(idempotency_key, {"status": "running"}, IDEMPOTENCY_TTL_SECONDS)
     return _enrich({
         "status": "running",
@@ -2046,7 +2094,7 @@ async def _wait_for_execution(execution_id: int, wait_seconds: int):
     def _fetch():
         return WorkflowExecution.objects.filter(id=execution_id).first()
     execution = await sync_to_async(_fetch)()
-    if execution and execution.status in ("completed", "failed", "cancelled"):
+    if execution and execution.status in ("completed", "failed", "cancelled", "waiting"):
         return execution
 
     # Subscribe to Redis channel for this execution
@@ -2072,7 +2120,7 @@ async def _wait_for_execution(execution_id: int, wait_seconds: int):
             if msg and msg.get("type") == "message":
                 # Got a completion signal; fetch the final state.
                 execution = await sync_to_async(_fetch)()
-                if execution:
+                if execution and execution.status in ("completed", "failed", "cancelled", "waiting"):
                     return execution
 
         await sync_to_async(pubsub.unsubscribe)(channel)

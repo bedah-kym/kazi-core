@@ -18,7 +18,7 @@ from orchestration.connectors.travel_flights_connector import TravelFlightsConne
 from orchestration.connectors.travel_transfers_connector import TravelTransfersConnector
 from orchestration.connectors.travel_events_connector import TravelEventsConnector
 from orchestration.mcp_router import SearchConnector, WeatherConnector, GiphyConnector, CurrencyConnector, ReminderConnector, CalendarConnector
-from orchestration.action_receipts import record_action_receipt, should_record_receipt
+from orchestration.action_receipts import attach_receipt_to_result, record_action_receipt, should_record_receipt
 from orchestration.action_catalog import (
     get_action_definition,
     get_capability_gate,
@@ -27,6 +27,7 @@ from orchestration.action_catalog import (
 )
 from orchestration.security_policy import should_block_action, sanitize_parameters
 
+from .runtime import resolve_step_idempotency_key
 from .utils import resolve_parameters
 
 _READ_ONLY_PAYMENT_ACTIONS = {
@@ -261,6 +262,9 @@ async def execute_workflow_step(step: Dict[str, Any], context: Dict[str, Any]) -
     service = (step.get('service') or '').lower()
     action = resolve_action_alias(step.get('action'))
     params = sanitize_parameters(resolve_parameters(step.get('params', {}), context))
+    idempotency_key = resolve_step_idempotency_key(step, context)
+    if idempotency_key and "idempotency_key" not in params:
+        params["idempotency_key"] = idempotency_key
 
     async def _effective_preferences() -> Dict[str, Any]:
         prefs = context.get("preferences")
@@ -335,13 +339,14 @@ async def execute_workflow_step(step: Dict[str, Any], context: Dict[str, Any]) -
     async def _record_and_return(result: Dict[str, Any]) -> Dict[str, Any]:
         if should_record_receipt(action):
             status = "success"
+            receipt = None
             if isinstance(result, dict):
                 if result.get("status") in ("error", "failed"):
                     status = "error"
                 elif result.get("error"):
                     status = "error"
             try:
-                await record_action_receipt(
+                receipt = await record_action_receipt(
                     user_id=context.get("user_id"),
                     room_id=context.get("room_id"),
                     action=action or "",
@@ -352,7 +357,9 @@ async def execute_workflow_step(step: Dict[str, Any], context: Dict[str, Any]) -
                     reason=result.get("error") if isinstance(result, dict) else "",
                 )
             except Exception:
-                pass
+                receipt = None
+            if isinstance(result, dict):
+                result = attach_receipt_to_result(result, receipt)
         return result
 
     if service == 'payments' and action == 'withdraw':

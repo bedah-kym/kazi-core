@@ -4,8 +4,12 @@ from django.conf import settings
 from temporalio.worker import Worker, UnsandboxedWorkflowRunner
 
 from workflows.temporal_integration import (
+    create_approval_record,
     DynamicUserWorkflow,
+    create_improvement_suggestions,
     get_temporal_client,
+    notify_workflow_event,
+    resolve_approval_record,
     run_step_activity,
     create_execution_record,
     update_execution_record,
@@ -24,7 +28,15 @@ class Command(BaseCommand):
             client,
             task_queue=settings.TEMPORAL_TASK_QUEUE,
             workflows=[DynamicUserWorkflow],
-            activities=[run_step_activity, create_execution_record, update_execution_record],
+            activities=[
+                run_step_activity,
+                create_execution_record,
+                update_execution_record,
+                create_approval_record,
+                resolve_approval_record,
+                notify_workflow_event,
+                create_improvement_suggestions,
+            ],
             workflow_runner=UnsandboxedWorkflowRunner(),
         )
         await worker.run()

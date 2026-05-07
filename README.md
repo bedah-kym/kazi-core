@@ -10,7 +10,7 @@
     <img src="https://img.shields.io/badge/status-early%20access-orange" alt="Status" />
   </p>
 
-  <p><strong>A self-hostable, open-source orchestration engine.</strong></p>
+  <p><strong>A self-hostable runtime for human-supervised agent workflows.</strong></p>
 </div>
 
 **Kazi Core** is built for teams who want AI agents that call their own tools, run on their own infrastructure, and keep their data in their own stack. **No vendor lock-in. No data leaving your server.**
@@ -22,8 +22,8 @@
 ## ❓ Why Kazi?
 
 Most agent frameworks give you a loop and a prompt.
-Kazi gives you the loop, the memory, the security, the payments, the contacts,
-the travel planner, the notification system, and the plugin architecture — all wired together,
+Kazi gives you the loop, the memory, the security, the approval gates,
+the durable workflow runtime, and the connector architecture — all wired together,
 all self-hosted, all yours.
 
 Here's what ships out of the box:
@@ -62,6 +62,12 @@ Sensitive actions (sending emails, moving money, booking travel) generate
 and whether the action is reversible. Users can review what the agent did
 and undo what it shouldn't have.
 
+### ⏸️ Durable human checkpoints
+
+Kazi workflows can now pause durably for human approval instead of relying on
+ephemeral chat state. A workflow can wait on Temporal, notify an operator over
+in-app, email, or WhatsApp, and resume only after an explicit decision lands.
+
 ### 🛡️ Security is in the bones
 
 - **Prompt injection detection** — regex-based, zero-latency, catches common attacks before they reach the LLM
@@ -84,7 +90,8 @@ Built-in debounce prevents notification spam.
 | Feature | What it does |
 |---------|-------------|
 | **Multi-step workflows** | *"Book a flight, find a hotel, and email my boss the itinerary"* — planned, verified, and executed as one workflow |
-| **Durable execution** | Workflows run on Temporal — they survive server restarts, retries, and network failures |
+| **Durable execution** | Workflows run on Temporal — they survive server restarts, retries, network failures, and approval waits |
+| **Human checkpoints** | High-risk or approval-gated steps pause durably, emit approval records, and resume only after an operator decision |
 | **Manager verifier** | A deterministic supervisor that reorders steps, fills missing params, and catches bad plans before execution |
 | **Voice messages** | Record voice notes, auto-transcribed to text for the agent to process |
 | **Document uploads** | Upload PDFs and images — Kazi extracts text and metadata via OCR/vision |
@@ -132,6 +139,14 @@ Python 3.11 and 3.12.
 Still early access — breaking changes possible before v1.0. See
 [`CHANGELOG.md`](CHANGELOG.md) for what's in each release.
 
+**v0.4 in flight — the *human-gated runtime cycle*.** Scope: durable approval
+checkpoints, execution controls, replay safety, an operations inbox, and a
+demo workflow pack that shows request -> workflow -> approval -> receipt ->
+replay. Connector and domain-feature sprawl are explicitly de-emphasized in
+the cycle so the runtime becomes easier to trust and extend.
+See [`docs/architecture.md`](docs/architecture.md) for the updated runtime
+shape and the examples near the workflow section below.
+
 ---
 
 ## 🌊 How Requests Flow
@@ -142,8 +157,9 @@ Still early access — breaking changes possible before v1.0. See
 3. Planner decides: single action, multi-step workflow, or clarification
 4. Tool executor runs connector actions with safety gates
 5. Manager verifier reviews the plan (reorders, fills gaps, catches errors)
-6. Results are streamed back in real time
-7. Receipts are logged. Memory is updated. Preferences adjust.
+6. Temporal keeps long-running runs durable, including approval waits
+7. Results are streamed back in real time
+8. Receipts are logged. Memory is updated. Preferences adjust.
 ```
 
 ## 🏗️ Architecture
@@ -155,9 +171,10 @@ Client (HTTP/WebSocket)
       -> Planner (single-turn or multi-step)
         -> Manager Verifier (reorder, validate, fill gaps)
           -> Tool Executor (risk gates + confirmation)
-            -> Connector Registry (auto-discovery)
-              -> Connectors (built-in + yours)
-                -> Receipts + Telemetry
+            -> Temporal Runtime (signals, approvals, replay-safe execution)
+              -> Connector Registry (auto-discovery)
+                -> Connectors (built-in + yours)
+                  -> Receipts + Telemetry + Ops Inbox
 ```
 
 ---
@@ -201,6 +218,10 @@ Full guide: [`docs/quickstart.md`](docs/quickstart.md)
 
 ## 🔌 Built-in Connectors
 
+These connectors are examples and useful defaults. The core product direction is
+the runtime itself: connector authorship, approval gates, observability, and
+durable execution.
+
 | Connector | Actions | Service |
 |-----------|---------|---------|
 | Weather | `get_weather` | OpenWeather |
@@ -217,6 +238,12 @@ Full guide: [`docs/quickstart.md`](docs/quickstart.md)
 | Notes | `create_note`, `complete_note` | Built-in |
 
 ---
+
+## 🧪 Demo Workflow Ideas
+
+- **Scheduled digest**: run a search on a cron trigger, then pause before sending the summary email.
+- **Approval-gated incident email**: gather context, draft the message, wait for approval, then send and log a receipt.
+- **Failure and replay**: mark discovery steps as replay-safe so an operator can rerun from the failed step without replaying the side effect.
 
 ## 🛠️ Create a Connector
 

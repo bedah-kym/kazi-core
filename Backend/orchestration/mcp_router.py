@@ -1,6 +1,27 @@
 """
-MCP (Multi-Control Protocol) Router for Mathia Orchestration
-Routes parsed intents to appropriate connectors/tools
+Tool Router (legacy filename: mcp_router.py).
+
+Routes parsed intents to appropriate connectors/tools.
+
+DEPRECATION NOTE — v0.4 M2-3 Phase 1
+====================================
+The "MCP" name predates Anthropic's now-standard Model Context Protocol
+and is a source of confusion for OSS readers. The runtime responsibility
+is unchanged, but this module is being prepared for two follow-up moves
+in v0.5:
+
+1. **File rename** to `tool_router.py`. `mcp_router.py` will become a
+   one-line re-export shim for one cycle, then be removed.
+2. **Inline connector split** — the six connectors defined below
+   (CalendarConnector, SearchConnector, WeatherConnector,
+   GiphyConnector, CurrencyConnector, ReminderConnector) move into
+   per-file modules under `Backend/orchestration/connectors/` to match
+   the connector layout of every other connector in the project.
+
+If you are writing new code: import the connector classes from their
+eventual home (`from orchestration.connectors.<name>_connector import ...`)
+once that lands; for now they live here and are re-exported by the
+connector_registry path documented in `docs/contracts/tool-schema.md`.
 """
 import json
 import logging

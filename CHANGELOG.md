@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`Backend/orchestration/mcp_router.py`** [v0.4 M2-3 phase 1] —
+  carries a deprecation note signaling the v0.5 file rename to
+  `tool_router.py` (the "MCP" name predates Anthropic's now-standard
+  Model Context Protocol) and the planned per-file extraction of the
+  six inline connectors. No behavior change — runtime imports keep
+  working. Agents and contributors should now expect `tool_router.py`
+  as the canonical name in v0.5.
+- **`AGENTS.md`** — the "read this first" pointer no longer recommends
+  `mcp_router.py` over `agent_loop.py`. The agent loop is the right
+  starting point; the router's deprecation note explains the file's
+  status.
+
 ### Planning
 
 - **v0.4 brief and roadmap landed** as `docs/v0.4-brief.md` and

@@ -124,6 +124,14 @@ def discover_connectors() -> Dict[str, Any]:
     # directory so the canonical "copy this to start" connector boots
     # with no opt-in required.
     if is_demo_mode():
+        # Example connectors are routing-only: they go into the connector_map
+        # for direct invocation but NOT into the global action_catalog. That
+        # keeps the workflow executor's startup validator
+        # (validate_executor_action_mappings) happy — it would otherwise
+        # require an executor mapping for every example action.
+        # Demo workflows that need example actions invoke the connector
+        # directly through the registry, not through the workflow executor's
+        # action-catalog dispatch.
         for connector in _scan_examples_directory():
             ok, msg = connector.validate_config()
             if not ok:
@@ -134,16 +142,16 @@ def discover_connectors() -> Dict[str, Any]:
             try:
                 entries = connector.get_action_catalog_entries()
                 for entry in entries:
-                    ok, _errors = _validate_or_warn(connector.name, entry)
-                    if ok:
-                        _registered_catalog_entries.append(entry)
+                    # Validate shape but do NOT add to _registered_catalog_entries.
+                    _validate_or_warn(connector.name, entry)
             except Exception as exc:
                 logger.warning(
                     "Example connector %s: get_action_catalog_entries() failed: %s",
                     connector.name, exc,
                 )
             logger.info(
-                "Registered example connector: %s v%s (%d actions)",
+                "Registered example connector: %s v%s (%d actions, "
+                "routing-only — not in action catalog)",
                 connector.name, connector.version, len(connector.actions),
             )
 

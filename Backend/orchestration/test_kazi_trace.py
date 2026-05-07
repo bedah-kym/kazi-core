@@ -103,11 +103,11 @@ class KaziTraceCommandTests(TestCase):
         approval = WorkflowApprovalRecord.objects.create(
             workflow=self.workflow,
             execution=execution,
-            user=self.user,
+            requested_by=self.user,
             step_id="send",
-            step_action="echo",
+            action="echo",
             status="pending",
-            summary="Sending follow-up",
+            approval_message="Sending follow-up",
         )
         execution.pending_approval = approval
         execution.save()

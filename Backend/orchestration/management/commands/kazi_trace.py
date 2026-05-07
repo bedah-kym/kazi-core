@@ -133,14 +133,14 @@ def _build_trace(execution: WorkflowExecution) -> Dict[str, Any]:
         approvals_render.append({
             "id": ar.id,
             "step_id": getattr(ar, "step_id", None),
-            "step_action": getattr(ar, "step_action", None),
+            "step_action": getattr(ar, "action", None),
             "status": ar.status,
-            "summary": getattr(ar, "summary", None),
-            "decided_by": getattr(getattr(ar, "decided_by", None), "username", None),
-            "decision_note": getattr(ar, "decision_note", None) or getattr(ar, "rejection_reason", None),
+            "summary": getattr(ar, "approval_message", None),
+            "decided_by": getattr(getattr(ar, "reviewed_by", None), "username", None),
+            "decision_note": getattr(ar, "review_comment", None),
             "requested_at": _iso(getattr(ar, "created_at", None)),
-            "deadline_at": _iso(getattr(ar, "deadline_at", None)),
-            "decided_at": _iso(getattr(ar, "decided_at", None)),
+            "deadline_at": _iso(getattr(ar, "expires_at", None)),
+            "decided_at": _iso(getattr(ar, "reviewed_at", None)),
         })
 
     deferred_render: List[Dict[str, Any]] = []

@@ -53,6 +53,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   note), watchdog deferred-run history, receipt count. `--json` emits
   the same data as a parseable document for piping into other tools.
   Documented at `docs/trace.md`.
+- **Top-level `examples/` directory** [v0.4 M5-3]. The canonical
+  "copy this to start" connector lives at `examples/connectors/echo/` and
+  is auto-discovered by the runtime when demo mode is on. No more
+  hidden-behind-a-flag template buried inside `Backend/`.
+- **`KAZI_DEMO_MODE` runtime flag** [v0.4 M5-2]. Setting
+  `KAZI_DEMO_MODE=true` enables example connectors at boot, no real
+  credentials required. A loud banner is logged so demo data is never
+  confused with real data. See `docs/demo-mode.md`.
 
 ### Changed
 
@@ -71,6 +79,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `bash scripts/demo.sh` as the boot command for first contact.
   Connector-add guidance now references the v0.4 contracts and the
   connector freeze.
+- `Backend/orchestration/connectors/example_connector.py` removed; the
+  echo connector now lives at `examples/connectors/echo/echo_connector.py`.
+- `KAZI_ENABLE_EXAMPLE_CONNECTOR` is gone — `KAZI_DEMO_MODE` replaces it
+  with a broader scope and a single flag for everything demo-related.
 
 ### Planning
 

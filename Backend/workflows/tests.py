@@ -346,3 +346,48 @@ class DeferredReplayTaskTests(TestCase):
         self.assertEqual(deferred.status, "abandoned")
         self.assertTrue(deferred.dead_letter_reason)
         self.assertTrue(deferred.recovery_hint)
+
+
+class SeedDemoWorkflowCommandTests(TestCase):
+    """v0.4 M5-1: the seed_demo_workflow management command loads
+    examples/workflows/follow_up_email/workflow.json and persists it as a
+    UserWorkflow row. Idempotent — re-running updates instead of duplicating.
+    """
+
+    def test_command_creates_user_workflow_from_example_json(self):
+        from io import StringIO
+        from django.core.management import call_command
+
+        user = User.objects.create_user(username="demo-seed", password="secret")
+        out = StringIO()
+
+        call_command("seed_demo_workflow", "--user", "demo-seed", stdout=out)
+
+        workflows = UserWorkflow.objects.filter(user=user)
+        self.assertEqual(workflows.count(), 1)
+        wf = workflows.first()
+        self.assertEqual(wf.status, "active")
+        steps = wf.definition.get("steps") or []
+        self.assertEqual(len(steps), 2)
+        step_ids = [s.get("id") for s in steps]
+        self.assertEqual(step_ids, ["draft_follow_up", "send_follow_up"])
+        # Second step is the human-gated one — it must declare requires_approval
+        self.assertTrue(steps[1].get("requires_approval"))
+        self.assertFalse(steps[1].get("safe_to_replay"))
+
+    def test_command_is_idempotent(self):
+        from io import StringIO
+        from django.core.management import call_command
+
+        user = User.objects.create_user(username="demo-seed-2", password="secret")
+        call_command("seed_demo_workflow", "--user", "demo-seed-2", stdout=StringIO())
+        call_command("seed_demo_workflow", "--user", "demo-seed-2", stdout=StringIO())
+
+        self.assertEqual(UserWorkflow.objects.filter(user=user).count(), 1)
+
+    def test_command_errors_when_user_missing(self):
+        from io import StringIO
+        from django.core.management import call_command, CommandError
+
+        with self.assertRaises(CommandError):
+            call_command("seed_demo_workflow", "--user", "no-such-user", stdout=StringIO())

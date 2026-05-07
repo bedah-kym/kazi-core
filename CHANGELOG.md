@@ -61,6 +61,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `KAZI_DEMO_MODE=true` enables example connectors at boot, no real
   credentials required. A loud banner is logged so demo data is never
   confused with real data. See `docs/demo-mode.md`.
+- **Demo workflow pack** [v0.4 M5-1] under
+  `examples/workflows/follow_up_email/`. A two-step workflow that
+  exercises the human-gated runtime end-to-end: step 1 runs
+  automatically, step 2 pauses durably for human approval, and the
+  replay-safety guard refuses to rerun the unsafe step without
+  `force=true`. Uses the `echo` example connector so the loop runs
+  with no real credentials when `KAZI_DEMO_MODE=true`.
+- **`scripts/demo.sh`** — single-command driver that boots the stack
+  in demo mode, migrates, seeds the demo user + workflow, and prints
+  the curl commands needed to drive the human-gated loop.
+- **`seed_demo_workflow` management command** — loads
+  `examples/workflows/follow_up_email/workflow.json` into a
+  `UserWorkflow` row. Idempotent.
 
 ### Changed
 

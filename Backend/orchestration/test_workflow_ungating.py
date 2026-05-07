@@ -111,3 +111,18 @@ class ConnectorRegistryUngatingTests(SimpleTestCase):
         reset_registry()
         discover_connectors()
         MCPRouter()
+
+    @patch.dict(os.environ, {"KAZI_ENABLE_EXAMPLE_CONNECTOR": "false"}, clear=False)
+    def test_router_consumes_registry_as_single_source(self):
+        # v0.4 M2-1: MCPRouter no longer maintains its own action->connector dict;
+        # it must reflect exactly what connector_registry.discover_connectors() exposes.
+        from orchestration.connector_registry import discover_connectors, reset_registry
+        from orchestration.mcp_router import MCPRouter
+
+        reset_registry()
+        registry_map = discover_connectors()
+        router = MCPRouter()
+
+        self.assertEqual(set(router.connectors.keys()), set(registry_map.keys()))
+        for action, connector in registry_map.items():
+            self.assertIs(router.connectors[action], connector)

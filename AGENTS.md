@@ -18,36 +18,63 @@ This file is the contract: read it before editing. If you change behavior descri
 ```
 Backend/
   orchestration/           # Agent core — start here for most changes
-    agent_loop.py          # ReAct loop (think -> act -> observe)
+    agent_loop.py          # ReAct loop (think -> act -> observe) — read this first
     workflow_planner.py    # Multi-step plan decomposition
     manager_verifier.py    # Deterministic plan verification + reordering
     tool_executor.py       # Tool dispatch + safety gates
     base_connector.py      # BaseConnector interface
-    connector_registry.py  # Auto-discovery (directory scan + entry points)
+    connector_registry.py  # Auto-discovery (directory + examples/ + entry points) — single source of truth
+    contracts.py           # v1.0 stable contracts + validate_catalog_entry
     action_catalog.py      # Tool definitions + risk levels
     security_policy.py     # Prompt-injection detection, parameter sanitization
     action_receipts.py     # Audit trail for sensitive actions
     memory_state.py        # Entity tracking + preference learning
     llm_client.py          # LLM provider abstraction (Anthropic first, HF fallback)
+    telemetry.py           # JSONL event log
+    eval/                  # Golden scenario evaluator (run via run_golden_eval)
+    mcp_router.py          # Legacy filename — being renamed tool_router.py in v0.5
     connectors/            # Built-in connectors — add yours here
+    management/commands/
+      kazi_trace.py        # Render a human-readable trace for any execution
+      run_golden_eval.py   # Run the golden scenario harness
   chatbot/                 # WebSocket consumers, room memory, encryption
   notifications/           # Unified in-app / email / WhatsApp routing
-  workflows/               # Durable execution (Temporal activities)
-  travel/                  # Travel search + booking connectors
-  payments/                # Double-entry ledger, invoices, wallets
+  workflows/               # Durable execution (Temporal) + human-gated runtime (M3-1..M3-5)
+    runtime.py             # Approval/replay/exec helpers
+    tasks.py               # Watchdog + retry tasks
+    management/commands/
+      seed_demo_workflow.py
+  travel/                  # Travel search + booking connectors (showcase module)
+  payments/                # Double-entry ledger, invoices, wallets (showcase module)
   users/                   # Auth, profiles, quotas, encryption keys
   tests/                   # Cross-cutting test scripts (see Section 6)
+examples/
+  connectors/echo/         # The "copy this to start" connector (auto-loaded in demo mode)
+  workflows/follow_up_email/  # The canonical end-to-end demo workflow
 .github/
-  workflows/               # CI: lint, bandit, Django tests, CodeQL, container release
+  workflows/               # CI: lint, bandit, Django tests, CodeQL, container release, eval
   copilot-instructions.md  # Legacy Copilot-specific notes (this file supersedes)
-docs/                      # Public docs (quickstart, architecture, connector guide)
+docs/                      # Public docs — workflow-organized (run/add/operate/deploy/debug)
+  contracts/               # v1.0 stable runtime contracts
+scripts/
+  demo.sh                  # Single-command driver for the canonical demo
 ```
 
 When in doubt, read `Backend/orchestration/agent_loop.py` first — that's where the ReAct loop lives. Tool dispatch is handled by `Backend/orchestration/connector_registry.py` (the single source of truth — collapsed in v0.4 M2-1) and routed by `Backend/orchestration/mcp_router.py` (filename is legacy; the "MCP" predates Anthropic's Model Context Protocol and is being renamed to `tool_router.py` in v0.5 — see the deprecation note at the top of the file).
 
+For a "what is in this repo right now?" overview, read `docs/v0.4-brief.md` and `docs/v0.4-roadmap.md` — they describe the cycle, the freeze (no new connectors), and the milestones already shipped vs. queued.
+
 ## 3. Setup commands
 
-**Docker (recommended):**
+**Demo mode (recommended for AI agents exploring the repo):**
+```bash
+bash scripts/demo.sh
+```
+Boots in `KAZI_DEMO_MODE=true` with no real credentials, seeds the canonical
+demo workflow, and prints curl commands for the human-gated runtime loop.
+See `docs/demo-mode.md` and `docs/run-locally.md`.
+
+**Docker (recommended for normal development):**
 ```bash
 docker compose up --build -d db redis web celery_worker celery_beat
 docker compose exec web python Backend/manage.py migrate
@@ -82,12 +109,14 @@ You need Postgres + Redis running and a `.env` in the repo root (one level above
 
 1. Create `Backend/orchestration/connectors/<your_connector>.py` subclassing `BaseConnector`.
 2. Implement `name`, `version`, `actions`, `get_action_catalog_entries()`, and `async def execute(self, parameters, context)`.
-3. Return `{"status": "success" | "error", "message": "...", "data": {...}}` shaped dicts.
-4. Auto-discovery picks it up on restart — no manual registration in most cases. (If you're touching `mcp_router.py`'s legacy `connectors` map, register there too.)
+3. Return shapes per the [tool schema contract](docs/contracts/tool-schema.md) and the [connector execution contract](docs/contracts/connector-execution.md). The `validate_catalog_entry()` runtime check warns at boot if your entry violates the v1.0 shape.
+4. Auto-discovery picks it up on restart — no manual registration. The single source of truth is `connector_registry.discover_connectors()` (v0.4 M2-1 collapsed two paths into one).
 5. Add tests — at minimum a happy-path and an error path with the external service mocked.
 6. Document the action(s) in `docs/connector-api-reference.md` if the API surface is new.
 
-Full guide: [`docs/writing-a-connector.md`](docs/writing-a-connector.md).
+**v0.4 freeze** is in effect: no new vertical connectors merge during the cycle. See `docs/v0.4-brief.md` §3.
+
+Full guide: [`docs/add-a-connector.md`](docs/add-a-connector.md) (workflow-oriented) or [`docs/writing-a-connector.md`](docs/writing-a-connector.md) (deep reference).
 
 ### Touching the LLM client
 

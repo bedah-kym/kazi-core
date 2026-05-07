@@ -324,9 +324,23 @@ Backend/
 
 ## 📚 Docs
 
-- [`docs/quickstart.md`](docs/quickstart.md) — running in 5 minutes
+**Workflow-organized — what most developers want, in order:**
+
+1. [`docs/run-locally.md`](docs/run-locally.md) — boot in <10 minutes, no real API keys
+2. [`docs/add-a-connector.md`](docs/add-a-connector.md) — one file plus one test
+3. [`docs/add-a-workflow.md`](docs/add-a-workflow.md) — author the JSON; let the runtime do the rest
+4. [`docs/operate-a-workflow.md`](docs/operate-a-workflow.md) — approve, reject, rerun, replay
+5. [`docs/deploy-safely.md`](docs/deploy-safely.md) — production checklist
+
+**Reference material:**
+
+- [`docs/quickstart.md`](docs/quickstart.md) — running in 5 minutes (deeper than `run-locally.md`)
 - [`docs/architecture.md`](docs/architecture.md) — how everything fits together
-- [`docs/writing-a-connector.md`](docs/writing-a-connector.md) — build your first plugin
+- [`docs/writing-a-connector.md`](docs/writing-a-connector.md) — full BaseConnector reference
+- [`docs/contracts/`](docs/contracts/README.md) — v1.0 stable runtime contracts
+- [`docs/eval.md`](docs/eval.md) — golden scenario harness
+- [`docs/trace.md`](docs/trace.md) — `kazi_trace` CLI
+- [`docs/demo-mode.md`](docs/demo-mode.md) — what `KAZI_DEMO_MODE` does
 - [`docs/connector-api-reference.md`](docs/connector-api-reference.md) — BaseConnector API
 - [`AGENTS.md`](AGENTS.md) — guide for AI coding agents (Claude Code, Codex CLI, Cursor, etc.)
 - [`CHANGELOG.md`](CHANGELOG.md) — release history

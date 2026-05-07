@@ -95,6 +95,16 @@ jobs:
           coverage xml -o coverage.xml
           coverage report --skip-covered --fail-under=0
 
+      # v0.4 M4-1: smoke-test the golden-scenario harness on every PR.
+      # No --allow-llm so this works without ANTHROPIC_API_KEY; the harness
+      # skips LLM-backed scenarios and still proves the wiring is healthy.
+      # Add ANTHROPIC_API_KEY as a repo secret + --allow-llm once enough
+      # scenarios accumulate to warrant the spend; flip continue-on-error
+      # to false when planner-regression coverage matures. See docs/eval.md.
+      - name: Eval - golden scenarios (advisory until coverage matures)
+        continue-on-error: true
+        run: python Backend/manage.py run_golden_eval
+
       - name: Upload coverage to Codecov
         if: matrix.python-version == '3.11'
         uses: codecov/codecov-action@v4

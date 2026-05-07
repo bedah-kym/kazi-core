@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`docs/eval.md`** [v0.4 M4-1] — promotes the previously-loose golden
+  scenario evaluator to a documented contributor surface. Covers
+  scenario format, how to add new scenarios, how to run locally with /
+  without an LLM, and how the CI job is wired.
+- **CI eval smoke test** — `.github/workflows/main.yml` runs
+  `python Backend/manage.py run_golden_eval` on every PR as an advisory
+  job. Without `ANTHROPIC_API_KEY` configured, LLM-backed scenarios
+  skip; the job still proves the harness wiring is healthy. Flip to
+  blocking once planner-regression coverage matures.
+
 ### Changed
 
 - **`Backend/orchestration/mcp_router.py`** [v0.4 M2-3 phase 1] —

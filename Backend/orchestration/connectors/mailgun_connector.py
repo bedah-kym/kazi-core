@@ -79,7 +79,7 @@ class MailgunConnector(BaseConnector):
             if html:
                 data["html"] = html
                 
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=20.0) as client:
                 response = await client.post(url, auth=auth, data=data)
                 
                 if response.status_code == 200:

@@ -72,7 +72,7 @@ def calendly_callback(request):
         'code': code,
         'redirect_uri': redirect_uri
     }
-    r = requests.post(token_url, data=payload)
+    r = requests.post(token_url, data=payload, timeout=20)
     if r.status_code != 200:
         logger.error('Calendly token exchange failed: %s', r.text)
         return Response({'error': 'token exchange failed'}, status=500)
@@ -82,12 +82,12 @@ def calendly_callback(request):
 
     # fetch user info
     headers = {'Authorization': f'Bearer {access_token}'}
-    userinfo = requests.get('https://api.calendly.com/users/me', headers=headers).json()
+    userinfo = requests.get('https://api.calendly.com/users/me', headers=headers, timeout=15).json()
     calendly_user_uri = userinfo.get('resource', {}).get('uri') or userinfo.get('uri') or userinfo.get('data', {}).get('uri')
 
     profile, _ = CalendlyProfile.objects.get_or_create(user=request.user)
     # For free tier assume single event type - try to fetch event_types
-    et_resp = requests.get('https://api.calendly.com/event_types', headers=headers, params={'user': calendly_user_uri})
+    et_resp = requests.get('https://api.calendly.com/event_types', headers=headers, params={'user': calendly_user_uri}, timeout=15)
     event_type_uri = None
     event_type_name = None
     booking_link = None
@@ -125,7 +125,7 @@ def calendly_events(request):
         return Response({'events': []})
     access_token = profile.get_access_token()
     headers = {'Authorization': f'Bearer {access_token}'}
-    r = requests.get('https://api.calendly.com/scheduled_events', headers=headers, params={'user': profile.calendly_user_uri})
+    r = requests.get('https://api.calendly.com/scheduled_events', headers=headers, params={'user': profile.calendly_user_uri}, timeout=15)
     if r.status_code != 200:
         return Response({'events': []})
     data = r.json()

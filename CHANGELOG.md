@@ -28,6 +28,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   README's docs section is reorganized to surface these in order, with
   the existing component-oriented pages demoted to "reference
   material" below them.
+- **`docs/contracts/`** [v0.4 M2-2] — five stable runtime contracts at
+  v1.0: connector execution, tool schema, approval, execution detail,
+  replay safety. Each carries a `Major.Minor` version, a documented
+  shape, examples, common mistakes, and a "changes since" log. New
+  contracts must be added with the runtime change that introduces
+  them, not in a separate doc PR.
+- **`validate_catalog_entry()`** in
+  `Backend/orchestration/contracts.py` — runtime validator for the
+  tool-schema contract. Wired into `connector_registry`: every
+  catalog entry is checked at registration time; bad entries are
+  skipped with a warning so a single typo does not break boot.
+- **Contract version constants** in `contracts.py` for each contract
+  (`CONNECTOR_EXECUTION_CONTRACT_VERSION`, etc.). Pin against these
+  to declare what surface your code expects.
+- **`Backend/orchestration/test_contracts.py`** — version-pin test +
+  twelve validator cases (good entry, optional fields, every error
+  branch).
 
 ### Changed
 

@@ -30,6 +30,24 @@ def _env_flag_enabled(name: str, default: bool = False) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _validate_or_warn(connector_name: str, entry: Any) -> tuple:
+    """Validate a catalog entry; log a warning and return (False, errors)
+    on failure so the caller can skip the entry. See
+    docs/contracts/tool-schema.md.
+    """
+    from orchestration.contracts import validate_catalog_entry
+
+    ok, errors = validate_catalog_entry(entry)
+    if not ok:
+        action = entry.get("action") if isinstance(entry, dict) else "<unknown>"
+        logger.warning(
+            "Connector %s: catalog entry for action %r violates tool-schema "
+            "contract v1.0 and will be skipped: %s",
+            connector_name, action, "; ".join(errors),
+        )
+    return ok, errors
+
+
 def discover_connectors() -> Dict[str, Any]:
     """
     Build the action-to-connector map by:
@@ -63,10 +81,16 @@ def discover_connectors() -> Dict[str, Any]:
         for action_name in connector.actions:
             connector_map[action_name] = connector
 
-        # Collect catalog entries
+        # Collect catalog entries — validate against the v0.4 tool-schema
+        # contract (docs/contracts/tool-schema.md) before registering.
+        # Bad entries are skipped with a warning so a single typo doesn't
+        # break boot.
         try:
             entries = connector.get_action_catalog_entries()
-            _registered_catalog_entries.extend(entries)
+            for entry in entries:
+                ok, errors = _validate_or_warn(connector.name, entry)
+                if ok:
+                    _registered_catalog_entries.append(entry)
         except Exception as exc:
             logger.warning(
                 "Connector %s: get_action_catalog_entries() failed: %s",

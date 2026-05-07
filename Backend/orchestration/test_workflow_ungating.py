@@ -95,15 +95,26 @@ class ManagerVerifierUngatingTests(SimpleTestCase):
 
 
 class ConnectorRegistryUngatingTests(SimpleTestCase):
-    @patch.dict(os.environ, {"KAZI_ENABLE_EXAMPLE_CONNECTOR": "false"}, clear=False)
-    def test_example_connector_is_disabled_by_default(self):
+    @patch.dict(os.environ, {"KAZI_DEMO_MODE": "false"}, clear=False)
+    def test_echo_connector_is_disabled_by_default(self):
+        # v0.4 M5-2: example connectors are off unless KAZI_DEMO_MODE is set.
         from orchestration.connector_registry import discover_connectors, reset_registry
 
         reset_registry()
         connectors = discover_connectors()
         self.assertNotIn("echo", connectors)
 
-    @patch.dict(os.environ, {"KAZI_ENABLE_EXAMPLE_CONNECTOR": "false"}, clear=False)
+    @patch.dict(os.environ, {"KAZI_DEMO_MODE": "true"}, clear=False)
+    def test_echo_connector_loads_in_demo_mode(self):
+        # v0.4 M5-3: examples/connectors/echo/ is auto-discovered when demo mode is on.
+        from orchestration.connector_registry import discover_connectors, reset_registry
+
+        reset_registry()
+        connectors = discover_connectors()
+        self.assertIn("echo", connectors)
+        self.assertEqual(connectors["echo"].name, "echo")
+
+    @patch.dict(os.environ, {"KAZI_DEMO_MODE": "false"}, clear=False)
     def test_router_integrity_still_passes_after_dynamic_discovery(self):
         from orchestration.connector_registry import discover_connectors, reset_registry
         from orchestration.mcp_router import MCPRouter
@@ -112,7 +123,7 @@ class ConnectorRegistryUngatingTests(SimpleTestCase):
         discover_connectors()
         MCPRouter()
 
-    @patch.dict(os.environ, {"KAZI_ENABLE_EXAMPLE_CONNECTOR": "false"}, clear=False)
+    @patch.dict(os.environ, {"KAZI_DEMO_MODE": "false"}, clear=False)
     def test_router_consumes_registry_as_single_source(self):
         # v0.4 M2-1: MCPRouter no longer maintains its own action->connector dict;
         # it must reflect exactly what connector_registry.discover_connectors() exposes.

@@ -3,12 +3,14 @@ Connector auto-discovery and registration.
 
 Scans the connectors directory for BaseConnector subclasses and builds
 a unified action-to-connector map. Also loads legacy hardcoded connectors
-for backward compatibility.
+for backward compatibility, and scans the top-level `examples/connectors/`
+directory for example-style connectors when demo mode is enabled.
 """
 from __future__ import annotations
 
 import importlib
 import importlib.metadata
+import importlib.util
 import inspect
 import logging
 import os
@@ -46,6 +48,24 @@ def _validate_or_warn(connector_name: str, entry: Any) -> tuple:
             connector_name, action, "; ".join(errors),
         )
     return ok, errors
+
+
+def is_demo_mode() -> bool:
+    """KAZI_DEMO_MODE — boots the runtime with example connectors enabled,
+    no real credentials required, banner logged at startup. The single
+    flag readers should check; everything demo-related branches off it.
+    """
+    return _env_flag_enabled("KAZI_DEMO_MODE", default=False)
+
+
+def _examples_connectors_root() -> Optional[Path]:
+    """Locate `<repo_root>/examples/connectors/`.
+
+    The repo root sits two levels above this file:
+    `Backend/orchestration/connector_registry.py` -> repo root.
+    """
+    candidate = Path(__file__).resolve().parents[2] / "examples" / "connectors"
+    return candidate if candidate.is_dir() else None
 
 
 def discover_connectors() -> Dict[str, Any]:
@@ -99,6 +119,33 @@ def discover_connectors() -> Dict[str, Any]:
 
         logger.info("Registered connector: %s v%s (%d actions)",
                      connector.name, connector.version, len(connector.actions))
+
+    # Step 2b: When demo mode is on, also scan the top-level examples/
+    # directory so the canonical "copy this to start" connector boots
+    # with no opt-in required.
+    if is_demo_mode():
+        for connector in _scan_examples_directory():
+            ok, msg = connector.validate_config()
+            if not ok:
+                logger.warning("Example connector %s skipped: %s", connector.name, msg)
+                continue
+            for action_name in connector.actions:
+                connector_map[action_name] = connector
+            try:
+                entries = connector.get_action_catalog_entries()
+                for entry in entries:
+                    ok, _errors = _validate_or_warn(connector.name, entry)
+                    if ok:
+                        _registered_catalog_entries.append(entry)
+            except Exception as exc:
+                logger.warning(
+                    "Example connector %s: get_action_catalog_entries() failed: %s",
+                    connector.name, exc,
+                )
+            logger.info(
+                "Registered example connector: %s v%s (%d actions)",
+                connector.name, connector.version, len(connector.actions),
+            )
 
     # Step 3: Scan entry points (for pip-installed community connectors)
     entrypoint_connectors = _scan_entry_points()
@@ -219,14 +266,6 @@ def _scan_connectors_directory() -> list:
     for module_info in pkgutil.iter_modules([str(connectors_dir)]):
         if module_info.name.startswith("_"):
             continue
-        if (
-            module_info.name == "example_connector"
-            and not _env_flag_enabled("KAZI_ENABLE_EXAMPLE_CONNECTOR", default=False)
-        ):
-            logger.debug(
-                "Skipping example connector module; set KAZI_ENABLE_EXAMPLE_CONNECTOR=true to enable it."
-            )
-            continue
         try:
             module = importlib.import_module(
                 f"orchestration.connectors.{module_info.name}"
@@ -250,6 +289,55 @@ def _scan_connectors_directory() -> list:
                         "Failed to instantiate connector %s: %s",
                         obj.__name__, exc,
                     )
+
+    return connectors
+
+
+def _scan_examples_directory() -> list:
+    """Scan `<repo_root>/examples/connectors/*/` for BaseConnector subclasses.
+
+    Each example connector lives in its own subdirectory and ships at
+    least one `*_connector.py` file. Loaded via importlib.util so the
+    examples don't need to be on sys.path or installed as a package.
+    Only invoked when `is_demo_mode()` is true.
+    """
+    from orchestration.base_connector import BaseConnector
+
+    connectors: list = []
+    examples_root = _examples_connectors_root()
+    if examples_root is None:
+        logger.debug("Examples directory not found; skipping example scan.")
+        return connectors
+
+    for sub in sorted(p for p in examples_root.iterdir() if p.is_dir()):
+        if sub.name.startswith("_") or sub.name.startswith("."):
+            continue
+        for py_file in sorted(sub.glob("*_connector.py")):
+            module_name = f"kazi_examples_{sub.name}_{py_file.stem}"
+            try:
+                spec = importlib.util.spec_from_file_location(module_name, py_file)
+                if spec is None or spec.loader is None:
+                    continue
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+            except Exception as exc:
+                logger.warning("Skipping example %s/%s: %s", sub.name, py_file.name, exc)
+                continue
+
+            for _attr_name, obj in inspect.getmembers(module, inspect.isclass):
+                if (
+                    issubclass(obj, BaseConnector)
+                    and obj is not BaseConnector
+                    and getattr(obj, "name", "")
+                    and getattr(obj, "actions", [])
+                ):
+                    try:
+                        connectors.append(obj())
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to instantiate example connector %s: %s",
+                            obj.__name__, exc,
+                        )
 
     return connectors
 

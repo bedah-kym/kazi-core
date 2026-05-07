@@ -45,6 +45,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`Backend/orchestration/test_contracts.py`** — version-pin test +
   twelve validator cases (good entry, optional fields, every error
   branch).
+- **`kazi_trace` management command** [v0.4 M4-2] —
+  `python Backend/manage.py kazi_trace <execution_id>` renders a
+  human-readable timeline for a single workflow execution: header
+  (status, timing, result/failure summary), per-step status in
+  declared order, every approval cycle (who decided, when, with what
+  note), watchdog deferred-run history, receipt count. `--json` emits
+  the same data as a parseable document for piping into other tools.
+  Documented at `docs/trace.md`.
 
 ### Changed
 

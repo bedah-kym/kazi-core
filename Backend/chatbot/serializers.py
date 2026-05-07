@@ -1,21 +1,21 @@
 from rest_framework import serializers
-from .models import Chatroom,Message,Member
+from .models import Chatroom, Message, Member
 
 
 class ChatroomSerializer(serializers.ModelSerializer):
-    text = serializers.CharField(source= "content",read_only=True)
+    text = serializers.CharField(source="content", read_only=True)
+
     class Meta:
         model = Chatroom
-        fields =[
+        fields = [
             'chats'
         ]
         model = Message
-        fields =[
+        fields = [
             'member',
             'text',
             'timestamp',
         ]
-
 
     """
         model = Member

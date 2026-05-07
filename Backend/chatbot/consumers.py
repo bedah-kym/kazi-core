@@ -85,14 +85,15 @@ PENDING_CONFIRM_TTL_SECONDS = 600
 LAST_SUMMARY_TTL_SECONDS = 60 * 60
 AGENT_LOOP_ENABLED = getattr(settings, "AGENT_LOOP_ENABLED", True)
 
+
 class ChatConsumer(AsyncWebsocketConsumer):
     # Define constants for key rotation
-    KEY_ROTATION_INTERVAL = 36000 * 10 # Rotate key every 100 hours
-    MESSAGES_BEFORE_ROTATION = 1000 # Rotate key after 1000 messages
+    KEY_ROTATION_INTERVAL = 36000 * 10  # Rotate key every 100 hours
+    MESSAGES_BEFORE_ROTATION = 1000  # Rotate key after 1000 messages
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.aes_gcm = None 
+        self.aes_gcm = None
         # Initialize key rotation attributes
         self.messages_since_rotation = 0
         self.last_key_rotation = timezone.now()
@@ -102,7 +103,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         if not self.scope["user"].is_authenticated:
             await self.close(code=4001)
             return
-        
+
         # 2. Room setup
         self.room_name = self.scope["url_route"]["kwargs"]["room_name"]
         self.room_group_name = f"chat_{self.room_name}"
@@ -121,7 +122,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
         # 5. Join group FIRST
         await self.channel_layer.group_add(self.room_group_name, self.channel_name)
-        
+
         # 6. Update presence in Redis ATOMICALLY
         redis = get_redis_connection("default")
         key = f"online:{self.room_group_name}"
@@ -130,7 +131,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         # Atomic presence update
         await sync_to_async(redis.srem)(key, user)
         await sync_to_async(redis.sadd)(key, user)
-        
+
         # Set last_seen timestamp
         last_seen_key = f"lastseen:{user}"
         current_time = timezone.now().isoformat()
@@ -284,19 +285,19 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     async def presence_update(self, event):
         logger.debug(f"presence_update received by {self.scope['user'].username}: {event}")
-        
+
         payload = {
             "command": "presence",
             "user": event.get("user"),
             "status": event.get("status"),
         }
-        
+
         if 'last_seen' in event:
             payload['last_seen'] = event.get('last_seen')
-        
+
         logger.debug(f"Sending presence update to client: {payload}")
         await self.send_message(payload)
-    
+
     @sync_to_async
     def get_chatroom_key(self, room_id):
         """Fetches the Chatroom and its encryption key from the database."""
@@ -331,7 +332,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             # Generate proper length nonce (12 bytes is recommended for GCM)
             nonce = os.urandom(12)
             message_bytes = json.dumps(message_data).encode('utf-8')
-            
+
             # Offload CPU-intensive encryption to thread
             encrypted_data = await sync_to_async(self.aes_gcm.encrypt)(
                 nonce,
@@ -477,10 +478,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     logger.warning(f"Presence broadcast timed out for {self.scope['user'].username}")
                 except Exception as e:
                     logger.error(f"Presence broadcast error: {e}")
-                    
+
             except Exception as e:
                 logger.error(f"Last seen update error: {e}")
-                
+
         except Exception as e:
             logger.error(f"Disconnect error for {self.channel_name}: {e}")
 
@@ -488,7 +489,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         try:
             data = json.loads(text_data)
             command = data.get("command", None)
-            
+
             if command == 'typing':
                 await self.channel_layer.group_send(
                     self.room_group_name,
@@ -521,20 +522,20 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 'content': "An error occurred processing your request",
                 'timestamp': str(timezone.now())
             })
-            
+
     async def send_quotas(self):
         """Fetch and send user quota stats"""
         try:
             from users.quota_service import QuotaService
-            
+
             # Use sync_to_async for cache access/calculations if needed
             # (QuotaService mainly uses cache which is often sync in Django, but django-redis can be sync)
             service = QuotaService()
             user_id = self.scope["user"].id
-            
+
             # Simple wrapper to run it in threadpool if cache backend is blocking
             quotas = await sync_to_async(service.get_user_quotas)(user_id)
-            
+
             await self.send_message({
                 'command': 'user_quotas',
                 'quotas': quotas
@@ -577,7 +578,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         RATE_LIMIT = 30  # messages per minute
         current_minute = timezone.now().strftime('%Y-%m-%d-%H-%M')
         cache_key = f"rate_limit:{user_id}:{current_minute}"
-        
+
         # Using Django's cache framework instead of Redis for simplicity
         from django.core.cache import cache
         current = cache.get(cache_key, 0)
@@ -585,20 +586,20 @@ class ChatConsumer(AsyncWebsocketConsumer):
             return False
         cache.set(cache_key, current + 1, 60)  # Expire after 60 seconds
         return True
-      
+
     async def check_user_muted(self, user, room_id):
-            """Check if user is muted in this room"""
-            def _check():
-                try:
-                    status = UserModerationStatus.objects.get(
-                        user=user,
-                        room_id=room_id
-                    )
-                    return status.is_muted
-                except UserModerationStatus.DoesNotExist:
-                    return False
-            
-            return await sync_to_async(_check)()
+        """Check if user is muted in this room"""
+        def _check():
+            try:
+                status = UserModerationStatus.objects.get(
+                    user=user,
+                    room_id=room_id
+                )
+                return status.is_muted
+            except UserModerationStatus.DoesNotExist:
+                return False
+
+        return await sync_to_async(_check)()
 
     async def buffer_message_for_moderation(self, room_id, message_id):
         """
@@ -608,30 +609,30 @@ class ChatConsumer(AsyncWebsocketConsumer):
         # Skip moderation in DEBUG mode to save Redis operations
         if settings.DEBUG:
             return False
-        
+
         room = await self.get_current_chatroom(room_id)
-        
+
         # Skip if moderation disabled for this room
         if hasattr(room, 'moderation_enabled') and not room.moderation_enabled:
             return False
-        
+
         redis = get_redis_connection("default")
         buffer_key = f"message_buffer:{room_id}"
-        
+
         # Add message to buffer
         await sync_to_async(redis.lpush)(buffer_key, message_id)
-        
+
         # Get buffer size
         buffer_size = await sync_to_async(redis.llen)(buffer_key)
-        
+
         # Check if batch size reached
         batch_size = getattr(settings, 'MODERATION_BATCH_SIZE', 10)
-        
+
         if buffer_size >= batch_size:
             # Get all messages from buffer
             message_ids = await sync_to_async(redis.lrange)(buffer_key, 0, -1)
             message_ids = [mid.decode() if isinstance(mid, bytes) else mid for mid in message_ids]
-            
+
             # Create moderation batch
             def _create_batch():
                 return ModerationBatch.objects.create(
@@ -639,24 +640,24 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     message_ids=json.dumps(message_ids),
                     status='pending'
                 )
-            
+
             batch = await sync_to_async(_create_batch)()
-            
+
             # Clear buffer
             await sync_to_async(redis.delete)(buffer_key)
-            
+
             # Trigger async moderation task
             moderate_message_batch.delay(batch.id)
-            
+
             logger.info(f"Triggered moderation batch {batch.id} for room {room_id}")
             return True
-        
-        return False                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
-    
+
+        return False
+
     async def new_message(self, data):
         try:
             logger.info(f"=== NEW MESSAGE START === Data: {data}")
-            
+
             member_username = data['from']
             if member_username != self.scope["user"].username:
                 await self.send_chat_message({
@@ -688,7 +689,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 })
                 return
             logger.info(f"Step 2: room_id={room_id}, checking mute status...")
-            
+
             try:
                 is_muted = await self.check_user_muted(member_user, room_id)
                 logger.info(f"Step 3: Mute check passed. is_muted={is_muted}")
@@ -696,7 +697,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 logger.error(f"ERROR in check_user_muted: {e}")
                 logger.error(traceback.format_exc())
                 raise
-            
+
             if is_muted:
                 await self.send_message({
                     'member': 'security system',
@@ -730,7 +731,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             # Sanitize and validate message content
             message_content = data.get('message', '').strip()
             logger.info(f"Step 6: Message content: {message_content[:50]}...")
-            
+
             if not message_content or len(message_content) > 5000:
                 await self.send_chat_message({
                     'member': 'security system',
@@ -845,7 +846,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
                     from orchestration.mcp_router import route_intent
                     from orchestration.data_synthesizer import synthesize_response
-                    
+
                     if ai_query:
                         # Fetch history for conversation context (bounded)
                         history_text = await self.get_history_as_text(room_id, limit=8)
@@ -856,7 +857,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                 history_text = "\n\n".join([history_text, context_prompt]).strip()
                         except Exception as e:
                             logger.warning(f"Context prompt load failed: {e}")
-                        
+
                         # Helper to broadcast chunks (Buffered)
                         # We use a mutable container for closure state
                         # Helper to broadcast chunks (Buffered & Whitespace Filtered)
@@ -864,26 +865,26 @@ class ChatConsumer(AsyncWebsocketConsumer):
                         stream_state = {'buffer': [], 'last_send': 0, 'first_token_sent': False, 'full_response': []}
                         turn_step_id = f"turn_{message.id}"
                         correlation_id = uuid.uuid4().hex
-                        
+
                         async def broadcast_chunk(chunk_text, is_final=False):
                             import time
-                            
+
                             # Store all chunks to build full response
                             if chunk_text:
                                 stream_state['full_response'].append(chunk_text)
-                            
+
                             # Filter leading whitespace if first token hasn't been sent
                             if not stream_state['first_token_sent'] and not is_final:
                                 if not chunk_text.strip():
-                                    return # Ignore pure whitespace at start
-                                chunk_text = chunk_text.lstrip() # Trim leading space of first word
+                                    return  # Ignore pure whitespace at start
+                                chunk_text = chunk_text.lstrip()  # Trim leading space of first word
                                 stream_state['first_token_sent'] = True
-                                
+
                             stream_state['buffer'].append(chunk_text)
-                            
+
                             current_time = time.time()
                             joined_text = "".join(stream_state['buffer'])
-                            
+
                             # Send if buffer > 6 chars OR > 0.08s passed OR is_final
                             if len(joined_text) > 6 or (current_time - stream_state['last_send']) > 0.08 or is_final:
                                 if joined_text or is_final:
@@ -943,7 +944,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                         "sent": send_ok,
                                     },
                                 )
-                        
+
                         from orchestration.workflow_planner import (
                             plan_user_request,
                             execute_adhoc_workflow,
@@ -1009,6 +1010,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             return
                         summary_text_for_cache = None
                         should_cache_summary = False
+
                         def _log_telemetry(event_type, payload=None):
                             try:
                                 record_event(event_type, payload or {})
@@ -1701,11 +1703,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                 else:
                                     # Fallback to LLM for general chat or low confidence (STREAMING)
                                     await _stream_general_chat(ai_query, history_text)
-                        
+
                         # End stream
                         await emit_progress("done", "completed", "Request complete.")
                         await broadcast_chunk("", is_final=True)
-                        
+
                         # === NEW: Save complete AI message to database ===
                         full_response_text = "".join(stream_state['full_response'])
 
@@ -1716,13 +1718,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
                         if full_response_text.strip():
                             logger.info(f"Saving AI message to database: {full_response_text[:100]}...")
-                            
+
                             # Encrypt the AI response
                             encrypted_message = await self.encrypt_message({
                                 'content': full_response_text,
                                 'timestamp': str(timezone.now())
                             })
-                            
+
                             if encrypted_message:
                                 # Create Mathia user/member if not exists
                                 def _create_ai_message():
@@ -1739,27 +1741,27 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                     ai_member = Member.objects.filter(User=ai_user).first()
                                     if not ai_member:
                                         ai_member = Member.objects.create(User=ai_user)
-                                    
+
                                     payload = json.dumps({
                                         'data': encrypted_message['data'],
                                         'nonce': encrypted_message['nonce'],
                                     })
-                                    
+
                                     return Message.objects.create(
                                         member=ai_member,
                                         content=payload,
                                         timestamp=timezone.now()
                                     )
-                                
+
                                 ai_message = await sync_to_async(_create_ai_message)()
-                                
+
                                 # Add to chatroom
                                 current_chat = await self.get_current_chatroom(room_id)
                                 if current_chat:
                                     await sync_to_async(current_chat.chats.add)(ai_message)
                                     await sync_to_async(current_chat.save)()
                                     logger.info(f"AI message saved with ID: {ai_message.id}")
-                                    
+
                                     # Trigger Mathia Voice Response (TTS) only in voice mode
                                     voice_enabled = False
                                     try:
@@ -1769,7 +1771,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                         logger.warning(f"Voice preference check failed: {e}")
                                     if voice_enabled:
                                         generate_voice_response.delay(ai_message.id)
-                                    
+
                                     # Broadcast saved message to clients for proper rendering
                                     message_json = await self.message_to_json(ai_message)
                                     await self.channel_layer.group_send(
@@ -1779,7 +1781,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                             "message": message_json
                                         }
                                     )
-                                    
+
                                     try:
                                         await self.schedule_context_summary(room_id, ai_message.id)
                                     except Exception as e:
@@ -1799,7 +1801,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 'content': "Error processing message",
                 'timestamp': str(timezone.now())
             })
-            
+
     async def file_message(self, data):
         try:
             member_username = data['from']
@@ -2150,7 +2152,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
     async def send_chat_message(self, message):
         """Helper to send message to group"""
         await self.send(text_data=json.dumps(message))
-        
+
     async def ai_response_message(self, event):
         """
         Handler for AI bot responses sent via channel layer
@@ -2159,17 +2161,17 @@ class ChatConsumer(AsyncWebsocketConsumer):
         try:
             ai_reply = event.get('ai_reply')
             user_id = event.get('user_id')
-            
+
             # Encrypt AI response
             encrypted_message = await self.encrypt_message({
                 'content': ai_reply,
                 'timestamp': str(timezone.now())
             })
-            
+
             if not encrypted_message:
                 logger.error("Failed to encrypt AI response")
                 return
-            
+
             # Create message from AI bot
             def _create_ai_message():
                 ai_user, created = User.objects.get_or_create(
@@ -2185,20 +2187,20 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 ai_member = Member.objects.filter(User=ai_user).first()
                 if not ai_member:
                     ai_member = Member.objects.create(User=ai_user)
-                
+
                 payload = json.dumps({
                     'data': encrypted_message['data'],
                     'nonce': encrypted_message['nonce'],
                 })
-                
+
                 return Message.objects.create(
                     member=ai_member,
                     content=payload,
                     timestamp=timezone.now()
                 )
-            
+
             message = await sync_to_async(_create_ai_message)()
-            
+
             # Add to room
             room_id = event.get('room_id')
             current_chat = await self.get_current_chatroom(room_id)
@@ -2209,18 +2211,18 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     await self.schedule_context_summary(room_id, message.id)
                 except Exception as e:
                     logger.warning(f"Context summary refresh skipped: {e}")
-            
+
             # Send to clients with correct command
             message_json = await self.message_to_json(message)
-            
+
             await self.send(text_data=json.dumps({
                 "command": "ai_message",  # Changed from "new_message"
                 "message": message_json
             }))
-            
+
         except Exception as e:
             logger.error(f"Error in ai_response_message: {e}")
-            
+
     async def ai_stream_chunk(self, event):
         """Handle streaming AI response chunks"""
         await self.send(text_data=json.dumps({
@@ -2235,23 +2237,23 @@ class ChatConsumer(AsyncWebsocketConsumer):
             "command": "orchestration_step",
             "event": event.get("event") or {},
         }))
-    
+
     async def ai_message_saved(self, event):
         """Send saved AI message to client for proper rendering with dropdown"""
         await self.send(text_data=json.dumps({
             "command": "ai_message_saved",
             "message": event.get('message')
         }))
-        
+
     @classmethod
     async def get_paginated_messages(cls, chatid, before_id=None, limit=20):
         """Fetch messages with cursor-based pagination.
-        
+
         Args:
             chatid: The chatroom ID
             before_id: If provided, fetch messages with id < before_id (for loading older)
             limit: Number of messages to fetch (default 20)
-            
+
         Returns:
             Dict with 'messages', 'has_more', 'oldest_id'
         """
@@ -2265,7 +2267,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             # Check if there are more messages beyond this page
             has_more = len(msgs) > limit
             return msgs[:limit], has_more
-        
+
         messages, has_more = await sync_to_async(_fetch)()
         oldest_id = messages[-1].id if messages else None
         return {
@@ -2273,7 +2275,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'has_more': has_more,
             'oldest_id': oldest_id
         }
-    
+
     # Legacy method for backwards compatibility
     @classmethod
     async def get_last_10_messages(cls, chatid):
@@ -2308,9 +2310,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
         """Check if key rotation is needed"""
         current_time = timezone.now()
         self.messages_since_rotation += 1
-        
-        if ((current_time - self.last_key_rotation).total_seconds() >= self.KEY_ROTATION_INTERVAL or 
-            self.messages_since_rotation >= self.MESSAGES_BEFORE_ROTATION):
+
+        if ((current_time - self.last_key_rotation).total_seconds() >= self.KEY_ROTATION_INTERVAL or
+                self.messages_since_rotation >= self.MESSAGES_BEFORE_ROTATION):
             # Pass the current room_name to re-initialize the secure session
             await self.initialize_secure_session(self.room_name)
             self.last_key_rotation = current_time
@@ -2320,7 +2322,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         """Decrypts message content before sending to the client."""
         try:
             username = await sync_to_async(lambda: message.member.User.username)()
-            final_content = "Error: Could not decrypt message." # default error message
+            final_content = "Error: Could not decrypt message."  # default error message
 
             db_content = message.content
             try:
@@ -2353,19 +2355,20 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 'content': 'Error processing message',
                 'timestamp': str(timezone.now())
             }
+
     async def get_history_as_text(self, room_id, limit=5):
         "Fetches last N messages and formats them as plain text history."
         try:
             from .models import Chatroom
             get_room = sync_to_async(Chatroom.objects.get)
             room = await get_room(id=room_id)
-            
+
             def _get_msgs():
                 return list(room.chats.all().order_by('-timestamp')[:limit])
-                
+
             messages = await sync_to_async(_get_msgs)()
             messages.reverse()
-            
+
             history_lines = []
             for msg in messages:
                 msg_json = await self.message_to_json(msg)
@@ -2373,7 +2376,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 member = msg_json.get('member', 'Unknown')
                 if content and not content.startswith('Error:'):
                     history_lines.append(f'{member}: {content}')
-            
+
             return '\n'.join(history_lines)
         except Exception as e:
             logger.error(f'Error getting history: {e}')

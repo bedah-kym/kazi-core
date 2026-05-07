@@ -7,20 +7,21 @@ from orchestration.mcp_router import route_intent
 
 logger = logging.getLogger(__name__)
 
+
 class VisaService:
     """
     Checks visa requirements using a local CSV dataset (Passport Index).
     Data source: ilyankou/passport-index-dataset
     """
-    
+
     def __init__(self):
         self.dataset_path = os.path.join(settings.BASE_DIR, 'travel', 'passport-index-tidy.csv')
-        self.data = {} # {(passport_code, destination_code): requirement_code}
+        self.data = {}  # {(passport_code, destination_code): requirement_code}
         self.loaded = False
 
     def _load_data(self):
         if self.loaded: return
-        
+
         try:
             with open(self.dataset_path, 'r', encoding='utf-8') as f:
                 reader = csv.DictReader(f)
@@ -30,7 +31,7 @@ class VisaService:
                     p_code = row.get('Passport')
                     d_code = row.get('Destination')
                     req = row.get('Requirement')
-                    
+
                     if p_code and d_code:
                         self.data[(p_code, d_code)] = req
             self.loaded = True
@@ -43,29 +44,30 @@ class VisaService:
         Codes: ISO-2 (e.g., 'US', 'KE', 'GB')
         """
         self._load_data()
-        
+
         key = (passport_country_code.upper(), destination_code.upper())
         req = self.data.get(key)
-        
+
         if req is None:
             return "Unknown (Check Embassy)"
-            
+
         if req == '-1':
             return "Visa on Arrival"
         elif req == '0':
-             return "Visa Required"
+            return "Visa Required"
         elif req.isdigit() and int(req) > 0:
-             return f"Visa Free ({req} days)"
+            return f"Visa Free ({req} days)"
         elif "eta" in req.lower():
-             return "eTA / E-Visa"
+            return "eTA / E-Visa"
         else:
-             return f"See Details ({req})"
+            return f"See Details ({req})"
+
 
 class WeatherService:
     """
     Fetches weather forecasts for itinerary dates using OpenWeatherMap.
     """
-    
+
     async def get_trip_forecast(self, destination: str) -> Dict:
         """
         Get current weather/forecast for the destination.
@@ -75,8 +77,8 @@ class WeatherService:
             "parameters": {"city": destination}
         }
         # Call existing connector via router
-        result = await route_intent(intent, {"user_id": 0}) # system call
-        
+        result = await route_intent(intent, {"user_id": 0})  # system call
+
         if result.get('status') == 'success':
             return result.get('data', {})
         return {"error": "Weather unavailable"}

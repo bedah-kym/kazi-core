@@ -301,6 +301,7 @@ class ConfirmationStateTests(SimpleTestCase):
         )
 
         saved_data = {}
+
         def mock_set(key, value, timeout):
             saved_data["key"] = key
             saved_data["value"] = value

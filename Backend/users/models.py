@@ -7,183 +7,182 @@ User = get_user_model()
 
 
 class CalendlyProfile(models.Model):
-	user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='calendly')
-	is_connected = models.BooleanField(default=False)
-	encrypted_access_token = models.TextField(blank=True, null=True)
-	encrypted_refresh_token = models.TextField(blank=True, null=True)
-	calendly_user_uri = models.CharField(max_length=255, blank=True, null=True)
-	event_type_uri = models.CharField(max_length=255, blank=True, null=True)
-	event_type_name = models.CharField(max_length=255, blank=True, null=True)
-	booking_link = models.CharField(max_length=1024, blank=True, null=True)
-	webhook_subscription_id = models.CharField(max_length=255, blank=True, null=True)
-	connected_at = models.DateTimeField(blank=True, null=True)
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='calendly')
+    is_connected = models.BooleanField(default=False)
+    encrypted_access_token = models.TextField(blank=True, null=True)
+    encrypted_refresh_token = models.TextField(blank=True, null=True)
+    calendly_user_uri = models.CharField(max_length=255, blank=True, null=True)
+    event_type_uri = models.CharField(max_length=255, blank=True, null=True)
+    event_type_name = models.CharField(max_length=255, blank=True, null=True)
+    booking_link = models.CharField(max_length=1024, blank=True, null=True)
+    webhook_subscription_id = models.CharField(max_length=255, blank=True, null=True)
+    connected_at = models.DateTimeField(blank=True, null=True)
 
-	def connect(self, access_token, refresh_token, calendly_user_uri, event_type_uri=None, event_type_name=None, booking_link=None, subscription_id=None):
-		"""
-		Store Calendly credentials securely.
-		
-		Args:
-			access_token: OAuth access token
-			refresh_token: OAuth refresh token
-			calendly_user_uri: User's Calendly URI
-			event_type_uri: Event type URI (optional)
-			event_type_name: Event type name (optional)
-			booking_link: Public booking link (optional)
-			subscription_id: Webhook subscription ID (optional)
-		"""
-		# Use secure encryption from TokenEncryption utility
-		self.encrypted_access_token = TokenEncryption.encrypt(access_token)
-		if refresh_token:
-			self.encrypted_refresh_token = TokenEncryption.encrypt(refresh_token)
-		self.calendly_user_uri = calendly_user_uri
-		self.event_type_uri = event_type_uri
-		self.event_type_name = event_type_name
-		self.booking_link = booking_link
-		self.webhook_subscription_id = subscription_id
-		self.is_connected = True
-		self.connected_at = timezone.now()
-		self.save()
+    def connect(self, access_token, refresh_token, calendly_user_uri, event_type_uri=None, event_type_name=None, booking_link=None, subscription_id=None):
+        """
+        Store Calendly credentials securely.
 
-	def disconnect(self):
-		"""Securely clear all Calendly credentials."""
-		self.encrypted_access_token = None
-		self.encrypted_refresh_token = None
-		self.calendly_user_uri = None
-		self.event_type_uri = None
-		self.event_type_name = None
-		self.booking_link = None
-		self.webhook_subscription_id = None
-		self.is_connected = False
-		self.connected_at = None
-		self.save()
+        Args:
+                access_token: OAuth access token
+                refresh_token: OAuth refresh token
+                calendly_user_uri: User's Calendly URI
+                event_type_uri: Event type URI (optional)
+                event_type_name: Event type name (optional)
+                booking_link: Public booking link (optional)
+                subscription_id: Webhook subscription ID (optional)
+        """
+        # Use secure encryption from TokenEncryption utility
+        self.encrypted_access_token = TokenEncryption.encrypt(access_token)
+        if refresh_token:
+            self.encrypted_refresh_token = TokenEncryption.encrypt(refresh_token)
+        self.calendly_user_uri = calendly_user_uri
+        self.event_type_uri = event_type_uri
+        self.event_type_name = event_type_name
+        self.booking_link = booking_link
+        self.webhook_subscription_id = subscription_id
+        self.is_connected = True
+        self.connected_at = timezone.now()
+        self.save()
 
-	def __str__(self):
-		return f"CalendlyProfile({self.user.username})"
+    def disconnect(self):
+        """Securely clear all Calendly credentials."""
+        self.encrypted_access_token = None
+        self.encrypted_refresh_token = None
+        self.calendly_user_uri = None
+        self.event_type_uri = None
+        self.event_type_name = None
+        self.booking_link = None
+        self.webhook_subscription_id = None
+        self.is_connected = False
+        self.connected_at = None
+        self.save()
 
-	def get_access_token(self):
-		"""Securely retrieve and decrypt access token."""
-		if not self.encrypted_access_token:
-			return None
-		return TokenEncryption.safe_decrypt(self.encrypted_access_token, default=None)
+    def __str__(self):
+        return f"CalendlyProfile({self.user.username})"
 
-	def get_refresh_token(self):
-		"""Securely retrieve and decrypt refresh token."""
-		if not self.encrypted_refresh_token:
-			return None
-		return TokenEncryption.safe_decrypt(self.encrypted_refresh_token, default=None)
+    def get_access_token(self):
+        """Securely retrieve and decrypt access token."""
+        if not self.encrypted_access_token:
+            return None
+        return TokenEncryption.safe_decrypt(self.encrypted_access_token, default=None)
+
+    def get_refresh_token(self):
+        """Securely retrieve and decrypt refresh token."""
+        if not self.encrypted_refresh_token:
+            return None
+        return TokenEncryption.safe_decrypt(self.encrypted_refresh_token, default=None)
 
 
 class UserProfile(models.Model):
-	"""
-	User Profile with bio, avatar, and social links
-	"""
-	user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
-	
-	# Basic Info
-	bio = models.TextField(max_length=500, blank=True, help_text="Short bio or description")
-	avatar = models.FileField(upload_to='avatars/', blank=True, null=True)
-	location = models.CharField(max_length=100, blank=True)
-	website = models.URLField(max_length=200, blank=True)
-	
-	# Professional Profile (NEW)
-	user_type = models.CharField(max_length=20, choices=[
-		('personal', 'Personal Brand'),
-		('team', 'Team'),
-		('business', 'Business')
-	], default='personal', help_text="Account type")
-	
-	industry = models.CharField(max_length=100, blank=True,
-		help_text="e.g., Design, Development, Marketing, Consulting")
-	
-	company_name = models.CharField(max_length=255, blank=True,
-		help_text="Company or brand name")
-	
-	company_size = models.CharField(max_length=20, blank=True, choices=[
-		('1', 'Just me'),
-		('2-5', '2-5 people'),
-		('6-10', '6-10 people'),
-		('11-25', '11-25 people'),
-		('26-50', '26-50 people'),
-		('50+', '50+ people')
-	])
-	
-	role = models.CharField(max_length=100, blank=True,
-		help_text="Job title/role (e.g., Founder, Designer, Developer)")
-	
-	# Social links (individual fields - backward compatible)
-	twitter_handle = models.CharField(max_length=50, blank=True)
-	linkedin_url = models.URLField(max_length=200, blank=True)
-	github_url = models.URLField(max_length=200, blank=True)
-	
-	# Social links as JSON for flexibility (NEW)
-	social_links = models.JSONField(default=dict, blank=True,
-		help_text='{"twitter": "@handle", "linkedin": "url", "github": "url", "portfolio": "url"}')
-	
-	# DEPRECATED: Use Workspace.onboarding_completed instead (kept for migration compat)
-	onboarding_completed = models.BooleanField(default=False)
-	onboarding_step = models.IntegerField(default=0,
-		help_text="DEPRECATED - Current onboarding step (0-6)")
-	
-	# Invite chain
-	invited_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True,
-		related_name='referred_users', help_text="User who invited this person")
-	invite_depth = models.PositiveIntegerField(default=0,
-		help_text="0 = admin-seeded (can send platform invites), 1+ = user-invited (room invites only)")
+    """
+    User Profile with bio, avatar, and social links
+    """
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
 
-	# AI Personalization (moved from GoalProfile)
-	ai_personalization_enabled = models.BooleanField(default=True,
-		help_text="Allow AI to use profile data for personalized suggestions")
+    # Basic Info
+    bio = models.TextField(max_length=500, blank=True, help_text="Short bio or description")
+    avatar = models.FileField(upload_to='avatars/', blank=True, null=True)
+    location = models.CharField(max_length=100, blank=True)
+    website = models.URLField(max_length=200, blank=True)
 
-	# Preferences
-	notification_preferences = models.JSONField(default=dict, blank=True,
-		help_text='{"email_notifications": true, "push_notifications": false, "digest_frequency": "daily"}')
-	
-	theme_preference = models.CharField(max_length=10, choices=[
-		('light', 'Light'),
-		('dark', 'Dark'),
-		('auto', 'Auto')
-	], default='auto')
-	
-	# Existing preferences
-	timezone = models.CharField(max_length=50, default='UTC')
-	language = models.CharField(max_length=10, default='en')
-	
-	created_at = models.DateTimeField(auto_now_add=True)
-	updated_at = models.DateTimeField(auto_now=True)
-	
-	def __str__(self):
-		return f"{self.user.username}'s Profile"
-	
-	def get_display_name(self):
-		"""Returns full name if available, otherwise username"""
-		if self.user.first_name and self.user.last_name:
-			return f"{self.user.first_name} {self.user.last_name}"
-		elif self.user.first_name:
-			return self.user.first_name
-		return self.user.username
-	
-	def get_avatar_url(self):
-		"""Returns avatar URL or default placeholder"""
-		if self.avatar:
-			return self.avatar.url
-		# Return default avatar based on username initial
-		initial = self.user.username[0].upper()
-		return f"https://ui-avatars.com/api/?name={initial}&background=4f8cff&color=fff&size=128"
-	
-	def consolidate_social_links(self):
-		"""Migrate individual social fields to social_links JSON"""
-		if not self.social_links:
-			self.social_links = {}
-		
-		if self.twitter_handle and 'twitter' not in self.social_links:
-			self.social_links['twitter'] = self.twitter_handle
-		if self.linkedin_url and 'linkedin' not in self.social_links:
-			self.social_links['linkedin'] = self.linkedin_url
-		if self.github_url and 'github' not in self.social_links:
-			self.social_links['github'] = self.github_url
-		
-		return self.social_links
+    # Professional Profile (NEW)
+    user_type = models.CharField(max_length=20, choices=[
+            ('personal', 'Personal Brand'),
+            ('team', 'Team'),
+            ('business', 'Business')
+    ], default='personal', help_text="Account type")
 
+    industry = models.CharField(max_length=100, blank=True,
+                                help_text="e.g., Design, Development, Marketing, Consulting")
+
+    company_name = models.CharField(max_length=255, blank=True,
+                                    help_text="Company or brand name")
+
+    company_size = models.CharField(max_length=20, blank=True, choices=[
+            ('1', 'Just me'),
+            ('2-5', '2-5 people'),
+            ('6-10', '6-10 people'),
+            ('11-25', '11-25 people'),
+            ('26-50', '26-50 people'),
+            ('50+', '50+ people')
+    ])
+
+    role = models.CharField(max_length=100, blank=True,
+                            help_text="Job title/role (e.g., Founder, Designer, Developer)")
+
+    # Social links (individual fields - backward compatible)
+    twitter_handle = models.CharField(max_length=50, blank=True)
+    linkedin_url = models.URLField(max_length=200, blank=True)
+    github_url = models.URLField(max_length=200, blank=True)
+
+    # Social links as JSON for flexibility (NEW)
+    social_links = models.JSONField(default=dict, blank=True,
+                                    help_text='{"twitter": "@handle", "linkedin": "url", "github": "url", "portfolio": "url"}')
+
+    # DEPRECATED: Use Workspace.onboarding_completed instead (kept for migration compat)
+    onboarding_completed = models.BooleanField(default=False)
+    onboarding_step = models.IntegerField(default=0,
+                                          help_text="DEPRECATED - Current onboarding step (0-6)")
+
+    # Invite chain
+    invited_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True,
+                                   related_name='referred_users', help_text="User who invited this person")
+    invite_depth = models.PositiveIntegerField(default=0,
+                                               help_text="0 = admin-seeded (can send platform invites), 1+ = user-invited (room invites only)")
+
+    # AI Personalization (moved from GoalProfile)
+    ai_personalization_enabled = models.BooleanField(default=True,
+                                                     help_text="Allow AI to use profile data for personalized suggestions")
+
+    # Preferences
+    notification_preferences = models.JSONField(default=dict, blank=True,
+                                                help_text='{"email_notifications": true, "push_notifications": false, "digest_frequency": "daily"}')
+
+    theme_preference = models.CharField(max_length=10, choices=[
+            ('light', 'Light'),
+            ('dark', 'Dark'),
+            ('auto', 'Auto')
+    ], default='auto')
+
+    # Existing preferences
+    timezone = models.CharField(max_length=50, default='UTC')
+    language = models.CharField(max_length=10, default='en')
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.user.username}'s Profile"
+
+    def get_display_name(self):
+        """Returns full name if available, otherwise username"""
+        if self.user.first_name and self.user.last_name:
+            return f"{self.user.first_name} {self.user.last_name}"
+        elif self.user.first_name:
+            return self.user.first_name
+        return self.user.username
+
+    def get_avatar_url(self):
+        """Returns avatar URL or default placeholder"""
+        if self.avatar:
+            return self.avatar.url
+        # Return default avatar based on username initial
+        initial = self.user.username[0].upper()
+        return f"https://ui-avatars.com/api/?name={initial}&background=4f8cff&color=fff&size=128"
+
+    def consolidate_social_links(self):
+        """Migrate individual social fields to social_links JSON"""
+        if not self.social_links:
+            self.social_links = {}
+
+        if self.twitter_handle and 'twitter' not in self.social_links:
+            self.social_links['twitter'] = self.twitter_handle
+        if self.linkedin_url and 'linkedin' not in self.social_links:
+            self.social_links['linkedin'] = self.linkedin_url
+        if self.github_url and 'github' not in self.social_links:
+            self.social_links['github'] = self.github_url
+
+        return self.social_links
 
 
 class Workspace(models.Model):
@@ -310,25 +309,25 @@ class UserIntegration(models.Model):
         ('whatsapp', 'WhatsApp Business'),
         ('mailgun', 'Mailgun'),
         ('intasend', 'IntaSend Pay'),
-        ('calendly', 'Calendly'), # Keeping explicit CalendlyProfile for now for backward compat, but can migrate later
+        ('calendly', 'Calendly'),  # Keeping explicit CalendlyProfile for now for backward compat, but can migrate later
         ('gmail', 'Gmail'),
         ('notion', 'Notion'),
     )
-    
+
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='integrations')
     workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name='integrations', null=True, blank=True)
     integration_type = models.CharField(max_length=50, choices=INTEGRATION_TYPES)
     is_connected = models.BooleanField(default=False)
-    
+
     # Security: Credentials should be encrypted before storage
     encrypted_credentials = models.TextField(blank=True, null=True)
-    
+
     # Extra data (e.g. phone number, domain, webhook IDs)
     metadata = models.JSONField(default=dict, blank=True)
-    
+
     connected_at = models.DateTimeField(null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+
     class Meta:
         unique_together = ('user', 'integration_type')
 
@@ -448,7 +447,7 @@ class CorrectionSignal(models.Model):
         ('result_selection', 'Result Selection'),  # Wrong result, user picks another
         ('preference', 'Preference Discovery'),    # User reveals preference
         ('workflow', 'Workflow Adjustment'),       # User modifies workflow steps
-        ('confirmation', 'Negative Confirmation'), # User says NO to action
+        ('confirmation', 'Negative Confirmation'),  # User says NO to action
     ]
 
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='correction_signals')

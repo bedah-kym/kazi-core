@@ -79,7 +79,7 @@ class MCPRouter:
         "allow_email": True,
         "allow_calendar": True,
     }
-    
+
     def __init__(self):
         # Single source of truth for action -> connector resolution lives in
         # `connector_registry`. It composes built-in connectors, directory-scanned
@@ -101,15 +101,15 @@ class MCPRouter:
                 "Router has connector mappings not present in action catalog: %s",
                 ", ".join(extra),
             )
-    
+
     async def route(self, intent: Dict, user_context: Dict) -> Dict:
         """
         Route an intent to the appropriate connector
-        
+
         Args:
             intent: Parsed intent from intent_parser
             user_context: User ID, room, preferences, etc.
-            
+
         Returns:
             Dict with status, data, and metadata
         """
@@ -118,7 +118,7 @@ class MCPRouter:
             action = resolve_action_alias(raw_action)
             risk_level = (get_action_definition(action) or {}).get("risk_level", "low")
             requires_confirmation = catalog_requires_confirmation(action)
-            
+
             # Validate
             validation = await self._validate_request(intent, user_context)
             if not validation["valid"]:
@@ -171,7 +171,7 @@ class MCPRouter:
                     reason="ambiguous_high_risk_request",
                     next_step="clarify",
                 )
-            
+
             # Get connector
             connector = self.connectors.get(action)
             if not connector:
@@ -185,7 +185,7 @@ class MCPRouter:
                     data={},
                     reason="unsupported_action",
                 )
-            
+
             # Execute with timeout
             logger.info(f"Routing to connector: {action}")
             parameters = sanitize_parameters(intent.get("parameters") or {})
@@ -198,7 +198,7 @@ class MCPRouter:
             parameters = sanitize_parameters(parameters)
 
             result = await connector.execute(parameters, user_context)
-            
+
             # Cache result
             await self._cache_result(intent, user_context, result)
 
@@ -217,7 +217,7 @@ class MCPRouter:
                 "connector": connector.__class__.__name__,
             }
             return payload
-            
+
         except Exception as e:
             logger.error("MCP routing error: %s", e)
             try:
@@ -364,14 +364,14 @@ class MCPRouter:
         try:
             cache_key = f"mcp_cache:{resolve_action_alias(intent.get('action'))}:{context.get('user_id')}"
             redis = get_redis_connection("default")
-            
+
             # Store with 5 min TTL
             cache_data = json.dumps({
                 "intent": intent,
                 "result": result,
                 "timestamp": datetime.now().isoformat()
             })
-            
+
             await sync_to_async(redis.setex)(cache_key, 300, cache_data)
         except Exception as e:
             logger.error("Cache error: %s", e)
@@ -530,19 +530,19 @@ class CalendarConnector(BaseConnector):
 
 class SearchConnector(BaseConnector):
     """Web search fallback for classic pipeline. Agent loop uses Claude's native web_search tool instead."""
-    
+
     def __init__(self):
         from .llm_client import get_llm_client
         self.llm = get_llm_client()
-    
+
     async def execute(self, parameters: Dict, context: Dict) -> Dict:
         """Perform web search with strict rate limiting"""
         from django.core.cache import cache
         from datetime import datetime
-        
+
         user_id = context.get("user_id")
         query = parameters.get("query")
-        
+
         if not query:
             return {"status": "error", "message": "No search query provided"}
 
@@ -582,37 +582,37 @@ class SearchConnector(BaseConnector):
 
 class WeatherConnector(BaseConnector):
     """Weather connector using OpenWeatherMap API"""
-    
+
     async def execute(self, parameters: Dict, context: Dict) -> Dict:
         """Get weather for a city"""
         from django.conf import settings
-        
+
         city = parameters.get("city", parameters.get("location", "Nairobi"))
         api_key = getattr(settings, 'OPENWEATHER_API_KEY', '')
-        
+
         if not api_key:
             logger.warning("Weather requested but OPENWEATHER_API_KEY not configured")
             return {"status": "error", "message": "Weather service is not configured. Please add OPENWEATHER_API_KEY to your environment."}
-        
+
         try:
             url = "https://api.openweathermap.org/data/2.5/weather"
             params = {"q": city, "appid": api_key, "units": "metric"}
-            
+
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.get(url, params=params)
-                
+
                 if response.status_code == 404:
                     return {"status": "error", "message": f"City '{city}' not found."}
-                
+
                 if response.status_code != 200:
                     logger.error(f"OpenWeatherMap error: {response.text}")
                     return {"status": "error", "message": "Failed to fetch weather data."}
-                
+
                 data = response.json()
                 weather = data.get("weather", [{}])[0]
                 main = data.get("main", {})
                 wind = data.get("wind", {})
-                
+
                 return {
                     "status": "success",
                     "city": data.get("name", city),
@@ -624,7 +624,7 @@ class WeatherConnector(BaseConnector):
                     "wind_speed": round(wind.get("speed", 0) * 3.6, 1),
                     "message": f"🌡️ {data.get('name', city)}: {round(main.get('temp', 0), 1)}°C, {weather.get('description', '').capitalize()}. Humidity: {main.get('humidity', 0)}%, Wind: {round(wind.get('speed', 0) * 3.6, 1)} km/h"
                 }
-                
+
         except Exception as e:
             logger.error("Weather fetch error: %s", e)
             return {"status": "error", "message": "Weather lookup failed. Please try again."}
@@ -632,41 +632,41 @@ class WeatherConnector(BaseConnector):
 
 class GiphyConnector(BaseConnector):
     """GIPHY connector for searching and returning GIFs"""
-    
+
     async def execute(self, parameters: Dict, context: Dict) -> Dict:
         """Search GIPHY for a GIF"""
         from django.conf import settings
         import random
-        
+
         query = parameters.get("query", parameters.get("search", "funny"))
         api_key = getattr(settings, 'GIPHY_API_KEY', '')
-        
+
         if not api_key:
             logger.warning("GIPHY requested but GIPHY_API_KEY not configured")
             return {"status": "error", "message": "GIF service is not configured. Please add GIPHY_API_KEY to your environment."}
-        
+
         try:
             url = "https://api.giphy.com/v1/gifs/search"
             params = {"api_key": api_key, "q": query, "limit": 10, "rating": "pg-13"}
-            
+
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.get(url, params=params)
-                
+
                 if response.status_code != 200:
                     logger.error(f"GIPHY error: {response.text}")
                     return {"status": "error", "message": "Failed to search for GIFs."}
-                
+
                 data = response.json()
                 gifs = data.get("data", [])
-                
+
                 if not gifs:
                     return {"status": "error", "message": f"No GIFs found for '{query}'."}
-                
+
                 gif = random.choice(gifs)
                 images = gif.get("images", {})
                 fixed = images.get("fixed_height", {})
                 original = images.get("original", {})
-                
+
                 return {
                     "status": "success",
                     "query": query,
@@ -676,7 +676,7 @@ class GiphyConnector(BaseConnector):
                     "message": f"🎬 Here's a GIF for '{query}'!",
                     "embed_html": f'<img src="{fixed.get("url", original.get("url", ""))}" alt="{query} GIF" style="max-width: 300px; border-radius: 8px;" />'
                 }
-                
+
         except Exception as e:
             logger.error("GIPHY fetch error: %s", e)
             return {"status": "error", "message": "GIF search failed. Please try again."}
@@ -684,45 +684,45 @@ class GiphyConnector(BaseConnector):
 
 class CurrencyConnector(BaseConnector):
     """Currency conversion connector using ExchangeRate-API"""
-    
+
     async def execute(self, parameters: Dict, context: Dict) -> Dict:
         """Convert currency"""
         from django.conf import settings
-        
+
         try:
             amount = float(parameters.get("amount", 1))
         except (ValueError, TypeError):
             return {"status": "error", "message": "Invalid amount. Please provide a valid number."}
-            
+
         from_currency = parameters.get("from_currency", parameters.get("from", "USD")).upper()
         to_currency = parameters.get("to_currency", parameters.get("to", "KES")).upper()
         api_key = getattr(settings, 'EXCHANGE_RATE_API_KEY', '')
-        
+
         if not api_key:
             logger.warning("Currency conversion requested but EXCHANGE_RATE_API_KEY not configured")
             return {"status": "error", "message": "Currency service is not configured. Please add EXCHANGE_RATE_API_KEY to your environment."}
-        
+
         try:
             url = f"https://v6.exchangerate-api.com/v6/{api_key}/pair/{from_currency}/{to_currency}/{amount}"
-            
+
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.get(url)
-                
+
                 if response.status_code != 200:
                     logger.error(f"ExchangeRate-API error: {response.text}")
                     return {"status": "error", "message": "Failed to fetch exchange rates."}
-                
+
                 data = response.json()
-                
+
                 if data.get("result") != "success":
                     error_type = data.get("error-type", "unknown")
                     if error_type == "unsupported-code":
                         return {"status": "error", "message": "Currency code not supported. Use valid ISO codes like USD, EUR, KES."}
                     return {"status": "error", "message": f"Currency conversion failed: {error_type}"}
-                
+
                 conversion_result = data.get("conversion_result", 0)
                 rate = data.get("conversion_rate", 0)
-                
+
                 return {
                     "status": "success",
                     "amount": amount,
@@ -732,7 +732,7 @@ class CurrencyConnector(BaseConnector):
                     "result": round(conversion_result, 2),
                     "message": f"💱 {amount:,.2f} {from_currency} = {conversion_result:,.2f} {to_currency} (Rate: 1 {from_currency} = {rate:.4f} {to_currency})"
                 }
-                
+
         except Exception as e:
             logger.error("Currency conversion error: %s", e)
             return {"status": "error", "message": "Currency conversion failed. Please try again."}
@@ -743,7 +743,7 @@ class ReminderConnector(BaseConnector):
     Sets reminders for the user
     Expects LLM to return ISO time or relative time string
     """
-    
+
     async def execute(self, parameters: Dict, context: Dict) -> Dict:
         """Create a reminder"""
         from chatbot.models import Reminder, Chatroom
@@ -751,18 +751,18 @@ class ReminderConnector(BaseConnector):
         from django.utils import timezone
         import dateutil.parser
         from asgiref.sync import sync_to_async
-        
+
         User = get_user_model()
         user_id = context.get("user_id")
         room_id = context.get("room_id")
-        
+
         content = parameters.get("content", "Reminder")
         time_str = parameters.get("time")
         priority = parameters.get("priority", "medium")
-        
+
         if not time_str:
             return {"status": "error", "message": "When should I remind you?"}
-            
+
         try:
             # 1. Try ISO parsing (LLM should prefer this)
             try:
@@ -775,19 +775,19 @@ class ReminderConnector(BaseConnector):
                     scheduled_time = timezone.now() + timedelta(minutes=minutes)
                 else:
                     return {"status": "error", "message": f"I couldn't understand the time '{time_str}'. Please use format like '10 minutes' or '5pm'."}
-            
+
             # Ensure timezone aware
             if timezone.is_naive(scheduled_time):
                 scheduled_time = timezone.make_aware(scheduled_time)
-                
+
             if scheduled_time < timezone.now():
                 # Assume tomorrow if time has passed today (simple heuristic)
                 scheduled_time += timedelta(days=1)
-            
+
             # Create Reminder
             user = await sync_to_async(User.objects.get)(pk=user_id)
             room = await sync_to_async(Chatroom.objects.get)(pk=room_id) if room_id else None
-            
+
             reminder = await sync_to_async(Reminder.objects.create)(
                 user=user,
                 room=room,
@@ -801,17 +801,17 @@ class ReminderConnector(BaseConnector):
                 await sync_to_async(schedule_reminder_delivery)(reminder.id, scheduled_time)
             except Exception as e:
                 logger.warning(f"Reminder scheduling skipped: {e}")
-            
+
             # Format friendly time display
             local_time = scheduled_time.strftime("%I:%M %p")
-            
+
             return {
                 "status": "success",
                 "message": f"✅ I've set a reminder: '{content}' for {local_time}.",
                 "reminder_id": reminder.id,
                 "timestamp": scheduled_time.isoformat()
             }
-            
+
         except Exception as e:
             logger.error(f"Reminder error: {e}")
             return {"status": "error", "message": "Failed to set reminder."}
@@ -819,6 +819,7 @@ class ReminderConnector(BaseConnector):
 
 _router = None
 _router_lock = threading.Lock()
+
 
 def get_mcp_router() -> MCPRouter:
     """Get or create the global MCP router instance (thread-safe)."""
@@ -834,4 +835,3 @@ async def route_intent(intent: Dict, user_context: Dict) -> Dict:
     """Convenience function to route an intent"""
     router = get_mcp_router()
     return await router.route(intent, user_context)
-

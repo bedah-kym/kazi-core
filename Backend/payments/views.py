@@ -110,7 +110,8 @@ def transactions_view(request):
     }
 
     return render(request, 'payments/transactions.html', context)
-        
+
+
 @login_required
 @ratelimit(key='user', rate='5/m', block=False)
 @ratelimit(key='ip', rate='10/m', block=False)
@@ -120,26 +121,26 @@ def initiate_deposit(request):
     """
     if getattr(request, 'limited', False):
         return JsonResponse({'error': 'Rate limit exceeded. Please try again later.'}, status=429)
-        
+
     if request.method != 'POST':
         return JsonResponse({'error': 'Method not allowed'}, status=405)
-    
+
     try:
         amount = Decimal(request.POST.get('amount', 0))
-        
+
         if amount < Decimal('1.00'):
             return JsonResponse({'error': 'Minimum deposit is 1 KES'}, status=400)
-        
+
         # Create a hosted payment link via IntaSend
         import os
-        
+
         publishable_key = os.environ.get('INTASEND_PUBLISHABLE_KEY')
         api_key = os.environ.get('INTASEND_API_KEY')
         is_test = os.environ.get('INTASEND_IS_TEST', 'True').lower() == 'true'
-        
+
         if not publishable_key or not api_key:
             return JsonResponse({'error': 'Payment gateway not configured'}, status=500)
-        
+
         from intasend import APIService
         from django.urls import reverse
         service = APIService(token=api_key, publishable_key=publishable_key, test=is_test)
@@ -166,7 +167,7 @@ def initiate_deposit(request):
             'payment_link': payment_link,
             'tracking_id': invoice_id,
         })
-            
+
     except Exception as e:
         logger.error(f"Deposit initiation error: {e}")
         return JsonResponse({'error': str(e)}, status=500)
@@ -179,7 +180,7 @@ def payment_callback(request):
     """
     if request.method != 'POST':
         return JsonResponse({'error': 'Method not allowed'}, status=405)
-    
+
     try:
         # Verify webhook signature
         from orchestration.webhook_validator import verify_intasend_signature, log_webhook_verification
@@ -199,7 +200,7 @@ def payment_callback(request):
 
         # Parse webhook data
         data = json.loads(raw_body)
-        
+
         invoice_id = (
             data.get('invoice_id')
             or data.get('id')
@@ -243,7 +244,7 @@ def payment_callback(request):
                 invoice.status = 'CANCELLED' if state != 'EXPIRED' else 'EXPIRED'
                 invoice.save(update_fields=['status'])
             return JsonResponse({'status': 'ignored', 'state': state})
-        
+
         # Find user by api_ref or email for wallet deposits
         from django.contrib.auth import get_user_model
         User = get_user_model()
@@ -284,7 +285,7 @@ def payment_callback(request):
             return JsonResponse({'status': 'success'})
 
         return JsonResponse({'status': 'ignored', 'state': state})
-        
+
     except Exception as e:
         logger.error(f"Callback processing error: {e}")
         return JsonResponse({'error': str(e)}, status=500)
@@ -322,16 +323,16 @@ def create_invoice_view(request):
     if getattr(request, 'limited', False):
         messages.error(request, 'Rate limit exceeded. Please try again later.')
         return redirect('payments:wallet_dashboard')
-        
+
     if request.method == 'POST':
         try:
             amount = Decimal(request.POST.get('amount'))
             description = request.POST.get('description', '')
             recipient_email = request.POST.get('recipient_email', '')
             recurrence = request.POST.get('recurrence', 'NONE')
-            
+
             from django.urls import reverse
-            
+
             invoice = InvoiceService.create_invoice(
                 issuer=request.user,
                 amount=amount,
@@ -340,14 +341,14 @@ def create_invoice_view(request):
                 recurrence=recurrence,
                 redirect_url=request.build_absolute_uri(reverse('payments:wallet_dashboard'))
             )
-            
+
             messages.success(request, f'Invoice created! Share link: {invoice.intasend_payment_link}')
             return redirect('payments:invoice_detail', reference_id=invoice.reference_id)
-            
+
         except Exception as e:
             messages.error(request, f'Error creating invoice: {str(e)}')
             return redirect('payments:wallet_dashboard')
-    
+
     context = {
         'workspace': request.user.workspace,
     }
@@ -360,12 +361,12 @@ def invoice_detail(request, reference_id):
     View invoice details
     """
     invoice = get_object_or_404(PaymentRequest, reference_id=reference_id)
-    
+
     # Check permission (issuer or payer can view)
     if invoice.issuer != request.user and invoice.payer != request.user:
         messages.error(request, 'Access denied')
         return redirect('payments:wallet_dashboard')
-    
+
     context = {
         'invoice': invoice,
         'workspace': getattr(request.user, 'workspace', None),

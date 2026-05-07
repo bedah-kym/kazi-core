@@ -23,4 +23,3 @@ class MathiaReplyAdmin(admin.ModelAdmin):
             preview
         )
     message_preview.short_description = 'Message'
-

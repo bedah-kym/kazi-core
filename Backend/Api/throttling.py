@@ -1,5 +1,6 @@
 from rest_framework.throttling import UserRateThrottle
 
+
 class AIRequestThrottle(UserRateThrottle):
     scope = 'ai_request'
 
@@ -7,7 +8,7 @@ class AIRequestThrottle(UserRateThrottle):
         user = getattr(self, 'user', None)
         if not user or not user.is_authenticated:
             return '0/day'  # No AI for anon
-        
+
         # Check for workspace plan
         try:
             plan = user.workspace.plan
@@ -23,6 +24,7 @@ class AIRequestThrottle(UserRateThrottle):
             return '10000/day'
         return '10/day'
 
+
 class GlobalApiThrottle(UserRateThrottle):
     scope = 'global_api'
 
@@ -35,7 +37,7 @@ class GlobalApiThrottle(UserRateThrottle):
             plan = user.workspace.plan
         except AttributeError:
             return '60/min'
-            
+
         if plan == 'free':
             return '60/min'
         elif plan == 'pro':

@@ -332,12 +332,14 @@ class ReferenceResolver:
             return None
 
         if 'price' in sort_key:
-            key_func = lambda x: x.get('price', float('inf'))
+            def key_func(x):
+                return x.get('price', float('inf'))
             reverse = 'max' in sort_key
             return sorted(items, key=key_func, reverse=reverse)[0]
 
         elif 'time' in sort_key:
-            key_func = lambda x: x.get('departure', x.get('start_time', ''))
+            def key_func(x):
+                return x.get('departure', x.get('start_time', ''))
             reverse = 'max' in sort_key
             return sorted(items, key=key_func, reverse=reverse)[0]
 

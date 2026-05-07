@@ -20,6 +20,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
+
 def run_verification():
     logger.info("🚀 Starting End-to-End Verification...")
 
@@ -38,16 +39,16 @@ def run_verification():
     # 3. Verify Trip Planning API (Search)
     client = APIClient()
     client.force_authenticate(user=user)
-    
+
     # Mock Search Request
     search_payload = {
         "search_type": "buses",
         "parameters": {"origin": "Nairobi", "destination": "Mombasa", "date": "2025-12-01"}
     }
-    # Note: This might hit the actual MCP router/LLM. 
+    # Note: This might hit the actual MCP router/LLM.
     # For CI/Verification, we assume the router handles 'buses' gracefully (even if mock).
     response = asyncio.run(async_search_proxy(search_payload, user))
-    
+
     # Check if we got a response (even error is 'ok' if it means router was hit)
     logger.info(f"Search Response: {response.keys()}")
     logger.info("✅ Helper: Search API reachable")
@@ -80,10 +81,11 @@ def run_verification():
 
     # 6. Verify Quota Update (Search should increment)
     # Note: Our search wrapper (step 3) was manual, let's verify if 'search' endpoint increments
-    # In strict mode, only the View increments if it calls router. 
+    # In strict mode, only the View increments if it calls router.
     # We'll skip strict increment check if mock router doesn't write to cache, but we check access.
-    
+
     logger.info("\n✨ All End-to-End Checks Passed!")
+
 
 async def async_search_proxy(payload, user):
     """

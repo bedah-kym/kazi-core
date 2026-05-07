@@ -25,44 +25,44 @@ class LedgerService:
     """
     Core ledger operations with atomic transaction handling
     """
-    
+
     @staticmethod
     @transaction.atomic
     def post_transaction(transaction_type: str, description: str, entries: list, provider_ref: str = '') -> JournalEntry:
         """
         Post a double-entry transaction to the ledger.
-        
+
         Args:
             transaction_type: Type of transaction (DEPOSIT, WITHDRAWAL, etc.)
             description: Human-readable description
             entries: List of dicts with keys: account_id, amount, dr_cr
             provider_ref: External reference (e.g., IntaSend tracking ID)
-        
+
         Returns:
             JournalEntry object
-        
+
         Raises:
             ValueError: If debits != credits
         """
         # Validate entries balance
         total_debits = sum(e['amount'] for e in entries if e['dr_cr'] == 'DEBIT')
         total_credits = sum(e['amount'] for e in entries if e['dr_cr'] == 'CREDIT')
-        
+
         if total_debits != total_credits:
             raise ValueError(f"Unbalanced entry: Debits={total_debits}, Credits={total_credits}")
-        
+
         # Create journal entry
         journal = JournalEntry.objects.create(
             transaction_type=transaction_type,
             description=description,
             provider_reference=provider_ref
         )
-        
+
         # Create ledger entries and update account balances
         for entry in entries:
             account = LedgerAccount.objects.select_for_update().get(id=entry['account_id'])
             amount = Decimal(str(entry['amount']))
-            
+
             # Create ledger entry
             LedgerEntry.objects.create(
                 journal_entry=journal,
@@ -70,7 +70,7 @@ class LedgerService:
                 amount=amount,
                 dr_cr=entry['dr_cr']
             )
-            
+
             # Update account balance
             if entry['dr_cr'] == 'DEBIT':
                 if account.account_type in ['ASSET', 'EXPENSE']:
@@ -82,17 +82,17 @@ class LedgerService:
                     account.balance -= amount
                 else:
                     account.balance += amount
-            
+
             account.save()
-        
+
         logger.info(f"Posted transaction: {journal.reference_id} - {transaction_type}")
         return journal
-    
+
     @staticmethod
     def get_system_accounts():
         """Get or create standard system accounts"""
         accounts = {}
-        
+
         # System IntaSend Asset Account
         accounts['system_asset'], _ = LedgerAccount.objects.get_or_create(
             name='System IntaSend Wallet',
@@ -101,7 +101,7 @@ class LedgerService:
                 'currency': 'KES'
             }
         )
-        
+
         # Transaction Fee Expense
         accounts['fee_expense'], _ = LedgerAccount.objects.get_or_create(
             name='Transaction Fee Expense',
@@ -110,7 +110,7 @@ class LedgerService:
                 'currency': 'KES'
             }
         )
-        
+
         # Platform Fee Revenue
         accounts['fee_revenue'], _ = LedgerAccount.objects.get_or_create(
             name='Platform Fee Revenue',
@@ -119,7 +119,7 @@ class LedgerService:
                 'currency': 'KES'
             }
         )
-        
+
         # Dispute Hold
         accounts['dispute_hold'], _ = LedgerAccount.objects.get_or_create(
             name='Dispute Hold Liability',
@@ -128,9 +128,9 @@ class LedgerService:
                 'currency': 'KES'
             }
         )
-        
+
         return accounts
-    
+
     @staticmethod
     def reconcile_daily():
         """
@@ -139,38 +139,38 @@ class LedgerService:
         """
         from intasend import APIService
         import os
-        
+
         system_accounts = LedgerService.get_system_accounts()
         expected_balance = system_accounts['system_asset'].balance
-        
+
         # Fetch real balance from IntaSend
         try:
             publishable_key = os.environ.get('INTASEND_PUBLISHABLE_KEY')
             api_key = os.environ.get('INTASEND_API_KEY')
             is_test = os.environ.get('INTASEND_IS_TEST', 'True').lower() == 'true'
-            
+
             if not publishable_key or not api_key:
                 logger.error("IntaSend credentials not configured")
                 return
-            
+
             # Using APIService isn't strictly necessary if Wallets handles it, but good for setup
             from intasend import Wallets
             wallet_service = Wallets(token=api_key, publishable_key=publishable_key, test=is_test)
-            
+
             # Get wallet balance
             # Note: SDK methods might change, using a safe placeholder or try/except block if method name differs
             try:
-                wallet_details = wallet_service.details() # Common method name or similar
+                wallet_details = wallet_service.details()  # Common method name or similar
                 actual_balance = Decimal(str(wallet_details.get('available_balance', 0)))
             except AttributeError:
-                 # Fallback/Placeholder if specific method unknown
-                 logger.warning("Could not retrieve IntaSend balance: Method unknown")
-                 return
+                # Fallback/Placeholder if specific method unknown
+                logger.warning("Could not retrieve IntaSend balance: Method unknown")
+                return
             # actual_balance = wallet_service.retrieve()['balance']
             actual_balance = expected_balance  # Placeholder
-            
+
             difference = abs(expected_balance - actual_balance)
-            
+
             if difference > Decimal('1.00'):  # Tolerance
                 # Determine severity
                 if difference > Decimal('1000.00'):
@@ -181,7 +181,7 @@ class LedgerService:
                     severity = 'MEDIUM'
                 else:
                     severity = 'LOW'
-                
+
                 # Create discrepancy record
                 ReconciliationDiscrepancy.objects.create(
                     date=timezone.now().date(),
@@ -191,11 +191,11 @@ class LedgerService:
                     severity=severity,
                     details=f"Reconciliation failed: {difference} KES discrepancy"
                 )
-                
+
                 logger.warning(f"Reconciliation discrepancy: {difference} KES")
             else:
                 logger.info("Reconciliation successful: Balances match")
-                
+
         except Exception as e:
             logger.error(f"Reconciliation error: {e}")
 
@@ -346,7 +346,7 @@ class InvoiceService:
     """
     Invoice/Payment Request operations
     """
-    
+
     @staticmethod
     def create_invoice(
         issuer: User,
@@ -362,9 +362,9 @@ class InvoiceService:
         """
         # Uses APIService for link generation below
         import os
-        
+
         expires_at = timezone.now() + timedelta(days=7)
-        
+
         invoice = PaymentRequest.objects.create(
             issuer=issuer,
             payer_email=payer_email,
@@ -375,30 +375,30 @@ class InvoiceService:
             is_recurring=(recurrence != 'NONE'),
             recurrence_interval=recurrence
         )
-        
+
         # Generate IntaSend payment link
         try:
             publishable_key = os.environ.get('INTASEND_PUBLISHABLE_KEY')
             api_key = os.environ.get('INTASEND_API_KEY')
             is_test = os.environ.get('INTASEND_IS_TEST', 'True').lower() == 'true'
-            
+
             if publishable_key and api_key:
                 from intasend import APIService
                 service = APIService(token=api_key, publishable_key=publishable_key, test=is_test)
-                
+
                 payload = {
                     "amount": float(amount),
                     "currency": currency,
                     "email": payer_email if payer_email else issuer.email,
                     "api_ref": str(invoice.reference_id),
                     "comment": description,
-                    "mobile_tarrif": "BUSINESS-PAYS" # or CUSTOMER-PAYS depending on need
+                    "mobile_tarrif": "BUSINESS-PAYS"  # or CUSTOMER-PAYS depending on need
                 }
                 if redirect_url:
                     payload["redirect_url"] = redirect_url
-                
+
                 response = service.collect.checkout(**payload)
-                
+
                 payment_link = response.get('url') or response.get('payment_link')
                 invoice_id = response.get('invoice_id') or response.get('id')
                 if payment_link:
@@ -408,10 +408,10 @@ class InvoiceService:
                 invoice.save()
         except Exception as e:
             logger.error(f"Error generating payment link: {e}")
-        
+
         logger.info(f"Created invoice: {invoice.reference_id}")
         return invoice
-    
+
     @staticmethod
     @transaction.atomic
     def process_invoice_payment(invoice_id: int, provider_ref: str) -> WalletTransaction:

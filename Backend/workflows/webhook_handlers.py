@@ -26,8 +26,6 @@ def _extract_calendly_owner_uri(payload: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-
-
 def _extract_calendly_subscription_id(payload: Dict[str, Any]) -> Optional[str]:
     for path in [
         ("payload", "config", "webhook_subscription", "uuid"),

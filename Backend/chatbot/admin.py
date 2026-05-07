@@ -135,4 +135,3 @@ class ChatroomAdmin(ImportExportModelAdmin):
     def messages_count(self, obj):
         return obj.chats.count()
     messages_count.short_description = 'Messages'
-

@@ -118,7 +118,7 @@ def discover_connectors() -> Dict[str, Any]:
             )
 
         logger.info("Registered connector: %s v%s (%d actions)",
-                     connector.name, connector.version, len(connector.actions))
+                    connector.name, connector.version, len(connector.actions))
 
     # Step 2b: When demo mode is on, also scan the top-level examples/
     # directory so the canonical "copy this to start" connector boots
@@ -173,14 +173,14 @@ def discover_connectors() -> Dict[str, Any]:
                 connector.name, exc,
             )
         logger.info("Registered entry-point connector: %s v%s",
-                     connector.name, connector.version)
+                    connector.name, connector.version)
 
     # Step 4: Register all discovered catalog entries into the action catalog
     if _registered_catalog_entries:
         from orchestration.action_catalog import register_actions
         register_actions(_registered_catalog_entries)
         logger.info("Registered %d catalog entries from discovered connectors",
-                     len(_registered_catalog_entries))
+                    len(_registered_catalog_entries))
 
     _discovered_connectors = connector_map
     logger.info("Total connector map: %d action mappings", len(connector_map))

@@ -148,11 +148,11 @@ def _activate_invite(user, invite, invite_type):
 def onboarding(request):
     """Multi-step onboarding flow"""
     step = int(request.GET.get('step', 1))
-    
+
     # Check if user already completed onboarding
     if hasattr(request.user, 'workspace') and request.user.workspace.onboarding_completed:
         return redirect('users:dashboard')
-    
+
     if request.method == 'POST':
         if step == 1:
             # Save account type
@@ -248,7 +248,7 @@ def onboarding(request):
 
             messages.success(request, 'Welcome to Mathia! Your workspace is ready.')
             return redirect('users:dashboard')
-    
+
     return render(request, 'users/onboarding.html', {
         'step': step
     })

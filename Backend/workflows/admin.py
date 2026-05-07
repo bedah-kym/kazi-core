@@ -60,7 +60,7 @@ class WorkflowDraftAdmin(admin.ModelAdmin):
                 '<span style="color: #555;">{}</span>',
                 name
             )
-        except:
+        except Exception:
             return '-'
     name_display.short_description = 'Draft'
 
@@ -285,4 +285,3 @@ class WorkflowImprovementSuggestionAdmin(admin.ModelAdmin):
     search_fields = ['workflow__name', 'title', 'summary']
     readonly_fields = ['created_at']
     autocomplete_fields = ['workflow', 'execution', 'user']
-

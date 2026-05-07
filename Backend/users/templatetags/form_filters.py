@@ -3,6 +3,7 @@ from django.utils.safestring import mark_safe
 
 register = template.Library()
 
+
 @register.filter(name='attr')
 def set_attr(field, attr_string):
     """
@@ -13,12 +14,14 @@ def set_attr(field, attr_string):
     for attr_pair in attr_string.split(','):
         key, value = attr_pair.split(':')
         attrs[key.strip()] = value.strip()
-    
+
     return field.as_widget(attrs=attrs)
+
 
 @register.filter(name='add_class')
 def add_class(field, css_class):
     return field.as_widget(attrs={'class': css_class})
+
 
 @register.filter(name='add_placeholder')
 def add_placeholder(field, placeholder_text):

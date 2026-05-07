@@ -22,7 +22,7 @@ def reminders_page(request):
     reminders = Reminder.objects.filter(
         user=request.user
     ).order_by('-created_at')
-    
+
     return render(request, 'users/reminders.html', {
         'reminders': reminders
     })
@@ -36,11 +36,11 @@ def create_reminder(request):
         scheduled_time_str = request.POST.get('scheduled_time', '')
         via_email = request.POST.get('via_email') == 'on'
         via_whatsapp = request.POST.get('via_whatsapp') == 'on'
-        
+
         try:
             # Parse datetime
             scheduled_time = datetime.fromisoformat(scheduled_time_str)
-            
+
             # Create reminder
             reminder = Reminder.objects.create(
                 user=request.user,
@@ -55,11 +55,11 @@ def create_reminder(request):
                 schedule_reminder_delivery(reminder.id, scheduled_time)
             except Exception as e:
                 messages.warning(request, f'Reminder saved but not scheduled: {e}')
-            
+
             messages.success(request, 'Reminder created successfully!')
         except Exception as e:
             messages.error(request, f'Error creating reminder: {str(e)}')
-    
+
     return redirect('users:reminders')
 
 
@@ -68,7 +68,7 @@ def settings_page(request):
     """Settings page - integrations and preferences"""
     # Check if Calendly is connected
     calendly_connected = hasattr(request.user, 'calendly') and request.user.calendly.is_connected
-    
+
     return render(request, 'users/settings.html', {
         'calendly_connected': calendly_connected
     })

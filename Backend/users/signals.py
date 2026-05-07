@@ -23,25 +23,25 @@ def create_user_profile(sender, instance, created, **kwargs):
             )
         else:
             UserProfile.objects.create(user=instance)
-            
+
             # Auto-create General Room
             from chatbot.models import Chatroom, Member, Message
             import django.utils.timezone
 
             # Create Member for new user
             user_member, _ = Member.objects.get_or_create(User=instance)
-            
+
             # Create the General Room
             general_room = Chatroom.objects.create()
             general_room.participants.add(user_member)
-            
+
             # Try to add Mathia
             try:
                 mathia_user = User.objects.get(username='mathia')
                 mathia_member, _ = Member.objects.get_or_create(User=mathia_user)
-                
+
                 general_room.participants.add(mathia_member)
-                
+
                 # Add a welcome message
                 welcome_msg = Message.objects.create(
                     member=mathia_member,
@@ -49,7 +49,7 @@ def create_user_profile(sender, instance, created, **kwargs):
                     timestamp=django.utils.timezone.now()
                 )
                 general_room.chats.add(welcome_msg)
-                
+
             except User.DoesNotExist:
                 # Mathia doesn't exist, but user still gets their room
                 print(f"Warning: Mathia user not found. General room created for {instance.username} without bot.")
@@ -58,11 +58,8 @@ def create_user_profile(sender, instance, created, **kwargs):
                 print(f"Error adding Mathia to room: {e}")
 
 
-
 @receiver(post_save, sender=User)
 def save_user_profile(sender, instance, **kwargs):
     """Save UserProfile when User is saved"""
     if hasattr(instance, 'profile'):
         instance.profile.save()
-
-

@@ -16,32 +16,32 @@ class DataSynthesizer:
     """
     Synthesizes natural language responses from structured data
     """
-    
+
     def __init__(self):
         from .llm_client import get_llm_client
         self.llm = get_llm_client()
-        
+
     async def synthesize(self, intent: Dict, result: Dict, use_llm: bool = True) -> str:
         """
         Convert result data into a user-friendly response
         """
         try:
             action = intent.get("action")
-            
+
             # 1. Basic formatting (fallback)
             basic_response = self._format_basic(intent, result)
-            
+
             # 2. Skip LLM for media/formatted actions (to preserve markdown)
             # These return pre-formatted messages with special syntax (images, etc)
             if action in ["search_gif", "get_weather", "convert_currency"]:
                 return basic_response
-            
+
             # 3. LLM Enhancement (if enabled for other actions)
             if use_llm:
                 return await self._enhance_with_llm(intent, result, basic_response)
-            
+
             return basic_response
-            
+
         except Exception as e:
             import traceback
             logger.error(f"Synthesis error: {e}\n{traceback.format_exc()}")
@@ -54,16 +54,16 @@ class DataSynthesizer:
         try:
             # 1. Basic formatting (fallback)
             basic_response = self._format_basic(intent, result)
-            
+
             # 2. LLM Enhancement (if enabled)
             if use_llm:
                 async for chunk in self._enhance_with_llm_stream(intent, result, basic_response):
                     yield chunk
                 return
-            
+
             # If not using LLM, simulate stream or just yield once
             yield basic_response
-            
+
         except Exception as e:
             import traceback
             logger.error(f"Synthesis stream error: {e}\n{traceback.format_exc()}")
@@ -86,14 +86,14 @@ class DataSynthesizer:
                     return f"{text}\n\n{receipt_line}"
                 return receipt_line
             return text
-        
+
         if action == "check_payments":
             return _with_receipt(f"Current balance: {data.get('currency')} {data.get('balance')}")
-            
+
         elif action == "schedule_meeting":
             slots = data.get("slots", [])
             return _with_receipt(f"Found {len(slots)} available slots. First available: {slots[0]['start'] if slots else 'None'}")
-            
+
         elif action == "search_info":
             return _with_receipt(data.get("summary", "Here is what I found."))
 
@@ -101,7 +101,7 @@ class DataSynthesizer:
             summary = "Your current usage limits:\n"
             if not isinstance(data, dict):
                 return _with_receipt(f"Error: Quota data not correctly formatted. Received: {type(data)}")
-                
+
             for key, q in data.items():
                 if isinstance(q, dict):
                     name = q.get('name', key.capitalize())
@@ -147,13 +147,13 @@ class DataSynthesizer:
 
         elif action == "book_travel_item":
             return _with_receipt(data.get("message", "Booking initiated."))
-         
+
         # NEW: Handle GIF with message AND full URL
         elif action == "search_gif":
             url = data.get("url", "")
             message = data.get("message", "Here's a GIF!")
             return _with_receipt(f"{message}\n![GIF]({url})")
-            
+
         return _with_receipt(str(data))
 
     async def _enhance_with_llm(self, intent: Dict, result: Dict, basic_response: str) -> str:
@@ -181,9 +181,9 @@ Please generate a natural response for the user.
                 temperature=0.7,
                 model_role="executor",
             )
-            
+
             return response
-            
+
         except Exception as e:
             logger.error(f"LLM enhancement failed: {e}")
             return basic_response
@@ -214,13 +214,14 @@ Please generate a natural response for the user.
                 model_role="executor",
             ):
                 yield chunk
-            
+
         except Exception as e:
             logger.error(f"LLM enhancement stream failed: {e}")
             yield basic_response
 
 
 _synthesizer = None
+
 
 def get_synthesizer() -> DataSynthesizer:
     """Get or create the global synthesizer instance"""
@@ -231,8 +232,8 @@ def get_synthesizer() -> DataSynthesizer:
 
 
 async def synthesize_response(
-    intent: Dict, 
-    result: Dict, 
+    intent: Dict,
+    result: Dict,
     use_llm: bool = False
 ) -> str:
     """
@@ -243,8 +244,8 @@ async def synthesize_response(
 
 
 async def synthesize_response_stream(
-    intent: Dict, 
-    result: Dict, 
+    intent: Dict,
+    result: Dict,
     use_llm: bool = False
 ):
     """

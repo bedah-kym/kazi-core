@@ -29,6 +29,7 @@ _NOTE_INJECTION_RE = re.compile(
     re.IGNORECASE,
 )
 
+
 class ContextManager:
     """
     Manages the 'Memory' of the AI.
@@ -49,10 +50,10 @@ class ContextManager:
         try:
             # 1. Get Local Room Context
             context_obj, created = RoomContext.objects.get_or_create(chatroom=chatroom)
-            
+
             # 2. Get Ranked Local Notes
             local_notes = ContextManager._get_ranked_notes(context_obj)
-            
+
             # Format Local Data
             context_data = {
                 "summary": context_obj.summary or "",
@@ -96,7 +97,7 @@ class ContextManager:
                     if context_obj.memory_updated_at else None
                 ),
             })
-            
+
             # 3. LINKED ROOM CONTEXT (opt-in only)
             linked_contexts = list(context_obj.related_rooms.all())
             if linked_contexts:
@@ -156,17 +157,17 @@ class ContextManager:
                 chatroom=chatroom,
                 status='completed'
             ).order_by('-uploaded_at')[:3]
-            
+
             if docs:
                 context_data['documents'] = [{
                     "id": d.id,
                     "type": d.file_type,
-                    "text": d.processed_text[:2000], # Limit per doc
+                    "text": d.processed_text[:2000],  # Limit per doc
                     "metadata": d.extracted_metadata
                 } for d in docs]
-                
+
             return context_data
-            
+
         except Exception as e:
             logger.error(f"Error getting context: {e}")
             return {"summary": "", "notes": []}
@@ -180,13 +181,13 @@ class ContextManager:
         try:
             room = Chatroom.objects.get(id=room_id)
             data = ContextManager.get_context_for_ai(room)
-            
+
             prompt_parts = []
-            
+
             # Add Summary
             if data['summary']:
                 prompt_parts.append(f"ROOM CONTEXT:\n{data['summary']}")
-            
+
             # Add Active Topics
             if data['active_topics']:
                 prompt_parts.append(f"TOPICS: {', '.join(data['active_topics'])}")
@@ -246,7 +247,7 @@ class ContextManager:
             if episode_lines:
                 prompt_parts.append("EPISODIC MEMORY:")
                 prompt_parts.extend(episode_lines)
-            
+
             # Add Local Notes
             if data['recent_notes']:
                 prompt_parts.append("IMPORTANT NOTES:")
@@ -258,7 +259,7 @@ class ContextManager:
 
             if data.get('latest_daily_summary'):
                 prompt_parts.append(f"DAILY SUMMARY:\n{data['latest_daily_summary']}")
-            
+
             # Add Linked Room Notes
             if data.get('linked_notes'):
                 prompt_parts.append("LINKED ROOM CONTEXT:")
@@ -272,7 +273,7 @@ class ContextManager:
                 prompt_parts.append("LINKED ROOM SUMMARIES:")
                 for ls in data['linked_room_summaries']:
                     prompt_parts.append(f"- Room {ls['room_id']}: {ls['summary']}")
-            
+
             # Add User Contacts
             if data.get('contacts'):
                 contact_lines = []
@@ -294,12 +295,12 @@ class ContextManager:
                     prompt_parts.append(f"--- DOCUMENT ID {doc['id']} ({doc['type']}) ---")
                     prompt_parts.append(doc['text'])
                     prompt_parts.append("--- END DOCUMENT ---")
-                    
+
             if not prompt_parts:
                 return ""
-                
+
             return "\n\n" + "\n".join(prompt_parts)
-            
+
         except Exception as e:
             logger.error(f"Error building context prompt: {e}")
             return ""

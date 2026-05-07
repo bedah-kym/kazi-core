@@ -5,6 +5,7 @@ from orchestration.llm_client import get_llm_client, extract_json
 
 logger = logging.getLogger(__name__)
 
+
 class RecommendationService:
     """
     AI-powered engine to provide context-aware travel recommendations.
@@ -14,15 +15,15 @@ class RecommendationService:
     def __init__(self):
         self.llm_client = get_llm_client()
 
-    async def recommend_activities(self, 
-                                 destination: str, 
-                                 current_itinerary_items: List[Dict],
-                                 interests: List[str] = None) -> List[Dict]:
+    async def recommend_activities(self,
+                                   destination: str,
+                                   current_itinerary_items: List[Dict],
+                                   interests: List[str] = None) -> List[Dict]:
         """
         Suggest complementary activities based on what's already booked.
         """
         context_summary = self._summarize_context(current_itinerary_items)
-        
+
         prompt = f"""
         Suggest 5 unique activities for a trip to {destination}.
         
@@ -44,7 +45,7 @@ class RecommendationService:
             }}
         ]
         """
-        
+
         return await self._get_llm_suggestions(prompt)
 
     async def recommend_dining(self, destination: str, cuisine_pref: str = None) -> List[Dict]:
@@ -66,7 +67,7 @@ class RecommendationService:
         ]
         """
         return await self._get_llm_suggestions(prompt)
-    
+
     async def get_hidden_gems(self, destination: str) -> List[Dict]:
         """
         Suggest non-touristy, 'hidden gem' locations.
@@ -97,7 +98,7 @@ class RecommendationService:
             )
             data = extract_json(response)
             if isinstance(data, list): return data
-            if isinstance(data, dict) and 'items' in data: return data['items'] # Handle wrapped responses
+            if isinstance(data, dict) and 'items' in data: return data['items']  # Handle wrapped responses
             return []
         except Exception as e:
             logger.error(f"Error getting recommendations: {e}")
@@ -108,22 +109,22 @@ class RecommendationService:
         Verify an activity using online search, subject to rate limits.
         """
         from orchestration.mcp_router import route_intent
-        
+
         logger.info(f"Verifying activity online: {activity_name}")
-        
+
         intent = {
             "action": "search_info",
             "parameters": {"query": f"latest reviews and opening hours for {activity_name} in Kenya"}
         }
         context = {"user_id": user_id}
-        
+
         result = await route_intent(intent, context)
-        
+
         if result.get('status') == 'success':
             data = result.get('data', {})
             if data.get('error') == 'rate_limit_exceeded':
-                 return {"verified": False, "reason": "Daily search limit reached."}
-            
+                return {"verified": False, "reason": "Daily search limit reached."}
+
             return {
                 "verified": True,
                 "summary": data.get('summary'),

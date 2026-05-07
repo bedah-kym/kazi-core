@@ -32,10 +32,10 @@ User = get_user_model()
 
 class ItineraryModelTests(TestCase):
     """Test Itinerary model"""
-    
+
     def setUp(self):
         self.user = User.objects.create_user(username='testuser', email='test@example.com', password='pass123')
-    
+
     def test_create_itinerary(self):
         """Test creating an itinerary"""
         itinerary = Itinerary.objects.create(
@@ -49,7 +49,7 @@ class ItineraryModelTests(TestCase):
         self.assertEqual(itinerary.title, 'Kenya Safari')
         self.assertEqual(itinerary.user, self.user)
         self.assertEqual(itinerary.status, 'draft')
-    
+
     def test_itinerary_duration(self):
         """Test itinerary duration calculation"""
         start = timezone.now()
@@ -83,7 +83,7 @@ class ItineraryModelTests(TestCase):
 
 class ItineraryItemModelTests(TestCase):
     """Test ItineraryItem model"""
-    
+
     def setUp(self):
         self.user = User.objects.create_user(username='testuser', email='test@example.com', password='pass123')
         self.itinerary = Itinerary.objects.create(
@@ -93,7 +93,7 @@ class ItineraryItemModelTests(TestCase):
             start_date=timezone.now(),
             end_date=timezone.now() + timedelta(days=7)
         )
-    
+
     def test_create_itinerary_item(self):
         """Test creating an itinerary item"""
         item = ItineraryItem.objects.create(
@@ -107,12 +107,12 @@ class ItineraryItemModelTests(TestCase):
         self.assertEqual(item.title, 'Safari Park Hotel')
         self.assertEqual(item.item_type, 'hotel')
         self.assertEqual(item.status, 'planned')
-    
+
     def test_item_ordering(self):
         """Test items ordered by sort_order and start_datetime"""
         time1 = timezone.now()
         time2 = time1 + timedelta(hours=1)
-        
+
         item2 = ItineraryItem.objects.create(
             itinerary=self.itinerary,
             item_type='flight',
@@ -127,7 +127,7 @@ class ItineraryItemModelTests(TestCase):
             start_datetime=time1,
             sort_order=1
         )
-        
+
         items = ItineraryItem.objects.all()
         self.assertEqual(items[0].id, item1.id)
         self.assertEqual(items[1].id, item2.id)
@@ -146,7 +146,7 @@ class ItineraryItemModelTests(TestCase):
 
 class EventModelTests(TestCase):
     """Test Event model"""
-    
+
     def test_create_event(self):
         """Test creating an event"""
         event = Event.objects.create(
@@ -177,15 +177,15 @@ class EventModelTests(TestCase):
 
 class SearchCacheModelTests(TestCase):
     """Test SearchCache model"""
-    
+
     def test_create_cache_entry(self):
         """Test creating a cache entry"""
         import hashlib
         import json
-        
+
         query = {'origin': 'Nairobi', 'destination': 'Mombasa'}
         query_hash = hashlib.sha256(json.dumps(query, sort_keys=True).encode()).hexdigest()
-        
+
         cache = SearchCache.objects.create(
             query_hash=query_hash,
             provider='buupass',
@@ -196,15 +196,15 @@ class SearchCacheModelTests(TestCase):
         self.assertEqual(cache.provider, 'buupass')
         self.assertFalse(cache.is_expired())
         self.assertEqual(cache.hit_count, 0)
-    
+
     def test_cache_expiry(self):
         """Test cache expiry detection"""
         import hashlib
         import json
-        
+
         query = {'test': 'query'}
         query_hash = hashlib.sha256(json.dumps(query, sort_keys=True).encode()).hexdigest()
-        
+
         cache = SearchCache.objects.create(
             query_hash=query_hash,
             provider='booking',

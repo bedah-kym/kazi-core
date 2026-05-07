@@ -33,13 +33,13 @@ class IntentParser:
     """
     Parses user messages and extracts structured intent using LLMClient
     """
-    
+
     # Define supported actions
     SUPPORTED_ACTIONS = sorted(set(get_supported_actions(include_aliases=False) + [
         "general_chat",
         "create_workflow",
     ]))
-    
+
     SYSTEM_PROMPT = """You are an intent classifier for Mathia, a personal assistant with travel planning.
     
 Your job: Parse user messages into structured JSON.
@@ -335,7 +335,7 @@ Rules:
             return None
         match = re.search(r"\+?\d{7,15}", message.replace(" ", ""))
         return match.group(0) if match else None
-        
+
     async def parse(self, message: str, user_context: Optional[Dict] = None) -> Dict:
         """Parse a natural language message into structured intent"""
         try:
@@ -394,13 +394,13 @@ Rules:
                 "raw_query": message,
                 "error": str(e)
             }
-    
+
     def _build_user_prompt(self, message: str, context: Optional[Dict]) -> str:
         """Build the user prompt with context"""
         from django.utils import timezone
-        
+
         prompt = f'Current Time: {timezone.now().isoformat()}\n'
-        
+
         if context and context.get('preferences'):
             try:
                 prompt += f"USER PREFERENCES:\n{json.dumps(context.get('preferences'))}\n\n"
@@ -412,9 +412,9 @@ Rules:
 
         if context and context.get('history'):
             prompt += f"CONVERSATION HISTORY (Most recent last):\n{context['history']}\n\n"
-            
+
         prompt += f'User message: "{message}"'
-        
+
         if context:
             expected_action = context.get("expected_action") if isinstance(context, dict) else None
             expected_slots = context.get("expected_slots") if isinstance(context, dict) else None
@@ -423,9 +423,9 @@ Rules:
             if expected_slots:
                 prompt += f"\nMissing slots to fill: {expected_slots}"
             prompt += f'\n\nUser context: {json.dumps(context)}'
-            
+
         return prompt
-    
+
     def _validate_intent(self, intent: Dict, original_message: str) -> Dict:
         """Validate and normalize the parsed intent"""
         if not intent or "action" not in intent:
@@ -438,13 +438,13 @@ Rules:
                 "clarifying_question": "",
                 "raw_query": original_message
             }
-        
+
         if "confidence" not in intent:
             intent["confidence"] = 0.5
-            
+
         if "parameters" not in intent:
             intent["parameters"] = {}
-            
+
         if "raw_query" not in intent:
             intent["raw_query"] = original_message
 
@@ -452,7 +452,7 @@ Rules:
             intent["missing_slots"] = []
         if "clarifying_question" not in intent:
             intent["clarifying_question"] = ""
-        
+
         try:
             intent["confidence"] = max(0.0, min(1.0, float(intent["confidence"])))
         except (ValueError, TypeError):
@@ -461,12 +461,12 @@ Rules:
         canonical_action = resolve_action_alias(intent.get("action"))
         if canonical_action:
             intent["action"] = canonical_action
-        
+
         if intent["action"] not in self.SUPPORTED_ACTIONS:
             logger.warning(f"Unknown action: {intent['action']}, defaulting to general_chat")
             intent["action"] = "general_chat"
             intent["confidence"] *= 0.5
-        
+
         return intent
 
     def _postprocess_intent(
@@ -539,6 +539,7 @@ Rules:
 # Singleton instance (thread-safe)
 _parser = None
 _parser_lock = threading.Lock()
+
 
 def get_intent_parser() -> IntentParser:
     """Get or create the global intent parser instance (thread-safe)."""

@@ -11,11 +11,11 @@ class EnsureMemberMiddleware:
     """
     Automatically create a Member object for any authenticated user if it doesn't exist.
     This fixes 403 errors in context panel where permission checks filter by Member.
-    
+
     Performance optimization: Once a Member is created, we set a session flag
     to avoid hitting the database on every subsequent request.
     """
-    
+
     def __init__(self, get_response):
         self.get_response = get_response
 
@@ -30,9 +30,9 @@ class EnsureMemberMiddleware:
                 except Member.MultipleObjectsReturned:
                     # Duplicates exist - just use the first one
                     member = Member.objects.filter(User=request.user).first()
-                
+
                 # Mark in session to skip this check for future requests
                 request.session['_member_created'] = True
-        
+
         response = self.get_response(request)
         return response

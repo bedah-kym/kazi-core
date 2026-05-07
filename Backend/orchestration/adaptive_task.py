@@ -47,6 +47,7 @@ PARAM_ALIASES = {
     "create_payment_link": {"phone": "phone_number", "payer_email": "email"},
 }
 
+
 def get_action_definition(action: Optional[str]) -> Optional[Dict[str, Any]]:
     return get_catalog_action_definition(action)
 

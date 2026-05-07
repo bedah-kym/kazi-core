@@ -1,6 +1,8 @@
 from django.db import models
 
 # Create your models here.
+
+
 class MathiaReply(models.Model):
     message = models.TextField()
     sender = models.CharField(max_length=15)

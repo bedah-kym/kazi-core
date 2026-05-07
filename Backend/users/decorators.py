@@ -19,14 +19,14 @@ def workspace_required(view_func):
         if not hasattr(request.user, 'workspace'):
             messages.warning(request, 'Please complete your workspace setup first')
             return redirect('users:onboarding')
-        
+
         # Check if onboarding is completed
         workspace = request.user.workspace
         if not workspace.onboarding_completed:
             messages.info(request, 'Almost there! Finish setting up your workspace')
             return redirect('users:onboarding')
-        
+
         # All good, proceed to view
         return view_func(request, *args, **kwargs)
-    
+
     return wrapper

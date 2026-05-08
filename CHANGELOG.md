@@ -7,6 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-05-08
+
+Bug-fix release. Real-world QA against the running docker stack and
+the user's `.env` surfaced four high-severity bugs in the v0.4.0
+human-gated runtime. None were caught by the 37-test suite because
+the unit tests stub the very layers where the bugs live. v0.4.1
+closes all four, ships a runnable diagnostics script so future QA
+catches regressions, and relaxes one v1.0 contract to honestly match
+the connector reality.
+
+### Fixed
+
+- **Workflow executor now dispatches registry-only connectors**
+  (Bug #1). `KAZI_DEMO_MODE=true` workflows that reference example
+  connectors (e.g. `echo`) used to fail with `Unsupported workflow
+  action: echo`. `Backend/workflows/activity_executors.py` now falls
+  back to `connector_registry.discover_connectors()` for any
+  catalog-absent action — restoring the M5-1 demo pack's actual
+  end-to-end execution. The startup validator
+  (`validate_executor_action_mappings`) is unchanged; the fallback
+  runs only at dispatch time, only for actions that have routing but
+  no catalog entry by design.
+- **Replay-safety guard now honored end-to-end** (Bug #2). Two layers
+  fixed:
+  - `is_step_safe_to_replay` now respects explicit `safe_to_replay:
+    false` step-level overrides. Previously only honored explicit
+    `True`, silently ignoring `False` and falling through to
+    action-level fallback.
+  - `rerun_execution` HTTP view now reads the documented `from_step`
+    (string) and `force` (bool) params from
+    `docs/contracts/replay-safety.md`. Returns 400 on unsafe rerun
+    unless `force: true` is passed; forced reruns are recorded in
+    `trigger_data.replay_forced` + `trigger_data.replay_safety_bypass_reason`
+    so the receipt + trace remain auditable. Legacy `from_failed_step`
+    boolean stays supported.
+  - `build_replay_request` signature extended with `from_step_id` +
+    `force` kwargs while keeping the legacy boolean for back-compat.
+- **`docker-compose.yml` no longer drops `.env` API keys** (Bug #3).
+  The `environment:` block had `ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}`
+  and 6 similar lines that overrode `env_file: .env` with whatever
+  the host shell had (usually empty). Removed; `env_file` now wins
+  for those keys. Verified `MAILGUN_API_KEY`, `TWILIO_ACCOUNT_SID`,
+  and the rest of the connector credentials now reach the container.
+
+### Changed
+
+- **Connector-execution contract relaxed to v1.1** (Bug #5). v1.0 said
+  `data` was required, but 24/25 built-in connectors return result
+  fields at the top level. v1.1 documents both shapes — envelope
+  (recommended for new connectors) and legacy (current built-ins) —
+  and the consumer-side fallback pattern. The contract now matches
+  ground truth. v2.0 will narrow back to envelope-only and ship a
+  connector migration. `CONNECTOR_EXECUTION_CONTRACT_VERSION` bumped
+  from `"1.0"` to `"1.1"`.
+
+### Added
+
+- **`Backend/tests/v04_release_diagnostics.py`** — committed as a
+  manual integration diagnostic. Run via
+  `docker compose exec -T web python Backend/manage.py shell <
+  Backend/tests/v04_release_diagnostics.py` to exercise every README
+  claim against real APIs. Catches the kind of integration bug
+  v0.4.1 patched, which the 37-test unit suite missed.
+- **Four new regression tests** in `Backend/workflows/tests.py`
+  (`ReplaySafetyRegressionTests`, `RerunEndpointReplaySafetyTests`)
+  and one in the same file (`WorkflowExecutorRegistryFallbackTests`)
+  pin all four fixes against future regressions.
+
+### Known issues (deferred to v0.5)
+
+- **Bug #6** — `manager_verifier.review_steps` reordering is
+  substring-keyword-fragile. Reorders correctly for some prompts
+  ("Find flights and email me the results") but not others ("Find
+  hotels and email me the list"). Honest fix needs LLM-backed
+  replanning or a much smarter heuristic; deferred to v0.5.
+- **24-of-25-connector envelope migration**. v1.1 documents the
+  legacy shape; v2.0 will require all connectors to wrap responses
+  in `data`. Big surface, ships as v0.5.
+
 ## [0.4.0] - 2026-05-08
 
 The **human-gated runtime cycle**. Workflows can now pause durably for
@@ -251,7 +330,8 @@ The full orchestration core was opened.
 - Project rebranded from Mathia.OS to **Kazi** (Swahili for "work").
   Agent identity is configurable via `KAZI_AGENT_NAME` (default `Kazi`).
 
-[Unreleased]: https://github.com/bedah-kym/kazi-core/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/bedah-kym/kazi-core/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/bedah-kym/kazi-core/releases/tag/v0.4.1
 [0.4.0]: https://github.com/bedah-kym/kazi-core/releases/tag/v0.4.0
 [0.3.0]: https://github.com/bedah-kym/kazi-core/releases/tag/v0.3.0
 [0.2.0]: https://github.com/bedah-kym/kazi-core/releases/tag/v0.2.0

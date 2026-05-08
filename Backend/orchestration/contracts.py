@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 
 # Contract versions — bump on any change documented in docs/contracts/.
-CONNECTOR_EXECUTION_CONTRACT_VERSION = "1.0"
+CONNECTOR_EXECUTION_CONTRACT_VERSION = "1.1"
 TOOL_SCHEMA_CONTRACT_VERSION = "1.0"
 APPROVAL_CONTRACT_VERSION = "1.0"
 EXECUTION_DETAIL_CONTRACT_VERSION = "1.0"

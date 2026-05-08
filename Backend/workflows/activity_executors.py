@@ -288,6 +288,23 @@ async def execute_workflow_step(step: Dict[str, Any], context: Dict[str, Any]) -
 
     action_def = get_action_definition(action)
     if not action_def:
+        # Fallback: registry-only connectors (e.g. example connectors loaded
+        # via KAZI_DEMO_MODE) are intentionally absent from the global
+        # action_catalog (PR #47) so they don't trip the executor's startup
+        # validator. Try the connector registry before failing — this lets
+        # the v0.4 demo workflow pack actually execute echo steps end-to-end
+        # (v0.4.1 Bug #1).
+        # Return the raw result; the `_record_and_return` closure is defined
+        # later in this function and isn't reachable from this early-exit
+        # branch, but registry-only actions aren't in the action_catalog so
+        # `should_record_receipt(action)` returns False for them anyway —
+        # no receipt would be persisted regardless.
+        from orchestration.connector_registry import discover_connectors
+        registry = discover_connectors()
+        registry_connector = registry.get(action)
+        if registry_connector is not None:
+            params.setdefault("action", action)
+            return await registry_connector.execute(params, context)
         return {"status": "error", "error": f"Unsupported workflow action: {action}"}
 
     # Guard against mismatched service/action pairs in user-provided workflow JSON.

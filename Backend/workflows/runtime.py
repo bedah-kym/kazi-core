@@ -56,8 +56,12 @@ def get_step_max_attempts(step: Dict[str, Any], default: int = 3) -> int:
 
 
 def is_step_safe_to_replay(step: Dict[str, Any]) -> bool:
-    if bool(step.get("safe_to_replay")):
-        return True
+    # Honor explicit step-level overrides — both True AND False. The previous
+    # `if bool(step.get("safe_to_replay")): return True` only honored True,
+    # silently ignoring `safe_to_replay: false` (v0.4.1 Bug #2A).
+    explicit = step.get("safe_to_replay")
+    if explicit is not None:
+        return bool(explicit)
     action = resolve_action_alias(step.get("action"))
     return not is_high_risk_action(action) and not requires_confirmation(action)
 

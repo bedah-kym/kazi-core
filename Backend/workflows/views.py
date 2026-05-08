@@ -309,6 +309,14 @@ def cancel_execution(request, execution_id):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def rerun_execution(request, execution_id):
+    """Rerun an execution from a chosen step, honoring replay-safety per
+    docs/contracts/replay-safety.md.
+
+    Body params (all optional):
+      from_step (str)      — step id to rerun from (preferred, v0.4.1)
+      force (bool)         — bypass safety check; recorded in receipt
+      from_failed_step (bool) — legacy: rerun from execution.current_step
+    """
     execution = (
         WorkflowExecution.objects.filter(id=execution_id, workflow__user=request.user)
         .select_related("workflow")
@@ -317,9 +325,20 @@ def rerun_execution(request, execution_id):
     if not execution:
         return Response({"error": "Execution not found"}, status=404)
 
+    raw_from_step = request.data.get("from_step")
+    from_step_id = str(raw_from_step).strip() if raw_from_step else None
+    if from_step_id == "":
+        from_step_id = None
+    force = bool(request.data.get("force"))
     from_failed_step = bool(request.data.get("from_failed_step"))
+
     try:
-        replay_request = async_to_sync(build_replay_request)(execution, from_failed_step=from_failed_step)
+        replay_request = async_to_sync(build_replay_request)(
+            execution,
+            from_failed_step=from_failed_step,
+            from_step_id=from_step_id,
+            force=force,
+        )
     except ValueError as exc:
         return Response({"error": str(exc)}, status=400)
 
@@ -328,12 +347,23 @@ def rerun_execution(request, execution_id):
         trigger_data=replay_request["trigger_data"],
         trigger_type="rerun",
     )
+
+    if force:
+        mode = "forced"
+    elif from_step_id:
+        mode = "from_step"
+    elif from_failed_step:
+        mode = "from_failed_step"
+    else:
+        mode = "full"
     return Response(
         {
             "status": "started",
             "execution_id": new_execution.id,
             "workflow_id": execution.workflow_id,
-            "mode": "from_failed_step" if from_failed_step else "full",
+            "mode": mode,
+            "from_step": from_step_id,
+            "forced": force,
         }
     )
 

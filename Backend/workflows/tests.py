@@ -391,3 +391,196 @@ class SeedDemoWorkflowCommandTests(TestCase):
 
         with self.assertRaises(CommandError):
             call_command("seed_demo_workflow", "--user", "no-such-user", stdout=StringIO())
+
+
+class ReplaySafetyRegressionTests(TestCase):
+    """v0.4.1 regression pins for Bug #2A (is_step_safe_to_replay) and
+    Bug #2B (rerun HTTP endpoint enforcement)."""
+
+    def test_safe_to_replay_honors_explicit_false(self):
+        """v0.4.1 Bug #2A — explicit False is respected, not silently dropped."""
+        from workflows.runtime import is_step_safe_to_replay
+
+        # get_weather is action-level safe (low-risk, no confirmation), but the
+        # step explicitly opts out → must be False.
+        step = {"id": "x", "action": "get_weather", "safe_to_replay": False}
+        self.assertFalse(
+            is_step_safe_to_replay(step),
+            "v0.4.1 Bug #2A regressed: explicit safe_to_replay=False ignored",
+        )
+
+    def test_safe_to_replay_honors_explicit_true(self):
+        """v0.4.1 Bug #2A — explicit True still works (back-compat)."""
+        from workflows.runtime import is_step_safe_to_replay
+
+        step = {"id": "x", "action": "send_email", "safe_to_replay": True}
+        self.assertTrue(is_step_safe_to_replay(step))
+
+    def test_safe_to_replay_falls_through_when_unset(self):
+        """v0.4.1 Bug #2A — None still falls through to action-level fallback."""
+        from workflows.runtime import is_step_safe_to_replay
+
+        # send_email is high-risk per the catalog → action-level fallback says unsafe.
+        unset = {"id": "x", "action": "send_email"}
+        self.assertFalse(is_step_safe_to_replay(unset))
+        # get_weather is low-risk → action-level fallback says safe.
+        unset_safe = {"id": "y", "action": "get_weather"}
+        self.assertTrue(is_step_safe_to_replay(unset_safe))
+
+
+class RerunEndpointReplaySafetyTests(TestCase):
+    """v0.4.1 Bug #2B — rerun HTTP view honors documented from_step + force."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="rerun-user", password="x")
+        self.workflow = UserWorkflow.objects.create(
+            user=self.user,
+            name="Two-step",
+            description="safe + unsafe",
+            definition={
+                "workflow_name": "Two-step",
+                "workflow_description": "safe + unsafe",
+                "triggers": [{"trigger_type": "manual"}],
+                "steps": [
+                    {"id": "draft", "service": "echo", "action": "echo",
+                     "params": {"message": "draft"}, "safe_to_replay": True},
+                    {"id": "send", "service": "echo", "action": "echo",
+                     "params": {"message": "send"}, "safe_to_replay": False,
+                     "requires_approval": True},
+                ],
+            },
+        )
+        self.execution = WorkflowExecution.objects.create(
+            workflow=self.workflow,
+            temporal_workflow_id="rerun-test-1",
+            trigger_type="manual",
+            status="completed",
+            current_step="send",
+        )
+
+    def _post_rerun(self, body):
+        client = APIClient()
+        client.force_authenticate(self.user)
+        return client.post(
+            f"/api/workflows/executions/{self.execution.id}/rerun/",
+            body, format="json",
+        )
+
+    @patch("workflows.views.start_workflow_execution", new=AsyncMock(
+        return_value=MagicMock(id=999, workflow_id=1)))
+    def test_rerun_from_unsafe_step_refused_400(self):
+        """Bug #2B: from_step pointing at unsafe step returns 400."""
+        response = self._post_rerun({"from_step": "send"})
+        self.assertEqual(
+            response.status_code, 400,
+            f"v0.4.1 Bug #2B regressed: rerun from unsafe step returned "
+            f"{response.status_code}, body={response.content!r}",
+        )
+        self.assertIn("not safe to replay", response.content.decode().lower())
+
+    @patch("workflows.views.start_workflow_execution", new=AsyncMock(
+        return_value=MagicMock(id=999, workflow_id=1)))
+    def test_rerun_from_unsafe_with_force_allowed(self):
+        """Bug #2B: force=true bypasses the safety check."""
+        response = self._post_rerun({"from_step": "send", "force": True})
+        self.assertEqual(response.status_code, 200, response.content)
+        body = response.json()
+        self.assertEqual(body.get("mode"), "forced")
+        self.assertTrue(body.get("forced"))
+        self.assertEqual(body.get("from_step"), "send")
+
+    @patch("workflows.views.start_workflow_execution", new=AsyncMock(
+        return_value=MagicMock(id=999, workflow_id=1)))
+    def test_rerun_from_safe_step_with_unsafe_tail_refused(self):
+        """Bug #2B: rerun from a safe step still refuses if the slice from
+        that step onwards includes an unsafe step. Per replay-safety contract,
+        rerun replays the chosen step AND everything after; the safety check
+        is over the whole slice, not just the entry point. Override with
+        force=true (covered by test_rerun_from_unsafe_with_force_allowed).
+        """
+        response = self._post_rerun({"from_step": "draft"})
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertIn("not safe to replay", response.content.decode().lower())
+
+    @patch("workflows.views.start_workflow_execution", new=AsyncMock(
+        return_value=MagicMock(id=999, workflow_id=1)))
+    def test_rerun_from_step_with_safe_tail_allowed(self):
+        """Bug #2B: rerun from a safe step IS allowed when the slice from
+        that step onwards is entirely safe. Uses a separate all-safe workflow
+        so the slice doesn't include any unsafe step."""
+        all_safe_workflow = UserWorkflow.objects.create(
+            user=self.user,
+            name="All-safe",
+            description="all safe steps",
+            definition={
+                "workflow_name": "All-safe",
+                "workflow_description": "all safe steps",
+                "triggers": [{"trigger_type": "manual"}],
+                "steps": [
+                    {"id": "lookup", "service": "echo", "action": "echo",
+                     "params": {"message": "lookup"}, "safe_to_replay": True},
+                    {"id": "report", "service": "echo", "action": "echo",
+                     "params": {"message": "report"}, "safe_to_replay": True},
+                ],
+            },
+        )
+        execution = WorkflowExecution.objects.create(
+            workflow=all_safe_workflow,
+            temporal_workflow_id="rerun-test-2",
+            trigger_type="manual",
+            status="completed",
+            current_step="report",
+        )
+        client = APIClient()
+        client.force_authenticate(self.user)
+        response = client.post(
+            f"/api/workflows/executions/{execution.id}/rerun/",
+            {"from_step": "lookup"}, format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        body = response.json()
+        self.assertEqual(body.get("mode"), "from_step")
+        self.assertEqual(body.get("from_step"), "lookup")
+        self.assertFalse(body.get("forced"))
+
+    @patch("workflows.views.start_workflow_execution", new=AsyncMock(
+        return_value=MagicMock(id=999, workflow_id=1)))
+    def test_legacy_from_failed_step_still_works(self):
+        """Bug #2B: back-compat — old from_failed_step boolean still accepted."""
+        response = self._post_rerun({"from_failed_step": True})
+        # Will refuse because current_step is the unsafe "send"
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertIn("not safe to replay", response.content.decode().lower())
+
+
+class WorkflowExecutorRegistryFallbackTests(TestCase):
+    """v0.4.1 Bug #1 — registry-only connectors execute via fallback."""
+
+    @patch.dict("os.environ", {"KAZI_DEMO_MODE": "true"}, clear=False)
+    def test_executor_dispatches_echo_from_registry(self):
+        """Echo isn't in action_catalog (PR #47), but workflow executor
+        should still dispatch it via the registry fallback (v0.4.1 Bug #1)."""
+        import asyncio
+        from orchestration.connector_registry import reset_registry, discover_connectors
+        from workflows.activity_executors import execute_workflow_step
+
+        reset_registry()
+        discover_connectors()  # populate registry under demo mode
+
+        step = {"id": "t", "service": "echo", "action": "echo",
+                "params": {"message": "ping"}}
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(
+                execute_workflow_step(step, {"user_id": 1, "room_id": None})
+            )
+        finally:
+            loop.close()
+
+        self.assertEqual(
+            result.get("status"), "success",
+            f"v0.4.1 Bug #1 regressed: {result}",
+        )
+        # The echo connector echoes the input back in `data.input`
+        data = result.get("data") if isinstance(result.get("data"), dict) else result
+        self.assertIn("ping", str(data))

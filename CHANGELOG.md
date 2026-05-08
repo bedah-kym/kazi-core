@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-08
+
+The **human-gated runtime cycle**. Workflows can now pause durably for
+human approval, operators get a first-class API + Django admin surface
+to drive runs (approve / reject / cancel / rerun / pause / resume), the
+deferred-run watchdog dead-letters runs that wait too long, and a
+canonical demo workflow pack runs the full
+`request → workflow → approval → receipt → replay` loop with no real
+API keys via `KAZI_DEMO_MODE=true`.
+
+The cycle also collapsed the duplicate connector loading path (one
+extension surface), landed five v1.0 stable runtime contracts under
+`docs/contracts/`, promoted the eval harness to a documented surface
+with a CI smoke test, shipped the `kazi_trace` CLI for debugging any
+execution, reorganized the docs around five developer flows
+(run / add-connector / add-workflow / operate / deploy), and tightened
+the lint posture (E712/E722/E731 now blocking; cosmetic findings down
+~80%).
+
+A connector and domain-feature freeze was in effect for the cycle.
+Both held — no new connectors, no new vertical features.
+
 ### Added
 
 - **`docs/eval.md`** [v0.4 M4-1] — promotes the previously-loose golden
@@ -229,6 +251,7 @@ The full orchestration core was opened.
 - Project rebranded from Mathia.OS to **Kazi** (Swahili for "work").
   Agent identity is configurable via `KAZI_AGENT_NAME` (default `Kazi`).
 
-[Unreleased]: https://github.com/bedah-kym/kazi-core/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/bedah-kym/kazi-core/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/bedah-kym/kazi-core/releases/tag/v0.4.0
 [0.3.0]: https://github.com/bedah-kym/kazi-core/releases/tag/v0.3.0
 [0.2.0]: https://github.com/bedah-kym/kazi-core/releases/tag/v0.2.0

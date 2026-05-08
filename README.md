@@ -126,26 +126,28 @@ your market, your currency, or your infrastructure.
 
 ## 🚀 Project Status
 
-**v0.3.0 — public OSS launch with hardened repo and signed releases.**
+**v0.4.0 — the human-gated runtime cycle.**
 
-The orchestration core is fully open source: multi-step workflow planner,
-manager verifier, durable execution on Temporal, agent loop, security policy,
-and action receipts. No gated features, no "Pro" tier — everything ships.
+Workflows now pause durably for human approval, operators get a
+first-class API + Django admin surface (approve / reject / cancel /
+rerun / pause / resume), the deferred-run watchdog dead-letters
+runs that wait too long, and a canonical demo workflow pack runs the
+full `request → workflow → approval → receipt → replay` loop with no
+real API keys via `KAZI_DEMO_MODE=true` plus
+[`bash scripts/demo.sh`](scripts/demo.sh).
 
-Container releases are **cosign-signed** (keyless via Sigstore) and ship
-**SBOM + SLSA provenance**. CI runs against real Postgres + Redis on
-Python 3.11 and 3.12.
+The cycle also collapsed connector loading into one extension path,
+landed five v1.0 stable runtime contracts under
+[`docs/contracts/`](docs/contracts/), promoted the eval harness to a
+documented surface, shipped the `kazi_trace` CLI for debugging any
+execution, and reorganized docs around five developer flows.
+
+Container releases are **cosign-signed** (keyless via Sigstore) and
+ship **SBOM + SLSA provenance**. CI runs against real Postgres + Redis
+on Python 3.11 and 3.12.
 
 Still early access — breaking changes possible before v1.0. See
 [`CHANGELOG.md`](CHANGELOG.md) for what's in each release.
-
-**v0.4 in flight — the *human-gated runtime cycle*.** Scope: durable approval
-checkpoints, execution controls, replay safety, an operations inbox, and a
-demo workflow pack that shows request -> workflow -> approval -> receipt ->
-replay. Connector and domain-feature sprawl are explicitly de-emphasized in
-the cycle so the runtime becomes easier to trust and extend.
-See [`docs/architecture.md`](docs/architecture.md) for the updated runtime
-shape and the examples near the workflow section below.
 
 ---
 

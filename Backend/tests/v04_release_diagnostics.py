@@ -279,7 +279,7 @@ def _():
     # rerun from "lookup" — should be ALLOWED (lookup is safe, send is not, so should fail too?)
     ok2, reason2, _ = get_replayable_slice(workflow_def, from_step_id="lookup")
     # NB: the slice from "lookup" includes "send" which is unsafe -> should also be refused
-    if ok2 != False:
+    if ok2 is not False:
         return f"NOTE: rerun from lookup allowed (slice includes unsafe send): expected refusal, got {ok2}"
     return f"refused unsafe correctly: {reason[:50]}"
 

@@ -916,21 +916,49 @@ async def build_replay_request(
     execution: WorkflowExecution,
     *,
     from_failed_step: bool = False,
+    from_step_id: Optional[str] = None,
+    force: bool = False,
 ) -> Dict[str, Any]:
+    """Build the replay payload, honoring per-step safety per
+    docs/contracts/replay-safety.md v1.0.
+
+    v0.4.1: accepts explicit `from_step_id` (string, documented contract)
+    in addition to the legacy `from_failed_step` (bool). When `force=True`
+    the safety check is bypassed and the override is recorded on
+    trigger_data so the receipt + trace remain auditable.
+    """
     definition = dict(execution.workflow.definition or {})
-    target_step = execution.current_step if from_failed_step else None
+    # Explicit from_step_id wins over the legacy boolean.
+    target_step = from_step_id or (execution.current_step if from_failed_step else None)
     if from_failed_step and not target_step:
         raise ValueError("This execution does not have a failed step to replay from.")
+
     allowed, error, replay_steps = get_replayable_slice(definition, from_step_id=target_step)
-    if not allowed:
+    if not allowed and not force:
         raise ValueError(error or "Replay is not allowed for this execution.")
 
+    if not allowed and force:
+        # Operator opted in to the unsafe replay. Manually compute the slice
+        # since get_replayable_slice returned []. The override is recorded
+        # in trigger_data below.
+        all_steps = list(definition.get("steps") or [])
+        replay_steps = list(all_steps)
+        if target_step:
+            from .runtime import get_step_id as _get_step_id
+            for idx, step in enumerate(all_steps):
+                if _get_step_id(step, idx) == target_step:
+                    replay_steps = all_steps[idx:]
+                    break
+
     replay_definition = dict(definition)
-    if from_failed_step:
+    if target_step or from_failed_step:
         replay_definition["steps"] = replay_steps
 
     trigger_data = dict(execution.trigger_data or {})
     trigger_data["replay_context"] = execution.result or {}
-    if from_failed_step and target_step:
+    if target_step:
         trigger_data["replay_from_step_id"] = target_step
+    if force:
+        trigger_data["replay_forced"] = True
+        trigger_data["replay_safety_bypass_reason"] = error or "operator override"
     return {"definition": replay_definition, "trigger_data": trigger_data}

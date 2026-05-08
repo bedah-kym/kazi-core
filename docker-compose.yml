@@ -51,14 +51,10 @@ services:
       - CELERY_RESULT_BACKEND=${REDIS_URL:-redis://redis:6379/0}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - DATABASE_URL=postgres://mathia_user:mathia_password@db:5432/mathia_db
-      - HF_API_TOKEN=${HF_API_TOKEN}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - CALENDLY_CLIENT_ID=${CALENDLY_CLIENT_ID}
-      - Webhook_signing_key=${Webhook_signing_key}
-      - CALENDLY_CLIENT_SECRET=${CALENDLY_CLIENT_SECRET}
-      - OPENWEATHER_API_KEY=${OPENWEATHER_API_KEY}
-      - GIPHY_API_KEY=${GIPHY_API_KEY}
-      - EXCHANGE_RATE_API_KEY=${EXCHANGE_RATE_API_KEY}
+      # NOTE: API keys are loaded via env_file: .env above. Listing them
+      # here with ${VAR} interpolation would OVERRIDE the env_file value
+      # with whatever the host shell has (usually empty), silently losing
+      # the .env value. v0.4.1 fix.
     depends_on:
       db:
         condition: service_healthy

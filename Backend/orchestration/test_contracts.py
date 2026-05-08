@@ -21,7 +21,9 @@ class ContractVersionTests(SimpleTestCase):
     """Pin the v1.0 baseline. Any bump must update docs/contracts/ in the same PR."""
 
     def test_versions_are_pinned(self):
-        self.assertEqual(CONNECTOR_EXECUTION_CONTRACT_VERSION, "1.0")
+        # v0.4.1: connector-execution bumped to 1.1 (clarification, not
+        # breaking — documents both legacy and envelope shapes).
+        self.assertEqual(CONNECTOR_EXECUTION_CONTRACT_VERSION, "1.1")
         self.assertEqual(TOOL_SCHEMA_CONTRACT_VERSION, "1.0")
         self.assertEqual(APPROVAL_CONTRACT_VERSION, "1.0")
         self.assertEqual(EXECUTION_DETAIL_CONTRACT_VERSION, "1.0")

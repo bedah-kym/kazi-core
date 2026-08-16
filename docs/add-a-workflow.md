@@ -8,7 +8,7 @@ and declares which ones are safe to replay.
 
 A `UserWorkflow` row whose `definition` field is a JSON object with
 this shape (see also
-[`examples/workflows/follow_up_email/workflow.json`](../examples/workflows/follow_up_email/workflow.json)):
+[`examples/workflows/follow_up_email/workflow.json`](https://github.com/bedah-kym/kazi-core/blob/main/examples/workflows/follow_up_email/workflow.json)):
 
 ```json
 {
@@ -94,9 +94,9 @@ UserWorkflow.objects.create(
 ### Option 3 — Let the agent compose one
 
 When a user asks the agent to do something multi-step, the
-[`workflow_planner`](../Backend/orchestration/workflow_planner.py)
+[`workflow_planner`](https://github.com/bedah-kym/kazi-core/blob/main/Backend/orchestration/workflow_planner.py)
 proposes a workflow definition, the
-[`manager_verifier`](../Backend/orchestration/manager_verifier.py)
+[`manager_verifier`](https://github.com/bedah-kym/kazi-core/blob/main/Backend/orchestration/manager_verifier.py)
 reorders + fills gaps + catches bad plans, and the runtime executes
 it. You don't need to write the JSON by hand for ad-hoc requests —
 this is the path most chat-driven workflows take.
@@ -150,4 +150,4 @@ or that returned an error are caught by the manager verifier.
   through the human-gated loop and the trace CLI.
 - [`contracts/`](contracts/README.md) — the runtime contracts every
   workflow author works against.
-- [`examples/workflows/follow_up_email/`](../examples/workflows/follow_up_email/) — the canonical demo.
+- [`examples/workflows/follow_up_email/`](https://github.com/bedah-kym/kazi-core/tree/main/examples/workflows/follow_up_email/) — the canonical demo.

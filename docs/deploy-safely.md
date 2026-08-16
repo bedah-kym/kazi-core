@@ -62,7 +62,7 @@ and forwards `/ws/` traffic with the right WebSocket headers.
   access on top.
 - **Webhook endpoints** — verify signatures (Calendly, IntaSend,
   Mailgun, etc.). The framework includes
-  [`webhook_validator.py`](../Backend/orchestration/webhook_validator.py)
+  [`webhook_validator.py`](https://github.com/bedah-kym/kazi-core/blob/main/Backend/orchestration/webhook_validator.py)
   helpers.
 - **Connector credentials** — never commit. Use your platform's
   secret manager (AWS Secrets Manager, GCP Secret Manager, Doppler,
@@ -117,11 +117,11 @@ backfill, then enforce in a follow-up release).
 - **Run a separate API server.** Django + Channels + Daphne is the
   whole web tier.
 - **Operate your own LLM.** The default
-  [`llm_client`](../Backend/orchestration/llm_client.py) talks to
+  [`llm_client`](https://github.com/bedah-kym/kazi-core/blob/main/Backend/orchestration/llm_client.py) talks to
   Anthropic; you bring the key. HuggingFace is the fallback.
 - **Stand up a UI.** Operator surfaces ship as JSON APIs + Django
   admin. A community web UI may follow under
-  [`examples/`](../examples/) — until then, your existing internal
+  [`examples/`](https://github.com/bedah-kym/kazi-core/tree/main/examples/) — until then, your existing internal
   tools or a `curl`-driven runbook is enough.
 
 ## Next

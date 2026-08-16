@@ -61,7 +61,7 @@ examples/connectors/
 ```
 
 With `KAZI_DEMO_MODE=true`, the runtime auto-loads it on startup. See
-[`examples/connectors/echo/`](../examples/connectors/echo/) for the
+[`examples/connectors/echo/`](https://github.com/bedah-kym/kazi-core/tree/main/examples/connectors/echo/) for the
 canonical template.
 
 ## Production warning
@@ -73,7 +73,7 @@ exercise risk gates the way the real connector set does.
 
 ## See also
 
-- [`examples/README.md`](../examples/README.md) — what lives under
+- [`examples/README.md`](https://github.com/bedah-kym/kazi-core/blob/main/examples/README.md) — what lives under
   `examples/`
 - [`writing-a-connector.md`](writing-a-connector.md) — the full guide to
   building your own

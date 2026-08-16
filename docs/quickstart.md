@@ -2,6 +2,10 @@
 
 Get Kazi running locally in under 5 minutes.
 
+> **New here?** The [Run Locally](run-locally.md) guide boots a working demo in
+> ~10 minutes with **no API keys** (`bash scripts/demo.sh`). This page is the
+> manual path with your own LLM key.
+
 ## Prerequisites
 
 - Docker and Docker Compose

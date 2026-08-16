@@ -96,7 +96,7 @@ When you write a connector:
 - For actions that *can* be made idempotent (e.g. with a
   client-supplied request id), build the connector to use it and then
   set `replay_safe: True`. The
-  [`resolve_step_idempotency_key`](../../Backend/workflows/runtime.py)
+  [`resolve_step_idempotency_key`](https://github.com/bedah-kym/kazi-core/blob/main/Backend/workflows/runtime.py)
   helper exists for this.
 
 ## Consumer side

@@ -153,6 +153,7 @@ Backend/tests/local_*.py
 Backend/tests/manual_*.py
 Security-docs/
 ssh-key-2026-02-01.key
+Backend/chatbot/static/spa/
 e2e/
 Security-docs/
 TEMP_ANALYSIS/
@@ -176,7 +177,17 @@ frontend/
 # Externalized documentation bundles and local vendor folders
 Security-docs/
 Microsoft/
-docs/
+docs/MONETIZATION_STRATEGIES.md
+docs/SOCIAL_MEDIA_OSINT_INTEGRATION.md
+docs/tg_integration_memory_plan.md
+docs/tg_phase_qa_progress.md
+docs/ENGAGEMENT_ROOM_INTEGRATION.md
+docs/LLM_PLAYBOOKS_AND_POLICY_GUIDE.md
+docs/SECURITY_MODULE_RISKS_AND_BIASES.md
+docs/SETTINGS_MIGRATION_PLAN.md
+docs/baileys_nodejs_bridge_plan.md
+docs/demo-workflows/
+docs/kazi-reference/
 # Local generated logs/artifacts
 logs.*.json
 

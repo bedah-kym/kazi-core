@@ -31,7 +31,10 @@ complete → replay-safety check).
 
 If the script printed a workflow id, you're done with the boot. Walk
 through the operator commands it printed. The full walkthrough lives
-at [`examples/workflows/follow_up_email/README.md`](../examples/workflows/follow_up_email/README.md).
+at [`examples/workflows/follow_up_email/README.md`](https://github.com/bedah-kym/kazi-core/blob/main/examples/workflows/follow_up_email/README.md).
+
+> **On Windows:** run `bash scripts/demo.sh` from Git Bash or WSL, or skip the
+> script and use the manual path below.
 
 ## What just happened
 

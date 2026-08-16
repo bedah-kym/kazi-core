@@ -1,0 +1,115 @@
+site_name: Kazi Core
+site_description: A self-hostable runtime for human-supervised agent workflows.
+repo_name: bedah-kym/kazi-core
+repo_url: https://github.com/bedah-kym/kazi-core
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  logo: assets/kazi-core.png
+  favicon: assets/kazi-core.png
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - content.code.annotate
+    - content.code.copy
+    - navigation.sections
+    - navigation.tracking
+    - navigation.top
+    - search.highlight
+    - search.suggest
+    - toc.follow
+
+nav:
+  - Home: index.md
+  - Start here:
+      - Quick Start: quickstart.md
+      - Run Locally: run-locally.md
+      - Demo Mode: demo-mode.md
+  - How-to:
+      - Add a Connector: add-a-connector.md
+      - Writing a Connector: writing-a-connector.md
+      - Add a Workflow: add-a-workflow.md
+      - Operate a Workflow: operate-a-workflow.md
+      - Deploy Safely: deploy-safely.md
+      - Telegram: telegram.md
+      - Memory: memory.md
+      - Skills: skills.md
+      - Notifications: notifications.md
+  - Reference:
+      - Configuration: configuration.md
+      - Connector API Reference: connector-api-reference.md
+      - Contracts:
+          - Overview: contracts/README.md
+          - Tool Schema: contracts/tool-schema.md
+          - Connector Execution: contracts/connector-execution.md
+          - Approval: contracts/approval.md
+          - Execution Detail: contracts/execution-detail.md
+          - Replay Safety: contracts/replay-safety.md
+      - Trace CLI: trace.md
+      - Evaluation: eval.md
+  - Explanation:
+      - Features: features.md
+      - Architecture: architecture.md
+      - Security: security.md
+      - Use Cases: use-cases.md
+  - Community:
+      - Contributing: contributing.md
+      - Roadmap: roadmap.md
+      - Release Notes:
+          - v0.4 Brief: v0.4-brief.md
+          - v0.4 Roadmap: v0.4-roadmap.md
+
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+  - tables
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/bedah-kym/kazi-core
+
+plugins:
+  - search
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          paths: [Backend]
+          options:
+            show_source: false
+
+exclude_docs: |
+  MONETIZATION_STRATEGIES.md
+  SOCIAL_MEDIA_OSINT_INTEGRATION.md
+  tg_integration_memory_plan.md
+  tg_phase_qa_progress.md
+  ENGAGEMENT_ROOM_INTEGRATION.md
+  LLM_PLAYBOOKS_AND_POLICY_GUIDE.md
+  SECURITY_MODULE_RISKS_AND_BIASES.md
+  SETTINGS_MIGRATION_PLAN.md
+  baileys_nodejs_bridge_plan.md
+  demo-workflows/
+  kazi-reference/

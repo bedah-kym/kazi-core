@@ -62,7 +62,7 @@ the tiers as the runtime stabilizes.
 
 ## See also
 
-- [`Backend/orchestration/contracts.py`](../../Backend/orchestration/contracts.py)
+- [`Backend/orchestration/contracts.py`](https://github.com/bedah-kym/kazi-core/blob/main/Backend/orchestration/contracts.py)
   — the in-tree builders + validators that back this directory.
 - [`docs/v0.4-brief.md`](../v0.4-brief.md) — why this exists (the
   "stable contracts" milestone, M2-2).

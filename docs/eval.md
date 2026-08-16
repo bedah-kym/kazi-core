@@ -155,7 +155,7 @@ unintended planner regression would show up as a failure. Flip
 
 ## See also
 
-- [`Backend/orchestration/eval/README.md`](../Backend/orchestration/eval/README.md) — the in-tree note that
+- [`Backend/orchestration/eval/README.md`](https://github.com/bedah-kym/kazi-core/blob/main/Backend/orchestration/eval/README.md) — the in-tree note that
   pre-dates this doc; will get a one-line pointer here in a future
   cleanup.
 - [`docs/architecture.md`](architecture.md) — where intent parsing and

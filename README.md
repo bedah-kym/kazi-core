@@ -7,6 +7,7 @@
     <img src="https://img.shields.io/badge/license-MIT-green" alt="License" />
     <img src="https://github.com/bedah-kym/kazi-core/actions/workflows/main.yml/badge.svg" alt="CI" />
     <a href="https://codecov.io/gh/bedah-kym/kazi-core"><img src="https://codecov.io/gh/bedah-kym/kazi-core/branch/main/graph/badge.svg" alt="codecov" /></a>
+    <a href="https://kazi-core.readthedocs.io/"><img src="https://readthedocs.org/projects/kazi-core/badge/?version=latest" alt="Docs" /></a>
     <img src="https://img.shields.io/badge/status-early%20access-orange" alt="Status" />
   </p>
 

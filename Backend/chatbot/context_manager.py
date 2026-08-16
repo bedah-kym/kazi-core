@@ -1,5 +1,5 @@
 """
-Context Manager for Mathia AI
+Context Manager for Kazi AI
 Handles storage, retrieval, and LLM-ready formatting of conversation context.
 Supports Cross-Room context sharing for high-priority notes.
 """
@@ -8,6 +8,7 @@ import json
 import math
 import re
 from datetime import datetime, date, timedelta
+from django.conf import settings
 from django.db.models import Q
 from django.utils import timezone
 from .models import RoomContext, RoomNote, AIConversation, DocumentUpload, Contact
@@ -299,7 +300,24 @@ class ContextManager:
             if not prompt_parts:
                 return ""
 
-            return "\n\n" + "\n".join(prompt_parts)
+            prompt = "\n\n" + "\n".join(prompt_parts)
+
+            # Cap context size so a runaway room can't silently blow the
+            # context window (the "context collapse" production failure mode).
+            max_chars = int(getattr(settings, "CONTEXT_PROMPT_MAX_CHARS", 8000))
+            if len(prompt) > max_chars:
+                prompt = prompt[:max_chars] + "\n\n[context truncated for size]"
+                try:
+                    from orchestration.telemetry import record_event
+                    record_event("context_truncated", {
+                        "room_id": room_id,
+                        "size": len(prompt),
+                        "limit": max_chars,
+                    })
+                except Exception:
+                    pass
+
+            return prompt
 
         except Exception as e:
             logger.error(f"Error building context prompt: {e}")

@@ -24,6 +24,7 @@ SENSITIVE_ACTIONS = {
     "check_availability",
     "book_travel_item",
     "add_to_itinerary",
+    "remove_from_itinerary",
     "create_itinerary",
     "create_workflow",
 }
@@ -169,6 +170,37 @@ def should_refuse_sensitive_request(message: Optional[str]) -> bool:
 
 def sensitive_refusal_message() -> str:
     return (
-        "Sorry, I can’t help with that request. "
+        "Sorry, I can't help with that request. "
         "If you need account or data access changes, please use the official admin tools."
     )
+
+
+# ---------------------------------------------------------------------------
+# Secret + PII redaction (fail-plausible guard)
+# ---------------------------------------------------------------------------
+
+_SECRET_PATTERNS = [
+    re.compile(r"\b(?:sk|pk|rk)-[A-Za-z0-9]{16,}\b"),
+    re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._-]{16,}\b"),
+    re.compile(r"(?i)\b(?:api[_-]?key|apikey|access[_-]?token|auth[_-]?token|refresh[_-]?token)\b\s*[:=]\s*\S+"),
+    re.compile(r"(?i)\b(?:password|passwd|pwd|secret|client[_-]?secret)\b\s*[:=]\s*\S+"),
+]
+
+_PII_EMAIL_RE = re.compile(r'[\w.+-]+@[\w-]+\.[\w.-]+')
+_PII_PHONE_RE = re.compile(
+    r'(?<!\d)(\+\d{1,3}[-.\s]?\d{2,4}[-.\s]?\d{3,4}[-.\s]?\d{2,4}'
+    r'|0\d{2,3}[-.\s]?\d{3}[-.\s]?\d{3,4}'
+    r'|\(\d{2,4}\)\s?\d{3}[-.\s]?\d{3,4})(?!\d)'
+)
+
+
+def redact_sensitive_text(text: Optional[str]) -> str:
+    """Strip secrets and PII from text before it re-enters LLM context or
+    reaches the user. Deterministic and zero-latency (regex only)."""
+    if not text:
+        return text or ""
+    for pattern in _SECRET_PATTERNS:
+        text = pattern.sub("[REDACTED SECRET]", text)
+    text = _PII_EMAIL_RE.sub("[REDACTED EMAIL]", text)
+    text = _PII_PHONE_RE.sub("[REDACTED PHONE]", text)
+    return text

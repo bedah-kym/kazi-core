@@ -92,6 +92,9 @@ TRAVEL PLANNER ACTIONS:
 - add_to_itinerary: User wants to add a booking to an existing itinerary
   Examples: "add this hotel to my trip", "save this flight to my itinerary"
   Extract: itinerary_id, item_type (bus|hotel|flight|transfer|event), item_id, provider
+- remove_from_itinerary: User wants to remove/delete an item from their itinerary
+  Examples: "remove that flight", "delete the hotel from my trip", "drop the bus ticket"
+  Extract: item_id (preferred), title (item name if id unknown), itinerary_id (optional)
 - book_travel_item: User ready to book (redirects to provider)
   Examples: "book this hotel", "complete the flight booking", "reserve the bus"
   Extract: item_type, item_id, provider
@@ -347,16 +350,15 @@ Rules:
 
             system_prompt = self._build_personalized_system_prompt(user_id)
 
-            response_text = await self.llm.generate_text(
+            intent = await self.llm.generate_json(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
+                required_fields=["action"],
                 temperature=0.1,
-                json_mode=True,
                 user_id=user_id,
                 model_role="planner",
             )
 
-            intent = self.llm.extract_json(response_text)
             intent = self._validate_intent(intent, message)
             preferences = (user_context or {}).get("preferences") if isinstance(user_context, dict) else None
             intent = self._postprocess_intent(intent, preferences=preferences, user_context=user_context)

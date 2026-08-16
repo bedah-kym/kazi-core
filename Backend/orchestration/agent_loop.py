@@ -14,11 +14,13 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Callable, Dict, List, Optional, Tuple
 
+from django.conf import settings
 from django.core.cache import cache
 
 from orchestration.agent_prompts import build_confirmation_prompt, build_system_prompt
 from orchestration.llm_client import get_llm_client
 from orchestration.memory_state import update_memory_state, save_memory_summary
+from orchestration.security_policy import redact_sensitive_text
 from orchestration.telemetry import record_event
 from orchestration.tool_executor import execute_tool, get_tool_risk_info
 from orchestration.tool_schemas import get_tool_definitions
@@ -160,6 +162,40 @@ def _dedup_key(name: str, tool_input: Dict[str, Any]) -> str:
     return f"{name}:{json.dumps(tool_input, sort_keys=True, default=str)}"
 
 
+def _message_chars(message: Dict[str, Any]) -> int:
+    """Rough character count of one history message (token proxy)."""
+    content = message.get("content", "")
+    if isinstance(content, str):
+        return len(content)
+    if isinstance(content, list):
+        return len(json.dumps(content, default=str))
+    return len(str(content or ""))
+
+
+def _fit_history_to_budget(
+    history: List[Dict[str, Any]],
+    max_chars: int,
+    max_messages: int,
+) -> Tuple[List[Dict[str, Any]], bool]:
+    """Trim the oldest turns so history fits a context budget, in O(n) time.
+
+    Keeps the largest suffix that fits (most recent context is preserved),
+    never drops the most recent message, and reports whether trimming occurred
+    so callers can emit a ``context_compacted`` event instead of truncating
+    silently.
+    """
+    if not history:
+        return history, False
+    char_counts = [_message_chars(m) for m in history]
+    total_chars = sum(char_counts)
+    n = len(history)
+    start = 0
+    while (n - start) > 1 and ((n - start) > max_messages or total_chars > max_chars):
+        total_chars -= char_counts[start]
+        start += 1
+    return history[start:], start > 0
+
+
 # --------------------------------------------------------------------------- #
 #  Web search rate limiting                                                   #
 # --------------------------------------------------------------------------- #
@@ -184,8 +220,11 @@ def _record_search_usage(user_id: Optional[int], count: int) -> None:
         return
     key = _search_limit_key(user_id)
     try:
-        cache.incr(key, count)
-    except ValueError:
+        # get-then-set with fresh TTL (cache.incr on a fresh key creates
+        # it without a TTL, so it would never expire)
+        current = int(cache.get(key) or 0)
+        cache.set(key, current + count, 86400)
+    except Exception:
         cache.set(key, count, 86400)
 
 
@@ -260,6 +299,9 @@ def _sanitize_tool_result(result_json: str) -> str:
     if pattern.search(result_json):
         logger.warning("Potential injection in tool result, stripping suspicious content")
         result_json = pattern.sub("[FILTERED]", result_json)
+
+    # Redact secrets/PII so they never re-enter LLM context (fail-plausible guard)
+    result_json = redact_sensitive_text(result_json)
 
     return result_json
 
@@ -408,6 +450,32 @@ META_TOOL_DEFINITIONS = [
             "required": ["description", "steps"],
         },
     },
+    {
+        "name": "list_skills",
+        "description": (
+            "List the available skills — reusable instruction packs for "
+            "well-defined procedures (e.g. report formatting). Use this "
+            "before load_skill to discover what's available."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "load_skill",
+        "description": (
+            "Load a skill's full instructions by name so you can follow the "
+            "procedure it describes. Use list_skills first to find the name."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Skill name to load",
+                },
+            },
+            "required": ["name"],
+        },
+    },
 ]
 
 # Sub-agent limits (tighter than parent)
@@ -431,8 +499,49 @@ async def _execute_meta_tool(
         )
     elif tool_name == "handoff_to_workflow":
         return await _create_workflow_handoff(tool_input, context)
+    elif tool_name == "list_skills":
+        return _list_skills()
+    elif tool_name == "load_skill":
+        return _load_skill(tool_input, context)
     else:
         return {"status": "error", "message": f"Unknown meta-tool: {tool_name}"}
+
+
+def _list_skills() -> Dict[str, Any]:
+    """List active skills (read-only meta-tool)."""
+    try:
+        from orchestration.skill_registry import list_skills
+        skills = list_skills()
+    except Exception as exc:
+        logger.error("list_skills failed: %s", exc)
+        return {"status": "error", "message": f"Could not list skills: {exc}"}
+    return {
+        "status": "success",
+        "skills": skills,
+        "message": (
+            f"{len(skills)} skill(s) available." if skills else "No active skills."
+        ),
+    }
+
+
+def _load_skill(tool_input: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+    """Load a skill's instructions into context (read-only meta-tool)."""
+    name = tool_input.get("name", "")
+    if not name:
+        return {"status": "error", "message": "Skill name is required."}
+    try:
+        from orchestration.skill_registry import load_skill_for_agent
+        result = load_skill_for_agent(name)
+        if result.get("status") == "success":
+            record_event("skill_loaded", {
+                "skill": result.get("skill"),
+                "user_id": context.get("user_id"),
+                "room_id": context.get("room_id"),
+            })
+        return result
+    except Exception as exc:
+        logger.error("load_skill failed: %s", exc)
+        return {"status": "error", "message": f"Could not load skill: {exc}"}
 
 
 async def _run_sub_agent(
@@ -717,6 +826,23 @@ async def run_agent_loop(
         # Fresh loop
         messages: List[Dict[str, Any]] = []
         if history:
+            if getattr(settings, "HISTORY_COMPACTION_ENABLED", False):
+                history, compacted = _fit_history_to_budget(
+                    history,
+                    max_chars=int(getattr(settings, "HISTORY_MAX_CHARS", 60000)),
+                    max_messages=int(getattr(settings, "HISTORY_MAX_MESSAGES", 50)),
+                )
+                if compacted:
+                    logger.warning(
+                        "Compacted conversation history for room %s: kept %d messages",
+                        room_id, len(history),
+                    )
+                    record_event("context_compacted", {
+                        "user_id": user_id,
+                        "room_id": room_id,
+                        "kept_messages": len(history),
+                        "history_max_chars": int(getattr(settings, "HISTORY_MAX_CHARS", 60000)),
+                    })
             messages.extend(history)
         messages.append({"role": "user", "content": user_message})
 
@@ -813,7 +939,7 @@ async def run_agent_loop(
         state.messages.append({"role": "assistant", "content": content_blocks})
 
         # ---- Stream text in small chunks for typing effect ----------- #
-        text = _extract_text(content_blocks)
+        text = redact_sensitive_text(_extract_text(content_blocks))
         if text:
             # Simulate streaming by chunking the text into small pieces
             chunk_size = 12  # ~3 words per chunk

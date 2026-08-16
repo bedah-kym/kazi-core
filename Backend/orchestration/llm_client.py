@@ -1,7 +1,7 @@
 """
-LLM Client for Mathia Orchestration
-Handles communication with LLM providers (Anthropic, Hugging Face) with fallback logic.
-Includes rate limiting and token budget enforcement for cost control.
+LLM Client for Kazi Orchestration
+Handles communication with LLM providers (Anthropic, DeepSeek, Hugging Face)
+with fallback logic. Includes rate limiting and token budget enforcement.
 """
 import os
 import json
@@ -19,38 +19,54 @@ logger = logging.getLogger(__name__)
 class LLMClient:
     """
     Unified client for LLM interactions.
-    Prioritizes Anthropic (Claude) if available, falls back to Hugging Face.
+    Prioritizes Anthropic (Claude) if available, then DeepSeek, then Hugging Face.
     """
 
     def __init__(self):
         self.anthropic_key = getattr(settings, 'ANTHROPIC_API_KEY', os.environ.get('ANTHROPIC_API_KEY'))
         self.hf_key = getattr(settings, 'HF_API_TOKEN', os.environ.get('HF_API_TOKEN'))
+        self.deepseek_key = getattr(settings, 'DEEPSEEK_API_KEY', os.environ.get('DEEPSEEK_API_KEY'))
         self._agent_name = getattr(settings, 'KAZI_AGENT_NAME', 'Kazi')
 
         # Models
         self.claude_model = "claude-sonnet-4-6"
         self.hf_model = "meta-llama/Llama-3.1-8B-Instruct"  # router-friendly chat model
+        self.deepseek_model = getattr(
+            settings, 'DEEPSEEK_MODEL',
+            os.environ.get('DEEPSEEK_MODEL', 'deepseek-chat'),
+        )
 
         # Endpoints
         self.anthropic_url = "https://api.anthropic.com/v1/messages"
         self.hf_url = "https://router.huggingface.co/v1/chat/completions"
+        # DeepSeek is OpenAI-compatible, so it reuses the OpenAI call paths.
+        self.deepseek_url = getattr(
+            settings, 'DEEPSEEK_BASE_URL',
+            os.environ.get('DEEPSEEK_BASE_URL', 'https://api.deepseek.com/v1/chat/completions'),
+        )
+
+    def _openai_config(self, provider: str, model_name: Optional[str] = None):
+        """Endpoint URL, API key, and model for an OpenAI-compatible provider."""
+        if provider == "deepseek":
+            return self.deepseek_url, self.deepseek_key, (model_name or self.deepseek_model)
+        return self.hf_url, self.hf_key, (model_name or self.hf_model)
 
     def _provider_order(self, model_role: str, provider_preference: Optional[str]) -> List[str]:
         role = (model_role or "default").lower()
         preference = (provider_preference or "").lower().strip()
         if preference:
-            ordered = [preference, "anthropic", "huggingface"]
+            ordered = [preference, "deepseek", "anthropic", "huggingface"]
         elif role == "planner":
-            ordered = [getattr(settings, "LLM_PLANNER_PROVIDER", "anthropic").lower(), "anthropic", "huggingface"]
+            ordered = [getattr(settings, "LLM_PLANNER_PROVIDER", "anthropic").lower(), "deepseek", "anthropic", "huggingface"]
         elif role == "executor":
-            ordered = [getattr(settings, "LLM_EXECUTOR_PROVIDER", "huggingface").lower(), "huggingface", "anthropic"]
+            ordered = [getattr(settings, "LLM_EXECUTOR_PROVIDER", "huggingface").lower(), "deepseek", "huggingface", "anthropic"]
         else:
-            ordered = ["anthropic", "huggingface"]
+            ordered = ["anthropic", "deepseek", "huggingface"]
         # De-dup while preserving order
         seen = set()
         result: List[str] = []
         for item in ordered:
-            if item in ("anthropic", "huggingface") and item not in seen:
+            if item in ("deepseek", "anthropic", "huggingface") and item not in seen:
                 result.append(item)
                 seen.add(item)
         return result
@@ -63,6 +79,12 @@ class LLMClient:
             if role == "executor":
                 return getattr(settings, "LLM_EXECUTOR_MODEL", self.claude_model)
             return self.claude_model
+        if provider == "deepseek":
+            if role == "planner":
+                return getattr(settings, "LLM_PLANNER_MODEL", self.deepseek_model)
+            if role == "executor":
+                return getattr(settings, "LLM_EXECUTOR_MODEL", self.deepseek_model)
+            return self.deepseek_model
         if role == "planner":
             return getattr(settings, "LLM_PLANNER_MODEL", self.hf_model)
         if role == "executor":
@@ -125,8 +147,9 @@ class LLMClient:
         user_id: Optional[int],
         model: Optional[str] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
+        provider: str = "huggingface",
     ) -> Dict[str, Any]:
-        """Fallback for create_message when Anthropic is unavailable."""
+        """Fallback for create_message via an OpenAI-compatible provider (HF or DeepSeek)."""
         prompt = self._messages_to_plain_text(messages)
         _agent = getattr(self, "_agent_name", "Kazi")
         fallback_system = system or f"You are {_agent}, a helpful AI assistant."
@@ -142,7 +165,8 @@ class LLMClient:
             temperature,
             max_tokens,
             False,
-            model_name=model or self._model_for("huggingface", "executor"),
+            model_name=model or self._model_for(provider, "executor"),
+            provider=provider,
         )
 
         input_tokens = self._estimate_tokens(fallback_system) + self._estimate_tokens(prompt)
@@ -150,7 +174,7 @@ class LLMClient:
         self._record_token_usage(input_tokens + output_tokens, user_id)
 
         return {
-            "id": "hf-fallback-message",
+            "id": f"{provider}-fallback-message",
             "type": "message",
             "role": "assistant",
             "content": [{"type": "text", "text": response_text}],
@@ -161,18 +185,198 @@ class LLMClient:
             },
         }
 
+    # ------------------------------------------------------------------ #
+    #  OpenAI-compatible tool-calling adapter (DeepSeek)                   #
+    #  Translates the Anthropic Messages contract (content blocks +       #
+    #  tool_use / tool_result, stop_reason) to/from OpenAI chat tools so  #
+    #  the agent loop keeps working unchanged on a non-Anthropic model.   #
+    # ------------------------------------------------------------------ #
+    def _anthropic_to_openai_messages(self, system: str, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        if system:
+            out.append({
+                "role": "system",
+                "content": system if isinstance(system, str) else self._message_content_to_text(system),
+            })
+        for m in messages:
+            role = m.get("role")
+            content = m.get("content")
+            if isinstance(content, str):
+                out.append({"role": role, "content": content})
+                continue
+            if not isinstance(content, list):
+                out.append({"role": role, "content": str(content or "")})
+                continue
+            if role == "assistant":
+                text_parts: List[str] = []
+                tool_calls: List[Dict[str, Any]] = []
+                for b in content:
+                    if not isinstance(b, dict):
+                        text_parts.append(str(b))
+                    elif b.get("type") == "text":
+                        text_parts.append(b.get("text", ""))
+                    elif b.get("type") == "tool_use":
+                        tool_calls.append({
+                            "id": b.get("id"),
+                            "type": "function",
+                            "function": {
+                                "name": b.get("name"),
+                                "arguments": json.dumps(b.get("input", {}), default=str),
+                            },
+                        })
+                msg: Dict[str, Any] = {
+                    "role": "assistant",
+                    "content": "\n".join(p for p in text_parts if p) or None,
+                }
+                if tool_calls:
+                    msg["tool_calls"] = tool_calls
+                out.append(msg)
+            elif role == "user":
+                tool_results = [
+                    b for b in content
+                    if isinstance(b, dict) and b.get("type") == "tool_result"
+                ]
+                if tool_results:
+                    for b in tool_results:
+                        payload = b.get("content")
+                        if not isinstance(payload, str):
+                            payload = self._message_content_to_text(payload)
+                        out.append({
+                            "role": "tool",
+                            "tool_call_id": b.get("tool_use_id"),
+                            "content": payload,
+                        })
+                    leftover = self._message_content_to_text([
+                        b for b in content
+                        if isinstance(b, dict) and b.get("type") == "text"
+                    ])
+                    if leftover.strip():
+                        out.append({"role": "user", "content": leftover})
+                else:
+                    out.append({"role": "user", "content": self._message_content_to_text(content)})
+            else:
+                out.append({"role": role, "content": self._message_content_to_text(content)})
+        return out
+
+    def _anthropic_tools_to_openai(self, tools: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        for t in tools or []:
+            if not isinstance(t, dict) or "input_schema" not in t:
+                continue
+            out.append({
+                "type": "function",
+                "function": {
+                    "name": t.get("name"),
+                    "description": t.get("description", ""),
+                    "parameters": t.get("input_schema") or {"type": "object", "properties": {}},
+                },
+            })
+        return out
+
+    def _openai_response_to_anthropic(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        choice = (data.get("choices") or [{}])[0]
+        message = choice.get("message", {}) or {}
+        finish = choice.get("finish_reason")
+        blocks: List[Dict[str, Any]] = []
+        text = message.get("content")
+        if text:
+            blocks.append({"type": "text", "text": text})
+        tool_calls = message.get("tool_calls") or []
+        for idx, tc in enumerate(tool_calls):
+            fn = tc.get("function", {}) or {}
+            try:
+                args = json.loads(fn.get("arguments") or "{}")
+            except Exception:
+                args = {}
+            blocks.append({
+                "type": "tool_use",
+                "id": tc.get("id") or f"call_{idx}",
+                "name": fn.get("name"),
+                "input": args,
+            })
+        if tool_calls:
+            stop_reason = "tool_use"
+        elif finish == "length":
+            stop_reason = "max_tokens"
+        else:
+            stop_reason = "end_turn"
+        if not blocks:
+            blocks = [{"type": "text", "text": ""}]
+        usage = data.get("usage", {}) or {}
+        return {
+            "id": data.get("id", "openai-message"),
+            "type": "message",
+            "role": "assistant",
+            "content": blocks,
+            "stop_reason": stop_reason,
+            "usage": {
+                "input_tokens": usage.get("prompt_tokens", 0),
+                "output_tokens": usage.get("completion_tokens", 0),
+            },
+        }
+
+    async def _create_openai_message(
+        self,
+        *,
+        provider: str,
+        messages: List[Dict[str, Any]],
+        system: str,
+        tools: Optional[List[Dict[str, Any]]],
+        temperature: float,
+        max_tokens: int,
+        user_id: Optional[int],
+        model: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """create_message via an OpenAI-compatible endpoint, with tool calling."""
+        url, key, model_name = self._openai_config(provider, model)
+        body: Dict[str, Any] = {
+            "model": model_name,
+            "messages": self._anthropic_to_openai_messages(system, messages),
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        oai_tools = self._anthropic_tools_to_openai(tools)
+        if oai_tools:
+            body["tools"] = oai_tools
+
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.post(
+                url,
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                json=body,
+            )
+            if response.status_code != 200:
+                raise Exception(f"{provider} create_message Error {response.status_code}: {response.text}")
+            data = response.json()
+
+        result = self._openai_response_to_anthropic(data)
+        usage = result.get("usage", {})
+        self._record_token_usage(usage.get("input_tokens", 0) + usage.get("output_tokens", 0), user_id)
+        return result
+
     def _get_user_token_budget(self, user_id: Optional[int]) -> Dict[str, int]:
         """
         Get token budget and current usage for a user.
-        Uses atomic integer counter in cache for thread-safe tracking.
+        Staff/superuser accounts are exempt.
         Returns {"limit": N, "used": M}
         """
         if not user_id:
             return {"limit": 999999, "used": 0}
 
+        limit = int(getattr(settings, "LLM_TOKEN_LIMIT_PER_USER_PER_HOUR", 50000))
+
+        # Staff / superusers are exempt from the token quota (owner debugging, support).
+        try:
+            from django.contrib.auth import get_user_model
+            User = get_user_model()
+            user = User.objects.filter(pk=user_id).only('is_staff', 'is_superuser').first()
+            if user and (user.is_staff or user.is_superuser):
+                return {"limit": 10_000_000, "used": 0}
+        except Exception:
+            pass
+
         cache_key = f"llm_tokens:{user_id}"
         used = cache.get(cache_key, 0)
-        limit = int(getattr(settings, "LLM_TOKEN_LIMIT_PER_USER_PER_HOUR", 50000))
         return {
             "limit": limit,
             "used": int(used),
@@ -186,6 +390,9 @@ class LLMClient:
         if not user_id:
             return True  # No tracking for anonymous
 
+        if not getattr(settings, "LLM_TOKEN_QUOTA_ENABLED", True):
+            return True  # Quota disabled (dev) — don't starve batch jobs
+
         budget = self._get_user_token_budget(user_id)
         if budget["used"] + estimated_tokens > budget["limit"]:
             logger.warning(
@@ -196,16 +403,22 @@ class LLMClient:
         return True
 
     def _record_token_usage(self, tokens: int, user_id: Optional[int]) -> None:
-        """Record token usage for rate limiting — atomic increment."""
+        """
+        Record token usage for rate limiting.
+
+        We never use cache.incr() here: django-redis INCRBY on a fresh key
+        creates it WITHOUT a TTL, so the counter would never expire. Use
+        get-then-set with a fresh TTL to get a proper sliding 1-hour window.
+        """
         if not user_id or tokens <= 0:
             return
 
         cache_key = f"llm_tokens:{user_id}"
-        ttl = 3600  # 1 hour
+        ttl = 3600  # 1 hour sliding window
         try:
-            cache.incr(cache_key, tokens)
-        except ValueError:
-            # Key doesn't exist yet — create with initial value
+            current = int(cache.get(cache_key) or 0)
+            cache.set(cache_key, current + tokens, ttl)
+        except Exception:
             cache.set(cache_key, tokens, ttl)
 
     async def generate_text(
@@ -265,6 +478,19 @@ class LLMClient:
         provider_order = self._provider_order(model_role, provider_preference)
         last_error: Optional[Exception] = None
         for provider in provider_order:
+            if provider == "deepseek" and self.deepseek_key:
+                try:
+                    model_name = self._model_for("deepseek", model_role)
+                    response = await self._call_huggingface(
+                        system_prompt, user_prompt, temperature, max_tokens,
+                        json_mode, model_name, provider="deepseek",
+                    )
+                    self._record_token_usage(estimated_tokens, user_id)
+                    self._store_cache(cache_key, response)
+                    return response
+                except Exception as e:
+                    last_error = e
+                    logger.error(f"DeepSeek API failed: {e}. Falling back.")
             if provider == "anthropic" and self.anthropic_key:
                 try:
                     model_name = self._model_for("anthropic", model_role)
@@ -291,6 +517,69 @@ class LLMClient:
 
         raise Exception("No valid API keys configured for Anthropic or Hugging Face.")
 
+    async def generate_json(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        required_fields: Optional[List[str]] = None,
+        temperature: float = 0.2,
+        max_tokens: int = 600,
+        user_id: Optional[int] = None,
+        model_role: str = "default",
+        provider_preference: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Generate a JSON object, retrying once with the validation error
+        if the first attempt is malformed or missing required fields.
+
+        This turns the old silent ``{}``-on-bad-JSON behavior into a
+        one-shot self-repair loop, then degrades gracefully.
+        """
+        required_fields = required_fields or []
+
+        def _ok(parsed: Any) -> bool:
+            if not isinstance(parsed, dict):
+                return False
+            return all(parsed.get(f) not in (None, "", [], {}) for f in required_fields)
+
+        response_text = await self.generate_text(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            json_mode=True,
+            user_id=user_id,
+            model_role=model_role,
+            provider_preference=provider_preference,
+        )
+        parsed = self.extract_json(response_text)
+        if _ok(parsed):
+            return parsed
+
+        if not isinstance(parsed, dict):
+            problems = "the response was not valid JSON"
+        else:
+            missing = [f for f in required_fields if parsed.get(f) in (None, "", [], {})]
+            problems = "missing required fields: " + ", ".join(missing)
+
+        repair_prompt = (
+            user_prompt
+            + f"\n\nYour previous response was invalid: {problems}. "
+            + "Respond with a single valid JSON object only."
+        )
+        response_text = await self.generate_text(
+            system_prompt=system_prompt,
+            user_prompt=repair_prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            json_mode=True,
+            user_id=user_id,
+            model_role=model_role,
+            provider_preference=provider_preference,
+        )
+        repaired = self.extract_json(response_text)
+        return repaired if _ok(repaired) else parsed
+
     async def stream_text(
         self,
         system_prompt: str,
@@ -310,6 +599,18 @@ class LLMClient:
         provider_order = self._provider_order(model_role, provider_preference)
         last_error: Optional[Exception] = None
         for provider in provider_order:
+            if provider == "deepseek" and self.deepseek_key:
+                try:
+                    model_name = self._model_for("deepseek", model_role)
+                    async for chunk in self._stream_huggingface(
+                        system_prompt, user_prompt, temperature, max_tokens,
+                        model_name, provider="deepseek",
+                    ):
+                        yield chunk
+                    return
+                except Exception as e:
+                    last_error = e
+                    logger.error(f"DeepSeek API failed: {e}. Falling back.")
             if provider == "anthropic" and self.anthropic_key:
                 try:
                     model_name = self._model_for("anthropic", model_role)
@@ -364,8 +665,8 @@ class LLMClient:
             stop_reason: "end_turn" | "tool_use" | "max_tokens"
             usage: {input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens}
         """
-        if not self.anthropic_key and not self.hf_key:
-            raise Exception("No valid API keys configured for Anthropic or Hugging Face.")
+        if not self.anthropic_key and not self.hf_key and not self.deepseek_key:
+            raise Exception("No valid API keys configured for DeepSeek, Anthropic, or Hugging Face.")
 
         estimated_tokens = sum(
             self._estimate_tokens(
@@ -434,14 +735,25 @@ class LLMClient:
 
                 return data
             except Exception as exc:
-                if not self.hf_key:
+                if not self.hf_key and not self.deepseek_key:
                     raise
                 logger.warning(
-                    "Anthropic create_message failed; using Hugging Face fallback: %s",
+                    "Anthropic create_message failed; using OpenAI-compatible fallback: %s",
                     exc,
                 )
 
-        # Fallback path (no Anthropic key or Anthropic call failed)
+        # Fallback path (no Anthropic key or Anthropic call failed).
+        if self.deepseek_key:
+            return await self._create_openai_message(
+                provider="deepseek",
+                messages=messages,
+                system=system,
+                tools=tools,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                user_id=user_id,
+                model=model,
+            )
         return await self._create_hf_fallback_message(
             messages=messages,
             system=system,
@@ -450,6 +762,7 @@ class LLMClient:
             user_id=user_id,
             model=model,
             tools=tools,
+            provider="huggingface",
         )
 
     async def stream_message(
@@ -474,8 +787,8 @@ class LLMClient:
             {"type": "tool_use_end", "id": "...", "name": "...", "input": {...}}
             {"type": "message_done", "stop_reason": "...", "usage": {...}}
         """
-        if not self.anthropic_key and not self.hf_key:
-            raise Exception("No valid API keys configured for Anthropic or Hugging Face.")
+        if not self.anthropic_key and not self.hf_key and not self.deepseek_key:
+            raise Exception("No valid API keys configured for DeepSeek, Anthropic, or Hugging Face.")
 
         if self.anthropic_key:
             body: Dict[str, Any] = {
@@ -602,10 +915,10 @@ class LLMClient:
                                 pass  # Already handled via message_delta
                 return
             except Exception as exc:
-                if not self.hf_key:
+                if not self.hf_key and not self.deepseek_key:
                     raise
                 logger.warning(
-                    "Anthropic stream_message failed; using Hugging Face fallback: %s",
+                    "Anthropic stream_message failed; using OpenAI-compatible fallback: %s",
                     exc,
                 )
 
@@ -618,13 +931,15 @@ class LLMClient:
                 "\n\nTool execution is currently unavailable in this mode. "
                 "Answer directly, and briefly mention any missing external actions."
             )
+        fallback_provider = "deepseek" if self.deepseek_key else "huggingface"
         collected_chunks: List[str] = []
         async for chunk in self._stream_huggingface(
             fallback_system,
             fallback_prompt,
             temperature,
             max_tokens,
-            model_name=model or self._model_for("huggingface", "executor"),
+            model_name=model or self._model_for(fallback_provider, "executor"),
+            provider=fallback_provider,
         ):
             if chunk:
                 collected_chunks.append(chunk)
@@ -726,8 +1041,10 @@ class LLMClient:
         max_tokens: int,
         json_mode: bool,
         model_name: Optional[str] = None,
+        provider: str = "huggingface",
     ) -> str:
-        """Call Hugging Face Router (OpenAI-compatible /v1/chat/completions API)"""
+        """Call an OpenAI-compatible /v1/chat/completions API (Hugging Face or DeepSeek)."""
+        url, key, model = self._openai_config(provider, model_name)
 
         # Build messages array in OpenAI/ChatML style
         messages = []
@@ -741,15 +1058,15 @@ class LLMClient:
 
         messages.append({"role": "user", "content": user_content})
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
-                self.hf_url,
+                url,
                 headers={
-                    "Authorization": f"Bearer {self.hf_key}",
+                    "Authorization": f"Bearer {key}",
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": model_name or self.hf_model,
+                    "model": model,
                     "messages": messages,
                     "max_tokens": max_tokens,
                     "temperature": temperature,
@@ -757,7 +1074,7 @@ class LLMClient:
             )
 
             if response.status_code != 200:
-                raise Exception(f"HF Error {response.status_code}: {response.text}")
+                raise Exception(f"{provider} Error {response.status_code}: {response.text}")
 
             data = response.json()
 
@@ -783,24 +1100,25 @@ class LLMClient:
                 # Fallback: just return the raw data stringified
                 return str(data)
 
-    async def _stream_huggingface(self, system_prompt: str, user_prompt: str, temperature: float, max_tokens: int, model_name: Optional[str] = None):
-        """Stream from Hugging Face Router (OpenAI-compatible SSE)"""
+    async def _stream_huggingface(self, system_prompt: str, user_prompt: str, temperature: float, max_tokens: int, model_name: Optional[str] = None, provider: str = "huggingface"):
+        """Stream from an OpenAI-compatible SSE endpoint (Hugging Face or DeepSeek)."""
+        url, key, model = self._openai_config(provider, model_name)
 
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": user_prompt})
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=60.0) as client:
             async with client.stream(
                 "POST",
-                self.hf_url,
+                url,
                 headers={
-                    "Authorization": f"Bearer {self.hf_key}",
+                    "Authorization": f"Bearer {key}",
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": model_name or self.hf_model,
+                    "model": model,
                     "messages": messages,
                     "max_tokens": max_tokens,
                     "temperature": temperature,
@@ -809,7 +1127,7 @@ class LLMClient:
             ) as response:
                 if response.status_code != 200:
                     error_text = await response.aread()
-                    raise Exception(f"HF Stream Error {response.status_code}: {error_text}")
+                    raise Exception(f"{provider} Stream Error {response.status_code}: {error_text}")
 
                 async for line in response.aiter_lines():
                     if line.startswith("data: "):

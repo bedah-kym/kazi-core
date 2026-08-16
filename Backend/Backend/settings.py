@@ -327,12 +327,34 @@ GMAIL_OAUTH_CLIENT_SECRET = os.environ.get('GMAIL_OAUTH_CLIENT_SECRET') or os.en
 GMAIL_OAUTH_REDIRECT_URI = os.environ.get('GMAIL_OAUTH_REDIRECT_URI', '')
 GMAIL_SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send'
 
+# Messaging connectors
+TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
+
 # Kazi platform
 KAZI_AGENT_NAME = os.environ.get('KAZI_AGENT_NAME', 'Kazi')
+
+# LLM providers (Anthropic first, DeepSeek + Hugging Face fallbacks)
+ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
+DEEPSEEK_API_KEY = os.environ.get('DEEPSEEK_API_KEY', '')
+DEEPSEEK_MODEL = os.environ.get('DEEPSEEK_MODEL', 'deepseek-chat')
+DEEPSEEK_BASE_URL = os.environ.get('DEEPSEEK_BASE_URL', 'https://api.deepseek.com/v1/chat/completions')
+LLM_PLANNER_PROVIDER = os.environ.get('LLM_PLANNER_PROVIDER', 'anthropic')
+LLM_EXECUTOR_PROVIDER = os.environ.get('LLM_EXECUTOR_PROVIDER', 'huggingface')
+LLM_PLANNER_MODEL = os.environ.get('LLM_PLANNER_MODEL', '')
+LLM_EXECUTOR_MODEL = os.environ.get('LLM_EXECUTOR_MODEL', '')
+
+# LLM token quota
+LLM_TOKEN_QUOTA_ENABLED = os.environ.get('LLM_TOKEN_QUOTA_ENABLED', 'True').lower() in ('1', 'true', 'yes')
+LLM_TOKEN_LIMIT_PER_USER_PER_HOUR = int(os.environ.get('LLM_TOKEN_LIMIT_PER_USER_PER_HOUR', 50000))
 
 # LLM cost guards
 LLM_MAX_TOKENS = int(os.environ.get('LLM_MAX_TOKENS', 700))  # hard ceiling per call
 LLM_PROMPT_CHAR_LIMIT = int(os.environ.get('LLM_PROMPT_CHAR_LIMIT', 4000))  # truncate user prompt to this many chars
+CONTEXT_PROMPT_MAX_CHARS = int(os.environ.get('CONTEXT_PROMPT_MAX_CHARS', 8000))  # cap room context injected into the system prompt
+SKILL_MAX_CHARS = int(os.environ.get('SKILL_MAX_CHARS', 8000))  # cap a loaded skill's instruction body
+HISTORY_MAX_CHARS = int(os.environ.get('HISTORY_MAX_CHARS', 60000))  # conversation history budget before auto-compaction
+HISTORY_MAX_MESSAGES = int(os.environ.get('HISTORY_MAX_MESSAGES', 50))  # max history turns kept in an agent loop
+HISTORY_COMPACTION_ENABLED = os.environ.get('HISTORY_COMPACTION_ENABLED', 'False').lower() in ('1', 'true', 'yes')  # opt-in: trim oldest turns when history exceeds the budget
 LLM_CACHE_ENABLED = os.environ.get('LLM_CACHE_ENABLED', 'True').lower() in ('1', 'true', 'yes')
 LLM_CACHE_TTL_SECONDS = int(os.environ.get('LLM_CACHE_TTL_SECONDS', 600))
 LLM_CACHE_MIN_TEMP = float(os.environ.get('LLM_CACHE_MIN_TEMP', 0.3))

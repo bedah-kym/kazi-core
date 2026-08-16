@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-08-16
+
+### Added
+- **DeepSeek LLM provider** (`orchestration/llm_client.py`): OpenAI-compatible
+  tool-calling adapter so the agent loop runs unchanged on DeepSeek with tools
+  preserved. Configure via `DEEPSEEK_API_KEY`, `DEEPSEEK_MODEL`, `DEEPSEEK_BASE_URL`;
+  order via `LLM_PLANNER_PROVIDER` / `LLM_EXECUTOR_PROVIDER`.
+- **Telegram Bot connector** (`connectors/telegram_bot_connector.py`): send text,
+  media, inline keyboards, edit, delete, and health-check. Auto-discovered;
+  requires `TELEGRAM_BOT_TOKEN`.
+- **`remove_from_itinerary`**: end-to-end itinerary removal with fuzzy id/title
+  resolution and real provider booking deep-links (`travel/booking_links.py`).
+- **Skills system** (`orchestration/skill_registry.py` + `skills/`): drop-in
+  `SKILL.md` instruction packs exposed via new `list_skills` / `load_skill`
+  meta-tools. Filesystem-first, `staging → review → active` promotion gates,
+  `SKILL_MAX_CHARS` cap, and `skill_loaded` telemetry.
+- **Validated output repair** (`LLMClient.generate_json`): one-shot self-repair
+  when LLM JSON is malformed or missing required fields; wired into the intent
+  parser and workflow planner.
+- **Output guardrails**: `security_policy.redact_sensitive_text` strips secrets
+  and PII from tool results and replies; tool errors are clamped + flattened
+  (`tool_executor._normalize_error`) so raw upstream bodies never re-enter LLM
+  context (fail-plausible guard).
+- **Context size cap** (`CONTEXT_PROMPT_MAX_CHARS`): `ContextManager.get_context_prompt`
+  caps room context and emits a `context_truncated` telemetry event instead of
+  silently overflowing the window.
+- **Auto-compaction (opt-in)**: `HISTORY_COMPACTION_ENABLED` trims the oldest
+  conversation turns to fit `HISTORY_MAX_CHARS` / `HISTORY_MAX_MESSAGES` in O(n),
+  never drops the most recent message, and emits `context_compacted`.
+
+### Fixed
+- **Redis TTL bug**: `cache.incr` on fresh keys created counters without a TTL,
+  so rate-limit and token-quota counters never expired. Switched to get-then-set
+  with a fresh TTL in `llm_client`, `agent_loop`, and `mcp_router`.
+- **Router startup resilience**: missing optional connector mappings now warn
+  instead of raising, so an unset `TELEGRAM_BOT_TOKEN` no longer blocks boot.
+- **Calendly self-heal**: re-fetches a missing user URI via `/users/me` and
+  organization memberships instead of erroring.
+- **Python 3.14 test compatibility**: `asyncio.get_event_loop()` → `asyncio.run()`
+  in `orchestration/test_agentic.py`.
+
 ## [0.4.1] - 2026-05-08
 
 Bug-fix release. Real-world QA against the running docker stack and

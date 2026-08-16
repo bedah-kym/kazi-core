@@ -1049,19 +1049,19 @@ async def _llm_manager_review(message: str, steps: List[Dict[str, Any]]) -> Dict
     })
 
     try:
-        response_text = await llm.generate_text(
+        parsed = await llm.generate_json(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
+            required_fields=["verdict"],
             temperature=0.2,
             max_tokens=700,
-            json_mode=True,
             model_role="planner",
         )
     except Exception as exc:
         logger.warning("LLM manager failed: %s", exc)
         return {}
 
-    parsed = llm.extract_json(response_text) or {}
+    parsed = parsed or {}
     verdict = str(parsed.get("verdict") or "").lower()
     revised_steps = parsed.get("revised_steps")
     if not isinstance(revised_steps, list):
@@ -1618,19 +1618,19 @@ async def plan_user_request(
     user_prompt = "\n".join(user_prompt_parts)
 
     try:
-        response_text = await llm.generate_text(
+        parsed = await llm.generate_json(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
+            required_fields=["mode"],
             temperature=0.2,
             max_tokens=900,
-            json_mode=True,
             model_role="planner",
         )
     except Exception as exc:
         logger.error("Planner LLM failed: %s", exc)
         return {"mode": "single", "assistant_message": "", "workflow_definition": None}
 
-    parsed = llm.extract_json(response_text) or {}
+    parsed = parsed or {}
     mode = parsed.get("mode") or "single"
     assistant_message = parsed.get("assistant_message") or ""
     steps = parsed.get("steps")

@@ -22,6 +22,18 @@ from orchestration.security_policy import is_prompt_injection, sanitize_paramete
 
 logger = logging.getLogger(__name__)
 
+_MAX_ERROR_CHARS = 300
+
+
+def _normalize_error(raw: str) -> str:
+    """Clamp + flatten an error so raw upstream bodies never enter LLM context."""
+    if not raw:
+        return "Tool execution failed."
+    flat = " ".join(raw.split())
+    if len(flat) > _MAX_ERROR_CHARS:
+        flat = flat[:_MAX_ERROR_CHARS] + "…"
+    return f"Tool execution failed: {flat}"
+
 # Lazy-loaded singleton for the connector map
 
 
@@ -138,7 +150,7 @@ async def execute_tool(
         logger.error("Tool execution error for %s: %s", action, exc, exc_info=True)
         return {
             "status": "error",
-            "message": f"Tool execution failed: {str(exc)}",
+            "message": _normalize_error(str(exc)),
         }
 
     elapsed = round(time.monotonic() - start_time, 2)

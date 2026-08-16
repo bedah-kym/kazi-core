@@ -75,6 +75,8 @@ in-app, email, or WhatsApp, and resume only after an explicit decision lands.
 - **Risk-level gates** — low-risk actions execute immediately, high-risk actions pause for confirmation
 - **Room-scoped access control** — users can only act within their own chatrooms
 - **AES-256-GCM encryption** — optional per-room message encryption at rest
+- **Output guardrails** — secrets and PII are redacted from tool results and replies before they reach the user or re-enter the model
+- **Context budgets** — room context and conversation history are capped with observable truncation events instead of silent window overflow
 
 ### 🔔 Notifications across every channel
 
@@ -102,6 +104,9 @@ Built-in debounce prevents notification spam.
 | **Quota system** | Transparent per-user rate limits with color-coded status (searches, AI actions, uploads) |
 | **Content moderation** | Batched message moderation with auto-muting after threshold |
 | **Telemetry** | JSONL event log for every agent loop, tool call, and memory update |
+| **Multi-provider LLM** | Anthropic (Claude), DeepSeek, and Hugging Face with automatic fallback — including full tool-calling on DeepSeek |
+| **Telegram messaging** | Send text, media, and inline keyboards via the Telegram Bot API |
+| **Skills** | Drop-in `SKILL.md` instruction packs the agent discovers and loads on demand |
 
 ---
 

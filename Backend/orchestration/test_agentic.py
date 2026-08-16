@@ -69,7 +69,7 @@ class ToolSchemaTests(SimpleTestCase):
 class ToolExecutorTests(SimpleTestCase):
     def test_unknown_tool_returns_error(self):
         from orchestration.tool_executor import execute_tool
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             execute_tool("nonexistent_tool", {}, {"user_id": 1, "room_id": 1})
         )
         self.assertEqual(result["status"], "error")

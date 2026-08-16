@@ -42,6 +42,10 @@ _ACTION_POLICIES: Dict[str, Dict[str, Any]] = {
         "requires_confirmation": True,
         "include_in_response": True,
     },
+    "remove_from_itinerary": {
+        "requires_confirmation": True,
+        "include_in_response": True,
+    },
     "set_reminder": {
         "requires_confirmation": False,
         "include_in_response": True,
@@ -60,6 +64,7 @@ _AUDITED_ACTIONS = {
     "book_travel_item",
     "set_reminder",
     "add_to_itinerary",
+    "remove_from_itinerary",
     "create_itinerary",
     "schedule_meeting",
 }
@@ -178,6 +183,9 @@ def summarize_action(action: str, params: Dict[str, Any]) -> str:
     if action == "add_to_itinerary":
         item_type = params.get("item_type") or "item"
         return f"Added {item_type} to itinerary"
+    if action == "remove_from_itinerary":
+        target = params.get("title") or params.get("item_id") or "item"
+        return f"Removed {target} from itinerary"
     if action == "create_itinerary":
         destination = params.get("destination") or params.get("location") or "trip"
         return f"Created itinerary for {destination}"

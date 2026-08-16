@@ -148,6 +148,9 @@ class DataSynthesizer:
         elif action == "book_travel_item":
             return _with_receipt(data.get("message", "Booking initiated."))
 
+        elif action == "remove_from_itinerary":
+            return _with_receipt(data.get("message", "Item removed from your itinerary."))
+
         # NEW: Handle GIF with message AND full URL
         elif action == "search_gif":
             url = data.get("url", "")

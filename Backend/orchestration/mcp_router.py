@@ -29,7 +29,6 @@ import threading
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
 from django.core.cache import cache
-from django.core.exceptions import ImproperlyConfigured
 from django_redis import get_redis_connection
 from asgiref.sync import sync_to_async
 import httpx
@@ -92,9 +91,10 @@ class MCPRouter:
     def _validate_action_connector_integrity(self) -> None:
         missing, extra = validate_router_mappings(self.connectors.keys())
         if missing:
-            raise ImproperlyConfigured(
-                "Orchestration action catalog mismatch. Missing router mappings for: "
-                + ", ".join(missing)
+            logger.warning(
+                "Action catalog has entries with no registered connector: %s. "
+                "These actions will not be available. Check env vars (e.g. TELEGRAM_BOT_TOKEN).",
+                ", ".join(missing),
             )
         if extra:
             logger.warning(
@@ -311,8 +311,11 @@ class MCPRouter:
         cache_key = f"mcp_rate:{user_id}"
 
         try:
-            current = cache.incr(cache_key)
-        except ValueError:
+            # get-then-set with fresh TTL (cache.incr on a fresh key creates
+            # it without a TTL, so the counter would never expire)
+            current = int(cache.get(cache_key) or 0) + 1
+            cache.set(cache_key, current, 3600)
+        except Exception:
             cache.set(cache_key, 1, 3600)
             current = 1
 
@@ -443,6 +446,44 @@ class CalendarConnector(BaseConnector):
 
             user_uri = await sync_to_async(lambda: profile.calendly_user_uri)()
 
+            # Self-heal: if the stored user URI is missing, fetch it from /users/me
+            if not user_uri:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    me_resp = await client.get(
+                        'https://api.calendly.com/users/me',
+                        headers={'Authorization': f'Bearer {access_token}'},
+                    )
+                    if me_resp.status_code == 200:
+                        me_data = me_resp.json()
+                        user_uri = (me_data.get('resource') or {}).get('uri') or me_data.get('uri')
+                        if user_uri:
+                            await sync_to_async(lambda: setattr(profile, 'calendly_user_uri', user_uri) or profile.save())()
+                    else:
+                        logger.error(
+                            "Calendly self-heal /users/me failed: %s %s",
+                            me_resp.status_code, me_resp.text[:300],
+                        )
+                    # Fallback via organization memberships
+                    if not user_uri and me_resp.status_code == 200:
+                        me_data = me_resp.json()
+                        org_uri = (me_data.get('resource') or {}).get('current_organization')
+                        if org_uri:
+                            org_resp = await client.get(
+                                'https://api.calendly.com/organization_memberships',
+                                headers={'Authorization': f'Bearer {access_token}'},
+                                params={'organization': org_uri},
+                            )
+                            if org_resp.status_code == 200:
+                                members = org_resp.json().get('collection') or []
+                                if members:
+                                    user_obj = members[0].get('user') or (members[0].get('resource') or {}).get('user') or {}
+                                    user_uri = user_obj.get('uri')
+                                    if user_uri:
+                                        await sync_to_async(lambda: setattr(profile, 'calendly_user_uri', user_uri) or profile.save())()
+
+            if not user_uri:
+                return {"status": "error", "message": "Your Calendly account URI is missing. Please reconnect Calendly.", "action_required": "connect_calendly"}
+
             # Fully async HTTP — no thread pool blocking
             async with httpx.AsyncClient(timeout=15.0) as client:
                 response = await client.get(
@@ -551,8 +592,10 @@ class SearchConnector(BaseConnector):
             today = datetime.now().strftime("%Y-%m-%d")
             limit_key = f"search_limit:{user_id}:{today}"
             try:
-                current_count = cache.incr(limit_key)
-            except ValueError:
+                # get-then-set with fresh TTL (see note above)
+                current_count = int(cache.get(limit_key) or 0) + 1
+                cache.set(limit_key, current_count, 86400)
+            except Exception:
                 cache.set(limit_key, 1, 86400)
                 current_count = 1
 

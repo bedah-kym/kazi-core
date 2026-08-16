@@ -8,8 +8,32 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _as_int(value: Any) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 class ItineraryConnector:
     """Connector to create, view, and update itineraries in the travel app."""
+
+    @staticmethod
+    def _match_itinerary(qs, itinerary_id):
+        """Resolve an itinerary from a qs given a possibly-fuzzy reference.
+
+        The LLM sometimes passes a title ("Mombasa Getaway") instead of a numeric
+        id, which used to crash the id lookup. Accept an int id, fall back to a
+        title match, then to the active / most-recent itinerary.
+        """
+        iid = _as_int(itinerary_id)
+        if iid is not None:
+            return qs.filter(id=iid).first()
+        if isinstance(itinerary_id, str) and itinerary_id.strip():
+            match = qs.filter(title__icontains=itinerary_id.strip()).first()
+            if match:
+                return match
+        return qs.filter(status='active').first() or qs.order_by('-created_at').first()
 
     def _parse_datetime(self, value: Any, fallback_days: int = 1) -> datetime:
         if isinstance(value, datetime):
@@ -33,6 +57,8 @@ class ItineraryConnector:
             return await self.view_itinerary(parameters, context)
         if action == "add_to_itinerary":
             return await self.add_to_itinerary(parameters, context)
+        if action == "remove_from_itinerary":
+            return await self.remove_from_itinerary(parameters, context)
         if action == "book_travel_item":
             return await self.book_travel_item(parameters, context)
 
@@ -114,9 +140,7 @@ class ItineraryConnector:
 
         def _get_itin():
             qs = Itinerary.objects.filter(user_id=user_id)
-            if itinerary_id:
-                return qs.filter(id=itinerary_id).first()
-            return qs.filter(status='active').first() or qs.order_by('-created_at').first()
+            return self._match_itinerary(qs, itinerary_id)
 
         itin = await sync_to_async(_get_itin)()
         if not itin:
@@ -165,9 +189,7 @@ class ItineraryConnector:
 
         def _get_itin():
             qs = Itinerary.objects.filter(user_id=user_id)
-            if itinerary_id:
-                return qs.filter(id=itinerary_id).first()
-            return qs.filter(status='active').first() or qs.order_by('-created_at').first()
+            return self._match_itinerary(qs, itinerary_id)
 
         itin = await sync_to_async(_get_itin)()
         if not itin:
@@ -202,6 +224,65 @@ class ItineraryConnector:
             "message": "Item added to itinerary",
             "item_id": item.id,
             "itinerary_id": itin.id
+        }
+
+    async def remove_from_itinerary(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        user_id = context.get("user_id")
+        if not user_id:
+            return {"status": "error", "message": "User context missing"}
+
+        from travel.models import Itinerary, ItineraryItem
+        import re
+
+        # Resolve the item id (LLM may pass it as an int, or a string like "item 3").
+        raw_item_id = parameters.get("item_id") or parameters.get("id")
+        item_id = None
+        if isinstance(raw_item_id, int):
+            item_id = raw_item_id
+        elif isinstance(raw_item_id, str):
+            match = re.search(r"\d+", raw_item_id)
+            if match:
+                item_id = int(match.group())
+
+        itinerary_id = parameters.get("itinerary_id")
+        title = parameters.get("title") or parameters.get("name")
+
+        def _resolve_itin():
+            qs = Itinerary.objects.filter(user_id=user_id)
+            return self._match_itinerary(qs, itinerary_id)
+
+        def _delete():
+            # Prefer an exact id match scoped to the user's own itineraries.
+            if item_id:
+                item = ItineraryItem.objects.filter(
+                    id=item_id, itinerary__user_id=user_id
+                ).first()
+                if item:
+                    removed_title = item.title
+                    item.delete()
+                    return removed_title, None
+
+            # Fall back to a title match within the target/active itinerary.
+            itin = _resolve_itin()
+            if not itin:
+                return None, "No itinerary found"
+            if title:
+                item = itin.items.filter(title__icontains=title).first()
+                if item:
+                    removed_title = item.title
+                    item.delete()
+                    return removed_title, None
+
+            return None, "Couldn't find that item — view the itinerary and pass the item's id."
+
+        removed_title, error = await sync_to_async(_delete)()
+        if error:
+            return {"status": "error", "message": error}
+
+        return {
+            "status": "success",
+            "message": f"Removed '{removed_title}' from your itinerary",
+            "removed_title": removed_title,
         }
 
     async def book_travel_item(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
@@ -276,11 +357,11 @@ class ItineraryConnector:
             if existing_booking:
                 return existing_booking, None
 
-            booking_url = (
-                parameters.get("booking_url")
-                or item.booking_url
-                or "https://amadeus.com"
-            )
+            from travel.booking_links import build_booking_link
+            booking_url = parameters.get("booking_url") or item.booking_url
+            if not booking_url or "amadeus.com" in booking_url:
+                # Hand off to a real provider checkout rather than a dead placeholder.
+                booking_url, _provider = build_booking_link(item)
             booking = BookingReference.objects.create(
                 itinerary_item=item,
                 provider=item.provider or parameters.get("provider") or "Unknown",

@@ -1,4 +1,5 @@
 from typing import Dict, Any, Optional
+from urllib.parse import urlparse
 from asgiref.sync import sync_to_async
 from datetime import datetime, timedelta
 from django.utils import timezone
@@ -13,6 +14,22 @@ def _as_int(value: Any) -> Optional[int]:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _is_placeholder_url(url: Optional[str]) -> bool:
+    """True when a booking URL is empty or a dead amadeus.com placeholder.
+
+    Hostname-based rather than substring-based so a crafted URL (e.g.
+    ``https://evil.com/?next=amadeus.com`` or ``amadeus.com.evil.com``)
+    cannot spoof the check.
+    """
+    if not url:
+        return True
+    try:
+        host = (urlparse(str(url)).hostname or "").lower()
+    except Exception:
+        return True
+    return host == "amadeus.com" or host.endswith(".amadeus.com")
 
 
 class ItineraryConnector:
@@ -359,7 +376,7 @@ class ItineraryConnector:
 
             from travel.booking_links import build_booking_link
             booking_url = parameters.get("booking_url") or item.booking_url
-            if not booking_url or "amadeus.com" in booking_url:
+            if _is_placeholder_url(booking_url):
                 # Hand off to a real provider checkout rather than a dead placeholder.
                 booking_url, _provider = build_booking_link(item)
             booking = BookingReference.objects.create(

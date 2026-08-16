@@ -131,28 +131,24 @@ your market, your currency, or your infrastructure.
 
 ## 🚀 Project Status
 
-**v0.4.0 — the human-gated runtime cycle.**
+**v0.4.2 — provider portability, messaging, Skills, and hardening.**
 
-Workflows now pause durably for human approval, operators get a
-first-class API + Django admin surface (approve / reject / cancel /
-rerun / pause / resume), the deferred-run watchdog dead-letters
-runs that wait too long, and a canonical demo workflow pack runs the
-full `request → workflow → approval → receipt → replay` loop with no
-real API keys via `KAZI_DEMO_MODE=true` plus
-[`bash scripts/demo.sh`](scripts/demo.sh).
+New in this release: a **DeepSeek** LLM provider (full tool-calling via an
+OpenAI-compatible adapter), a **Telegram** connector, **itinerary removal**
+with real provider booking links, a **Skills** system (`SKILL.md` instruction
+packs loaded on demand), and production hardening — secret/PII output
+redaction, validated JSON self-repair, context-size caps with observable
+truncation events, and opt-in auto-compaction.
 
-The cycle also collapsed connector loading into one extension path,
-landed five v1.0 stable runtime contracts under
-[`docs/contracts/`](docs/contracts/), promoted the eval harness to a
-documented surface, shipped the `kazi_trace` CLI for debugging any
-execution, and reorganized docs around five developer flows.
+v0.4.0 introduced the human-gated runtime cycle (durable checkpoints,
+operator API + admin surface, deferred-run watchdog, demo workflow pack).
+See [`CHANGELOG.md`](CHANGELOG.md) for the full history.
 
 Container releases are **cosign-signed** (keyless via Sigstore) and
 ship **SBOM + SLSA provenance**. CI runs against real Postgres + Redis
 on Python 3.11 and 3.12.
 
-Still early access — breaking changes possible before v1.0. See
-[`CHANGELOG.md`](CHANGELOG.md) for what's in each release.
+Still early access — breaking changes possible before v1.0.
 
 ---
 
@@ -207,6 +203,9 @@ REDIS_URL=redis://redis:6379/0
 CELERY_BROKER_URL=redis://redis:6379/0
 CELERY_RESULT_BACKEND=redis://redis:6379/0
 ANTHROPIC_API_KEY=sk-ant-...
+# Optional — DeepSeek (OpenAI-compatible) and Telegram messaging:
+# DEEPSEEK_API_KEY=sk-...
+# TELEGRAM_BOT_TOKEN=123456:ABC...
 ```
 
 3. Start services and initialize DB:
@@ -236,10 +235,11 @@ durable execution.
 | Search | `search_info` | Web search |
 | Gmail | `send_email` | Gmail API (OAuth) |
 | WhatsApp | `send_message` | Twilio |
+| Telegram | `send_telegram_message`, media, keyboards, edit, delete | Telegram Bot API |
 | Payments | `check_balance`, `list_transactions` | IntaSend |
 | Invoices | `create_invoice`, `create_payment_link` | IntaSend |
 | Calendar | `schedule_meeting`, `check_availability` | Calendly |
-| Travel | flights, hotels, buses, transfers, events | Amadeus + Buupass |
+| Travel | flights, hotels, buses, transfers, events + itinerary CRUD | Amadeus + Buupass |
 | Reminders | `set_reminder` | Built-in (Celery) |
 | Contacts | `lookup_contact`, `save_contact` | Built-in |
 | Notes | `create_note`, `complete_note` | Built-in |
@@ -308,7 +308,8 @@ Backend/
     memory_state.py     # Entity tracking + preference learning
     contact_tools.py    # LLM-accessible contact system
     memory_tools.py     # Note creation + archival tools
-    llm_client.py       # LLM provider abstraction
+    llm_client.py       # LLM provider abstraction (Claude, DeepSeek, HF)
+    skill_registry.py   # SKILL.md instruction-pack discovery
     connectors/         # Built-in connectors (add yours here)
   chatbot/              # WebSocket consumers, memory, context, contacts
   notifications/        # Unified in-app, email, WhatsApp notifications
@@ -316,6 +317,7 @@ Backend/
   travel/               # Multi-modal travel search + booking
   payments/             # Double-entry ledger, invoices, wallets
   users/                # Auth, profiles, quotas, encryption
+skills/                 # Drop-in SKILL.md instruction packs
 ```
 
 ## 💻 Tech Stack
@@ -325,7 +327,7 @@ Backend/
 - PostgreSQL
 - Celery + Celery Beat (async tasks + scheduling)
 - Temporal (optional — durable multi-step workflows)
-- Anthropic Claude + HuggingFace (LLM providers, bring your own)
+- Anthropic Claude + DeepSeek + HuggingFace (LLM providers, bring your own)
 
 ---
 

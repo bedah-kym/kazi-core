@@ -667,39 +667,54 @@ async def _create_workflow_handoff(
     try:
         from workflows.models import UserWorkflow
         from asgiref.sync import sync_to_async
+        from orchestration.workflow_planner import execute_adhoc_workflow
 
-        workflow_def = {
-            "description": description,
+        # Build the same definition shape the planner/validator consumes
+        # (workflow_name / workflow_description / triggers / steps) instead of
+        # the old {description, steps} shape that bypassed validation and a
+        # separate raw execution path.
+        definition = {
+            "workflow_name": description[:100] or "Agent handoff",
+            "workflow_description": description.strip()[:300],
+            "triggers": [{"trigger_type": trigger_type or "manual"}],
             "steps": steps,
+            "metadata": {"source": "agent_handoff"},
         }
+
+        if trigger_type == "manual":
+            result = await execute_adhoc_workflow(
+                definition,
+                user_id=context.get("user_id"),
+                room_id=context.get("room_id"),
+                trigger_data={"source": "agent_handoff"},
+            )
+            workflow = result.get("workflow")
+            workflow_id = getattr(workflow, "id", None)
+            if result.get("status") == "error":
+                return {
+                    "status": "error",
+                    "message": result.get("message") or "Workflow handoff failed.",
+                }
+            return {
+                "status": "success",
+                "message": result.get("message") or f"Workflow '{description}' started.",
+                "workflow_id": workflow_id,
+            }
+
         workflow = await sync_to_async(UserWorkflow.objects.create)(
             user_id=context.get("user_id"),
             name=description[:100],
-            definition=workflow_def,
+            definition=definition,
             status="active",
         )
-
-        if trigger_type == "manual":
-            from workflows.temporal_integration import start_workflow_execution
-            execution = await start_workflow_execution(
-                workflow,
-                trigger_data={"source": "agent_handoff"},
-                trigger_type="manual",
-            )
-            return {
-                "status": "success",
-                "message": f"Workflow '{description}' started (ID: {workflow.id}).",
-                "workflow_id": workflow.id,
-            }
-        else:
-            return {
-                "status": "success",
-                "message": (
-                    f"Workflow '{description}' created (ID: {workflow.id}). "
-                    f"Trigger type: {trigger_type}."
-                ),
-                "workflow_id": workflow.id,
-            }
+        return {
+            "status": "success",
+            "message": (
+                f"Workflow '{description}' created (ID: {workflow.id}). "
+                f"Trigger type: {trigger_type}."
+            ),
+            "workflow_id": workflow.id,
+        }
 
     except Exception as exc:
         logger.error("Workflow handoff failed: %s", exc, exc_info=True)

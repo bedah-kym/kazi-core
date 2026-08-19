@@ -362,6 +362,11 @@ LLM_CACHE_MIN_TEMP = float(os.environ.get('LLM_CACHE_MIN_TEMP', 0.3))
 # Manager agent LLM fallback
 MANAGER_LLM_ENABLED = os.environ.get('MANAGER_LLM_ENABLED', 'True').lower() in ('1', 'true', 'yes')
 
+# Orchestration startup integrity checks (connector <-> action catalog).
+# Previously only checked via getattr(settings, ..., True) which could never be
+# disabled. Wired to env so CI/dev can skip the eager MCPRouter construction.
+ORCHESTRATION_STRICT_STARTUP_CHECKS = os.environ.get('ORCHESTRATION_STRICT_STARTUP_CHECKS', 'True').lower() in ('1', 'true', 'yes')
+
 # Password validation
 # https://docs.djangoproject.com/en/4.1/ref/settings/#auth-password-validators
 

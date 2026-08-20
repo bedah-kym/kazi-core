@@ -1,28 +1,21 @@
-"""Activity executors for workflow steps."""
+"""Activity executors for workflow steps.
+
+Workflow steps execute through the same connector registry the agent loop
+uses (`orchestration.connector_registry.discover_connectors`), so there is a
+single source of truth for action -> connector resolution. Workflow-specific
+concerns (idempotency, receipts, capability gates, dependency resolution,
+withdraw policy, email summary) are layered on top.
+"""
 import json
 from decimal import Decimal
 from typing import Dict, Any, Optional
 from django.conf import settings
 
 from orchestration.llm_client import get_llm_client
-from orchestration.connectors.gmail_connector import GmailConnector
-from orchestration.connectors.whatsapp_connector import WhatsAppConnector
-from orchestration.connectors.payment_connector import ReadOnlyPaymentConnector
-from orchestration.connectors.intersend_connector import IntersendPayConnector
-from orchestration.connectors.invoice_connector import InvoiceConnector
-from orchestration.connectors.quota_connector import QuotaConnector
-from orchestration.connectors.itinerary_connector import ItineraryConnector
-from orchestration.connectors.travel_buses_connector import TravelBusesConnector
-from orchestration.connectors.travel_hotels_connector import TravelHotelsConnector
-from orchestration.connectors.travel_flights_connector import TravelFlightsConnector
-from orchestration.connectors.travel_transfers_connector import TravelTransfersConnector
-from orchestration.connectors.travel_events_connector import TravelEventsConnector
-from orchestration.mcp_router import SearchConnector, WeatherConnector, GiphyConnector, CurrencyConnector, ReminderConnector, CalendarConnector
 from orchestration.action_receipts import attach_receipt_to_result, record_action_receipt, should_record_receipt
 from orchestration.action_catalog import (
     get_action_definition,
     get_capability_gate,
-    get_supported_actions,
     resolve_action_alias,
 )
 from orchestration.security_policy import should_block_action, sanitize_parameters
@@ -30,51 +23,8 @@ from orchestration.security_policy import should_block_action, sanitize_paramete
 from .runtime import resolve_step_idempotency_key
 from .utils import resolve_parameters
 
-_READ_ONLY_PAYMENT_ACTIONS = {
-    'check_balance',
-    'list_transactions',
-    'check_invoice_status',
-    'check_payments'
-}
-
-_PAYMENT_ACTIONS = {
-    'create_payment_link',
-    'withdraw',
-    'check_status'
-}
-
-_TRAVEL_ACTIONS = {
-    'search_buses': TravelBusesConnector(),
-    'search_hotels': TravelHotelsConnector(),
-    'search_flights': TravelFlightsConnector(),
-    'search_transfers': TravelTransfersConnector(),
-    'search_events': TravelEventsConnector(),
-    'create_itinerary': ItineraryConnector(),
-    'view_itinerary': ItineraryConnector(),
-    'add_to_itinerary': ItineraryConnector(),
-    'remove_from_itinerary': ItineraryConnector(),
-    'book_travel_item': ItineraryConnector(),
-}
-
-_MISC_ACTIONS = {
-    'search_info': SearchConnector(),
-    'get_weather': WeatherConnector(),
-    'search_gif': GiphyConnector(),
-    'convert_currency': CurrencyConnector(),
-    'set_reminder': ReminderConnector(),
-    'check_quotas': QuotaConnector(),
-    'schedule_meeting': CalendarConnector(),
-    'check_availability': CalendarConnector(),
-}
-
 _AUTO_EMAIL_SUMMARY_TOKEN = "__AUTO_SUMMARY__"
 _OPTION_PARAM_HINTS = ("item_id", "option", "selection")
-
-_EXECUTOR_BASE_ACTIONS = {
-    "send_email",
-    "send_message",
-    "create_invoice",
-}
 
 # Actions that are connector-level tools (invoked via the router/agent loop,
 # not through workflow steps). They don't need workflow executor mappings.
@@ -86,25 +36,6 @@ _CONNECTOR_ONLY_ACTIONS = {
     "delete_telegram_message",
     "telegram_health",
 }
-
-
-def validate_executor_action_mappings() -> None:
-    mapped = set(_EXECUTOR_BASE_ACTIONS)
-    mapped.update(_READ_ONLY_PAYMENT_ACTIONS)
-    mapped.update(_PAYMENT_ACTIONS)
-    mapped.update(_TRAVEL_ACTIONS.keys())
-    mapped.update(_MISC_ACTIONS.keys())
-    required = set(get_supported_actions(include_aliases=False))
-    # Connector-only actions are not workflow steps — exclude from required.
-    required -= _CONNECTOR_ONLY_ACTIONS
-    missing = sorted(required - mapped)
-    if missing:
-        raise RuntimeError(
-            "Workflow executor is missing action mappings for: " + ", ".join(missing)
-        )
-
-
-validate_executor_action_mappings()
 
 
 def _normalize_depends_on(value: Any) -> list:
@@ -398,46 +329,22 @@ async def execute_workflow_step(step: Dict[str, Any], context: Dict[str, Any]) -
         if error:
             return await _record_and_return({"status": "error", "error": error})
 
-    if service in ('gmail', 'mailgun'):
-        if params.get('text') == _AUTO_EMAIL_SUMMARY_TOKEN:
-            params['text'] = await _build_email_summary(context)
-        connector = GmailConnector()
-        params.setdefault('action', 'send_email')
-        return await _record_and_return(await connector.execute(params, context))
+    if service in ('gmail', 'mailgun') and params.get('text') == _AUTO_EMAIL_SUMMARY_TOKEN:
+        params['text'] = await _build_email_summary(context)
 
-    if service == 'whatsapp':
-        connector = WhatsAppConnector()
-        params.setdefault('action', 'send_message')
-        return await _record_and_return(await connector.execute(params, context))
+    if action in _CONNECTOR_ONLY_ACTIONS:
+        return await _record_and_return({
+            "status": "error",
+            "error": f"Action '{action}' is not available as a workflow step.",
+        })
 
-    if service == 'payments':
-        if action in _READ_ONLY_PAYMENT_ACTIONS:
-            connector = ReadOnlyPaymentConnector()
-            params.setdefault('action', action)
-            return await _record_and_return(await connector.execute(params, context))
-        if action == 'create_invoice':
-            connector = InvoiceConnector()
-            params.setdefault('action', action)
-            return await _record_and_return(await connector.execute(params, context))
-        if action in _PAYMENT_ACTIONS:
-            connector = IntersendPayConnector()
-            params.setdefault('action', action)
-            return await _record_and_return(await connector.execute(params, context))
-        return await _record_and_return({"status": "error", "error": f"Unsupported payment action: {action}"})
+    # Unified dispatch: resolve the connector through the same registry the
+    # agent loop uses — the single source of truth for action -> connector.
+    from orchestration.connector_registry import discover_connectors
 
-    if service == 'travel' and action in _TRAVEL_ACTIONS:
-        connector = _TRAVEL_ACTIONS[action]
-        params.setdefault('action', action)
-        return await _record_and_return(await connector.execute(params, context))
+    connector = discover_connectors().get(action)
+    if connector is None:
+        return await _record_and_return({"status": "error", "error": f"Unsupported workflow action: {action}"})
 
-    if action in _TRAVEL_ACTIONS:
-        connector = _TRAVEL_ACTIONS[action]
-        params.setdefault('action', action)
-        return await _record_and_return(await connector.execute(params, context))
-
-    if action in _MISC_ACTIONS:
-        connector = _MISC_ACTIONS[action]
-        params.setdefault('action', action)
-        return await _record_and_return(await connector.execute(params, context))
-
-    return await _record_and_return({"status": "error", "error": f"Unsupported workflow step: {service}.{action}"})
+    params.setdefault('action', action)
+    return await _record_and_return(await connector.execute(params, context))

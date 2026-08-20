@@ -125,10 +125,9 @@ def discover_connectors() -> Dict[str, Any]:
     # with no opt-in required.
     if is_demo_mode():
         # Example connectors are routing-only: they go into the connector_map
-        # for direct invocation but NOT into the global action_catalog. That
-        # keeps the workflow executor's startup validator
-        # (validate_executor_action_mappings) happy — it would otherwise
-        # require an executor mapping for every example action.
+        # for direct invocation but NOT into the global action_catalog, so the
+        # workflow executor's unified registry dispatch never surfaces them as
+        # workflow steps.
         # Demo workflows that need example actions invoke the connector
         # directly through the registry, not through the workflow executor's
         # action-catalog dispatch.

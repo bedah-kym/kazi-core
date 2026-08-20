@@ -208,7 +208,15 @@ class DeferredWorkflowExecution(models.Model):
 
 
 class WorkflowApprovalRecord(models.Model):
-    """Immutable review record for a workflow step that needed human approval."""
+    """Immutable review record for a step that needed human approval.
+
+    Covers two kinds of approval:
+      - ``workflow``    — a step inside a durable workflow run (has workflow
+        + execution FKs, written by the Temporal integration).
+      - ``agent_loop``  — a high-risk tool paused inside the ReAct agent loop
+        (no workflow/execution; scoped by ``room_id`` and the requesting user,
+        with the serialized loop state held in ``metadata``).
+    """
 
     STATUS_CHOICES = [
         ('pending', 'Pending'),
@@ -218,8 +226,25 @@ class WorkflowApprovalRecord(models.Model):
         ('cancelled', 'Cancelled'),
     ]
 
-    workflow = models.ForeignKey(UserWorkflow, on_delete=models.CASCADE, related_name='approval_records')
-    execution = models.ForeignKey(WorkflowExecution, on_delete=models.CASCADE, related_name='approval_records')
+    KIND_CHOICES = [
+        ('workflow', 'Workflow'),
+        ('agent_loop', 'Agent Loop'),
+    ]
+
+    workflow = models.ForeignKey(
+        UserWorkflow,
+        on_delete=models.CASCADE,
+        related_name='approval_records',
+        null=True,
+        blank=True,
+    )
+    execution = models.ForeignKey(
+        WorkflowExecution,
+        on_delete=models.CASCADE,
+        related_name='approval_records',
+        null=True,
+        blank=True,
+    )
     requested_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='requested_workflow_approvals')
     reviewed_by = models.ForeignKey(
         User,
@@ -229,6 +254,8 @@ class WorkflowApprovalRecord(models.Model):
         related_name='reviewed_workflow_approvals',
     )
 
+    kind = models.CharField(max_length=20, choices=KIND_CHOICES, default='workflow')
+    room_id = models.IntegerField(null=True, blank=True)
     step_id = models.CharField(max_length=120)
     service = models.CharField(max_length=50, blank=True)
     action = models.CharField(max_length=100)
@@ -247,6 +274,7 @@ class WorkflowApprovalRecord(models.Model):
         indexes = [
             models.Index(fields=['status', 'expires_at']),
             models.Index(fields=['workflow', 'step_id']),
+            models.Index(fields=['kind', 'room_id', 'status']),
         ]
 
     def __str__(self):

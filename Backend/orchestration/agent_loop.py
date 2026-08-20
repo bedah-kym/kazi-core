@@ -12,10 +12,13 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Any, AsyncGenerator, Callable, Dict, List, Optional, Tuple
 
+from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.core.cache import cache
+from django.utils import timezone
 
 from orchestration.agent_prompts import build_confirmation_prompt, build_system_prompt
 from orchestration.llm_client import get_llm_client
@@ -38,6 +41,7 @@ TOOL_TIMEOUT_SECONDS = 30
 LOOP_TIMEOUT_SECONDS = 120
 CONFIRMATION_STATE_TTL = 600  # 10 minutes
 AGENT_STATE_KEY = "orchestration:agent_state:{room_id}:{user_id}"
+AGENT_LOOP_APPROVAL_KIND = "agent_loop"
 
 # Web search rate limits
 DAILY_SEARCH_LIMIT = 10
@@ -129,6 +133,87 @@ def load_loop_state(room_id: int, user_id: int) -> Optional[LoopState]:
 
 def clear_loop_state(room_id: int, user_id: int) -> None:
     cache.delete(_state_key(room_id, user_id))
+
+
+# --------------------------------------------------------------------------- #
+#  Durable approval records (WorkflowApprovalRecord)                          #
+# --------------------------------------------------------------------------- #
+
+def _pending_approval_record(room_id: int, user_id: int):
+    """Return the pending, unexpired agent-loop approval row, or None.
+
+    Sync-only helper — callers wrap it in ``sync_to_async``. Only
+    ``agent_loop``-kind rows scoped to (room, user) are considered, so one
+    user can never see or act on another user's pending approval.
+    """
+    from workflows.models import WorkflowApprovalRecord
+
+    now = timezone.now()
+    candidates = WorkflowApprovalRecord.objects.filter(
+        kind=AGENT_LOOP_APPROVAL_KIND,
+        room_id=room_id,
+        requested_by_id=user_id,
+        status="pending",
+    )
+    for record in candidates:
+        if record.expires_at is None or record.expires_at > now:
+            return record
+    return None
+
+
+async def save_pending_confirmation(
+    room_id: int,
+    user_id: int,
+    tool: Dict[str, Any],
+    confirmation_text: str,
+) -> Optional[int]:
+    """Durably persist a pending high-risk tool confirmation (DB)."""
+
+    def _create():
+        from workflows.models import WorkflowApprovalRecord
+
+        expires_at = timezone.now() + timedelta(seconds=CONFIRMATION_STATE_TTL)
+        record = WorkflowApprovalRecord.objects.create(
+            workflow_id=None,
+            execution_id=None,
+            requested_by_id=user_id,
+            kind=AGENT_LOOP_APPROVAL_KIND,
+            room_id=room_id,
+            step_id=f"agent_loop:{room_id}:{user_id}",
+            service="",
+            action=tool.get("name", ""),
+            approval_message=confirmation_text,
+            sanitized_params=tool.get("input", {}),
+            status="pending",
+            expires_at=expires_at,
+            metadata={"tool_id": tool.get("id", "")},
+        )
+        return record.id
+
+    return await sync_to_async(_create)()
+
+
+async def _resolve_pending_approval(
+    room_id: int,
+    user_id: int,
+    status: str,
+    reviewed_by_id: Optional[int] = None,
+    comment: str = "",
+) -> None:
+    """Move a pending agent-loop approval to a terminal status (durable)."""
+
+    def _update():
+        record = _pending_approval_record(room_id, user_id)
+        if record is None:
+            return
+        record.status = status
+        record.reviewed_by_id = reviewed_by_id or record.reviewed_by_id
+        record.reviewed_at = timezone.now()
+        if comment:
+            record.review_comment = comment
+        record.save(update_fields=["status", "reviewed_by", "reviewed_at", "review_comment"])
+
+    await sync_to_async(_update)()
 
 
 # --------------------------------------------------------------------------- #
@@ -1088,13 +1173,16 @@ async def run_agent_loop(
                 state.pending_tool = tc
                 state.paused_for_confirmation = True
 
-                # Save state to Redis for resume
-                if room_id and user_id:
-                    save_loop_state(room_id, user_id, state)
-
                 confirmation_text = build_confirmation_prompt(
                     tc["name"], tc["input"],
                 )
+
+                # Persist loop state (Redis) + durable approval record (DB)
+                if room_id and user_id:
+                    save_loop_state(room_id, user_id, state)
+                    await save_pending_confirmation(
+                        room_id, user_id, tc, confirmation_text,
+                    )
                 yield AgentEvent("confirmation", {
                     "message": confirmation_text,
                     "tool_name": tc["name"],
@@ -1158,9 +1246,10 @@ async def run_agent_loop(
 #  Public helpers for the consumer                                            #
 # --------------------------------------------------------------------------- #
 
-def has_pending_agent_state(room_id: int, user_id: int) -> bool:
-    """Check if there's a paused agent loop waiting for confirmation."""
-    return load_loop_state(room_id, user_id) is not None
+async def has_pending_agent_state(room_id: int, user_id: int) -> bool:
+    """Check (durably) whether a high-risk action is paused for confirmation."""
+    record = await sync_to_async(_pending_approval_record)(room_id, user_id)
+    return record is not None
 
 
 async def resume_after_confirmation(
@@ -1172,16 +1261,37 @@ async def resume_after_confirmation(
 ) -> AsyncGenerator[AgentEvent, None]:
     """
     Resume a paused agent loop after the user confirms a high-risk action.
+
+    Approval is resolved durably before the pending tool executes, and the
+    loop state is reloaded from Redis. If the durable record exists but the
+    loop state was evicted, the action is NOT executed and the record is
+    rejected so it cannot be replayed.
     """
     room_id = context.get("room_id")
     user_id = context.get("user_id")
 
-    state = load_loop_state(room_id, user_id)
-    if not state or not state.pending_tool:
+    record = await sync_to_async(_pending_approval_record)(room_id, user_id)
+    if record is None:
         yield AgentEvent("error", {
             "message": "No pending action found to confirm.",
         })
         return
+
+    state = load_loop_state(room_id, user_id)
+    if not state or not state.pending_tool:
+        await _resolve_pending_approval(
+            room_id, user_id, "rejected",
+            comment="Loop state lost before confirmation.",
+        )
+        yield AgentEvent("error", {
+            "message": "The pending action is no longer available to confirm.",
+        })
+        return
+
+    # Durable approval BEFORE execution.
+    await _resolve_pending_approval(
+        room_id, user_id, "approved", reviewed_by_id=user_id,
+    )
 
     clear_loop_state(room_id, user_id)
 
@@ -1200,10 +1310,20 @@ async def resume_after_confirmation(
 async def cancel_pending_action(
     room_id: int, user_id: int,
 ) -> Optional[str]:
-    """Cancel a pending confirmation and clean up state."""
-    state = load_loop_state(room_id, user_id)
-    if not state or not state.pending_tool:
+    """Cancel a pending confirmation and clean up state (durable)."""
+    record = await sync_to_async(_pending_approval_record)(room_id, user_id)
+    if record is None:
+        clear_loop_state(room_id, user_id)
         return None
-    tool_name = state.pending_tool.get("name", "action")
+    tool_name = record.action or "action"
+    await _resolve_pending_approval(
+        room_id, user_id, "cancelled", reviewed_by_id=user_id,
+    )
     clear_loop_state(room_id, user_id)
     return f"Cancelled the pending {tool_name.replace('_', ' ')}."
+
+
+async def dismiss_pending_confirmation(room_id: int, user_id: int) -> None:
+    """Silently clear a pending confirmation the user did not act on."""
+    await _resolve_pending_approval(room_id, user_id, "cancelled")
+    clear_loop_state(room_id, user_id)

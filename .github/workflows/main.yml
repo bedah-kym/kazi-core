@@ -48,6 +48,7 @@ jobs:
       DJANGO_SECRET_KEY: ci-test-key-not-for-prod
       DJANGO_DEBUG: "true"
       DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1
+      ENCRYPTION_KEY: "I2m1pOTNatH-LkRdlnWXZXqZ9-8oQRm-JCwpwshx6dc="
       REDIS_URL: redis://localhost:6379/0
       CELERY_BROKER_URL: redis://localhost:6379/0
       CELERY_RESULT_BACKEND: redis://localhost:6379/0

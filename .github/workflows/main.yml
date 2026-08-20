@@ -100,7 +100,7 @@ jobs:
 
       - name: Run tests with coverage
         run: |
-          coverage run --source=Backend --omit='*/migrations/*,*/tests/*,*/test_*.py' \
+          coverage run --source=Backend --omit='*/migrations/*,*/tests/*,*/test_*.py,*/tests.py' \
             Backend/manage.py test --noinput --verbosity=2
           coverage xml -o coverage.xml
           coverage report --skip-covered --fail-under=0

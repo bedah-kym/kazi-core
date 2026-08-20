@@ -1,0 +1,22 @@
+# Codecov configuration
+# https://docs.codecov.com/docs/codecovyml-reference
+
+coverage:
+  status:
+    project:
+      default:
+        # Total coverage must not regress relative to the base branch.
+        target: auto
+        threshold: 1%
+    patch:
+      default:
+        # PR patches should be well-covered, but refactors and error-branch
+        # handling legitimately leave some added lines uncovered. Require
+        # 80% patch coverage, allowing up to 15% below that before failing.
+        target: 80%
+        threshold: 15%
+
+comment:
+  layout: "reach, diff, files"
+  behavior: default
+  require_changes: false

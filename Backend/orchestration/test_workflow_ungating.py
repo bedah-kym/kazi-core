@@ -2,6 +2,7 @@ import asyncio
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from asgiref.sync import async_to_sync
 from django.test import SimpleTestCase, override_settings
 
 
@@ -18,41 +19,42 @@ class WorkflowPlannerUngatingTests(SimpleTestCase):
     @patch("orchestration.workflow_planner.get_llm_client")
     def test_plan_user_request_returns_real_adhoc_workflow(self, mock_get_llm):
         mock_llm = MagicMock()
-        mock_llm.generate_text = AsyncMock(return_value='{"mode":"adhoc_workflow"}')
-        mock_llm.extract_json.return_value = {
-            "mode": "adhoc_workflow",
-            "assistant_message": "Working on it.",
-            "confidence": 0.95,
-            "steps": [
-                {
-                    "id": "step_1",
-                    "service": "weather",
-                    "action": "get_weather",
-                    "params": {"city": "Nairobi"},
-                },
-                {
-                    "id": "step_2",
-                    "service": "currency",
-                    "action": "convert_currency",
-                    "params": {
-                        "amount": 100,
-                        "from_currency": "USD",
-                        "to_currency": "KES",
+        # plan_user_request uses generate_json() (v0.4.2 validated-output path),
+        # not generate_text()+extract_json().
+        mock_llm.generate_json = AsyncMock(
+            return_value={
+                "mode": "adhoc_workflow",
+                "assistant_message": "Working on it.",
+                "confidence": 0.95,
+                "steps": [
+                    {
+                        "id": "step_1",
+                        "service": "weather",
+                        "action": "get_weather",
+                        "params": {"city": "Nairobi"},
                     },
-                },
-            ],
-        }
+                    {
+                        "id": "step_2",
+                        "service": "currency",
+                        "action": "convert_currency",
+                        "params": {
+                            "amount": 100,
+                            "from_currency": "USD",
+                            "to_currency": "KES",
+                        },
+                    },
+                ],
+            }
+        )
         mock_get_llm.return_value = mock_llm
 
         from orchestration.workflow_planner import plan_user_request
 
-        result = run_async(
-            plan_user_request(
-                "Check Nairobi weather then convert 100 USD to KES",
-                history_text="",
-                user_id=None,
-                preferences={},
-            )
+        result = async_to_sync(plan_user_request)(
+            "Check Nairobi weather then convert 100 USD to KES",
+            history_text="",
+            user_id=None,
+            preferences={},
         )
         self.assertEqual(result.get("mode"), "adhoc_workflow")
         definition = result.get("workflow_definition") or {}

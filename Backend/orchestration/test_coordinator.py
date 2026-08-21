@@ -14,6 +14,7 @@ from asgiref.sync import async_to_sync
 from django.test import SimpleTestCase
 
 from orchestration.coordinator import OrchestrationCoordinator
+from orchestration.agent_loop import AgentEvent
 
 
 def _empty_preferences(user_id):
@@ -213,3 +214,272 @@ class OrchestrationCoordinatorTests(SimpleTestCase):
                 "summary text",
                 timeout=3600,
             )
+
+    # --- Directives --------------------------------------------------- #
+
+    def test_dismiss_directive(self):
+        cache = MagicMock()
+        cache.get.side_effect = lambda key, *a: (
+            "some reason" if key == "proactive:last_reason:1:1"
+            else [] if key == "proactive:dismissed:1:1"
+            else None
+        )
+        result = self._run(
+            "dismiss the nudge",
+            patches={"orchestration.coordinator.cache": cache},
+        )
+        self.assertIn("stop showing", result.full_response)
+
+    def test_receipt_directive(self):
+        result = self._run(
+            "show me my receipt",
+            patches={
+                "orchestration.coordinator.fetch_recent_receipts": AsyncMock(return_value=[]),
+                "orchestration.coordinator.format_receipt_list": MagicMock(return_value="No receipts."),
+            },
+        )
+        self.assertIn("No receipts.", result.full_response)
+
+    def test_undo_directive(self):
+        result = self._run(
+            "undo that",
+            patches={
+                "orchestration.coordinator.undo_last_action": AsyncMock(return_value={"message": "Undone."}),
+            },
+        )
+        self.assertIn("Undone.", result.full_response)
+
+    def test_pause_directive(self):
+        result = self._run(
+            "stop for now",
+            patches={"orchestration.coordinator.set_conversation_mode": AsyncMock()},
+        )
+        self.assertIn("pause tasks", result.full_response)
+
+    def test_capabilities_directive(self):
+        result = self._run("what can you do")
+        self.assertIn("I can also", result.full_response)
+
+    # --- Pending confirmations ---------------------------------------- #
+
+    def test_pending_workflow_confirmation(self):
+        async def _fake_wf_stream(message, definition, result, status, error, preferences=None):
+            yield "Workflow executed."
+
+        cache = MagicMock()
+        cache.get.side_effect = lambda key, *a: (
+            {"kind": "workflow", "workflow_definition": {"steps": []}, "user_message": "do it"}
+            if key == "orchestration:pending:1:1" else None
+        )
+        result = self._run(
+            "yes",
+            patches={
+                "orchestration.coordinator.cache": cache,
+                "orchestration.coordinator.execute_adhoc_workflow": AsyncMock(
+                    return_value={"status": "completed", "result": {}, "mode": "inline"}
+                ),
+                "orchestration.coordinator.synthesize_workflow_response_stream": _fake_wf_stream,
+            },
+        )
+        self.assertIn("Workflow executed.", result.full_response)
+
+    def test_pending_intent_confirmation(self):
+        async def _fake_stream(intent, result, use_llm):
+            yield "Done."
+
+        cache = MagicMock()
+        cache.get.side_effect = lambda key, *a: (
+            {"kind": "intent", "intent": {"action": "get_weather", "parameters": {"city": "Nairobi"}, "confirmed": False}}
+            if key == "orchestration:pending:1:1" else None
+        )
+        result = self._run(
+            "yes",
+            patches={
+                "orchestration.coordinator.cache": cache,
+                "orchestration.coordinator.needs_option_context": AsyncMock(return_value=None),
+                "orchestration.coordinator.requires_confirmation": MagicMock(return_value=False),
+                "orchestration.coordinator.route_intent": AsyncMock(return_value={"status": "success", "data": {}}),
+                "orchestration.coordinator.should_record_receipt": MagicMock(return_value=False),
+                "orchestration.coordinator.should_include_receipt": MagicMock(return_value=False),
+                "orchestration.coordinator.synthesize_response": AsyncMock(return_value="summary"),
+                "orchestration.coordinator.synthesize_response_stream": _fake_stream,
+                "orchestration.coordinator.clear_task_state": AsyncMock(),
+            },
+        )
+        self.assertIn("Done.", result.full_response)
+
+    # --- Agent loop path ----------------------------------------------- #
+
+    def test_agent_loop_path(self):
+        async def _fake_loop(**kwargs):
+            yield AgentEvent("text", {"text": "Hi there"})
+            yield AgentEvent("thinking", {})
+            yield AgentEvent("tool_start", {"name": "get_weather"})
+            yield AgentEvent("tool_result", {"name": "get_weather", "result": {"status": "success"}})
+            yield AgentEvent("confirmation", {"message": "Proceed?"})
+            yield AgentEvent("error", {"message": "oops"})
+            yield AgentEvent("done", {})
+
+        result = self._run(
+            "hello",
+            patches={
+                "orchestration.coordinator.get_conversation_mode": AsyncMock(return_value="auto"),
+                "orchestration.coordinator.run_agent_loop": _fake_loop,
+            },
+        )
+        self.assertTrue(result.persist)
+        self.assertIn("Hi there", result.full_response)
+
+    # --- Planner branches ---------------------------------------------- #
+
+    def test_planner_automation_request(self):
+        result = self._run(
+            "automate this",
+            patches={
+                "orchestration.coordinator.plan_user_request": AsyncMock(return_value={"mode": "automation_request"}),
+                "workflows.workflow_agent.handle_workflow_message": AsyncMock(return_value="Draft ready."),
+            },
+        )
+        self.assertIn("Draft ready.", result.full_response)
+
+    def test_planner_needs_clarification(self):
+        result = self._run(
+            "book a trip",
+            patches={
+                "orchestration.coordinator.plan_user_request": AsyncMock(
+                    return_value={"mode": "needs_clarification", "assistant_message": "Which city?"}
+                ),
+            },
+        )
+        self.assertIn("Which city?", result.full_response)
+
+    def test_planner_needs_confirmation(self):
+        result = self._run(
+            "book a trip",
+            patches={
+                "orchestration.coordinator.plan_user_request": AsyncMock(
+                    return_value={
+                        "mode": "needs_confirmation",
+                        "workflow_definition": {"steps": []},
+                        "assistant_message": "Confirm to proceed?",
+                    }
+                ),
+            },
+        )
+        self.assertIn("Confirm to proceed?", result.full_response)
+
+    def test_planner_adhoc_workflow(self):
+        async def _fake_wf_stream(message, definition, result, status, error, preferences=None):
+            yield "Ran workflow."
+
+        result = self._run(
+            "book a trip",
+            patches={
+                "orchestration.coordinator.plan_user_request": AsyncMock(
+                    return_value={"mode": "adhoc_workflow", "workflow_definition": {"steps": []}}
+                ),
+                "orchestration.coordinator.execute_adhoc_workflow": AsyncMock(
+                    return_value={"status": "completed", "result": {}, "mode": "inline"}
+                ),
+                "orchestration.coordinator.synthesize_workflow_response_stream": _fake_wf_stream,
+            },
+        )
+        self.assertIn("Ran workflow.", result.full_response)
+
+    # --- Intent sub-branches ------------------------------------------- #
+
+    def test_intent_create_workflow(self):
+        result = self._run(
+            "create a workflow",
+            patches={
+                "orchestration.coordinator.plan_user_request": AsyncMock(return_value={"mode": "intent"}),
+                "orchestration.coordinator.parse_intent": AsyncMock(
+                    return_value={"action": "create_workflow", "parameters": {}, "confidence": 0.8}
+                ),
+                "orchestration.coordinator.init_task_state": MagicMock(return_value={"status": "ready"}),
+                "workflows.workflow_agent.handle_workflow_message": AsyncMock(return_value="Workflow created."),
+            },
+        )
+        self.assertIn("Workflow created.", result.full_response)
+
+    def test_intent_awaiting_slots(self):
+        result = self._run(
+            "weather",
+            patches={
+                "orchestration.coordinator.plan_user_request": AsyncMock(return_value={"mode": "intent"}),
+                "orchestration.coordinator.parse_intent": AsyncMock(
+                    return_value={"action": "get_weather", "parameters": {}, "confidence": 0.9}
+                ),
+                "orchestration.coordinator.init_task_state": MagicMock(
+                    return_value={"status": "awaiting_slots", "missing_slots": ["city"], "action": "get_weather"}
+                ),
+                "orchestration.coordinator.get_action_definition": MagicMock(return_value=None),
+                "orchestration.coordinator.format_missing_prompt": MagicMock(return_value="Which city?"),
+                "orchestration.coordinator.save_task_state": AsyncMock(),
+            },
+        )
+        self.assertIn("Which city?", result.full_response)
+
+    def test_intent_confirm(self):
+        result = self._run(
+            "email john",
+            patches={
+                "orchestration.coordinator.plan_user_request": AsyncMock(return_value={"mode": "intent"}),
+                "orchestration.coordinator.parse_intent": AsyncMock(
+                    return_value={"action": "send_email", "parameters": {"to": "a@b.c"}, "confidence": 0.7}
+                ),
+                "orchestration.coordinator.init_task_state": MagicMock(return_value={"status": "ready"}),
+                "orchestration.coordinator.clear_task_state": AsyncMock(),
+            },
+        )
+        self.assertIn("I think you want me to send email", result.full_response)
+
+    # --- _execute_intent sub-branches ---------------------------------- #
+
+    def test_execute_intent_requires_confirmation(self):
+        result = self._run(
+            "send email to a@b.c",
+            patches={
+                "orchestration.coordinator.plan_user_request": AsyncMock(return_value={"mode": "intent"}),
+                "orchestration.coordinator.parse_intent": AsyncMock(
+                    return_value={"action": "send_email", "parameters": {"to": "a@b.c"}, "confidence": 0.9}
+                ),
+                "orchestration.coordinator.init_task_state": MagicMock(return_value={"status": "ready"}),
+                "orchestration.coordinator.needs_option_context": AsyncMock(return_value=None),
+                "orchestration.coordinator.requires_confirmation": MagicMock(return_value=True),
+                "orchestration.coordinator.build_confirmation_prompt": MagicMock(return_value="Confirm sending email?"),
+            },
+        )
+        self.assertIn("Confirm sending email?", result.full_response)
+
+    def test_execute_intent_error(self):
+        result = self._run(
+            "weather in nairobi",
+            patches={
+                "orchestration.coordinator.plan_user_request": AsyncMock(return_value={"mode": "intent"}),
+                "orchestration.coordinator.parse_intent": AsyncMock(
+                    return_value={"action": "get_weather", "parameters": {"city": "Nairobi"}, "confidence": 0.9}
+                ),
+                "orchestration.coordinator.init_task_state": MagicMock(return_value={"status": "ready"}),
+                "orchestration.coordinator.needs_option_context": AsyncMock(return_value=None),
+                "orchestration.coordinator.requires_confirmation": MagicMock(return_value=False),
+                "orchestration.coordinator.route_intent": AsyncMock(return_value={"status": "error", "message": "Boom"}),
+                "orchestration.coordinator.should_record_receipt": MagicMock(return_value=False),
+            },
+        )
+        self.assertIn("Boom", result.full_response)
+
+    def test_execute_intent_needs_option_context(self):
+        result = self._run(
+            "weather",
+            patches={
+                "orchestration.coordinator.plan_user_request": AsyncMock(return_value={"mode": "intent"}),
+                "orchestration.coordinator.parse_intent": AsyncMock(
+                    return_value={"action": "get_weather", "parameters": {}, "confidence": 0.9}
+                ),
+                "orchestration.coordinator.init_task_state": MagicMock(return_value={"status": "ready"}),
+                "orchestration.coordinator.needs_option_context": AsyncMock(return_value="Which city?"),
+                "orchestration.coordinator.save_task_state": AsyncMock(),
+            },
+        )
+        self.assertIn("Which city?", result.full_response)

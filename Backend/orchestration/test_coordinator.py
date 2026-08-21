@@ -7,6 +7,7 @@ These tests pin the two things that are easy to get wrong during extraction:
    `return` skipped both the final stream flush and the DB write).
 2. the normal path DOES collect a full response and persist it.
 """
+from contextlib import ExitStack
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from asgiref.sync import async_to_sync
@@ -29,6 +30,19 @@ def _make_callbacks():
     }
 
 
+def _base_patches():
+    """Patches shared by nearly every coordinator test (no Redis / no DB)."""
+    return {
+        "orchestration.coordinator.load_memory_summary": AsyncMock(return_value=None),
+        "orchestration.coordinator.get_user_preferences": _empty_preferences,
+        "orchestration.coordinator.get_conversation_mode": AsyncMock(return_value="classic"),
+        "orchestration.coordinator.has_pending_agent_state": AsyncMock(return_value=False),
+        "orchestration.coordinator.load_task_state": AsyncMock(return_value=None),
+        "orchestration.coordinator.record_event": MagicMock(),
+        "orchestration.coordinator.cache": MagicMock(),
+    }
+
+
 class OrchestrationCoordinatorTests(SimpleTestCase):
     def _handle(self, query, **overrides):
         async def run():
@@ -45,6 +59,36 @@ class OrchestrationCoordinatorTests(SimpleTestCase):
             )
 
         return async_to_sync(run)()
+
+    def _run(self, query, patches=None, callbacks=None):
+        """Run handle_message with the base patches plus extras (returns result)."""
+        combined = _base_patches()
+        if patches:
+            combined.update(patches)
+
+        stack = ExitStack()
+        for target, mock in combined.items():
+            stack.enter_context(patch(target, new=mock))
+
+        try:
+            cb = _make_callbacks()
+            if callbacks:
+                cb.update(callbacks)
+
+            async def run():
+                return await OrchestrationCoordinator().handle_message(
+                    query=query,
+                    user_id=1,
+                    room_id="1",
+                    username="alice",
+                    message_id=42,
+                    history_text="",
+                    **cb,
+                )
+
+            return async_to_sync(run)()
+        finally:
+            stack.close()
 
     def test_reset_request_is_not_persisted_and_never_flushes(self):
         with (

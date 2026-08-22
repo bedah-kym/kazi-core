@@ -172,22 +172,31 @@ async def save_pending_confirmation(
     def _create():
         from workflows.models import WorkflowApprovalRecord
 
-        expires_at = timezone.now() + timedelta(seconds=CONFIRMATION_STATE_TTL)
-        record = WorkflowApprovalRecord.objects.create(
-            workflow_id=None,
-            execution_id=None,
-            requested_by_id=user_id,
+        now = timezone.now()
+        expires_at = now + timedelta(seconds=CONFIRMATION_STATE_TTL)
+        defaults = {
+            "workflow_id": None,
+            "execution_id": None,
+            "step_id": f"agent_loop:{room_id}:{user_id}",
+            "service": "",
+            "action": tool.get("name", ""),
+            "approval_message": confirmation_text,
+            "sanitized_params": tool.get("input", {}),
+            "expires_at": expires_at,
+            "metadata": {"tool_id": tool.get("id", "")},
+        }
+        record, created = WorkflowApprovalRecord.objects.get_or_create(
             kind=AGENT_LOOP_APPROVAL_KIND,
             room_id=room_id,
-            step_id=f"agent_loop:{room_id}:{user_id}",
-            service="",
-            action=tool.get("name", ""),
-            approval_message=confirmation_text,
-            sanitized_params=tool.get("input", {}),
+            requested_by_id=user_id,
             status="pending",
-            expires_at=expires_at,
-            metadata={"tool_id": tool.get("id", "")},
+            defaults=defaults,
         )
+        if not created and (record.expires_at is None or record.expires_at <= now):
+            # Refresh a stale-but-unswept row so the new pause is durable.
+            for attr_name, value in defaults.items():
+                setattr(record, attr_name, value)
+            record.save(update_fields=list(defaults.keys()))
         return record.id
 
     return await sync_to_async(_create)()

@@ -17,7 +17,13 @@ from django.test import SimpleTestCase, TransactionTestCase
 
 from orchestration.coordinator import OrchestrationResult
 
-from .consumers import ChatConsumer
+from .consumers import (
+    ChatConsumer,
+    _agent_loop_locks,
+    _agent_loop_lock_refs,
+    _get_agent_loop_lock,
+    _release_agent_loop_lock,
+)
 from .models import Chatroom, Member
 
 
@@ -84,6 +90,28 @@ class ChatConsumerContractTests(SimpleTestCase):
 class ChatConsumerRoutingTests(TransactionTestCase):
     """Lock the consumer -> coordinator handoff (Phase 1 wiring)."""
 
+    def _make_consumer(self, alice, member, chatroom):
+        consumer = ChatConsumer()
+        consumer.scope = {"user": alice}
+        consumer.room_name = str(chatroom.id)
+        consumer.room_group_name = f"chat_{chatroom.id}"
+        consumer.channel_layer = MagicMock()
+        consumer.channel_layer.group_send = AsyncMock()
+        consumer.send_chat_message = AsyncMock()
+        consumer.send_message = AsyncMock()
+        consumer.encrypt_message = AsyncMock(return_value={"data": "enc", "nonce": "nonce"})
+        consumer.check_user_muted = AsyncMock(return_value=False)
+        consumer.check_rate_limit = AsyncMock(return_value=True)
+        consumer.check_key_rotation = AsyncMock()
+        consumer.buffer_message_for_moderation = AsyncMock()
+        consumer.get_current_chatroom = AsyncMock(return_value=chatroom)
+        consumer.get_chatroom_participants = AsyncMock(return_value=[member])
+        consumer.message_to_json = AsyncMock(return_value={})
+        consumer.schedule_context_summary = AsyncMock()
+        consumer.schedule_idle_nudge_if_needed = AsyncMock()
+        consumer.get_history_as_text = AsyncMock(return_value="")
+        return consumer
+
     @patch("orchestration.coordinator.OrchestrationCoordinator")
     def test_new_message_routes_ai_to_coordinator_and_persists(self, mock_coord):
         User = get_user_model()
@@ -137,3 +165,55 @@ class ChatConsumerRoutingTests(TransactionTestCase):
                 member__User__username="mathia", content__contains="enc"
             ).exists()
         )
+
+    @patch("orchestration.coordinator.OrchestrationCoordinator")
+    def test_new_message_serializes_agent_loop_per_room_user(self, mock_coord):
+        User = get_user_model()
+        alice = User.objects.create_user(username="alice_lock", password="pw")
+        member = Member.objects.select_related("User").get(User=alice)
+        chatroom = Chatroom.objects.get(participants=member)
+
+        observed = {}
+
+        async def handle(**kwargs):
+            observed["called"] = True
+            key = (kwargs["user_id"], str(kwargs["room_id"]))
+            observed["locked"] = _agent_loop_locks[key].locked()
+            return OrchestrationResult(full_response="", persist=False)
+
+        mock_coord.return_value.handle_message = handle
+
+        consumer = self._make_consumer(alice, member, chatroom)
+        async_to_sync(consumer.new_message)(
+            {"from": "alice_lock", "message": "@mathia hello", "chatid": str(chatroom.id)}
+        )
+
+        self.assertTrue(observed.get("called"), "handle never called")
+        self.assertTrue(observed["locked"])
+        self.assertEqual(_agent_loop_locks, {})
+        self.assertEqual(_agent_loop_lock_refs, {})
+
+
+class AgentLoopLockTests(SimpleTestCase):
+    def setUp(self):
+        _agent_loop_locks.clear()
+        _agent_loop_lock_refs.clear()
+
+    def tearDown(self):
+        _agent_loop_locks.clear()
+        _agent_loop_lock_refs.clear()
+
+    def test_lock_is_shared_per_room_user_and_cleaned_up(self):
+        first = _get_agent_loop_lock(1, "room")
+        second = _get_agent_loop_lock(1, "room")
+        other = _get_agent_loop_lock(2, "room")
+
+        self.assertIs(first, second)
+        self.assertIsNot(first, other)
+
+        _release_agent_loop_lock(1, "room")
+        _release_agent_loop_lock(1, "room")
+        _release_agent_loop_lock(2, "room")
+
+        self.assertEqual(_agent_loop_locks, {})
+        self.assertEqual(_agent_loop_lock_refs, {})

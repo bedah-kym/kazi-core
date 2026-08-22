@@ -16,6 +16,7 @@ from cryptography.exceptions import InvalidKey
 from users.encryption import TokenEncryption
 import logging
 import asyncio
+from typing import Dict, Tuple
 from .models import Message, Member, Chatroom, UserModerationStatus, ModerationBatch, RoomReadState
 from .tasks import moderate_message_batch, generate_ai_response, generate_voice_response
 from orchestration.user_preferences import get_user_preferences
@@ -24,6 +25,34 @@ from django.conf import settings
 from django.utils.text import get_valid_filename
 logger = logging.getLogger(__name__)
 User = get_user_model()
+
+# Per-(room, user) locks so concurrent messages from the same user in the
+# same room cannot race on paused agent-loop confirmations (the pause state is
+# a single Redis key + a single pending durable approval row).
+_agent_loop_locks: Dict[Tuple[int, str], asyncio.Lock] = {}
+_agent_loop_lock_refs: Dict[Tuple[int, str], int] = {}
+
+
+def _get_agent_loop_lock(user_id: int, room_id) -> asyncio.Lock:
+    key = (int(user_id), str(room_id))
+    lock = _agent_loop_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _agent_loop_locks[key] = lock
+        _agent_loop_lock_refs[key] = 1
+    else:
+        _agent_loop_lock_refs[key] += 1
+    return lock
+
+
+def _release_agent_loop_lock(user_id: int, room_id) -> None:
+    key = (int(user_id), str(room_id))
+    refs = _agent_loop_lock_refs.get(key, 0) - 1
+    if refs <= 0:
+        _agent_loop_locks.pop(key, None)
+        _agent_loop_lock_refs.pop(key, None)
+    else:
+        _agent_loop_lock_refs[key] = refs
 
 
 class ChatConsumer(AsyncWebsocketConsumer):
@@ -826,18 +855,24 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             for action in actions:
                                 update_proactive_signals(room_id, member_user.id, action)
 
-                        result = await OrchestrationCoordinator().handle_message(
-                            query=ai_query,
-                            user_id=member_user.id,
-                            room_id=room_id,
-                            username=member_username,
-                            message_id=message.id,
-                            history_text=history_text,
-                            send_chunk=send_chunk,
-                            send_step_event=send_step_event,
-                            get_context_prompt=get_context_prompt,
-                            bump_signals=bump_signals,
-                        )
+                        agent_lock = _get_agent_loop_lock(member_user.id, room_id)
+                        try:
+                            await agent_lock.acquire()
+                            result = await OrchestrationCoordinator().handle_message(
+                                query=ai_query,
+                                user_id=member_user.id,
+                                room_id=room_id,
+                                username=member_username,
+                                message_id=message.id,
+                                history_text=history_text,
+                                send_chunk=send_chunk,
+                                send_step_event=send_step_event,
+                                get_context_prompt=get_context_prompt,
+                                bump_signals=bump_signals,
+                            )
+                        finally:
+                            agent_lock.release()
+                            _release_agent_loop_lock(member_user.id, room_id)
 
                         full_response_text = result.full_response
 

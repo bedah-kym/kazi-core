@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **OrchestrationCoordinator** (`orchestration/coordinator.py`): a single chat-routing
+  facade that owns everything after `@mathia` routing — directives, pending
+  confirmations, the agent loop, planner, intent dispatch, and general chat.
+  `chatbot/consumers.py` delegates to it, shrinking the WebSocket consumer by ~900 lines.
+- **Durable agent-loop approvals**: high-risk tools paused inside the agent loop now
+  write a durable `WorkflowApprovalRecord` (kind=`agent_loop`, room-scoped), so a
+  pending confirmation survives Redis eviction and is auditable in the ops inbox.
+- **Retry backoff + per-service circuit breaker** (`agent_loop.py`): failed tool calls
+  retry with exponential backoff (capped at 300s) and a service trips a circuit breaker
+  after repeated failures (60s cooldown), so flapping integrations degrade instead of
+  being hammered.
+- **Cycle detection in workflow dependencies**: a shared Kahn's-algorithm check
+  (`workflows/capabilities.find_dependency_cycle`) rejects `A→B→A` step cycles in both
+  the manager verifier and `validate_workflow_definition`.
+- **History compaction on by default**: `HISTORY_COMPACTION_ENABLED` now defaults to
+  enabled (opt-out), trimming the oldest turns to fit the context budget.
+
+### Fixed
+- **Concurrency race on pending approvals**: two rapid messages for the same
+  (room, user) could overwrite a paused confirmation. Added a per-(room, user)
+  asyncio lock plus a partial unique constraint on pending agent-loop approvals.
+- **Intent-path summary caching**: the intent route now caches conversation summaries
+  (a `nonlocal` scoping bug previously skipped the cache on that path).
+
+### Changed
+- `chatbot/consumers.py` slimmed down; post-`@mathia` routing moved to `OrchestrationCoordinator`.
+- `HISTORY_COMPACTION_ENABLED` default changed from `False` to `True`.
+
 ## [0.4.2] - 2026-08-16
 
 ### Added

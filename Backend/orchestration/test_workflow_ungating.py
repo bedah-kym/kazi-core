@@ -95,6 +95,94 @@ class ManagerVerifierUngatingTests(SimpleTestCase):
         self.assertEqual(reviewed_steps[1].get("action"), "send_email")
         self.assertEqual(reviewed_steps[1].get("depends_on"), [reviewed_steps[0].get("id")])
 
+    def test_manager_verifier_rejects_dependency_cycle(self):
+        from orchestration.manager_verifier import ManagerVerifier
+
+        steps = [
+            {
+                "id": "step_a",
+                "service": "weather",
+                "action": "get_weather",
+                "params": {"city": "Nairobi"},
+                "depends_on": ["step_b"],
+            },
+            {
+                "id": "step_b",
+                "service": "weather",
+                "action": "get_weather",
+                "params": {"city": "Mombasa"},
+                "depends_on": ["step_a"],
+            },
+        ]
+
+        review = ManagerVerifier().review_steps(steps, "Run two weather checks")
+        self.assertEqual(review.get("verdict"), "ask_user")
+        self.assertEqual(review.get("reason"), "cyclic_dependency")
+
+    def test_manager_verifier_rejects_indirect_dependency_cycle(self):
+        from orchestration.manager_verifier import ManagerVerifier
+
+        steps = [
+            {
+                "id": "step_a",
+                "service": "weather",
+                "action": "get_weather",
+                "params": {"city": "Nairobi"},
+                "depends_on": ["step_c"],
+            },
+            {
+                "id": "step_b",
+                "service": "weather",
+                "action": "get_weather",
+                "params": {"city": "Mombasa"},
+                "depends_on": ["step_a"],
+            },
+            {
+                "id": "step_c",
+                "service": "weather",
+                "action": "get_weather",
+                "params": {"city": "Kisumu"},
+                "depends_on": ["step_b"],
+            },
+        ]
+
+        review = ManagerVerifier().review_steps(steps, "Run three weather checks")
+        self.assertEqual(review.get("verdict"), "ask_user")
+        self.assertEqual(review.get("reason"), "cyclic_dependency")
+
+    def test_manager_verifier_allows_acyclic_dependencies(self):
+        from orchestration.manager_verifier import ManagerVerifier
+
+        steps = [
+            {
+                "id": "step_1",
+                "service": "weather",
+                "action": "get_weather",
+                "params": {"city": "Nairobi"},
+            },
+            {
+                "id": "step_2",
+                "service": "currency",
+                "action": "convert_currency",
+                "params": {"amount": 10, "from_currency": "USD", "to_currency": "KES"},
+                "depends_on": ["step_1"],
+            },
+        ]
+
+        review = ManagerVerifier().review_steps(steps, "Weather then convert currency")
+        self.assertEqual(review.get("verdict"), "approve")
+
+    def test_find_dependency_cycle_ignores_malformed_dependencies(self):
+        from workflows.capabilities import find_dependency_cycle
+
+        steps = [
+            {"id": "a", "depends_on": "b"},   # string, not a list
+            None,                              # non-dict step
+            {"id": "b", "depends_on": None},   # None, not a list
+            {"id": "c"},                        # no depends_on key
+        ]
+        self.assertEqual(find_dependency_cycle(steps), [])
+
 
 class ConnectorRegistryUngatingTests(SimpleTestCase):
     @patch.dict(os.environ, {"KAZI_DEMO_MODE": "false"}, clear=False)

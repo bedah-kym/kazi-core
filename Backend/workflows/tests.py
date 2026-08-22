@@ -80,6 +80,33 @@ class WorkflowDefinitionValidationTests(TestCase):
         self.assertFalse(valid)
         self.assertIn("on_timeout", error)
 
+    def test_rejects_dependency_cycle(self):
+        workflow_def = {
+            "workflow_name": "Cycle",
+            "workflow_description": "A depends on B which depends on A",
+            "triggers": [{"trigger_type": "manual"}],
+            "steps": [
+                {
+                    "id": "step_a",
+                    "service": "weather",
+                    "action": "get_weather",
+                    "params": {"city": "Nairobi"},
+                    "depends_on": ["step_b"],
+                },
+                {
+                    "id": "step_b",
+                    "service": "weather",
+                    "action": "get_weather",
+                    "params": {"city": "Mombasa"},
+                    "depends_on": ["step_a"],
+                },
+            ],
+        }
+
+        valid, error = validate_workflow_definition(workflow_def)
+        self.assertFalse(valid)
+        self.assertIn("cycle", error)
+
 
 class AdhocWorkflowFallbackTests(TestCase):
     @override_settings(TEMPORAL_DISABLED=True)

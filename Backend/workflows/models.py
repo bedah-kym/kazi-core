@@ -276,6 +276,13 @@ class WorkflowApprovalRecord(models.Model):
             models.Index(fields=['workflow', 'step_id']),
             models.Index(fields=['kind', 'room_id', 'status']),
         ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['kind', 'room_id', 'requested_by'],
+                condition=models.Q(kind='agent_loop', status='pending'),
+                name='uniq_agent_loop_pending_room_user',
+            ),
+        ]
 
     def __str__(self):
         return f"Approval {self.id} ({self.step_id} - {self.status})"

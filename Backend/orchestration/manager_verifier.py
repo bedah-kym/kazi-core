@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 import copy
 
-from workflows.capabilities import SYSTEM_CAPABILITIES
+from workflows.capabilities import SYSTEM_CAPABILITIES, find_dependency_cycle
 from orchestration.user_preferences import format_date_hint, format_time_hint
 
 _AUTO_EMAIL_SUMMARY_TOKEN = "__AUTO_SUMMARY__"
@@ -44,6 +44,18 @@ class ManagerVerifier:
         if dependency_check.get("verdict") == "ask_user":
             return dependency_check
         steps = dependency_check.get("steps") or steps
+        cycle_ids = find_dependency_cycle(steps)
+        if cycle_ids:
+            return {
+                "verdict": "ask_user",
+                "reason": "cyclic_dependency",
+                "assistant_message": (
+                    "These steps depend on each other in a loop, so I can't order them. "
+                    "Please rephrase so each step depends only on earlier steps."
+                ),
+                "steps": steps,
+                "missing_fields": [],
+            }
         steps = self._reorder_by_dependencies(steps)
 
         missing: List[Tuple[str, str]] = []

@@ -39,6 +39,9 @@ MAX_TOOL_CALLS = 15
 MAX_RETRIES_PER_TOOL = 2
 TOOL_TIMEOUT_SECONDS = 30
 LOOP_TIMEOUT_SECONDS = 120
+RETRY_BACKOFF_CAP_SECONDS = 300
+CIRCUIT_BREAKER_FAILURE_THRESHOLD = 3
+CIRCUIT_BREAKER_COOLDOWN_SECONDS = 60
 CONFIRMATION_STATE_TTL = 600  # 10 minutes
 AGENT_STATE_KEY = "orchestration:agent_state:{room_id}:{user_id}"
 AGENT_LOOP_APPROVAL_KIND = "agent_loop"
@@ -172,22 +175,31 @@ async def save_pending_confirmation(
     def _create():
         from workflows.models import WorkflowApprovalRecord
 
-        expires_at = timezone.now() + timedelta(seconds=CONFIRMATION_STATE_TTL)
-        record = WorkflowApprovalRecord.objects.create(
-            workflow_id=None,
-            execution_id=None,
-            requested_by_id=user_id,
+        now = timezone.now()
+        expires_at = now + timedelta(seconds=CONFIRMATION_STATE_TTL)
+        defaults = {
+            "workflow_id": None,
+            "execution_id": None,
+            "step_id": f"agent_loop:{room_id}:{user_id}",
+            "service": "",
+            "action": tool.get("name", ""),
+            "approval_message": confirmation_text,
+            "sanitized_params": tool.get("input", {}),
+            "expires_at": expires_at,
+            "metadata": {"tool_id": tool.get("id", "")},
+        }
+        record, created = WorkflowApprovalRecord.objects.get_or_create(
             kind=AGENT_LOOP_APPROVAL_KIND,
             room_id=room_id,
-            step_id=f"agent_loop:{room_id}:{user_id}",
-            service="",
-            action=tool.get("name", ""),
-            approval_message=confirmation_text,
-            sanitized_params=tool.get("input", {}),
+            requested_by_id=user_id,
             status="pending",
-            expires_at=expires_at,
-            metadata={"tool_id": tool.get("id", "")},
+            defaults=defaults,
         )
+        if not created and (record.expires_at is None or record.expires_at <= now):
+            # Refresh a stale-but-unswept row so the new pause is durable.
+            for attr_name, value in defaults.items():
+                setattr(record, attr_name, value)
+            record.save(update_fields=list(defaults.keys()))
         return record.id
 
     return await sync_to_async(_create)()
@@ -437,6 +449,64 @@ async def _execute_with_timeout(
             "message": f"Tool {tool_name} timed out after {timeout}s. "
                        f"The operation may still be processing.",
         }
+
+
+# --------------------------------------------------------------------------- #
+#  Tool retry backoff & circuit breaker                                       #
+# --------------------------------------------------------------------------- #
+
+# Per-service degrade state: service -> {"failures": int, "opened_at": float|None}.
+# Repeated failures open the circuit and block further calls for a cooldown
+# window, so a flapping integration degrades instead of being hammered.
+_circuit_state: Dict[str, Dict[str, Any]] = {}
+
+
+def _service_for_tool(tool_name: str) -> str:
+    from orchestration.action_catalog import get_action_definition
+
+    return (get_action_definition(tool_name) or {}).get("service") or tool_name
+
+
+def _retry_backoff_seconds(retry_count: int) -> float:
+    """Exponential backoff for a tool retry: 2^n seconds, capped at 300."""
+    return float(min(RETRY_BACKOFF_CAP_SECONDS, 2 ** max(0, retry_count)))
+
+
+def _circuit_breaker_open(service: str) -> bool:
+    """True when the service's circuit is tripped and still cooling down."""
+    state = _circuit_state.get(service)
+    if not state:
+        return False
+    opened_at = state.get("opened_at")
+    if not opened_at:
+        return False
+    if time.monotonic() - opened_at >= CIRCUIT_BREAKER_COOLDOWN_SECONDS:
+        _circuit_state.pop(service, None)  # half-open: allow a trial request
+        return False
+    return True
+
+
+def _record_tool_failure(service: str) -> None:
+    state = _circuit_state.setdefault(service, {"failures": 0, "opened_at": None})
+    state["failures"] = state.get("failures", 0) + 1
+    if state["failures"] >= CIRCUIT_BREAKER_FAILURE_THRESHOLD:
+        state["opened_at"] = time.monotonic()
+
+
+def _record_tool_success(service: str) -> None:
+    _circuit_state.pop(service, None)
+
+
+def reset_circuit_breakers() -> None:
+    """Clear all circuit-breaker state (used by tests)."""
+    _circuit_state.clear()
+
+
+def _circuit_open_message(service: str) -> str:
+    return (
+        f"{service.replace('_', ' ')} is temporarily unavailable after "
+        f"repeated failures. Please try again in a few seconds."
+    )
 
 
 async def _record_receipt(
@@ -926,7 +996,7 @@ async def run_agent_loop(
         # Fresh loop
         messages: List[Dict[str, Any]] = []
         if history:
-            if getattr(settings, "HISTORY_COMPACTION_ENABLED", False):
+            if getattr(settings, "HISTORY_COMPACTION_ENABLED", True):
                 history, compacted = _fit_history_to_budget(
                     history,
                     max_chars=int(getattr(settings, "HISTORY_MAX_CHARS", 60000)),
@@ -1079,35 +1149,57 @@ async def run_agent_loop(
                 async def _run_safe(tc: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
                     dedup = _dedup_key(tc["name"], tc["input"])
                     if dedup in seen_calls:
-                        # Return cached result from a previous identical call
+                        # Return a cached result from a previous identical
+                        # SUCCESSFUL call. Failed calls stay retryable.
                         cached = next(
                             (e["output"] for e in state.tool_call_log
                              if e["name"] == tc["name"]
+                             and isinstance(e["output"], dict)
+                             and e["output"].get("status") == "success"
                              and _dedup_key(e["name"], e["input"]) == dedup),
                             None,
                         )
                         if cached is not None:
                             return tc, cached
-                        # If no cached result found, check retry budget
+
+                    service = _service_for_tool(tc["name"])
+                    if _circuit_breaker_open(service):
+                        return tc, {
+                            "status": "error",
+                            "message": _circuit_open_message(service),
+                        }
+
+                    if dedup in seen_calls:
+                        # Retrying a previously-failed identical call.
                         retries = state.retry_counts.get(tc["name"], 0)
                         if retries >= MAX_RETRIES_PER_TOOL:
                             return tc, {
                                 "status": "error",
                                 "message": f"Max retries ({MAX_RETRIES_PER_TOOL}) reached for {tc['name']}.",
                             }
-                        state.retry_counts[tc["name"]] = retries + 1
+                        await asyncio.sleep(_retry_backoff_seconds(retries))
                     seen_calls.add(dedup)
-                    # Meta-tools use their own executor
-                    if tc["name"] in _META_TOOL_NAMES:
-                        result = await _execute_meta_tool(
-                            tc["name"], tc["input"], context,
-                            preferences, system, tools,
-                        )
-                    else:
-                        result = await _execute_with_timeout(tc["name"], tc["input"], context)
-                    # Track retries on error
+
+                    try:
+                        # Meta-tools use their own executor
+                        if tc["name"] in _META_TOOL_NAMES:
+                            result = await _execute_meta_tool(
+                                tc["name"], tc["input"], context,
+                                preferences, system, tools,
+                            )
+                        else:
+                            result = await _execute_with_timeout(tc["name"], tc["input"], context)
+                    except Exception as exc:
+                        logger.error("Tool %s raised unexpectedly: %s", tc["name"], exc)
+                        result = {"status": "error", "message": str(exc)}
+
+                    # Track retries + circuit breaker state
                     if result.get("status") == "error":
                         state.retry_counts[tc["name"]] = state.retry_counts.get(tc["name"], 0) + 1
+                        _record_tool_failure(service)
+                    else:
+                        state.retry_counts[tc["name"]] = 0
+                        _record_tool_success(service)
                     return tc, result
 
                 # Run in parallel

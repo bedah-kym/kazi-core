@@ -168,3 +168,45 @@ class DurableApprovalTests(TransactionTestCase):
 
         self.assertIsNotNone(self._record(status="cancelled"))
         self.assertFalse(async_to_sync(has_pending_agent_state)(1, self.alice.id))
+
+    def test_save_pending_confirmation_is_idempotent_per_room_user(self):
+        first = self._save_pending()
+        second = self._save_pending()
+
+        self.assertEqual(first, second)
+        self.assertEqual(
+            WorkflowApprovalRecord.objects.filter(
+                kind="agent_loop", room_id=1, requested_by=self.alice, status="pending",
+            ).count(),
+            1,
+        )
+
+    def test_pending_approval_unique_per_user_in_same_room(self):
+        alice_id = self._save_pending(user=self.alice)
+        bob_id = self._save_pending(user=self.bob)
+
+        self.assertNotEqual(alice_id, bob_id)
+        self.assertEqual(
+            WorkflowApprovalRecord.objects.filter(
+                kind="agent_loop", room_id=1, status="pending",
+            ).count(),
+            2,
+        )
+
+    def test_stale_expired_row_is_refreshed_on_new_pause(self):
+        approval_id = self._save_pending()
+        WorkflowApprovalRecord.objects.filter(id=approval_id).update(
+            expires_at=timezone.now() - timedelta(seconds=1),
+        )
+
+        new_id = self._save_pending()
+
+        self.assertEqual(new_id, approval_id)
+        record = WorkflowApprovalRecord.objects.get(id=approval_id)
+        self.assertGreater(record.expires_at, timezone.now())
+        self.assertEqual(
+            WorkflowApprovalRecord.objects.filter(
+                kind="agent_loop", room_id=1, requested_by=self.alice, status="pending",
+            ).count(),
+            1,
+        )

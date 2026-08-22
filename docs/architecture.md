@@ -13,6 +13,9 @@ Client (WebSocket / HTTP)
 ChatConsumer (Django Channels)
   |
   v
+OrchestrationCoordinator (post-@mathia routing)
+  |
+  v
 ContextManager (memory assembly)
   |
   v
@@ -41,7 +44,14 @@ Safety limits:
 - Max 15 tool calls per loop
 - 2-minute timeout
 - 50k token budget
-- 2 retries per failed tool
+- 2 retries per failed tool, with exponential backoff and a per-service circuit breaker
+
+### OrchestrationCoordinator (`orchestration/coordinator.py`)
+
+The routing facade that owns everything after `@mathia` routing: directives,
+pending confirmations (durable agent-loop approvals), the agent loop, planner,
+intent dispatch, and general chat. The WebSocket consumer delegates to it via
+injected async callbacks, so it has no Channels dependency of its own.
 
 ### Tool Executor (`orchestration/tool_executor.py`)
 
@@ -96,8 +106,9 @@ Features: token budgeting, response caching, automatic fallback between provider
 ## Supporting Systems
 
 ### Real-Time Transport (`chatbot/consumers.py`)
-Django Channels WebSocket consumer. Handles connection auth, message routing,
-streaming responses, and presence.
+Django Channels WebSocket consumer. Handles connection auth, encryption,
+message persistence, and presence; routing decisions are delegated to
+`OrchestrationCoordinator`.
 
 ### Notifications (`notifications/`)
 Unified notification system with in-app, email, and WhatsApp channels.
@@ -116,6 +127,7 @@ Durable multi-step workflow execution via Temporal.
 
 Runtime additions in the current cycle:
 - Durable approval checkpoints for high-risk or explicitly gated steps
+- Durable agent-loop approvals: high-risk tool pauses inside the ReAct loop write a room-scoped `WorkflowApprovalRecord` (kind=`agent_loop`) so they survive Redis eviction and are auditable
 - Execution detail records with current step, waiting reason, receipts, and replay hints
 - Operator controls for approve, reject, cancel, rerun, and schedule pause/resume
 - Deferred-run watchdog state with backoff and dead-letter reasons

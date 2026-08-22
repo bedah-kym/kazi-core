@@ -44,6 +44,13 @@ def _base_patches():
     }
 
 
+def _empty_cache():
+    """Cache whose .get returns None so the pending-confirmation branch is skipped."""
+    cache = MagicMock()
+    cache.get.return_value = None
+    return cache
+
+
 class OrchestrationCoordinatorTests(SimpleTestCase):
     def _handle(self, query, **overrides):
         async def run():
@@ -483,3 +490,145 @@ class OrchestrationCoordinatorTests(SimpleTestCase):
             },
         )
         self.assertIn("Which city?", result.full_response)
+
+    # --- Adaptive task-state slot filling ------------------------------ #
+
+    def test_adaptive_cancel_awaiting_slots(self):
+        result = self._run(
+            "cancel",
+            patches={
+                "orchestration.coordinator.cache": _empty_cache(),
+                "orchestration.coordinator.load_task_state": AsyncMock(
+                    return_value={"status": "awaiting_slots", "action": "get_weather", "missing_slots": ["city"]}
+                ),
+                "orchestration.coordinator.clear_task_state": AsyncMock(),
+            },
+        )
+        self.assertIn("paused that task", result.full_response)
+
+    def test_adaptive_slot_fill_still_awaiting(self):
+        result = self._run(
+            "Nairobi",
+            patches={
+                "orchestration.coordinator.cache": _empty_cache(),
+                "orchestration.coordinator.load_task_state": AsyncMock(
+                    return_value={
+                        "status": "awaiting_slots",
+                        "action": "get_weather",
+                        "parameters": {},
+                        "missing_slots": ["city", "date"],
+                    }
+                ),
+                "orchestration.coordinator.is_task_paused": MagicMock(return_value=False),
+                "orchestration.coordinator.parse_intent": AsyncMock(
+                    return_value={"action": "get_weather", "parameters": {}, "confidence": 0.5}
+                ),
+                "orchestration.coordinator.update_task_state": MagicMock(
+                    return_value={
+                        "status": "awaiting_slots",
+                        "action": "get_weather",
+                        "parameters": {"city": "Nairobi"},
+                        "missing_slots": ["date"],
+                    }
+                ),
+                "orchestration.coordinator.get_action_definition": MagicMock(return_value=None),
+                "orchestration.coordinator.format_missing_prompt": MagicMock(return_value="Need date."),
+                "orchestration.coordinator.save_task_state": AsyncMock(),
+            },
+        )
+        self.assertIn("Need date.", result.full_response)
+
+    def test_adaptive_slot_fill_option_context(self):
+        result = self._run(
+            "Nairobi",
+            patches={
+                "orchestration.coordinator.cache": _empty_cache(),
+                "orchestration.coordinator.load_task_state": AsyncMock(
+                    return_value={
+                        "status": "awaiting_slots",
+                        "action": "get_weather",
+                        "parameters": {},
+                        "missing_slots": ["city"],
+                    }
+                ),
+                "orchestration.coordinator.is_task_paused": MagicMock(return_value=False),
+                "orchestration.coordinator.parse_intent": AsyncMock(
+                    return_value={"action": "get_weather", "parameters": {}, "confidence": 0.5}
+                ),
+                "orchestration.coordinator.update_task_state": MagicMock(
+                    return_value={
+                        "status": "ready",
+                        "action": "get_weather",
+                        "parameters": {"city": "Nairobi"},
+                        "missing_slots": [],
+                    }
+                ),
+                "orchestration.coordinator.get_action_definition": MagicMock(return_value=None),
+                "orchestration.coordinator.needs_option_context": AsyncMock(return_value="Which date?"),
+                "orchestration.coordinator.save_task_state": AsyncMock(),
+            },
+        )
+        self.assertIn("Which date?", result.full_response)
+
+    def test_adaptive_slot_fill_executes(self):
+        async def _fake_stream(intent, result, use_llm):
+            yield "Done."
+
+        result = self._run(
+            "Nairobi",
+            patches={
+                "orchestration.coordinator.cache": _empty_cache(),
+                "orchestration.coordinator.load_task_state": AsyncMock(
+                    return_value={
+                        "status": "awaiting_slots",
+                        "action": "get_weather",
+                        "parameters": {},
+                        "missing_slots": ["city"],
+                    }
+                ),
+                "orchestration.coordinator.is_task_paused": MagicMock(return_value=False),
+                "orchestration.coordinator.parse_intent": AsyncMock(
+                    return_value={"action": "get_weather", "parameters": {}, "confidence": 0.5}
+                ),
+                "orchestration.coordinator.update_task_state": MagicMock(
+                    return_value={
+                        "status": "ready",
+                        "action": "get_weather",
+                        "parameters": {"city": "Nairobi"},
+                        "missing_slots": [],
+                    }
+                ),
+                "orchestration.coordinator.get_action_definition": MagicMock(return_value=None),
+                "orchestration.coordinator.needs_option_context": AsyncMock(return_value=None),
+                "orchestration.coordinator.requires_confirmation": MagicMock(return_value=False),
+                "orchestration.coordinator.route_intent": AsyncMock(return_value={"status": "success", "data": {}}),
+                "orchestration.coordinator.should_record_receipt": MagicMock(return_value=False),
+                "orchestration.coordinator.should_include_receipt": MagicMock(return_value=False),
+                "orchestration.coordinator.synthesize_response": AsyncMock(return_value="summary"),
+                "orchestration.coordinator.synthesize_response_stream": _fake_stream,
+                "orchestration.coordinator.save_task_state": AsyncMock(),
+                "orchestration.coordinator.clear_task_state": AsyncMock(),
+            },
+        )
+        self.assertIn("Done.", result.full_response)
+
+    def test_adaptive_paused_small_talk(self):
+        async def _fake_stream(system_prompt, user_prompt, **kwargs):
+            yield "Hi!"
+
+        fake_llm = MagicMock()
+        fake_llm.stream_text = _fake_stream
+
+        result = self._run(
+            "hi",
+            patches={
+                "orchestration.coordinator.cache": _empty_cache(),
+                "orchestration.coordinator.load_task_state": AsyncMock(
+                    return_value={"status": "awaiting_slots", "action": "get_weather", "missing_slots": ["city"]}
+                ),
+                "orchestration.coordinator.is_task_paused": MagicMock(return_value=True),
+                "orchestration.coordinator.save_task_state": AsyncMock(),
+                "orchestration.llm_client.get_llm_client": MagicMock(return_value=fake_llm),
+            },
+        )
+        self.assertIn("Hi!", result.full_response)

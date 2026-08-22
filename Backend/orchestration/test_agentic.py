@@ -330,11 +330,15 @@ class ConfirmationStateTests(SimpleTestCase):
         mock_cache.get.return_value = None
         self.assertIsNone(load_loop_state(1, 1))
 
-    @patch("orchestration.agent_loop.cache")
-    def test_has_pending_agent_state(self, mock_cache):
+    def test_has_pending_agent_state_false_without_record(self):
         from orchestration.agent_loop import has_pending_agent_state
-        mock_cache.get.return_value = None
-        self.assertFalse(has_pending_agent_state(1, 1))
+
+        def _no_pending(room_id, user_id):
+            return None
+
+        with patch("orchestration.agent_loop._pending_approval_record", new=_no_pending):
+            result = asyncio.run(has_pending_agent_state(1, 1))
+        self.assertFalse(result)
 
 
 # ---------------------------------------------------------------------------

@@ -98,10 +98,11 @@ class Scenario1SimpleToolTest(SimpleTestCase):
 class Scenario2MultiToolChainTest(SimpleTestCase):
     """User: "Find cheapest flight to Mombasa and email it" → search → email confirm."""
 
+    @patch("orchestration.agent_loop.save_pending_confirmation", new_callable=AsyncMock)
     @patch("orchestration.agent_loop.get_llm_client")
     @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)
     @patch("orchestration.agent_loop.cache")
-    def test_search_then_email(self, mock_cache, mock_exec, mock_get_llm):
+    def test_search_then_email(self, mock_cache, mock_exec, mock_get_llm, mock_save):
         mock_cache.get.return_value = None
         mock_exec.side_effect = [
             {"status": "success", "results": [{"airline": "KQ", "price": 12500}]},
@@ -309,10 +310,11 @@ class Scenario6ParallelToolsTest(SimpleTestCase):
 class Scenario7ConfirmationFlowTest(SimpleTestCase):
     """High-risk tool pauses the loop → state saved → resume works."""
 
+    @patch("orchestration.agent_loop.save_pending_confirmation", new_callable=AsyncMock)
     @patch("orchestration.agent_loop.get_llm_client")
     @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)
     @patch("orchestration.agent_loop.cache")
-    def test_confirmation_pause(self, mock_cache, mock_exec, mock_get_llm):
+    def test_confirmation_pause(self, mock_cache, mock_exec, mock_get_llm, mock_save):
         mock_cache.get.return_value = None
         saved_state = {}
 
@@ -364,27 +366,19 @@ class Scenario8InjectionProtectionTest(SimpleTestCase):
 # ---------------------------------------------------------------------------
 
 class Scenario9CancelPendingTest(SimpleTestCase):
-    @patch("orchestration.agent_loop.cache")
-    def test_cancel_pending(self, mock_cache):
-        from orchestration.agent_loop import (
-            LoopState, save_loop_state, cancel_pending_action,
-        )
-        state = LoopState(
-            messages=[],
-            pending_tool={"id": "t1", "name": "withdraw", "input": {"amount": 5000}},
-        )
-        saved = {}
+    def test_cancel_pending(self):
+        from orchestration.agent_loop import cancel_pending_action
 
-        def mock_set(key, value, timeout=None):
-            saved[key] = value
-        mock_cache.set.side_effect = mock_set
-        save_loop_state(1, 1, state)
+        def _fake_record(room_id, user_id):
+            return MagicMock(action="withdraw")
 
-        mock_cache.get.return_value = saved.get(
-            next(iter(saved)) if saved else "", None
-        )
+        with (
+            patch("orchestration.agent_loop._pending_approval_record", new=_fake_record),
+            patch("orchestration.agent_loop._resolve_pending_approval", new=AsyncMock()),
+            patch("orchestration.agent_loop.cache"),
+        ):
+            result = run_async(cancel_pending_action(1, 1))
 
-        result = run_async(cancel_pending_action(1, 1))
         self.assertIsNotNone(result)
         self.assertIn("withdraw", result)
 

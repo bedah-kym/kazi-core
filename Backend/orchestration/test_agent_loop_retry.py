@@ -234,3 +234,64 @@ class AgentLoopRetryIntegrationTests(SimpleTestCase):
         self.assertEqual(results[0].get("status"), "error")
         self.assertIn("temporarily unavailable", results[0].get("message", ""))
         mock_exec.assert_not_called()  # circuit short-circuited the call
+
+    @patch("orchestration.agent_loop.get_llm_client")
+    @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)
+    @patch("orchestration.agent_loop.cache")
+    def test_tool_raising_exception_becomes_error_result(
+        self, mock_cache, mock_exec, mock_get_llm,
+    ):
+        mock_cache.get.return_value = None
+        mock_exec.side_effect = RuntimeError("connector exploded")
+        mock_llm = MagicMock()
+        mock_llm.create_message = AsyncMock(side_effect=[
+            _make_llm_response(
+                [_tool_use_block("t1", "get_weather", {"city": "Nairobi"})],
+                stop_reason="tool_use",
+            ),
+            _make_llm_response([_text_block("Something went wrong.")], stop_reason="end_turn"),
+        ])
+        mock_get_llm.return_value = mock_llm
+
+        from orchestration.agent_loop import run_agent_loop
+
+        events = run_async(collect_events(run_agent_loop(
+            user_message="Weather in Nairobi",
+            context={"user_id": 1, "room_id": 1, "username": "test"},
+        )))
+
+        results = [e.data.get("result") for e in events if e.kind == "tool_result"]
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].get("status"), "error")
+        self.assertIn("connector exploded", results[0].get("message", ""))
+
+    @patch("orchestration.agent_loop.get_llm_client")
+    @patch("orchestration.agent_loop.cache")
+    def test_meta_tool_is_dispatched_through_safe_executor(
+        self, mock_cache, mock_get_llm,
+    ):
+        mock_cache.get.return_value = None
+        mock_llm = MagicMock()
+        mock_llm.create_message = AsyncMock(side_effect=[
+            _make_llm_response(
+                [_tool_use_block("t1", "list_skills", {})],
+                stop_reason="tool_use",
+            ),
+            _make_llm_response([_text_block("Here are the skills.")], stop_reason="end_turn"),
+        ])
+        mock_get_llm.return_value = mock_llm
+
+        from orchestration.agent_loop import run_agent_loop
+
+        with patch(
+            "orchestration.agent_loop._execute_meta_tool",
+            new_callable=AsyncMock,
+            return_value={"status": "success", "skills": []},
+        ) as mock_meta:
+            events = run_async(collect_events(run_agent_loop(
+                user_message="List skills",
+                context={"user_id": 1, "room_id": 1, "username": "test"},
+            )))
+
+        mock_meta.assert_awaited_once()
+        self.assertTrue(any(e.kind == "done" for e in events))

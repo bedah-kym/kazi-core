@@ -172,6 +172,17 @@ class ManagerVerifierUngatingTests(SimpleTestCase):
         review = ManagerVerifier().review_steps(steps, "Weather then convert currency")
         self.assertEqual(review.get("verdict"), "approve")
 
+    def test_find_dependency_cycle_ignores_malformed_dependencies(self):
+        from workflows.capabilities import find_dependency_cycle
+
+        steps = [
+            {"id": "a", "depends_on": "b"},   # string, not a list
+            None,                              # non-dict step
+            {"id": "b", "depends_on": None},   # None, not a list
+            {"id": "c"},                        # no depends_on key
+        ]
+        self.assertEqual(find_dependency_cycle(steps), [])
+
 
 class ConnectorRegistryUngatingTests(SimpleTestCase):
     @patch.dict(os.environ, {"KAZI_DEMO_MODE": "false"}, clear=False)

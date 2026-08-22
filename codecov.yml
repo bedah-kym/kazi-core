@@ -10,11 +10,11 @@ coverage:
         threshold: 1%
     patch:
       default:
-        # PR patches should be well-covered, but refactors and error-branch
-        # handling legitimately leave some added lines uncovered. Require
-        # 80% patch coverage, allowing up to 15% below that before failing.
+        # New code must be ≥ 80% covered — no tolerance. This is a hard
+        # bar (not a soft target) because this is an open-source project
+        # and coverage signals testing intent to contributors.
         target: 80%
-        threshold: 15%
+        threshold: 0%
 
 comment:
   layout: "reach, diff, files"

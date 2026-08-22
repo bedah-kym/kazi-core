@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+from asgiref.sync import async_to_sync
 from celery import shared_task
 
 logger = logging.getLogger(__name__)
@@ -79,7 +80,15 @@ def deliver_notification_whatsapp(self, notification_id, user_id, event_type, ti
         if not user:
             return
 
-        phone = getattr(user.profile, "phone_number", None) or getattr(user.profile, "phone", None)
+        profile = user.profile
+        prefs = getattr(profile, "notification_preferences", None) or {}
+        # No dedicated phone column exists yet; the JSON preferences block is
+        # the only user-editable place to record one until a field lands.
+        phone = (
+            getattr(profile, "phone_number", None)
+            or getattr(profile, "phone", None)
+            or prefs.get("phone_number")
+        )
         if not phone:
             logger.info("No phone number for user %s — skipping WhatsApp notification", user_id)
             return
@@ -89,7 +98,9 @@ def deliver_notification_whatsapp(self, notification_id, user_id, event_type, ti
         from orchestration.connectors.whatsapp_connector import WhatsAppConnector
 
         connector = WhatsAppConnector()
-        result = connector.execute({
+        # execute() is async; calling it bare yields a coroutine whose .get()
+        # raises AttributeError, so every WhatsApp delivery used to fail.
+        result = async_to_sync(connector.execute)({
             "action": "send_whatsapp",
             "phone_number": str(phone),
             "message": message_text,

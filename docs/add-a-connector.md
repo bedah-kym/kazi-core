@@ -2,6 +2,9 @@
 
 The second developer flow. **One file plus one test** is the SLA.
 
+Publishing or sharing a connector? See [Community Connectors](community-connectors.md)
+for the contract, distribution paths, and the boot-time guardrails Kazi enforces.
+
 ## What a connector is
 
 A `BaseConnector` subclass that:

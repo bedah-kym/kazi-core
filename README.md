@@ -139,7 +139,7 @@ OpenAI-compatible adapter), a **Telegram** connector, **itinerary removal**
 with real provider booking links, a **Skills** system (`SKILL.md` instruction
 packs loaded on demand), and production hardening — secret/PII output
 redaction, validated JSON self-repair, context-size caps with observable
-truncation events, and opt-in auto-compaction.
+truncation events, and auto-compaction (on by default).
 
 v0.4.0 introduced the human-gated runtime cycle (durable checkpoints,
 operator API + admin surface, deferred-run watchdog, demo workflow pack).

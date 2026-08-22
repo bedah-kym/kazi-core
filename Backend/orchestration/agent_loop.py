@@ -935,7 +935,7 @@ async def run_agent_loop(
         # Fresh loop
         messages: List[Dict[str, Any]] = []
         if history:
-            if getattr(settings, "HISTORY_COMPACTION_ENABLED", False):
+            if getattr(settings, "HISTORY_COMPACTION_ENABLED", True):
                 history, compacted = _fit_history_to_budget(
                     history,
                     max_chars=int(getattr(settings, "HISTORY_MAX_CHARS", 60000)),

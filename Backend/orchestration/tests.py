@@ -1,5 +1,8 @@
 from django.test import SimpleTestCase, override_settings
 
+from asgiref.sync import async_to_sync
+from unittest.mock import AsyncMock, MagicMock, patch
+
 from orchestration.action_catalog import (
     build_capabilities_catalog,
     get_action_definition,
@@ -111,6 +114,46 @@ class HistoryBudgetTests(SimpleTestCase):
         self.assertLessEqual(len(kept), 50)  # 25000 chars / ~500 chars per message
         self.assertEqual(kept[-1], history[-1])
         self.assertEqual(kept, history[-len(kept):])
+
+    def test_agent_loop_compacts_history_by_default(self):
+        from orchestration.agent_loop import run_agent_loop
+
+        history = [{"role": "user", "content": "x" * 1000} for _ in range(100)]
+
+        async def collect():
+            events = []
+            async for event in run_agent_loop(
+                user_message="hello",
+                context={"user_id": 1, "room_id": 1, "username": "test"},
+                history=history,
+            ):
+                events.append(event)
+            return events
+
+        mock_llm = MagicMock()
+        mock_llm.create_message = AsyncMock(return_value={
+            "content": [{"type": "text", "text": "hi"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        })
+
+        with (
+            patch("orchestration.agent_loop.get_llm_client", return_value=mock_llm),
+            patch("orchestration.agent_loop.cache") as mock_cache,
+            patch("orchestration.agent_loop.record_event") as mock_record,
+        ):
+            mock_cache.get.return_value = None
+            mock_cache.set.return_value = None
+            mock_cache.delete.return_value = None
+            events = async_to_sync(collect)()
+
+        messages = mock_llm.create_message.await_args.kwargs["messages"]
+        self.assertLess(len(messages), 100)  # history was compacted, not passed through raw
+        self.assertTrue(any(e.kind == "done" for e in events))
+        self.assertTrue(any(
+            call.args and call.args[0] == "context_compacted"
+            for call in mock_record.call_args_list
+        ))
 
 
 class SkillRegistryTests(SimpleTestCase):

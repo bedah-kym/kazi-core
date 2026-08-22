@@ -16,7 +16,7 @@ import logging
 import os
 import pkgutil
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,91 @@ def _validate_or_warn(connector_name: str, entry: Any) -> tuple:
             connector_name, action, "; ".join(errors),
         )
     return ok, errors
+
+
+def _warn_if_not_async(connector) -> None:
+    """Warn when a connector's execute() isn't a coroutine function.
+
+    The agent loop only awaits tool calls, so a sync ``def execute`` will
+    always raise at runtime. Catch it at registration with a clear hint.
+    """
+    execute = getattr(connector, "execute", None)
+    if execute is not None and not inspect.iscoroutinefunction(execute):
+        logger.warning(
+            "Connector %s: execute() must be `async def`; a synchronous "
+            "execute() will raise when the agent loop awaits it.",
+            getattr(connector, "name", None) or connector.__class__.__name__,
+        )
+
+
+def _warn_on_conflict(connector_map: Dict[str, Any], action_name: str, new_name: str) -> None:
+    """Warn when a connector overwrites an action owned by another connector."""
+    existing = connector_map.get(action_name)
+    if existing is not None and getattr(existing, "name", None) != new_name:
+        logger.warning(
+            "Action %r is already registered by connector %s; %s overrides it.",
+            action_name,
+            getattr(existing, "name", None) or existing.__class__.__name__,
+            new_name,
+        )
+
+
+def _warn_on_actions_mismatch(connector, entries: List[Dict[str, Any]]) -> None:
+    """Warn when a connector's `actions` list and catalog entries disagree.
+
+    An action in `actions` with no catalog entry never surfaces as an LLM
+    tool; a catalog entry not listed in `actions` never routes at runtime.
+    """
+    name = getattr(connector, "name", None) or connector.__class__.__name__
+    declared = set(connector.actions or [])
+    catalogued = {entry.get("action") for entry in entries if isinstance(entry, dict)}
+    if declared - catalogued:
+        logger.warning(
+            "Connector %s: actions %s are declared but have no catalog entry, "
+            "so the LLM will never see them as tools.",
+            name, sorted(declared - catalogued),
+        )
+    if catalogued - declared:
+        logger.warning(
+            "Connector %s: catalog entries %s are not in `actions`, so they "
+            "will not be routable at execution time.",
+            name, sorted(catalogued - declared),
+        )
+
+
+def _register_actions_and_entries(
+    connector_map: Dict[str, Any], connector,
+) -> List[Dict[str, Any]]:
+    """Register one connector's actions + catalog entries, with guardrails.
+
+    Returns the validated catalog entries (invalid ones are skipped with a
+    warning). Callers merge them into `_registered_catalog_entries` only for
+    connectors whose entries should surface in the global action catalog.
+    """
+    name = getattr(connector, "name", None) or connector.__class__.__name__
+    _warn_if_not_async(connector)
+
+    for action_name in connector.actions:
+        _warn_on_conflict(connector_map, action_name, name)
+        connector_map[action_name] = connector
+
+    try:
+        raw_entries = connector.get_action_catalog_entries()
+    except Exception as exc:
+        logger.warning(
+            "Connector %s: get_action_catalog_entries() failed: %s",
+            name, exc,
+        )
+        raw_entries = []
+
+    validated: List[Dict[str, Any]] = []
+    for entry in raw_entries:
+        ok, _errors = _validate_or_warn(name, entry)
+        if ok:
+            validated.append(entry)
+
+    _warn_on_actions_mismatch(connector, validated)
+    return validated
 
 
 def is_demo_mode() -> bool:
@@ -97,25 +182,8 @@ def discover_connectors() -> Dict[str, Any]:
             logger.warning("Connector %s skipped: %s", connector.name, msg)
             continue
 
-        # Register actions
-        for action_name in connector.actions:
-            connector_map[action_name] = connector
-
-        # Collect catalog entries — validate against the v0.4 tool-schema
-        # contract (docs/contracts/tool-schema.md) before registering.
-        # Bad entries are skipped with a warning so a single typo doesn't
-        # break boot.
-        try:
-            entries = connector.get_action_catalog_entries()
-            for entry in entries:
-                ok, errors = _validate_or_warn(connector.name, entry)
-                if ok:
-                    _registered_catalog_entries.append(entry)
-        except Exception as exc:
-            logger.warning(
-                "Connector %s: get_action_catalog_entries() failed: %s",
-                connector.name, exc,
-            )
+        entries = _register_actions_and_entries(connector_map, connector)
+        _registered_catalog_entries.extend(entries)
 
         logger.info("Registered connector: %s v%s (%d actions)",
                     connector.name, connector.version, len(connector.actions))
@@ -136,18 +204,9 @@ def discover_connectors() -> Dict[str, Any]:
             if not ok:
                 logger.warning("Example connector %s skipped: %s", connector.name, msg)
                 continue
-            for action_name in connector.actions:
-                connector_map[action_name] = connector
-            try:
-                entries = connector.get_action_catalog_entries()
-                for entry in entries:
-                    # Validate shape but do NOT add to _registered_catalog_entries.
-                    _validate_or_warn(connector.name, entry)
-            except Exception as exc:
-                logger.warning(
-                    "Example connector %s: get_action_catalog_entries() failed: %s",
-                    connector.name, exc,
-                )
+            # Example connectors are routing-only: register actions + validate
+            # entries, but do NOT add them to the global action catalog.
+            _register_actions_and_entries(connector_map, connector)
             logger.info(
                 "Registered example connector: %s v%s (%d actions, "
                 "routing-only — not in action catalog)",
@@ -161,16 +220,8 @@ def discover_connectors() -> Dict[str, Any]:
         if not ok:
             logger.warning("Entry-point connector %s skipped: %s", connector.name, msg)
             continue
-        for action_name in connector.actions:
-            connector_map[action_name] = connector
-        try:
-            entries = connector.get_action_catalog_entries()
-            _registered_catalog_entries.extend(entries)
-        except Exception as exc:
-            logger.warning(
-                "Entry-point connector %s: get_action_catalog_entries() failed: %s",
-                connector.name, exc,
-            )
+        entries = _register_actions_and_entries(connector_map, connector)
+        _registered_catalog_entries.extend(entries)
         logger.info("Registered entry-point connector: %s v%s",
                     connector.name, connector.version)
 
@@ -373,6 +424,13 @@ def _scan_entry_points() -> list:
                 try:
                     cls = ep.load()
                     if isinstance(cls, type) and issubclass(cls, BaseConnector):
+                        if not getattr(cls, "name", "") or not getattr(cls, "actions", []):
+                            logger.warning(
+                                "Entry point %s: connector must define a non-empty "
+                                "'name' and 'actions'; skipping.",
+                                ep.name,
+                            )
+                            continue
                         connectors.append(cls())
                 except Exception as exc:
                     logger.warning("Failed to load entry point %s: %s", ep.name, exc)

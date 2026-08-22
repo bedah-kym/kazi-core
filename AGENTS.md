@@ -150,7 +150,7 @@ bandit -r Backend --skip B101
 - Public agentic coverage lives in `Backend/tests/test_agentic.py` and `test_agentic_scenarios.py` — extend those before creating new ad-hoc files.
 
 **Known limitations:**
-- CI runs against SQLite. Some Postgres JSON SQL functions don't have SQLite equivalents — tests that rely on them should be marked or moved.
+- CI runs two lanes: the main job against Postgres + Redis service containers, and a `hermetic-tests` job with no services (SQLite + LocMem cache). Some Postgres JSON SQL functions don't have SQLite equivalents — tests that rely on them should be marked or moved.
 - `Backend/tests/` is a loose folder, not a Django app. If you add tests there and `manage.py test` doesn't pick them up, that's why; either co-locate tests with the relevant app (`Backend/<app>/tests.py`) or use a test runner configured to walk that directory.
 
 ## 7. Commits and pull requests

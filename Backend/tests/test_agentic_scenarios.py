@@ -5,21 +5,26 @@ These test the agent loop end-to-end with mocked LLM and tool execution,
 verifying multi-tool chaining, error recovery, confirmation flows, safety,
 and injection protection.
 """
-import asyncio
 import json
 from unittest.mock import AsyncMock, patch, MagicMock
 
+from asgiref.sync import async_to_sync, sync_to_async
 from django.contrib.auth import get_user_model
+from django.db import connections
 from django.test import SimpleTestCase, TransactionTestCase
 
 
 def run_async(coro):
-    """Helper to run async generators in sync tests."""
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
+    """Run a coroutine and release any DB connections its sync_to_async
+    hops opened, so Postgres can drop the test database at teardown."""
+
+    async def _with_cleanup():
+        try:
+            return await coro
+        finally:
+            await sync_to_async(connections.close_all)()
+
+    return async_to_sync(_with_cleanup)()
 
 
 async def collect_events(async_gen):

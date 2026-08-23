@@ -152,6 +152,8 @@ bandit -r Backend --skip B101
 **Known limitations:**
 - CI runs against SQLite. Some Postgres JSON SQL functions don't have SQLite equivalents — tests that rely on them should be marked or moved.
 - `Backend/tests/` is a loose folder, not a Django app. If you add tests there and `manage.py test` doesn't pick them up, that's why; either co-locate tests with the relevant app (`Backend/<app>/tests.py`) or use a test runner configured to walk that directory.
+- Bare `manage.py test` (no labels) runs every suite via `tests.runner.KaziDiscoverRunner`. Under test runs the cache backend is swapped to LocMem so no live Redis is needed; `django_ratelimit.E003` is silenced for that reason only.
+- Django's parallel test runner (`--parallel > 1`) is known to crash on Windows ("cannot pickle 'traceback' object"); run serially on Windows.
 
 ## 7. Commits and pull requests
 

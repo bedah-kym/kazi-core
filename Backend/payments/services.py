@@ -6,7 +6,7 @@ from django.db import transaction, models
 from django.db.models import F
 from django.utils import timezone
 from django.contrib.auth import get_user_model
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 from datetime import timedelta
 import uuid
 import logging
@@ -19,6 +19,23 @@ from .models import (
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
+
+CENT = Decimal('0.01')
+
+
+def money(value) -> Decimal:
+    """
+    Coerce any inbound numeric (int, float, str, Decimal) to an exact
+    2-decimal amount with an explicit rounding mode — never hardware-
+    accidental rounding from binary floats.
+    """
+    try:
+        amount = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        raise ValueError(f"Invalid monetary amount: {value!r}")
+    if not amount.is_finite():
+        raise ValueError(f"Invalid monetary amount: {value!r}")
+    return amount.quantize(CENT, rounding=ROUND_HALF_UP)
 
 
 class LedgerService:
@@ -45,9 +62,11 @@ class LedgerService:
             ValueError: If debits != credits
         """
         # Validate entries balance
-        total_debits = sum(e['amount'] for e in entries if e['dr_cr'] == 'DEBIT')
-        total_credits = sum(e['amount'] for e in entries if e['dr_cr'] == 'CREDIT')
+        total_debits = sum((money(e['amount']) for e in entries if e['dr_cr'] == 'DEBIT'), Decimal('0.00'))
+        total_credits = sum((money(e['amount']) for e in entries if e['dr_cr'] == 'CREDIT'), Decimal('0.00'))
 
+        if not entries:
+            raise ValueError("Refusing to post a journal with no ledger lines")
         if total_debits != total_credits:
             raise ValueError(f"Unbalanced entry: Debits={total_debits}, Credits={total_credits}")
 
@@ -61,7 +80,7 @@ class LedgerService:
         # Create ledger entries and update account balances
         for entry in entries:
             account = LedgerAccount.objects.select_for_update().get(id=entry['account_id'])
-            amount = Decimal(str(entry['amount']))
+            amount = money(entry['amount'])
 
             # Create ledger entry
             LedgerEntry.objects.create(
@@ -146,11 +165,18 @@ class LedgerService:
 
     @staticmethod
     def _build_entries(entry_specs) -> list:
-        return [
-            {'account_id': spec[0], 'amount': amount, 'dr_cr': spec[1]}
-            for spec in entry_specs
-            if (amount := Decimal(str(spec[2]))) >= Decimal('0.01')
-        ]
+        built = []
+        for spec in entry_specs:
+            amount = money(spec[2])
+            if amount == Decimal('0.00'):
+                continue
+            if amount < CENT:
+                raise ValueError(
+                    f"Ledger line {spec[1]} of {amount} is below the smallest "
+                    f"minor unit; dropping it silently would unbalance the journal"
+                )
+            built.append({'account_id': spec[0], 'amount': amount, 'dr_cr': spec[1]})
+        return built
 
     @staticmethod
     def reconcile_daily():
@@ -179,7 +205,7 @@ class LedgerService:
 
             try:
                 wallet_details = wallet_service.details()
-                actual_balance = Decimal(str(wallet_details.get('available_balance', 0)))
+                actual_balance = money(wallet_details.get('available_balance', 0))
             except AttributeError:
                 logger.warning("Could not retrieve IntaSend balance: Method unknown")
                 return
@@ -254,11 +280,12 @@ class WalletService:
         except FeeSchedule.DoesNotExist:
             platform_fee = Decimal('50.00')
 
-        gross_amount = Decimal(str(gross_amount))
-        intasend_fee = Decimal(str(intasend_fee))
+        gross_amount = money(gross_amount)
+        intasend_fee = money(intasend_fee)
+        platform_fee = money(platform_fee)
 
         user_credit = gross_amount - intasend_fee - platform_fee
-        if user_credit < Decimal('0.00'):
+        if user_credit < CENT:
             raise ValueError('Deposit amount is too small after fees.')
 
         wallet = WalletService.get_or_create_user_wallet(user)
@@ -274,7 +301,7 @@ class WalletService:
 
         accounts = LedgerService.get_system_accounts()
         wallet_account = LedgerService.get_wallet_ledger_account(user)
-        journal = LedgerService.post_transaction(
+        LedgerService.post_transaction(
             'DEPOSIT',
             f"Deposit by {user.username}",
             LedgerService._build_entries([
@@ -323,7 +350,9 @@ class WalletService:
         """
         Process a withdrawal
         """
-        amount = Decimal(str(amount))
+        amount = money(amount)
+        if amount < CENT:
+            raise ValueError("Withdrawal amount must be at least 0.01")
         wallet = WalletService.get_or_create_user_wallet(user)
         wallet = Wallet.objects.select_for_update().get(pk=wallet.pk)
 
@@ -340,7 +369,7 @@ class WalletService:
 
         accounts = LedgerService.get_system_accounts()
         wallet_account = LedgerService.get_wallet_ledger_account(user)
-        journal = LedgerService.post_transaction(
+        LedgerService.post_transaction(
             'WITHDRAWAL',
             f"Withdrawal by {user.username}",
             [

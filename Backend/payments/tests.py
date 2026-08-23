@@ -21,14 +21,17 @@ Lanes:
   deferred transactions cannot enforce the invariant (see AGENTS.md known limitations).
 """
 import json
+import os
+import sys
 import threading
 from decimal import Decimal
+from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
 from django.db import connections
 from django.test import TransactionTestCase, override_settings
 
-from .models import FeeSchedule, JournalEntry, LedgerAccount, LedgerEntry, PaymentRequest
+from .models import DepositIntent, FeeSchedule, JournalEntry, LedgerAccount, LedgerEntry, PaymentRequest
 from .services import InvoiceService, LedgerService, WalletService
 from users.models import Wallet, WalletTransaction
 
@@ -346,6 +349,31 @@ class WebhookCallbackTests(TransactionTestCase):
         self.assertEqual(self.wallet.balance, Decimal('0.00'))
         self.assertEqual(WalletTransaction.objects.count(), 0)
 
+    def test_intent_routes_deposit_without_api_ref(self):
+        from .models import DepositIntent
+        DepositIntent.objects.create(
+            tracking_id='TCK-INTENT-1', user=self.user, amount=Decimal('1000.00'),
+        )
+        response = self._post({
+            'state': 'COMPLETE', 'invoice_id': 'TCK-INTENT-1',
+            'value': 1000, 'fee': 30,
+        })
+        self.assertEqual(response.status_code, 200)
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.balance, Decimal('945.00'))
+        self.assertTrue(WalletTransaction.objects.filter(reference='TCK-INTENT-1').exists())
+
+    def test_shared_email_does_not_route_deposit(self):
+        response = self._post({
+            'state': 'COMPLETE', 'invoice_id': 'TCK-STRANGER',
+            'value': 1000, 'fee': 30,
+            'email': self.user.email,
+        })
+        self.assertEqual(response.status_code, 404)
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.balance, Decimal('0.00'))
+        self.assertEqual(WalletTransaction.objects.count(), 0)
+
     def test_unknown_user_rejected(self):
         response = self._post({
             'state': 'COMPLETE', 'invoice_id': 'TCK-NONE',
@@ -398,3 +426,43 @@ class WebhookInvoiceRoutingTests(TransactionTestCase):
         self.assertEqual(response.json()['status'], 'ignored')
         self.invoice.refresh_from_db()
         self.assertEqual(self.invoice.status, 'EXPIRED')
+
+
+class DepositInitiationTests(TransactionTestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username='initiate-user', email='initiate@example.com', password='fake-token',
+        )
+        WalletService.get_or_create_user_wallet(self.user)
+        self.client.force_login(self.user)
+        self.fake_intasend = MagicMock()
+        self.fake_intasend.APIService.return_value.collect.checkout.return_value = {
+            'url': 'https://sandbox.intasend.com/checkout/abc',
+            'invoice_id': 'TCK-NEW-1',
+            'id': 'TCK-NEW-1',
+        }
+
+    def _initiate(self, amount='1000'):
+        env = {
+            'INTASEND_PUBLISHABLE_KEY': 'test-pk',
+            'INTASEND_API_KEY': 'test-sk',
+            'INTASEND_IS_TEST': 'true',
+        }
+        with patch.dict(sys.modules, {'intasend': self.fake_intasend}), \
+             patch.dict(os.environ, env):
+            return self.client.post('/payments/wallet/deposit/', {'amount': amount})
+
+    def test_initiation_persists_intent_with_tracking_id(self):
+        response = self._initiate('1000')
+        self.assertEqual(response.status_code, 200)
+        intent = DepositIntent.objects.get(tracking_id='TCK-NEW-1')
+        self.assertEqual(intent.user, self.user)
+        self.assertEqual(intent.amount, Decimal('1000.00'))
+
+    def test_initiation_without_tracking_id_persists_nothing(self):
+        self.fake_intasend.APIService.return_value.collect.checkout.return_value = {
+            'url': 'https://sandbox.intasend.com/checkout/abc',
+        }
+        response = self._initiate()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(DepositIntent.objects.count(), 0)

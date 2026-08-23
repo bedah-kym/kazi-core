@@ -192,6 +192,25 @@ class PaymentRequest(models.Model):
         return f"Invoice {self.reference_id} - {self.amount} {self.currency} ({self.status})"
 
 
+class DepositIntent(models.Model):
+    """
+    Maps an IntaSend tracking id to the user who initiated the deposit,
+    so webhook callbacks are routed by our own record instead of by
+    provider-supplied email (shared mailboxes must not cross-route funds).
+    """
+    tracking_id = models.CharField(max_length=255, unique=True)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='deposit_intents')
+    amount = models.DecimalField(max_digits=12, decimal_places=2,
+                                  validators=[MinValueValidator(Decimal('0.01'))])
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.tracking_id} -> user {self.user_id} ({self.amount})"
+
+
 class FeeSchedule(models.Model):
     """
     Platform fee configuration

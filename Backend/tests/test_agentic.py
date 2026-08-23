@@ -384,6 +384,62 @@ class PendingApprovalRecordTests(TransactionTestCase):
         self.assertFalse(run_with_db_cleanup(has_pending_agent_state(1, self.user.id)))
 
 
+class ConsumePendingApprovalTests(TransactionTestCase):
+    """The pending approval is single-consumer: a double-confirm must not
+    execute a high-risk tool twice."""
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username='consume-user',
+            email='example@example.com',
+            password='fake-token',
+        )
+
+    def _make_pending(self, room_id=1):
+        from workflows.models import WorkflowApprovalRecord
+        return WorkflowApprovalRecord.objects.create(
+            kind='agent_loop',
+            room_id=room_id,
+            requested_by=self.user,
+            step_id=f'agent_loop:{room_id}:{self.user.id}',
+            action='withdraw',
+            status='pending',
+        )
+
+    def test_consume_flips_record_to_approved(self):
+        from orchestration.agent_loop import _consume_pending_approval_sync
+        from workflows.models import WorkflowApprovalRecord
+        self._make_pending()
+        self.assertTrue(_consume_pending_approval_sync(1, self.user.id, self.user.id))
+        record = WorkflowApprovalRecord.objects.get(requested_by=self.user)
+        self.assertEqual(record.status, 'approved')
+        self.assertEqual(record.reviewed_by_id, self.user.id)
+        self.assertIsNotNone(record.reviewed_at)
+
+    def test_consume_is_single_use(self):
+        from orchestration.agent_loop import _consume_pending_approval_sync
+        self._make_pending()
+        self.assertTrue(_consume_pending_approval_sync(1, self.user.id, self.user.id))
+        # A second confirm (double-click, racing sessions) is refused.
+        self.assertFalse(_consume_pending_approval_sync(1, self.user.id, self.user.id))
+
+    def test_consume_without_pending_returns_false(self):
+        from orchestration.agent_loop import _consume_pending_approval_sync
+        self.assertFalse(_consume_pending_approval_sync(1, self.user.id, self.user.id))
+
+    def test_consume_is_scoped_to_room_and_user(self):
+        from orchestration.agent_loop import _consume_pending_approval_sync
+        other_user = get_user_model().objects.create_user(
+            username='other-user',
+            email='other@example.com',
+            password='fake-token',
+        )
+        self._make_pending(room_id=2)
+        self.assertFalse(_consume_pending_approval_sync(1, other_user.id, other_user.id))
+        self.assertFalse(_consume_pending_approval_sync(2, other_user.id, other_user.id))
+        self.assertTrue(_consume_pending_approval_sync(2, self.user.id, self.user.id))
+
+
 # ---------------------------------------------------------------------------
 #  Meta-tool Definitions
 # ---------------------------------------------------------------------------

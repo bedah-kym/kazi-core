@@ -228,6 +228,27 @@ async def _resolve_pending_approval(
     await sync_to_async(_update)()
 
 
+def _consume_pending_approval_sync(room_id: int, user_id: int, reviewer_id: int) -> bool:
+    """Atomically flip the pending agent-loop approval to ``approved``.
+
+    Returns True only for the caller that performed the transition, so a
+    double-confirm can never execute the tool twice.
+    """
+    from workflows.models import WorkflowApprovalRecord
+
+    updated = WorkflowApprovalRecord.objects.filter(
+        kind=AGENT_LOOP_APPROVAL_KIND,
+        room_id=room_id,
+        requested_by_id=user_id,
+        status="pending",
+    ).update(
+        status="approved",
+        reviewed_by_id=reviewer_id,
+        reviewed_at=timezone.now(),
+    )
+    return updated == 1
+
+
 # --------------------------------------------------------------------------- #
 #  Helpers                                                                    #
 # --------------------------------------------------------------------------- #
@@ -1380,10 +1401,17 @@ async def resume_after_confirmation(
         })
         return
 
-    # Durable approval BEFORE execution.
-    await _resolve_pending_approval(
-        room_id, user_id, "approved", reviewed_by_id=user_id,
+    # Durable approval BEFORE execution. The conditional update makes the
+    # transition single-consumer: a second concurrent confirm finds no
+    # pending row and is refused instead of executing the tool again.
+    consumed = await sync_to_async(_consume_pending_approval_sync)(
+        room_id, user_id, user_id,
     )
+    if not consumed:
+        yield AgentEvent("error", {
+            "message": "That action was already confirmed or cancelled.",
+        })
+        return
 
     clear_loop_state(room_id, user_id)
 

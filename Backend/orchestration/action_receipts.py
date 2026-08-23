@@ -254,25 +254,21 @@ async def record_action_receipt(
     sanitized_result = _sanitize_payload(result or {})
 
     def _create():
-        # Use update_or_create to handle race conditions
-        # If the same action is triggered twice in rapid succession,
-        # the second call will update the existing receipt rather than creating a duplicate
-        receipt, created = ActionReceipt.objects.update_or_create(
+        # Append-only: each execution gets its own receipt row so the audit
+        # trail is never overwritten and undo state cannot be resurrected.
+        return ActionReceipt.objects.create(
             user_id=user_id,
             room_id=room_id,
             action=normalize_action(action),
-            defaults={
-                "service": service or "",
-                "params": sanitized_params,
-                "result": sanitized_result,
-                "status": status,
-                "reversible": reversible,
-                "undo_action": undo_action or "",
-                "undo_params": undo_params,
-                "reason": reason or "",
-            }
+            service=service or "",
+            params=sanitized_params,
+            result=sanitized_result,
+            status=status,
+            reversible=reversible,
+            undo_action=undo_action or "",
+            undo_params=undo_params,
+            reason=reason or "",
         )
-        return receipt
 
     receipt = await sync_to_async(_create)()
     try:

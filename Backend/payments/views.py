@@ -15,7 +15,7 @@ import uuid
 import json
 import logging
 
-from .models import PaymentRequest, PaymentNotification, FeeSchedule
+from .models import DepositIntent, PaymentRequest, PaymentNotification, FeeSchedule
 from .services import WalletService, InvoiceService
 from users.models import WalletTransaction
 from users.decorators import workspace_required
@@ -161,6 +161,12 @@ def initiate_deposit(request):
         if not payment_link:
             return JsonResponse({'error': 'Payment link not returned by gateway'}, status=502)
 
+        if invoice_id:
+            DepositIntent.objects.update_or_create(
+                tracking_id=invoice_id,
+                defaults={'user': request.user, 'amount': amount},
+            )
+
         return JsonResponse({
             'status': 'success',
             'message': 'Redirecting to payment page',
@@ -260,13 +266,13 @@ def payment_callback(request):
             except Exception:
                 user = None
 
-        if not user:
-            email = data.get('email')
-            if email:
-                user = User.objects.filter(email=email).first()
+        if not user and invoice_id:
+            intent = DepositIntent.objects.filter(tracking_id=invoice_id).first()
+            if intent:
+                user = intent.user
 
         if not user:
-            logger.error(f"User not found for deposit: api_ref={api_ref}, email={data.get('email')}")
+            logger.error(f"User not found for deposit: api_ref={api_ref}, invoice_id={invoice_id}")
             return JsonResponse({'error': 'User not found'}, status=404)
 
         from workflows.webhook_handlers import handle_intasend_webhook_event

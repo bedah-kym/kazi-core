@@ -1,5 +1,5 @@
 """Tests for the unified notification service."""
-from unittest.mock import patch, MagicMock
+from unittest.mock import AsyncMock, patch, MagicMock
 
 from django.contrib.auth import get_user_model
 from django.test import SimpleTestCase, TestCase
@@ -95,3 +95,38 @@ class NotificationServiceTests(TestCase):
             Notification.objects.filter(user=self.user, event_type="system.info").count(),
             0,
         )
+
+
+class WhatsAppDeliveryTaskTests(TestCase):
+    """deliver_notification_whatsapp must await the async connector execute()."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(
+            username="wauser", email="wa@example.com", password="pass"
+        )
+        profile = cls.user.profile
+        profile.notification_preferences = {"phone_number": "+254712345678"}
+        profile.save()
+
+    @patch(
+        "orchestration.connectors.whatsapp_connector.WhatsAppConnector.execute",
+        new_callable=AsyncMock,
+    )
+    def test_successful_send_marks_delivered(self, mock_execute):
+        from notifications.models import Notification
+        from notifications.tasks import deliver_notification_whatsapp
+
+        notification = Notification.objects.create(
+            user=self.user, event_type="workflow.approval", title="Approval", body="Hi",
+        )
+        mock_execute.return_value = {"status": "sent"}
+
+        deliver_notification_whatsapp.run(notification.id, self.user.id, "workflow.approval", "Approval", "Hi")
+
+        mock_execute.assert_called_once()
+        params = mock_execute.call_args[0][0]
+        self.assertEqual(params["action"], "send_whatsapp")
+        self.assertEqual(params["phone_number"], "+254712345678")
+        notification.refresh_from_db()
+        self.assertTrue(notification.delivered_whatsapp)

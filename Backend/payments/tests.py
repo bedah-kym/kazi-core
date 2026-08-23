@@ -1,0 +1,390 @@
+"""
+Payments money-integrity charter (QA Phase 2a)
+
+Owned invariants:
+- LedgerService.post_transaction rejects unbalanced entries atomically (no partial journal rows).
+- Account balance deltas follow the ASSET/EXPENSE vs LIABILITY/EQUITY/INCOME sign convention.
+- Deposits credit gross - provider_fee - platform_fee; never negative; replayed provider refs are idempotent.
+- Withdrawals never drive a wallet below zero, even under concurrency (Postgres row lock); replayed refs are idempotent.
+- An invoice pays exactly once: same-ref replay returns the original tx, any other second payment hits the status guard.
+- The IntaSend webhook is unauthenticated garbage until the challenge signature verifies; bad signatures change nothing.
+
+Compatibility notes:
+- users.Wallet is the source of truth for balances; JournalEntry/LedgerEntry are audit-side
+  and are NOT yet posted on the wallet hot path (audit F5.3, scheduled Phase 2c). Tests here
+  pin wallet-level invariants, not ledger linkage.
+- reconcile_daily is a known placeholder tautology (F5.3); intentionally untested until fixed.
+
+Lanes:
+- Everything here is DB-integration (TransactionTestCase, real DB): money paths require it.
+- ConcurrentWithdrawalTests requires Postgres row locking; skipped on SQLite where
+  deferred transactions cannot enforce the invariant (see AGENTS.md known limitations).
+"""
+import json
+import threading
+from decimal import Decimal
+
+from django.contrib.auth import get_user_model
+from django.db import connections
+from django.test import TransactionTestCase, override_settings
+
+from .models import FeeSchedule, JournalEntry, LedgerAccount, LedgerEntry, PaymentRequest
+from .services import InvoiceService, LedgerService, WalletService
+from users.models import Wallet, WalletTransaction
+
+
+def _credit_balance(wallet, amount):
+    Wallet.objects.filter(pk=wallet.pk).update(balance=amount)
+    wallet.refresh_from_db()
+
+
+@override_settings(CHANNEL_LAYERS={"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}})
+class LedgerPostingTests(TransactionTestCase):
+    def setUp(self):
+        self.asset = LedgerAccount.objects.create(
+            name='Test Asset', account_type='ASSET', currency='KES'
+        )
+        self.income = LedgerAccount.objects.create(
+            name='Test Income', account_type='INCOME', currency='KES'
+        )
+
+    def test_balanced_entry_posts_journal_and_updates_balances(self):
+        journal = LedgerService.post_transaction(
+            'DEPOSIT', 'test entry',
+            [
+                {'account_id': self.asset.id, 'amount': Decimal('100.00'), 'dr_cr': 'DEBIT'},
+                {'account_id': self.income.id, 'amount': Decimal('100.00'), 'dr_cr': 'CREDIT'},
+            ],
+            provider_ref='TRACK-1',
+        )
+        self.assertTrue(journal.verify_balance())
+        self.assertEqual(journal.provider_reference, 'TRACK-1')
+        self.assertEqual(journal.ledger_entries.count(), 2)
+        self.asset.refresh_from_db()
+        self.income.refresh_from_db()
+        self.assertEqual(self.asset.balance, Decimal('100.00'))
+        self.assertEqual(self.income.balance, Decimal('100.00'))
+
+    def test_unbalanced_entry_rejected_without_partial_rows(self):
+        with self.assertRaises(ValueError):
+            LedgerService.post_transaction(
+                'DEPOSIT', 'unbalanced',
+                [
+                    {'account_id': self.asset.id, 'amount': Decimal('100.00'), 'dr_cr': 'DEBIT'},
+                    {'account_id': self.income.id, 'amount': Decimal('90.00'), 'dr_cr': 'CREDIT'},
+                ],
+            )
+        self.assertEqual(JournalEntry.objects.count(), 0)
+        self.assertEqual(LedgerEntry.objects.count(), 0)
+        self.asset.refresh_from_db()
+        self.assertEqual(self.asset.balance, Decimal('0.00'))
+
+    def test_verify_balance_detects_unbalanced_entries(self):
+        journal = JournalEntry.objects.create(transaction_type='FEE', description='tampered')
+        LedgerEntry.objects.create(
+            journal_entry=journal, ledger_account=self.asset,
+            amount=Decimal('10.00'), dr_cr='DEBIT',
+        )
+        self.assertFalse(journal.verify_balance())
+
+
+@override_settings(CHANNEL_LAYERS={"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}})
+class WalletDepositTests(TransactionTestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username='deposit-user', email='example@example.com', password='fake-token',
+        )
+        self.wallet = WalletService.get_or_create_user_wallet(self.user)
+
+    def test_fee_split_credits_gross_minus_fees(self):
+        FeeSchedule.objects.create(transaction_type='DEPOSIT', platform_fee=Decimal('25.00'))
+        tx = WalletService.process_deposit(
+            self.user, Decimal('1000.00'), Decimal('30.00'), 'DEP-REF-1'
+        )
+        self.assertEqual(tx.amount, Decimal('945.00'))
+        self.assertEqual(tx.type, 'CREDIT')
+        self.assertEqual(tx.status, 'COMPLETED')
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.balance, Decimal('945.00'))
+
+    def test_default_platform_fee_when_no_schedule(self):
+        tx = WalletService.process_deposit(self.user, Decimal('200.00'), Decimal('0.00'), 'DEP-REF-2')
+        self.assertEqual(tx.amount, Decimal('150.00'))
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.balance, Decimal('150.00'))
+
+    def test_deposit_too_small_after_fees_rejected(self):
+        FeeSchedule.objects.create(transaction_type='DEPOSIT', platform_fee=Decimal('50.00'))
+        with self.assertRaises(ValueError):
+            WalletService.process_deposit(self.user, Decimal('60.00'), Decimal('20.00'), 'DEP-REF-3')
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.balance, Decimal('0.00'))
+        self.assertEqual(WalletTransaction.objects.count(), 0)
+
+    def test_replayed_reference_is_idempotent(self):
+        FeeSchedule.objects.create(transaction_type='DEPOSIT', platform_fee=Decimal('25.00'))
+        first = WalletService.process_deposit(self.user, Decimal('1000.00'), Decimal('30.00'), 'DEP-REPLAY')
+        second = WalletService.process_deposit(self.user, Decimal('1000.00'), Decimal('30.00'), 'DEP-REPLAY')
+        self.assertEqual(first.pk, second.pk)
+        self.assertEqual(WalletTransaction.objects.count(), 1)
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.balance, Decimal('945.00'))
+
+
+@override_settings(CHANNEL_LAYERS={"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}})
+class WalletWithdrawalTests(TransactionTestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username='withdraw-user', email='example@example.com', password='fake-token',
+        )
+        self.wallet = WalletService.get_or_create_user_wallet(self.user)
+
+    def test_withdrawal_debits_balance_and_records_tx(self):
+        _credit_balance(self.wallet, Decimal('500.00'))
+        tx = WalletService.process_withdrawal(self.user, Decimal('120.00'), 'WD-REF-1')
+        self.assertEqual(tx.amount, Decimal('120.00'))
+        self.assertEqual(tx.type, 'DEBIT')
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.balance, Decimal('380.00'))
+
+    def test_overdraft_rejected_leaving_state_untouched(self):
+        _credit_balance(self.wallet, Decimal('100.00'))
+        with self.assertRaises(ValueError):
+            WalletService.process_withdrawal(self.user, Decimal('150.00'), 'WD-OVER')
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.balance, Decimal('100.00'))
+        self.assertEqual(WalletTransaction.objects.count(), 0)
+
+    def test_exact_balance_is_allowed_boundary(self):
+        _credit_balance(self.wallet, Decimal('100.00'))
+        WalletService.process_withdrawal(self.user, Decimal('100.00'), 'WD-EXACT')
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.balance, Decimal('0.00'))
+
+    def test_replayed_reference_is_idempotent(self):
+        _credit_balance(self.wallet, Decimal('500.00'))
+        first = WalletService.process_withdrawal(self.user, Decimal('100.00'), 'WD-REPLAY')
+        second = WalletService.process_withdrawal(self.user, Decimal('100.00'), 'WD-REPLAY')
+        self.assertEqual(first.pk, second.pk)
+        self.assertEqual(WalletTransaction.objects.count(), 1)
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.balance, Decimal('400.00'))
+
+
+@override_settings(CHANNEL_LAYERS={"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}})
+class ConcurrentWithdrawalTests(TransactionTestCase):
+    """Two simultaneous withdrawals of the same funds must produce at most one debit."""
+
+    def setUp(self):
+        from django.db import connection
+        self.is_postgres = connection.vendor == 'postgresql'
+
+        self.user = get_user_model().objects.create_user(
+            username='race-user', email='example@example.com', password='fake-token',
+        )
+        self.wallet = WalletService.get_or_create_user_wallet(self.user)
+        _credit_balance(self.wallet, Decimal('100.00'))
+
+    def test_concurrent_withdrawals_cannot_overdraft(self):
+        if not self.is_postgres:
+            self.skipTest('Requires Postgres row locking; SQLite cannot enforce the invariant')
+
+        barrier = threading.Barrier(2)
+        succeeded = []
+        rejected = []
+        unexpected = []
+
+        def attempt(index):
+            try:
+                barrier.wait(timeout=10)
+                WalletService.process_withdrawal(self.user, Decimal('80.00'), f'WD-RACE-{index}')
+                succeeded.append(index)
+            except ValueError:
+                rejected.append(index)
+            except Exception as exc:
+                unexpected.append(exc)
+            finally:
+                connections.close_all()
+
+        threads = [threading.Thread(target=attempt, args=(i,)) for i in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=15)
+
+        self.assertEqual(unexpected, [])
+        self.assertEqual(len(succeeded), 1, f'expected one winner, got {succeeded}')
+        self.assertEqual(len(rejected), 1)
+        self.assertEqual(WalletTransaction.objects.filter(type='DEBIT').count(), 1)
+        self.wallet.refresh_from_db()
+        self.assertGreaterEqual(self.wallet.balance, Decimal('0.00'))
+        self.assertEqual(self.wallet.balance, Decimal('20.00'))
+
+
+@override_settings(CHANNEL_LAYERS={"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}})
+class InvoicePaymentTests(TransactionTestCase):
+    def setUp(self):
+        self.issuer = get_user_model().objects.create_user(
+            username='issuer-user', email='example@example.com', password='fake-token',
+        )
+        self.wallet = WalletService.get_or_create_user_wallet(self.issuer)
+        self.invoice = PaymentRequest.objects.create(
+            issuer=self.issuer,
+            amount=Decimal('500.00'),
+            description='test invoice',
+            expires_at='2099-01-01T00:00:00Z',
+        )
+
+    def test_payment_credits_issuer_and_marks_paid(self):
+        tx = InvoiceService.process_invoice_payment(self.invoice.id, 'INV-PAY-1')
+        self.assertEqual(tx.amount, Decimal('500.00'))
+        self.invoice.refresh_from_db()
+        self.assertEqual(self.invoice.status, 'PAID')
+        self.assertIsNotNone(self.invoice.paid_at)
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.balance, Decimal('500.00'))
+
+    def test_same_ref_replay_returns_original_tx(self):
+        first = InvoiceService.process_invoice_payment(self.invoice.id, 'INV-REPLAY')
+        second = InvoiceService.process_invoice_payment(self.invoice.id, 'INV-REPLAY')
+        self.assertEqual(first.pk, second.pk)
+        self.assertEqual(WalletTransaction.objects.count(), 1)
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.balance, Decimal('500.00'))
+
+    def test_second_payment_under_different_ref_hits_status_guard(self):
+        InvoiceService.process_invoice_payment(self.invoice.id, 'INV-FIRST')
+        with self.assertRaises(ValueError):
+            InvoiceService.process_invoice_payment(self.invoice.id, 'INV-SECOND')
+        self.assertEqual(WalletTransaction.objects.count(), 1)
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.balance, Decimal('500.00'))
+
+    def test_non_pending_invoice_rejected(self):
+        self.invoice.status = 'CANCELLED'
+        self.invoice.save(update_fields=['status'])
+        with self.assertRaises(ValueError):
+            InvoiceService.process_invoice_payment(self.invoice.id, 'INV-CANCELLED')
+        self.assertEqual(WalletTransaction.objects.count(), 0)
+
+
+@override_settings(INTASEND_WEBHOOK_SECRET='test-challenge-secret')
+@override_settings(CHANNEL_LAYERS={"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}})
+class WebhookCallbackTests(TransactionTestCase):
+    def setUp(self):
+        FeeSchedule.objects.create(transaction_type='DEPOSIT', platform_fee=Decimal('25.00'))
+        self.user = get_user_model().objects.create_user(
+            username='webhook-user', email='webhook@example.com', password='fake-token',
+        )
+        self.wallet = WalletService.get_or_create_user_wallet(self.user)
+        self.url = '/payments/wallet/callback/'
+
+    def _post(self, payload, signature='test-challenge-secret'):
+        return self.client.post(
+            self.url, data=json.dumps(payload), content_type='application/json',
+            HTTP_X_INTASEND_SIGNATURE=signature,
+        )
+
+    def test_invalid_signature_rejected_without_side_effects(self):
+        response = self._post(
+            {
+                'state': 'COMPLETE', 'invoice_id': 'TCK-BAD-SIG',
+                'value': 1000, 'fee': 30, 'api_ref': f'wallet:{self.user.id}',
+            },
+            signature='wrong-secret',
+        )
+        self.assertEqual(response.status_code, 401)
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.balance, Decimal('0.00'))
+        self.assertEqual(WalletTransaction.objects.count(), 0)
+
+    def test_unconfigured_secret_rejected(self):
+        with override_settings(INTASEND_WEBHOOK_SECRET=None):
+            response = self._post({'state': 'COMPLETE', 'invoice_id': 'TCK-X'})
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(WalletTransaction.objects.count(), 0)
+
+    def test_complete_deposit_payload_credits_wallet(self):
+        response = self._post({
+            'state': 'COMPLETE', 'invoice_id': 'TCK-GOOD-1',
+            'value': 1000, 'fee': 30, 'api_ref': f'wallet:{self.user.id}',
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['status'], 'success')
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.balance, Decimal('945.00'))
+        self.assertTrue(WalletTransaction.objects.filter(reference='TCK-GOOD-1').exists())
+
+    def test_replayed_callback_credits_only_once(self):
+        payload = {
+            'state': 'COMPLETE', 'invoice_id': 'TCK-REPLAY',
+            'value': 1000, 'fee': 30, 'api_ref': f'wallet:{self.user.id}',
+        }
+        self._post(payload)
+        self._post(payload)
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.balance, Decimal('945.00'))
+        self.assertEqual(WalletTransaction.objects.count(), 1)
+
+    def test_non_terminal_state_is_ignored(self):
+        response = self._post({
+            'state': 'IN_PROGRESS', 'invoice_id': 'TCK-PENDING',
+            'value': 1000, 'fee': 30, 'api_ref': f'wallet:{self.user.id}',
+        })
+        self.assertEqual(response.json()['status'], 'ignored')
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.balance, Decimal('0.00'))
+        self.assertEqual(WalletTransaction.objects.count(), 0)
+
+    def test_unknown_user_rejected(self):
+        response = self._post({
+            'state': 'COMPLETE', 'invoice_id': 'TCK-NONE',
+            'value': 1000, 'fee': 30,
+        })
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(WalletTransaction.objects.count(), 0)
+
+
+@override_settings(INTASEND_WEBHOOK_SECRET='test-challenge-secret')
+@override_settings(CHANNEL_LAYERS={"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}})
+class WebhookInvoiceRoutingTests(TransactionTestCase):
+    def setUp(self):
+        self.issuer = get_user_model().objects.create_user(
+            username='inv-route-user', email='inv-route@example.com', password='fake-token',
+        )
+        self.wallet = WalletService.get_or_create_user_wallet(self.issuer)
+        self.invoice = PaymentRequest.objects.create(
+            issuer=self.issuer,
+            amount=Decimal('500.00'),
+            description='routed invoice',
+            expires_at='2099-01-01T00:00:00Z',
+            intasend_invoice_id='INV-ROUTED-1',
+        )
+        self.url = '/payments/wallet/callback/'
+
+    def _post(self, payload, signature='test-challenge-secret'):
+        return self.client.post(
+            self.url, data=json.dumps(payload), content_type='application/json',
+            HTTP_X_INTASEND_SIGNATURE=signature,
+        )
+
+    def test_complete_invoice_webhook_pays_invoice_once(self):
+        payload = {'state': 'COMPLETE', 'invoice_id': 'INV-ROUTED-1', 'value': 500, 'fee': 0}
+        response = self._post(payload)
+        self.assertEqual(response.status_code, 200)
+        self.invoice.refresh_from_db()
+        self.assertEqual(self.invoice.status, 'PAID')
+        self.assertEqual(self.invoice.intasend_invoice_id, 'INV-ROUTED-1')
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.balance, Decimal('500.00'))
+
+        self._post(payload)
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.balance, Decimal('500.00'))
+        self.assertEqual(WalletTransaction.objects.count(), 1)
+
+    def test_expired_webhook_cancels_pending_invoice(self):
+        response = self._post({'state': 'EXPIRED', 'invoice_id': 'INV-ROUTED-1'})
+        self.assertEqual(response.json()['status'], 'ignored')
+        self.invoice.refresh_from_db()
+        self.assertEqual(self.invoice.status, 'EXPIRED')

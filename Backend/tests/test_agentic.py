@@ -10,7 +10,8 @@ import json
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from django.test import SimpleTestCase, override_settings
+from django.contrib.auth import get_user_model
+from django.test import SimpleTestCase, TransactionTestCase, override_settings
 
 
 # ---------------------------------------------------------------------------
@@ -69,7 +70,7 @@ class ToolSchemaTests(SimpleTestCase):
 class ToolExecutorTests(SimpleTestCase):
     def test_unknown_tool_returns_error(self):
         from orchestration.tool_executor import execute_tool
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             execute_tool("nonexistent_tool", {}, {"user_id": 1, "room_id": 1})
         )
         self.assertEqual(result["status"], "error")
@@ -324,11 +325,48 @@ class ConfirmationStateTests(SimpleTestCase):
         mock_cache.get.return_value = None
         self.assertIsNone(load_loop_state(1, 1))
 
-    @patch("orchestration.agent_loop.cache")
-    def test_has_pending_agent_state(self, mock_cache):
+
+class PendingApprovalRecordTests(TransactionTestCase):
+    """has_pending_agent_state is a durable (DB-backed) check, not cache."""
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username='approval-user',
+            email='example@example.com',
+            password='fake-token',
+        )
+
+    def test_false_without_pending_record(self):
         from orchestration.agent_loop import has_pending_agent_state
-        mock_cache.get.return_value = None
-        self.assertFalse(has_pending_agent_state(1, 1))
+        self.assertFalse(asyncio.run(has_pending_agent_state(1, self.user.id)))
+
+    def test_true_with_pending_record(self):
+        from workflows.models import WorkflowApprovalRecord
+        WorkflowApprovalRecord.objects.create(
+            kind='agent_loop',
+            room_id=1,
+            requested_by=self.user,
+            step_id=f'agent_loop:1:{self.user.id}',
+            action='send_email',
+            status='pending',
+        )
+        from orchestration.agent_loop import has_pending_agent_state
+        self.assertTrue(asyncio.run(has_pending_agent_state(1, self.user.id)))
+
+    def test_false_after_record_cancelled(self):
+        from workflows.models import WorkflowApprovalRecord
+        record = WorkflowApprovalRecord.objects.create(
+            kind='agent_loop',
+            room_id=1,
+            requested_by=self.user,
+            step_id=f'agent_loop:1:{self.user.id}',
+            action='send_email',
+            status='pending',
+        )
+        record.status = 'cancelled'
+        record.save(update_fields=['status'])
+        from orchestration.agent_loop import has_pending_agent_state
+        self.assertFalse(asyncio.run(has_pending_agent_state(1, self.user.id)))
 
 
 # ---------------------------------------------------------------------------

@@ -273,6 +273,13 @@ def payment_callback(request):
         handle_intasend_webhook_event(user.id, data)
 
         if state in ('COMPLETE', 'COMPLETED'):
+            if not invoice_id:
+                logger.error(
+                    f"Deposit callback without invoice/tracking id rejected "
+                    f"(api_ref={api_ref}); a random reference would defeat idempotency"
+                )
+                return JsonResponse({'error': 'Missing invoice/tracking id'}, status=400)
+
             # Process deposit
             tx = WalletService.process_deposit(
                 user=user,

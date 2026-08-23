@@ -315,6 +315,16 @@ class WebhookCallbackTests(TransactionTestCase):
         self.assertEqual(self.wallet.balance, Decimal('945.00'))
         self.assertTrue(WalletTransaction.objects.filter(reference='TCK-GOOD-1').exists())
 
+    def test_complete_deposit_without_any_id_rejected(self):
+        response = self._post({
+            'state': 'COMPLETE', 'value': 1000, 'fee': 30,
+            'api_ref': f'wallet:{self.user.id}',
+        })
+        self.assertEqual(response.status_code, 400)
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.balance, Decimal('0.00'))
+        self.assertEqual(WalletTransaction.objects.count(), 0)
+
     def test_replayed_callback_credits_only_once(self):
         payload = {
             'state': 'COMPLETE', 'invoice_id': 'TCK-REPLAY',

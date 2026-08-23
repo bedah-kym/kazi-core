@@ -102,9 +102,43 @@ jobs:
       - name: Run tests with coverage
         run: |
           coverage run --source=Backend --omit='*/migrations/*,*/tests/*,*/test_*.py,*/tests.py' \
-            Backend/manage.py test --noinput --verbosity=2 orchestration workflows chatbot travel notifications
+            Backend/manage.py test --noinput --verbosity=2 orchestration workflows chatbot travel notifications tests users Api payments
           coverage xml -o coverage.xml
-          coverage report --skip-covered --fail-under=0
+          # Floor = measured 39% (2026-08) minus margin; ratchet upward as suites mature.
+          coverage report --skip-covered --fail-under=35
+
+  # Proves the suite runs hermetically (SQLite + LocMem cache, no service
+  # containers). Guards against tests silently requiring external infra.
+  hermetic-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+
+    env:
+      DJANGO_SECRET_KEY: ci-test-key-not-for-prod
+      DJANGO_DEBUG: "true"
+      DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1
+      ENCRYPTION_KEY: "I2m1pOTNatH-LkRdlnWXZXqZ9-8oQRm-JCwpwshx6dc="
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run full suite without Postgres/Redis
+        run: python Backend/manage.py test --noinput
 
       # v0.4 M4-1: smoke-test the golden-scenario harness on every PR.
       # No --allow-llm so this works without ANTHROPIC_API_KEY; the harness

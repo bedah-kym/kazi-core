@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/4.1/ref/settings/
 """
 from decimal import Decimal
 import os
+import sys
 from pathlib import Path
 import dj_database_url
 from celery.schedules import crontab
@@ -632,3 +633,14 @@ JAZZMIN_UI_TWEAKS = {
     "tooltip_class": "tooltip-primary",
     "window_box_shadow_class": "card-shadow",
 }
+
+TEST_RUNNER = 'tests.runner.KaziDiscoverRunner'
+
+if 'test' in sys.argv:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "kazi-tests",
+        }
+    }
+    SILENCED_SYSTEM_CHECKS = ['django_ratelimit.E003']

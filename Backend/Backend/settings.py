@@ -262,7 +262,9 @@ CHANNEL_LAYERS = {
     },
 }
 
-# Celery Beat Schedule
+# Celery Beat Schedule — single source of truth. A second definition later in
+# this file silently replaced this dict once already (dropping the reminder
+# sweep and the deferred-workflow replay watchdog); never redefine it below.
 MODERATION_ENABLED = os.environ.get('MODERATION_ENABLED')
 if MODERATION_ENABLED is None:
     MODERATION_ENABLED = bool(os.environ.get('HF_API_TOKEN', ''))
@@ -274,13 +276,17 @@ REMINDER_SWEEP_SECONDS = int(os.environ.get('REMINDER_SWEEP_SECONDS', 3600))
 WORKFLOW_REPLAY_SCHEDULE_SECONDS = int(os.environ.get('WORKFLOW_REPLAY_SCHEDULE_SECONDS', 300))
 
 CELERY_BEAT_SCHEDULE = {
-    'reconcile-ledger': {
+    'nightly_ledger_reconciliation': {
         'task': 'payments.tasks.reconcile_ledger',
-        'schedule': 7200.0,  # Every 2 hours
+        'schedule': crontab(hour=2, minute=0),
     },
-    'process-recurring-invoices': {
+    'daily_recurring_invoices': {
         'task': 'payments.tasks.process_recurring_invoices',
-        'schedule': 86400.0,  # Daily
+        'schedule': crontab(hour=1, minute=0),
+    },
+    'sweep-memory-notes': {
+        'task': 'chatbot.tasks.sweep_memory_notes',
+        'schedule': 21600.0,  # Every 6 hours
     },
     'check-due-reminders': {
         'task': 'chatbot.tasks.check_due_reminders',
@@ -626,24 +632,6 @@ JAZZMIN_UI_TWEAKS = {
     "accent": "accent-primary",
     "tooltip_class": "tooltip-primary",
     "window_box_shadow_class": "card-shadow",
-}
-
-# Celery Beat Schedule
-from celery.schedules import crontab
-
-CELERY_BEAT_SCHEDULE = {
-    'nightly_ledger_reconciliation': {
-        'task': 'payments.tasks.reconcile_ledger',
-        'schedule': crontab(hour=2, minute=0),
-    },
-    'daily_recurring_invoices': {
-        'task': 'payments.tasks.process_recurring_invoices',
-        'schedule': crontab(hour=1, minute=0),
-    },
-    'sweep-memory-notes': {
-        'task': 'chatbot.tasks.sweep_memory_notes',
-        'schedule': 21600.0,  # Every 6 hours
-    },
 }
 
 TEST_RUNNER = 'tests.runner.KaziDiscoverRunner'

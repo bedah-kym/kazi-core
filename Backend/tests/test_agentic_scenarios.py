@@ -9,7 +9,8 @@ import asyncio
 import json
 from unittest.mock import AsyncMock, patch, MagicMock
 
-from django.test import SimpleTestCase
+from django.contrib.auth import get_user_model
+from django.test import SimpleTestCase, TransactionTestCase
 
 
 def run_async(coro):
@@ -95,8 +96,15 @@ class Scenario1SimpleToolTest(SimpleTestCase):
 #  Scenario 2: Multi-tool chain (search flights → email)
 # ---------------------------------------------------------------------------
 
-class Scenario2MultiToolChainTest(SimpleTestCase):
+class Scenario2MultiToolChainTest(TransactionTestCase):
     """User: "Find cheapest flight to Mombasa and email it" → search → email confirm."""
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username='scenario2-user',
+            email='example@example.com',
+            password='fake-token',
+        )
 
     @patch("orchestration.agent_loop.get_llm_client")
     @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)
@@ -128,7 +136,11 @@ class Scenario2MultiToolChainTest(SimpleTestCase):
         from orchestration.agent_loop import run_agent_loop
         events = run_async(collect_events(run_agent_loop(
             user_message="Find cheapest flight to Mombasa and email it to me",
-            context={"user_id": 1, "room_id": 1, "username": "test-user"},
+            context={
+                "user_id": self.user.id,
+                "room_id": 1,
+                "username": "scenario2-user",
+            },
         )))
 
         kinds = [e.kind for e in events]
@@ -137,6 +149,15 @@ class Scenario2MultiToolChainTest(SimpleTestCase):
         # Should NOT have "done" because it paused
         confirm_event = next(e for e in events if e.kind == "confirmation")
         self.assertIn("send email", confirm_event.data["message"])
+        # The pause must be durable, not just cache state
+        from workflows.models import WorkflowApprovalRecord
+        self.assertTrue(WorkflowApprovalRecord.objects.filter(
+            kind='agent_loop',
+            room_id=1,
+            requested_by=self.user,
+            status='pending',
+            action='send_email',
+        ).exists())
 
 
 # ---------------------------------------------------------------------------
@@ -306,8 +327,15 @@ class Scenario6ParallelToolsTest(SimpleTestCase):
 #  Scenario 7: Confirmation flow — pause and resume
 # ---------------------------------------------------------------------------
 
-class Scenario7ConfirmationFlowTest(SimpleTestCase):
-    """High-risk tool pauses the loop → state saved → resume works."""
+class Scenario7ConfirmationFlowTest(TransactionTestCase):
+    """High-risk tool pauses the loop → state saved durably → resume works."""
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username='scenario7-user',
+            email='example@example.com',
+            password='fake-token',
+        )
 
     @patch("orchestration.agent_loop.get_llm_client")
     @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)
@@ -331,7 +359,11 @@ class Scenario7ConfirmationFlowTest(SimpleTestCase):
         from orchestration.agent_loop import run_agent_loop
         events = run_async(collect_events(run_agent_loop(
             user_message="Email john",
-            context={"user_id": 1, "room_id": 1, "username": "test-user"},
+            context={
+                "user_id": self.user.id,
+                "room_id": 1,
+                "username": "scenario7-user",
+            },
         )))
 
         kinds = [e.kind for e in events]
@@ -339,6 +371,12 @@ class Scenario7ConfirmationFlowTest(SimpleTestCase):
         self.assertNotIn("done", kinds)  # loop paused, not done
         # State should have been saved
         self.assertTrue(any("agent_state" in k for k in saved_state))
+        # The pause must also be durable
+        from workflows.models import WorkflowApprovalRecord
+        record = WorkflowApprovalRecord.objects.get(
+            kind='agent_loop', room_id=1, requested_by=self.user, status='pending',
+        )
+        self.assertEqual(record.action, 'send_email')
 
 
 # ---------------------------------------------------------------------------
@@ -363,11 +401,28 @@ class Scenario8InjectionProtectionTest(SimpleTestCase):
 #  Scenario 9: Cancel pending action
 # ---------------------------------------------------------------------------
 
-class Scenario9CancelPendingTest(SimpleTestCase):
+class Scenario9CancelPendingTest(TransactionTestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username='scenario9-user',
+            email='example@example.com',
+            password='fake-token',
+        )
+
     @patch("orchestration.agent_loop.cache")
     def test_cancel_pending(self, mock_cache):
         from orchestration.agent_loop import (
             LoopState, save_loop_state, cancel_pending_action,
+        )
+        from workflows.models import WorkflowApprovalRecord
+
+        WorkflowApprovalRecord.objects.create(
+            kind='agent_loop',
+            room_id=1,
+            requested_by=self.user,
+            step_id=f'agent_loop:1:{self.user.id}',
+            action='withdraw',
+            status='pending',
         )
         state = LoopState(
             messages=[],
@@ -378,15 +433,19 @@ class Scenario9CancelPendingTest(SimpleTestCase):
         def mock_set(key, value, timeout=None):
             saved[key] = value
         mock_cache.set.side_effect = mock_set
-        save_loop_state(1, 1, state)
+        save_loop_state(1, self.user.id, state)
 
         mock_cache.get.return_value = saved.get(
             next(iter(saved)) if saved else "", None
         )
 
-        result = run_async(cancel_pending_action(1, 1))
+        result = run_async(cancel_pending_action(1, self.user.id))
         self.assertIsNotNone(result)
         self.assertIn("withdraw", result)
+        record = WorkflowApprovalRecord.objects.get(
+            kind='agent_loop', room_id=1, requested_by=self.user,
+        )
+        self.assertEqual(record.status, 'cancelled')
 
 
 # ---------------------------------------------------------------------------

@@ -48,15 +48,13 @@ LLM_CONFIDENCE_REJECT = 0.20            # Intent unclear, ask user to rephrase
 # Backwards compatibility (deprecated, use above)
 LLM_CONFIDENCE_EXECUTE = LLM_CONFIDENCE_AUTO_EXECUTE
 LLM_CONFIDENCE_CONFIRM = LLM_CONFIDENCE_ASK_ONCE
-_CONFIRM_WORDS = {
-    "yes",
-    "approve",
-    "approved",
-    "confirm",
-    "confirmed",
-    "go ahead",
-    "proceed",
-}
+# Affirmative-led replies only. Substring matching here once let
+# "yesterday's weather" confirm a pending high-risk workflow because
+# "yes" is a substring of "yesterday".
+_AFFIRMATIVE_RE = re.compile(
+    r"^(?:y|ye|yes|yeah|yep|yup|ok|okay|approve[d]?|confirm(ed)?|proceed|go\s+ahead)\b",
+    re.IGNORECASE,
+)
 _SERVICE_ALIASES = {
     "email": "gmail",
     "mail": "gmail",
@@ -244,8 +242,7 @@ def _looks_like_automation(message: str) -> bool:
 
 
 def _looks_like_confirmation(message: str) -> bool:
-    lowered = message.strip().lower()
-    return any(word in lowered for word in _CONFIRM_WORDS)
+    return bool(_AFFIRMATIVE_RE.match(message.strip()))
 
 
 def looks_like_confirmation(message: str) -> bool:

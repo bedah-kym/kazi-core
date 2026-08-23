@@ -11,6 +11,37 @@ from orchestration.action_catalog import (
 from orchestration.security_policy import sanitize_parameters, should_block_action
 
 
+class ConfirmationMatchingTests(SimpleTestCase):
+    """Only affirmative-led replies may confirm a pending gate.
+
+    Substring matching once let "yesterday's weather" confirm a pending
+    high-risk workflow ("yes" in "yesterday").
+    """
+
+    def test_affirmative_replies_match(self):
+        from orchestration.workflow_planner import looks_like_confirmation
+        for message in (
+            "yes", "Yes.", "YES",
+            "yeah, send it", "ok do it", "Okay, proceed",
+            "approve", "approved, go on", "confirm that", "confirmed",
+            "proceed with the booking", "go ahead", "Go ahead and email it",
+        ):
+            self.assertTrue(looks_like_confirmation(message), msg=message)
+
+    def test_non_affirmative_messages_do_not_match(self):
+        from orchestration.workflow_planner import looks_like_confirmation
+        for message in (
+            "yesterday's weather in Mombasa",
+            "can you confirm my email address?",
+            "did you approve the invoice?",
+            "cancel that",
+            "not yet",
+            "what's the weather?",
+            "",
+        ):
+            self.assertFalse(looks_like_confirmation(message), msg=message)
+
+
 class ActionCatalogTests(SimpleTestCase):
     def test_send_whatsapp_alias(self):
         self.assertEqual(resolve_action_alias("send_whatsapp"), "send_message")

@@ -10,8 +10,23 @@ import json
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from asgiref.sync import async_to_sync, sync_to_async
 from django.contrib.auth import get_user_model
+from django.db import connections
 from django.test import SimpleTestCase, TransactionTestCase, override_settings
+
+
+def run_with_db_cleanup(coro):
+    """Run a coroutine and release DB connections opened on its executor
+    thread, so Postgres can drop the test database at teardown."""
+
+    async def _with_cleanup():
+        try:
+            return await coro
+        finally:
+            await sync_to_async(connections.close_all)()
+
+    return async_to_sync(_with_cleanup)()
 
 
 # ---------------------------------------------------------------------------
@@ -338,7 +353,7 @@ class PendingApprovalRecordTests(TransactionTestCase):
 
     def test_false_without_pending_record(self):
         from orchestration.agent_loop import has_pending_agent_state
-        self.assertFalse(asyncio.run(has_pending_agent_state(1, self.user.id)))
+        self.assertFalse(run_with_db_cleanup(has_pending_agent_state(1, self.user.id)))
 
     def test_true_with_pending_record(self):
         from workflows.models import WorkflowApprovalRecord
@@ -351,7 +366,7 @@ class PendingApprovalRecordTests(TransactionTestCase):
             status='pending',
         )
         from orchestration.agent_loop import has_pending_agent_state
-        self.assertTrue(asyncio.run(has_pending_agent_state(1, self.user.id)))
+        self.assertTrue(run_with_db_cleanup(has_pending_agent_state(1, self.user.id)))
 
     def test_false_after_record_cancelled(self):
         from workflows.models import WorkflowApprovalRecord
@@ -366,7 +381,7 @@ class PendingApprovalRecordTests(TransactionTestCase):
         record.status = 'cancelled'
         record.save(update_fields=['status'])
         from orchestration.agent_loop import has_pending_agent_state
-        self.assertFalse(asyncio.run(has_pending_agent_state(1, self.user.id)))
+        self.assertFalse(run_with_db_cleanup(has_pending_agent_state(1, self.user.id)))
 
 
 # ---------------------------------------------------------------------------

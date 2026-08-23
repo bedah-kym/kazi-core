@@ -30,8 +30,17 @@ from unittest.mock import MagicMock, patch
 from django.contrib.auth import get_user_model
 from django.db import connections
 from django.test import TransactionTestCase, override_settings
+from django.utils import timezone
 
-from .models import DepositIntent, FeeSchedule, JournalEntry, LedgerAccount, LedgerEntry, PaymentRequest
+from .models import (
+    DepositIntent,
+    FeeSchedule,
+    JournalEntry,
+    LedgerAccount,
+    LedgerEntry,
+    PaymentRequest,
+    ReconciliationDiscrepancy,
+)
 from .services import InvoiceService, LedgerService, WalletService
 from users.models import Wallet, WalletTransaction
 
@@ -466,3 +475,120 @@ class DepositInitiationTests(TransactionTestCase):
         response = self._initiate()
         self.assertEqual(response.status_code, 200)
         self.assertEqual(DepositIntent.objects.count(), 0)
+
+
+class DepositLedgerPostingTests(TransactionTestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username='ledger-deposit-user', email='example@example.com', password='fake-token',
+        )
+        self.wallet = WalletService.get_or_create_user_wallet(self.user)
+
+    def _deposit(self):
+        FeeSchedule.objects.create(transaction_type='DEPOSIT', platform_fee=Decimal('25.00'))
+        return WalletService.process_deposit(self.user, Decimal('1000.00'), Decimal('30.00'), 'DEP-JOURNAL')
+
+    def test_deposit_posts_balanced_journal(self):
+        self._deposit()
+        journal = JournalEntry.objects.get(transaction_type='DEPOSIT')
+        self.assertTrue(journal.verify_balance())
+        self.assertEqual(journal.provider_reference, 'DEP-JOURNAL')
+        lines = {e.ledger_account.name: (e.amount, e.dr_cr) for e in journal.ledger_entries.all()}
+        self.assertEqual(lines['System IntaSend Wallet'], (Decimal('970.00'), 'DEBIT'))
+        self.assertEqual(lines['Platform Fee Revenue'], (Decimal('25.00'), 'CREDIT'))
+        self.assertEqual(
+            lines[f'Wallet Liability: {self.user.username}'], (Decimal('945.00'), 'CREDIT')
+        )
+
+    def test_deposit_replay_does_not_double_post_journal(self):
+        self._deposit()
+        WalletService.process_deposit(self.user, Decimal('1000.00'), Decimal('30.00'), 'DEP-JOURNAL')
+        self.assertEqual(JournalEntry.objects.filter(transaction_type='DEPOSIT').count(), 1)
+
+
+class WithdrawalLedgerPostingTests(TransactionTestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username='ledger-wd-user', email='example@example.com', password='fake-token',
+        )
+        self.wallet = WalletService.get_or_create_user_wallet(self.user)
+        _credit_balance(self.wallet, Decimal('500.00'))
+
+    def test_withdrawal_posts_balanced_journal(self):
+        WalletService.process_withdrawal(self.user, Decimal('120.00'), 'WD-JOURNAL')
+        journal = JournalEntry.objects.get(transaction_type='WITHDRAWAL')
+        self.assertTrue(journal.verify_balance())
+        self.assertEqual(journal.provider_reference, 'WD-JOURNAL')
+        lines = {e.ledger_account.name: (e.amount, e.dr_cr) for e in journal.ledger_entries.all()}
+        self.assertEqual(lines[f'Wallet Liability: {self.user.username}'], (Decimal('120.00'), 'DEBIT'))
+        self.assertEqual(lines['System IntaSend Wallet'], (Decimal('120.00'), 'CREDIT'))
+
+
+@override_settings(CHANNEL_LAYERS={"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}})
+class InvoiceJournalLinkTests(TransactionTestCase):
+    def setUp(self):
+        self.issuer = get_user_model().objects.create_user(
+            username='journal-inv-user', email='example@example.com', password='fake-token',
+        )
+        self.wallet = WalletService.get_or_create_user_wallet(self.issuer)
+        self.invoice = PaymentRequest.objects.create(
+            issuer=self.issuer,
+            amount=Decimal('500.00'),
+            description='journal invoice',
+            expires_at='2099-01-01T00:00:00Z',
+        )
+
+    def test_invoice_payment_links_journal_entry(self):
+        InvoiceService.process_invoice_payment(self.invoice.id, 'INV-JOURNAL')
+        self.invoice.refresh_from_db()
+        self.assertIsNotNone(self.invoice.journal_entry)
+        journal = self.invoice.journal_entry
+        self.assertEqual(journal.transaction_type, 'INVOICE_PAYMENT')
+        self.assertTrue(journal.verify_balance())
+        self.assertEqual(journal.provider_reference, 'INV-JOURNAL')
+
+
+class ReconcileDailyTests(TransactionTestCase):
+    def setUp(self):
+        self.asset, _ = LedgerAccount.objects.get_or_create(
+            name='System IntaSend Wallet',
+            defaults={'account_type': 'ASSET', 'currency': 'KES'},
+        )
+
+    def _run(self, details=None, credentials=True):
+        fake = MagicMock()
+        if details is not None:
+            fake.Wallets.return_value.details.return_value = details
+        env = {
+            'INTASEND_PUBLISHABLE_KEY': 'test-pk' if credentials else '',
+            'INTASEND_API_KEY': 'test-sk' if credentials else '',
+            'INTASEND_IS_TEST': 'true',
+        }
+        modules = {'intasend': fake} if credentials is not False else {}
+        with patch.dict(sys.modules, modules), patch.dict(os.environ, env):
+            LedgerService.reconcile_daily()
+
+    def test_discrepancy_recorded_when_provider_balance_differs(self):
+        Wallet.objects.none()
+        LedgerAccount.objects.filter(pk=self.asset.pk).update(balance=Decimal('1000.00'))
+        self._run({'available_balance': 900})
+        row = ReconciliationDiscrepancy.objects.get(date=timezone.now().date())
+        self.assertEqual(row.expected_balance, Decimal('1000.00'))
+        self.assertEqual(row.actual_balance, Decimal('900'))
+        self.assertEqual(row.difference, Decimal('100.00'))
+        self.assertEqual(row.severity, 'MEDIUM')
+
+    def test_critical_severity_for_large_gap(self):
+        LedgerAccount.objects.filter(pk=self.asset.pk).update(balance=Decimal('2000.00'))
+        self._run({'available_balance': 0})
+        row = ReconciliationDiscrepancy.objects.get(date=timezone.now().date())
+        self.assertEqual(row.severity, 'CRITICAL')
+
+    def test_no_discrepancy_when_balances_match(self):
+        LedgerAccount.objects.filter(pk=self.asset.pk).update(balance=Decimal('500.00'))
+        self._run({'available_balance': 500})
+        self.assertEqual(ReconciliationDiscrepancy.objects.count(), 0)
+
+    def test_missing_credentials_is_noop(self):
+        self._run(credentials=False)
+        self.assertEqual(ReconciliationDiscrepancy.objects.count(), 0)

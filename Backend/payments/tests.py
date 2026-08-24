@@ -41,7 +41,7 @@ from .models import (
     PaymentRequest,
     ReconciliationDiscrepancy,
 )
-from .services import InvoiceService, LedgerService, WalletService
+from .services import InvoiceService, LedgerService, WalletService, money
 from users.models import Wallet, WalletTransaction
 
 
@@ -476,6 +476,25 @@ class DepositInitiationTests(TransactionTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(DepositIntent.objects.count(), 0)
 
+    def test_tracking_id_owned_by_another_user_returns_409_and_keeps_owner(self):
+        other = get_user_model().objects.create_user(
+            username='other-initiator', email='other@example.com', password='fake-token',
+        )
+        WalletService.get_or_create_user_wallet(other)
+        DepositIntent.objects.create(
+            tracking_id='TCK-HIJACK', user=other, amount=Decimal('500.00'),
+        )
+        self.fake_intasend.APIService.return_value.collect.checkout.return_value = {
+            'url': 'https://sandbox.intasend.com/checkout/abc',
+            'invoice_id': 'TCK-HIJACK',
+        }
+
+        response = self._initiate()
+
+        self.assertEqual(response.status_code, 409)
+        intent = DepositIntent.objects.get(tracking_id='TCK-HIJACK')
+        self.assertEqual(intent.user_id, other.id)
+
 
 class DepositLedgerPostingTests(TransactionTestCase):
     def setUp(self):
@@ -504,6 +523,62 @@ class DepositLedgerPostingTests(TransactionTestCase):
         self._deposit()
         WalletService.process_deposit(self.user, Decimal('1000.00'), Decimal('30.00'), 'DEP-JOURNAL')
         self.assertEqual(JournalEntry.objects.filter(transaction_type='DEPOSIT').count(), 1)
+
+    def test_zero_platform_fee_still_posts_balanced_two_line_journal(self):
+        FeeSchedule.objects.update_or_create(
+            transaction_type='DEPOSIT', defaults={'platform_fee': Decimal('0.00')}
+        )
+        WalletService.process_deposit(self.user, Decimal('1000.00'), Decimal('30.00'), 'DEP-ZEROFEE')
+        journal = JournalEntry.objects.get(provider_reference='DEP-ZEROFEE')
+        self.assertTrue(journal.verify_balance())
+        lines = {e.ledger_account.name for e in journal.ledger_entries.all()}
+        self.assertEqual(len(lines), 2)
+        self.assertNotIn('Platform Fee Revenue', lines)
+
+    def test_deposit_credit_of_zero_rejected_not_zero_posted(self):
+        with self.assertRaises(ValueError):
+            WalletService.process_deposit(self.user, Decimal('80.00'), Decimal('30.00'), 'DEP-NIL')
+        self.assertEqual(JournalEntry.objects.count(), 0)
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.balance, Decimal('0.00'))
+        self.assertEqual(WalletTransaction.objects.count(), 0)
+
+    def test_float_gross_amount_is_quantized_exactly(self):
+        FeeSchedule.objects.update_or_create(
+            transaction_type='DEPOSIT', defaults={'platform_fee': Decimal('25.00')}
+        )
+        tx = WalletService.process_deposit(
+            self.user, 1000.555, 30.004, 'DEP-FLOAT'
+        )
+        self.assertEqual(tx.amount, Decimal('945.56'))
+        journal = JournalEntry.objects.get(provider_reference='DEP-FLOAT')
+        lines = {e.ledger_account.name: e.amount for e in journal.ledger_entries.all()}
+        self.assertEqual(lines['System IntaSend Wallet'], Decimal('970.56'))
+        self.assertEqual(lines[f'Wallet Liability: {self.user.username}'], Decimal('945.56'))
+
+    def test_negative_ledger_line_rejected_not_posted(self):
+        asset, _ = LedgerAccount.objects.get_or_create(
+            name='System IntaSend Wallet',
+            defaults={'account_type': 'ASSET', 'currency': 'KES'},
+        )
+        liability = LedgerAccount.objects.create(
+            name=f'Wallet Liability: {self.user.username}',
+            account_type='LIABILITY', user=self.user,
+        )
+        with self.assertRaises(ValueError):
+            LedgerService._build_entries([
+                (asset.id, 'DEBIT', Decimal('100.00')),
+                (liability.id, 'CREDIT', Decimal('-0.50')),
+            ])
+
+    def test_money_helper_rounds_float_noise_half_up(self):
+        self.assertEqual(money(2.675), Decimal('2.68'))
+        self.assertEqual(money('450.52'), Decimal('450.52'))
+        self.assertEqual(money(500), Decimal('500.00'))
+        with self.assertRaises(ValueError):
+            money('not-a-number')
+        with self.assertRaises(ValueError):
+            money(float('nan'))
 
 
 class WithdrawalLedgerPostingTests(TransactionTestCase):

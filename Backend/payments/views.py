@@ -16,7 +16,7 @@ import json
 import logging
 
 from .models import DepositIntent, PaymentRequest, PaymentNotification, FeeSchedule
-from .services import WalletService, InvoiceService
+from .services import WalletService, InvoiceService, money
 from users.models import WalletTransaction
 from users.decorators import workspace_required
 
@@ -126,7 +126,7 @@ def initiate_deposit(request):
         return JsonResponse({'error': 'Method not allowed'}, status=405)
 
     try:
-        amount = Decimal(request.POST.get('amount', 0))
+        amount = money(request.POST.get('amount', 0))
 
         if amount < Decimal('1.00'):
             return JsonResponse({'error': 'Minimum deposit is 1 KES'}, status=400)
@@ -162,10 +162,16 @@ def initiate_deposit(request):
             return JsonResponse({'error': 'Payment link not returned by gateway'}, status=502)
 
         if invoice_id:
-            DepositIntent.objects.update_or_create(
+            intent, created = DepositIntent.objects.get_or_create(
                 tracking_id=invoice_id,
                 defaults={'user': request.user, 'amount': amount},
             )
+            if not created and intent.user_id != request.user.id:
+                logger.error(
+                    f"Tracking id {invoice_id} already bound to user "
+                    f"{intent.user_id}; refusing to rebind to {request.user.id}"
+                )
+                return JsonResponse({'error': 'Tracking id conflict'}, status=409)
 
         return JsonResponse({
             'status': 'success',
@@ -205,7 +211,9 @@ def payment_callback(request):
         log_webhook_verification('intasend', True)
 
         # Parse webhook data
-        data = json.loads(raw_body)
+        # parse_float=Decimal keeps provider amounts out of binary-float
+        # territory before any arithmetic sees them
+        data = json.loads(raw_body, parse_float=Decimal)
 
         invoice_id = (
             data.get('invoice_id')
@@ -214,8 +222,8 @@ def payment_callback(request):
             or data.get('invoice')
         )
         state = data.get('state')
-        gross_amount = Decimal(str(data.get('value') or data.get('amount') or 0))
-        fee = Decimal(str(data.get('fee') or 0))
+        gross_amount = money(data.get('value') or data.get('amount') or 0)
+        fee = money(data.get('fee') or 0)
         api_ref = data.get('api_ref') or data.get('api_ref_id')
 
         invoice = None

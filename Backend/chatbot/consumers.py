@@ -89,36 +89,49 @@ class ChatConsumer(AsyncWebsocketConsumer):
             await self.close(code=4002)
             return
 
-        # 5. Join group FIRST
-        await self.channel_layer.group_add(self.room_group_name, self.channel_name)
+        # 5. Join group FIRST. A channel-layer outage must not kill the
+        # handshake — the socket stays up degraded (direct sends still work,
+        # group events are dropped until Redis recovers).
+        try:
+            await self.channel_layer.group_add(self.room_group_name, self.channel_name)
+        except Exception as exc:
+            logger.warning("Channel layer unavailable on connect (%s); joining room degraded", exc)
 
-        # 6. Update presence in Redis ATOMICALLY
-        redis = get_redis_connection("default")
-        key = f"online:{self.room_group_name}"
-        user = self.scope["user"].username
-
-        # Atomic presence update
-        await sync_to_async(redis.srem)(key, user)
-        await sync_to_async(redis.sadd)(key, user)
-
-        # Set last_seen timestamp
-        last_seen_key = f"lastseen:{user}"
         current_time = timezone.now().isoformat()
-        await sync_to_async(redis.set)(last_seen_key, current_time)
+
+        # 6. Update presence in Redis ATOMICALLY (best effort when Redis is down)
+        try:
+            redis = get_redis_connection("default")
+            key = f"online:{self.room_group_name}"
+            user = self.scope["user"].username
+
+            await sync_to_async(redis.srem)(key, user)
+            await sync_to_async(redis.sadd)(key, user)
+
+            last_seen_key = f"lastseen:{user}"
+            await sync_to_async(redis.set)(last_seen_key, current_time)
+        except Exception as exc:
+            logger.warning("Presence backend unavailable on connect (%s); presence degraded", exc)
+            redis = None
+            key = f"online:{self.room_group_name}"
+            user = self.scope["user"].username
 
         # 7. Accept connection
         await self.accept()
 
         # 8. Broadcast online status to ALL other users
-        await self.channel_layer.group_send(
-            self.room_group_name,
-            {
-                "type": "presence_update",
-                "user": user,
-                "status": "online",
-                "last_seen": current_time,
-            }
-        )
+        try:
+            await self.channel_layer.group_send(
+                self.room_group_name,
+                {
+                    "type": "presence_update",
+                    "user": user,
+                    "status": "online",
+                    "last_seen": current_time,
+                }
+            )
+        except Exception as exc:
+            logger.warning("Presence broadcast skipped (%s); room sees stale presence", exc)
 
         # 9. Small delay to ensure broadcast propagates
         try:
@@ -132,7 +145,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             participants = await self.get_chatroom_participants(current_chat)
 
             # Re-read Redis to get absolute latest state
-            raw_online = await sync_to_async(redis.smembers)(key)
+            raw_online = await sync_to_async(redis.smembers)(key) if redis is not None else set()
             online_set = set(u.decode() if isinstance(u, bytes) else u for u in raw_online)
 
             logger.debug(f"Building presence for {user}: {len(participants)} participants, {len(online_set)} online")
@@ -149,7 +162,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 is_online = uname in online_set
 
                 # Fetch last_seen from Redis
-                ls = await sync_to_async(redis.get)(f"lastseen:{uname}")
+                ls = await sync_to_async(redis.get)(f"lastseen:{uname}") if redis is not None else None
                 if isinstance(ls, bytes):
                     try:
                         ls = ls.decode()

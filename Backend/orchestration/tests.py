@@ -218,6 +218,184 @@ class SkillRegistryTests(SimpleTestCase):
                 self.assertIn("draft-skill", all_skills)
 
 
+def _end_turn():
+    from orchestration.test_agentic_scenarios import _make_llm_response, _text_block
+
+    return _make_llm_response([_text_block("Done.")], stop_reason="end_turn")
+
+
+class AgentCapsToggleLoopTests(SimpleTestCase):
+    """The install-level caps switch must actually lift budget checks in the
+    agent loops (parent iteration/tool/token caps, sub-agent caps) when
+    disabled from Settings > Capabilities."""
+
+    def _run(self, coro):
+        import asyncio
+
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
+
+    def _tool_use_response(self, i):
+        from orchestration.test_agentic_scenarios import (
+            _make_llm_response,
+            _text_block,
+            _tool_use_block,
+        )
+
+        return _make_llm_response(
+            [_text_block("Step."), _tool_use_block(f"t{i}", "get_weather", {})],
+            stop_reason="tool_use",
+            usage={"input_tokens": 10, "output_tokens": 5},
+        )
+
+    def _collect_loop_events(self):
+        from orchestration.agent_loop import run_agent_loop
+
+        async def _collect():
+            return [event async for event in run_agent_loop(
+                user_message="do things",
+                context={"user_id": 1, "room_id": 1, "username": "test"},
+            )]
+
+        return [e.kind for e in self._run(_collect())]
+
+    @patch("orchestration.agent_loop.enforce_agent_caps")
+    @patch("orchestration.agent_loop.MAX_TOOL_CALLS", 1)
+    @patch("orchestration.agent_loop.get_llm_client")
+    @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)
+    @patch("orchestration.agent_loop.cache")
+    def test_parent_loop_skips_tool_cap_when_disabled(self, mock_cache, mock_exec, mock_llm_client, mock_caps):
+        mock_cache.get.return_value = None
+        mock_exec.return_value = {"status": "success"}
+        mock_caps.return_value = False
+        mock_llm = MagicMock()
+        mock_llm.create_message = AsyncMock(side_effect=[
+            self._tool_use_response(1),
+            self._tool_use_response(2),
+            _end_turn(),
+        ])
+        mock_llm_client.return_value = mock_llm
+
+        kinds = self._collect_loop_events()
+        self.assertEqual(kinds.count("tool_result"), 2)
+
+    @patch("orchestration.agent_loop.enforce_agent_caps")
+    @patch("orchestration.agent_loop.MAX_TOOL_CALLS", 1)
+    @patch("orchestration.agent_loop.get_llm_client")
+    @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)
+    @patch("orchestration.agent_loop.cache")
+    def test_parent_loop_keeps_tool_cap_when_enabled(self, mock_cache, mock_exec, mock_llm_client, mock_caps):
+        mock_cache.get.return_value = None
+        mock_exec.return_value = {"status": "success"}
+        mock_caps.return_value = True
+        mock_llm = MagicMock()
+        mock_llm.create_message = AsyncMock(side_effect=[
+            self._tool_use_response(1),
+            self._tool_use_response(2),
+            _end_turn(),
+        ])
+        mock_llm_client.return_value = mock_llm
+
+        kinds = self._collect_loop_events()
+        self.assertEqual(kinds.count("tool_result"), 1)
+
+    @patch("orchestration.agent_loop.SUB_AGENT_MAX_TOOL_CALLS", 1)
+    @patch("orchestration.agent_loop.get_llm_client")
+    @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)
+    @patch("orchestration.agent_loop.update_memory_state", new=AsyncMock())
+    def test_sub_agent_skips_cap_when_parent_caps_disabled(self, mock_exec, mock_llm_client):
+        from orchestration.agent_loop import _run_sub_agent
+
+        mock_exec.return_value = {"status": "success"}
+
+        def _run_sub(**context_extra):
+            mock_llm = MagicMock()
+            mock_llm.create_message = AsyncMock(side_effect=[
+                self._tool_use_response(1),
+                self._tool_use_response(2),
+                _end_turn(),
+            ])
+            mock_llm_client.return_value = mock_llm
+            context = {"user_id": 1, "room_id": 1}
+            context.update(context_extra)
+            return self._run(_run_sub_agent(
+                {"task": "Do the thing"},
+                context,
+                None,
+                "system prompt",
+                [{"name": "get_weather", "input_schema": {}}],
+            ))
+
+        result = _run_sub(caps_enforced=False)
+        self.assertEqual(len(result["tools_used"]), 2)
+
+        result = _run_sub()
+        self.assertEqual(len(result["tools_used"]), 1)
+
+
+class RouterCapsToggleTests(SimpleTestCase):
+    """Disabling the caps switch lifts the hourly request limit."""
+
+    def _run(self, coro):
+        import asyncio
+
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
+
+    def _router(self):
+        from orchestration.mcp_router import MCPRouter
+
+        return object.__new__(MCPRouter)
+
+    def _counting_redis(self):
+        counter = {"n": 0}
+        conn = MagicMock()
+
+        def _incr(key):
+            counter["n"] += 1
+            return counter["n"]
+
+        conn.incr = Mock(side_effect=_incr)
+        conn.expire = Mock(return_value=True)
+        return conn
+
+    def _validate_n_times(self, router, n):
+        from orchestration.mcp_router import MCPRouter
+
+        MCPRouter._local_rate_counters.clear()
+        conn = self._counting_redis()
+
+        async def _prefs(user_id):
+            return dict(MCPRouter.DEFAULT_CAPABILITY_PREFS)
+
+        with patch("orchestration.mcp_router.get_redis_connection", return_value=conn), \
+                patch.object(type(router), "_get_user_prefs", new=AsyncMock(side_effect=_prefs)), \
+                patch("orchestration.mcp_router.user_has_room_access", new=AsyncMock(return_value=True)):
+            return [
+                self._run(router._validate_request(
+                    {"action": "get_weather"}, {"user_id": 7, "room_id": 1},
+                ))
+                for _ in range(n)
+            ]
+
+    @patch("orchestration.mcp_router.enforce_agent_caps", new=MagicMock(return_value=False))
+    def test_rate_limit_lifted_when_caps_disabled(self):
+        outcomes = self._validate_n_times(self._router(), 120)
+        self.assertTrue(all(o["valid"] for o in outcomes))
+
+    @patch("orchestration.mcp_router.enforce_agent_caps", new=MagicMock(return_value=True))
+    def test_rate_limit_still_applies_when_caps_enabled(self):
+        outcomes = self._validate_n_times(self._router(), 105)
+        self.assertTrue(outcomes[0]["valid"])
+        self.assertFalse(outcomes[100]["valid"])
+
+
 class Te2FailClosedTests(SimpleTestCase):
     """TE-2: a failed capability-preference lookup must never widen what a
     user can do. Money/messaging gates fall back to denied; the rate-limit
@@ -333,6 +511,7 @@ class Te2FailClosedTests(SimpleTestCase):
         from orchestration.mcp_router import MCPRouter
 
         router = object.__new__(MCPRouter)
+        MCPRouter._local_rate_counters.clear()
         with patch(
             "orchestration.mcp_router.get_redis_connection",
             side_effect=ConnectionError("redis down"),

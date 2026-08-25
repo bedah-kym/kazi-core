@@ -303,3 +303,40 @@ def get_user_preferences(user_id: Optional[int]) -> Dict[str, Any]:
         timezone_name=getattr(profile, "timezone", "") or "",
         location=getattr(profile, "location", "") or "",
     )
+
+
+ENFORCE_AGENT_CAPS_PREF_KEY = "enforce_agent_caps"
+
+
+def enforce_agent_caps(user_id: Optional[int]) -> bool:
+    """Install-level kill switch for agent budget caps (iterations, token
+    budgets, tool-call limits, router rate limits).
+
+    Stored under notification_preferences["enforce_agent_caps"]; defaults to
+    ON. Solo/self-hosted operators may turn it off in Settings > Capabilities
+    so long-running agent loops are never cut short. Any lookup failure keeps
+    caps ON — the switch can only ever loosen limits deliberately.
+    """
+    if user_id is None:
+        return True
+
+    from django.core.cache import cache
+
+    cache_key = f"agent_caps_enforced:{user_id}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return bool(cached)
+
+    try:
+        from django.contrib.auth import get_user_model
+
+        User = get_user_model()
+        user = User.objects.get(pk=user_id)
+        profile = getattr(user, "profile", None)
+        prefs = profile.notification_preferences if profile and profile.notification_preferences else {}
+        enforced = bool(prefs.get(ENFORCE_AGENT_CAPS_PREF_KEY, True))
+    except Exception:
+        return True
+
+    cache.set(cache_key, enforced, 60)
+    return enforced

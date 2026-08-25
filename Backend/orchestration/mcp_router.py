@@ -44,6 +44,7 @@ from orchestration.action_catalog import (
     validate_router_mappings,
 )
 from orchestration.contracts import build_orchestration_result
+from orchestration.user_preferences import enforce_agent_caps
 from .base_connector import BaseConnector
 from .security_policy import (
     conservative_capability_prefs,
@@ -320,7 +321,8 @@ class MCPRouter:
 
         current = await self._count_request(cache_key)
 
-        if current >= self.RATE_LIMIT_PER_HOUR:
+        caps_enforced = await sync_to_async(enforce_agent_caps)(user_id)
+        if caps_enforced and current >= self.RATE_LIMIT_PER_HOUR:
             return {"valid": False, "reason": "Rate limit exceeded. Try again in an hour."}
 
         action = resolve_action_alias(intent.get("action"))

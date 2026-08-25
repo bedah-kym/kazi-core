@@ -56,6 +56,7 @@ def settings(request):
         "allow_whatsapp": True,
         "allow_email": True,
         "allow_calendar": True,
+        "enforce_agent_caps": True,
     }
 
     capability_presets = {
@@ -228,8 +229,14 @@ def settings(request):
             else:
                 prefs.pop("proactive_snooze_until", None)
 
+            # Install-level kill switch for agent budget caps — applies
+            # regardless of mode so presets never silently re-enable it.
+            prefs["enforce_agent_caps"] = request.POST.get('enforce_agent_caps') == 'on'
+
             profile.notification_preferences = prefs
             profile.save(update_fields=['notification_preferences'])
+            from django.core.cache import cache
+            cache.delete(f"agent_caps_enforced:{request.user.id}")
             messages.success(request, 'Capability settings updated.')
             return redirect('/accounts/settings/#capabilities')
 

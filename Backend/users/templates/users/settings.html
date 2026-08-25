@@ -462,6 +462,16 @@
                                     {% if capability_prefs.manager_llm_enabled %}checked{% endif %}>
                                 <label class="form-check-label" for="managerToggle">Manager LLM fallback</label>
                             </div>
+                            <div class="form-check form-switch mb-2">
+                                <input class="form-check-input" type="checkbox" id="capsToggle" name="enforce_agent_caps"
+                                    {% if capability_prefs.enforce_agent_caps %}checked{% endif %}>
+                                <label class="form-check-label" for="capsToggle">Enforce agent budget caps</label>
+                                <div class="form-text">
+                                    Stops long-running agent tasks at iteration, token and tool-call
+                                    budgets, plus hourly request limits. Leave on for shared installs;
+                                    single-operator installs may turn this off so tasks are never cut short.
+                                </div>
+                            </div>
                             <div class="mt-2">
                                 <label class="form-label small text-muted">Nudge frequency</label>
                                 <select class="form-select form-select-sm" name="nudge_frequency">

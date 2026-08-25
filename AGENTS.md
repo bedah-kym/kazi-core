@@ -9,7 +9,7 @@ This file is the contract: read it before editing. If you change behavior descri
 ## 1. Project at a glance
 
 - **What it is:** A self-hostable Django + Channels backend that runs an agent loop, plans multi-step workflows, executes tool calls through a pluggable connector registry, and persists conversation memory.
-- **Language / runtime:** Python 3.11, Django 5.x (ASGI). Postgres + Redis required in production; SQLite works for unit tests.
+- **Language / runtime:** Python 3.11–3.12 (see §6), Django 5.x (ASGI). Postgres + Redis required in production; SQLite works for unit tests.
 - **Async model:** ASGI (Daphne / Uvicorn) for HTTP + WebSockets via Django Channels. Celery + Beat for background work. Optional Temporal for durable workflows.
 - **Open vs in-house:** This repo (`kazi-core`) ships the **agent core**. The maintainer also runs an in-house SaaS called **Mathia OS** built on top of this core. Anything Mathia-specific is held back from this branch. If you find a path that is intentionally `.gitignore`d (e.g. `frontend/`, parts of `docs/`), assume it belongs to Mathia and is not yours to recreate.
 
@@ -85,10 +85,17 @@ docker compose exec web python Backend/manage.py createsuperuser
 ```powershell
 python -m venv .venv
 . .venv/Scripts/Activate.ps1
-pip install -r requirements.txt
+pip install -r requirements.lock
 python Backend/manage.py migrate
 python Backend/manage.py runserver
 ```
+
+`requirements.txt` holds the declared minimums; `requirements.lock` is the
+compiled, fully-pinned set CI tests against (regenerate with
+`uv pip compile requirements.txt --universal --no-annotate --no-header
+-o requirements.lock`). The flat format is deliberate: it is byte-identical no
+matter which OS regenerates it. If you edit `requirements.txt`, recompile the
+lock in the same commit — CI fails on a stale lock.
 
 You need Postgres + Redis running and a `.env` in the repo root (one level above `Backend/`). Required keys: `DJANGO_SECRET_KEY`, `DATABASE_URL`, `REDIS_URL`, `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`. Optional: `ANTHROPIC_API_KEY`, `HF_API_TOKEN`, plus per-connector keys (`OPENWEATHER_API_KEY`, `CALENDLY_CLIENT_*`, etc.).
 
@@ -136,6 +143,12 @@ Keep `generate_text` and `stream_text` semantics stable — `mcp_router.py`, `ag
 python Backend/manage.py check
 python Backend/manage.py test
 ```
+
+**Supported Python matrix:** 3.11 and 3.12 (declared in `pyproject.toml` as
+`>=3.11,<3.13`). Python 3.13/3.14 are **not** supported yet — Django 5.x and
+several pinned deps are unvalidated there; treat an upgrade as a deliberate,
+CI-validated change, not drift. CI installs from `requirements.lock`, so the
+locked set is what every lane actually tests.
 
 **Lint + security:**
 ```bash

@@ -37,6 +37,10 @@ logger = logging.getLogger(__name__)
 
 MAX_ITERATIONS = 10
 MAX_TOOL_CALLS = 15
+# Backstop when the install-level caps toggle is OFF (Settings > Capabilities):
+# "unlimited" means 10k, never infinite — a runaway loop must always terminate.
+HARD_CAP_ITERATIONS = 10000
+HARD_CAP_TOOL_CALLS = 10000
 MAX_RETRIES_PER_TOOL = 2
 TOOL_TIMEOUT_SECONDS = 30
 LOOP_TIMEOUT_SECONDS = 120
@@ -736,8 +740,9 @@ async def _execute_scoped_tool_calls(
     """
     result_blocks = []
     caps_enforced = context.get("caps_enforced", True)
+    effective_cap = SUB_AGENT_MAX_TOOL_CALLS if caps_enforced else HARD_CAP_TOOL_CALLS
     for tc in tool_calls:
-        if caps_enforced and len(sub_tool_log) >= SUB_AGENT_MAX_TOOL_CALLS:
+        if len(sub_tool_log) >= effective_cap:
             return result_blocks, True
 
         # Sub-agents cannot pause for confirmation; block high-risk actions.
@@ -807,10 +812,11 @@ async def _run_sub_agent(
     completed = False
 
     caps_enforced = context.get("caps_enforced", True)
-    max_iterations = SUB_AGENT_MAX_ITERATIONS if caps_enforced else float("inf")
+    max_iterations = SUB_AGENT_MAX_ITERATIONS if caps_enforced else HARD_CAP_ITERATIONS
+    tool_call_cap = SUB_AGENT_MAX_TOOL_CALLS if caps_enforced else HARD_CAP_TOOL_CALLS
 
     while iteration < max_iterations:
-        if caps_enforced and len(sub_tool_log) >= SUB_AGENT_MAX_TOOL_CALLS:
+        if len(sub_tool_log) >= tool_call_cap:
             stopped_reason = "max_tool_calls"
             break
 
@@ -1004,7 +1010,9 @@ async def run_agent_loop(
         await sync_to_async(enforce_agent_caps)(user_id),
     )
     context["caps_enforced"] = caps_enforced
-    max_iterations = MAX_ITERATIONS if caps_enforced else float("inf")
+    max_iterations = MAX_ITERATIONS if caps_enforced else HARD_CAP_ITERATIONS
+    tool_call_cap = MAX_TOOL_CALLS if caps_enforced else HARD_CAP_TOOL_CALLS
+    timeout_cap = LOOP_TIMEOUT_SECONDS if caps_enforced else None
 
     # Build tool definitions (filtered by user capabilities)
     tools = get_tool_definitions(
@@ -1121,9 +1129,9 @@ async def run_agent_loop(
     #  Main ReAct loop                                                    #
     # ------------------------------------------------------------------ #
     while state.iteration < max_iterations:
-        # Timeout check
+        # Timeout check (hard backstop only when caps are enforced)
         elapsed = time.monotonic() - state.start_time
-        if caps_enforced and elapsed > LOOP_TIMEOUT_SECONDS:
+        if timeout_cap is not None and elapsed > timeout_cap:
             yield AgentEvent("error", {
                 "message": "I ran out of time on this request. "
                            "Here's what I managed so far.",
@@ -1131,7 +1139,7 @@ async def run_agent_loop(
             break
 
         # Tool call budget check
-        if caps_enforced and state.tool_call_count >= MAX_TOOL_CALLS:
+        if state.tool_call_count >= tool_call_cap:
             yield AgentEvent("error", {
                 "message": "I've reached the maximum number of tool calls "
                            "for this request.",

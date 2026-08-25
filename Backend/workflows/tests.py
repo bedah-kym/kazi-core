@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from orchestration.workflow_planner import execute_adhoc_workflow
@@ -18,7 +19,9 @@ from workflows.models import (
     WorkflowTrigger,
     UserWorkflow,
 )
-from workflows.tasks import replay_deferred_workflows
+from workflows.tasks import replay_deferred_workflows, sweep_stuck_approvals
+
+from datetime import timedelta
 
 
 User = get_user_model()
@@ -373,6 +376,203 @@ class DeferredReplayTaskTests(TestCase):
         self.assertEqual(deferred.status, "abandoned")
         self.assertTrue(deferred.dead_letter_reason)
         self.assertTrue(deferred.recovery_hint)
+
+
+class SweepStuckApprovalsTaskTests(TestCase):
+    """F2.2: approvals orphaned by a dead agent loop / Temporal worker must be
+    swept to a terminal status instead of sitting pending forever."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="sweep-user", email="sweep@example.com", password="secret")
+        self.workflow = UserWorkflow.objects.create(
+            user=self.user,
+            name="Sweep workflow",
+            description="Approval sweep",
+            definition={
+                "workflow_name": "Sweep workflow",
+                "workflow_description": "Approval sweep",
+                "triggers": [],
+                "steps": [],
+            },
+        )
+
+    def _make_execution(self, suffix, **overrides):
+        fields = dict(
+            workflow=self.workflow,
+            temporal_workflow_id=f"wf-sweep-{suffix}",
+            trigger_type="manual",
+            trigger_data={},
+            status="waiting",
+            waiting_on="approval",
+        )
+        fields.update(overrides)
+        return WorkflowExecution.objects.create(**fields)
+
+    def _make_approval(self, execution=None, expires_at=None, kind="workflow", room_id=None):
+        return WorkflowApprovalRecord.objects.create(
+            workflow=self.workflow if kind == "workflow" else None,
+            execution=execution if kind == "workflow" else None,
+            requested_by=self.user,
+            kind=kind,
+            room_id=(
+                room_id
+                if room_id is not None
+                else (WorkflowApprovalRecord.objects.count() + 100 if kind == "agent_loop" else None)
+            ),
+            step_id=f"step_{kind}_{expires_at and 'expired' or 'live'}",
+            service="gmail",
+            action="send_email",
+            status="pending",
+            expires_at=expires_at,
+        )
+
+    def test_expired_agent_loop_approval_is_timed_out(self):
+        stale = self._make_approval(expires_at=timezone.now() - timedelta(seconds=1), kind="agent_loop")
+        fresh = self._make_approval(expires_at=timezone.now() + timedelta(hours=1), kind="agent_loop")
+
+        result = sweep_stuck_approvals()
+
+        self.assertEqual(result["swept"], 1)
+        stale.refresh_from_db()
+        fresh.refresh_from_db()
+        self.assertEqual(stale.status, "timed_out")
+        self.assertIsNotNone(stale.reviewed_at)
+        self.assertTrue(stale.review_comment)
+        self.assertEqual(fresh.status, "pending")
+
+    def test_expired_workflow_approval_fails_stuck_execution(self):
+        execution = self._make_execution("exec-1")
+        approval = self._make_approval(execution=execution, expires_at=timezone.now() - timedelta(seconds=1))
+        execution.pending_approval = approval
+        execution.save(update_fields=["pending_approval"])
+
+        result = sweep_stuck_approvals()
+
+        self.assertEqual(result["swept"], 1)
+        self.assertEqual(result["failed_executions"], 1)
+        approval.refresh_from_db()
+        execution.refresh_from_db()
+        self.assertEqual(approval.status, "timed_out")
+        self.assertEqual(execution.status, "failed")
+        self.assertIsNone(execution.pending_approval)
+        self.assertFalse(execution.waiting_on)
+        self.assertTrue(execution.failure_summary)
+        self.assertIn("rerun", (execution.recovery_suggestion or "").lower())
+
+    def test_unexpired_and_recently_created_approvals_are_untouched(self):
+        live_dated = self._make_execution("exec-live")
+        live_approval = self._make_approval(
+            execution=live_dated, expires_at=timezone.now() + timedelta(minutes=30)
+        )
+        no_expiry_recent = self._make_approval(kind="agent_loop", expires_at=None)
+
+        result = sweep_stuck_approvals()
+
+        self.assertEqual(result["swept"], 0)
+        live_approval.refresh_from_db()
+        no_expiry_recent.refresh_from_db()
+        live_dated.refresh_from_db()
+        self.assertEqual(live_approval.status, "pending")
+        self.assertEqual(no_expiry_recent.status, "pending")
+        self.assertEqual(live_dated.status, "waiting")
+
+    def test_waiting_execution_without_swept_approval_is_not_failed(self):
+        execution = self._make_execution("exec-other")
+        approval = self._make_approval(execution=execution, expires_at=timezone.now() + timedelta(days=7))
+        execution.pending_approval = approval
+        execution.save(update_fields=["pending_approval"])
+
+        sweep_stuck_approvals()
+
+        execution.refresh_from_db()
+        self.assertEqual(execution.status, "waiting")
+
+
+class TemporalDeadHandleApiTests(TestCase):
+    """F2.1: REST confirm/cancel against a dead Temporal handle returns 409
+    instead of hanging or surfacing a generic 500."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="dead-handle-user", email="dh@example.com", password="secret")
+        self.client.force_authenticate(self.user)
+        self.workflow = UserWorkflow.objects.create(
+            user=self.user,
+            name="Dead handle workflow",
+            description="409 guard",
+            definition={
+                "workflow_name": "Dead handle workflow",
+                "workflow_description": "409 guard",
+                "triggers": [],
+                "steps": [],
+            },
+        )
+
+    def _waiting_execution_with_pending_approval(self, suffix):
+        execution = WorkflowExecution.objects.create(
+            workflow=self.workflow,
+            temporal_workflow_id=f"wf-dead-{suffix}",
+            temporal_run_id=f"run-{suffix}",
+            trigger_type="manual",
+            trigger_data={},
+            status="waiting",
+            waiting_on="approval",
+        )
+        approval = WorkflowApprovalRecord.objects.create(
+            workflow=self.workflow,
+            execution=execution,
+            requested_by=self.user,
+            step_id="email_step",
+            service="gmail",
+            action="send_email",
+            status="pending",
+        )
+        execution.pending_approval = approval
+        execution.save(update_fields=["pending_approval"])
+        return execution
+
+    def test_approve_returns_409_when_temporal_dead(self):
+        execution = self._waiting_execution_with_pending_approval("approve")
+
+        with patch(
+            "workflows.views.submit_execution_approval",
+            new=AsyncMock(side_effect=RuntimeError("workflow execution already completed")),
+        ):
+            response = self.client.post(f"/api/workflows/executions/{execution.id}/approve/", {}, format="json")
+
+        self.assertEqual(response.status_code, 409)
+        payload = response.json()
+        self.assertIn("Temporal", payload["error"])
+        self.assertEqual(payload["detail"], "workflow execution already completed")
+
+    def test_reject_returns_409_when_temporal_dead(self):
+        execution = self._waiting_execution_with_pending_approval("reject")
+
+        with patch(
+            "workflows.views.submit_execution_approval",
+            new=AsyncMock(side_effect=OSError("connection refused")),
+        ):
+            response = self.client.post(f"/api/workflows/executions/{execution.id}/reject/", {}, format="json")
+
+        self.assertEqual(response.status_code, 409)
+
+    def test_cancel_returns_409_when_temporal_dead(self):
+        execution = WorkflowExecution.objects.create(
+            workflow=self.workflow,
+            temporal_workflow_id="wf-dead-cancel",
+            temporal_run_id="run-cancel",
+            trigger_type="manual",
+            trigger_data={},
+            status="running",
+        )
+
+        with patch(
+            "workflows.views.request_execution_cancel",
+            new=AsyncMock(side_effect=RuntimeError("event loop closed")),
+        ):
+            response = self.client.post(f"/api/workflows/executions/{execution.id}/cancel/", {}, format="json")
+
+        self.assertEqual(response.status_code, 409)
 
 
 class SeedDemoWorkflowCommandTests(TestCase):

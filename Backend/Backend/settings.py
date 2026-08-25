@@ -274,6 +274,7 @@ else:
 MODERATION_FLUSH_SECONDS = int(os.environ.get('MODERATION_FLUSH_SECONDS', 600))
 REMINDER_SWEEP_SECONDS = int(os.environ.get('REMINDER_SWEEP_SECONDS', 3600))
 WORKFLOW_REPLAY_SCHEDULE_SECONDS = int(os.environ.get('WORKFLOW_REPLAY_SCHEDULE_SECONDS', 300))
+WORKFLOW_APPROVAL_SWEEP_SECONDS = int(os.environ.get('WORKFLOW_APPROVAL_SWEEP_SECONDS', 300))
 
 CELERY_BEAT_SCHEDULE = {
     'nightly_ledger_reconciliation': {
@@ -295,6 +296,10 @@ CELERY_BEAT_SCHEDULE = {
     'send-trial-summary': {
         'task': 'users.tasks.send_trial_summary_task',
         'schedule': crontab(hour=7, minute=0),  # every day at 07:00
+    },
+    'sweep-stuck-approvals': {
+        'task': 'workflows.tasks.sweep_stuck_approvals',
+        'schedule': float(WORKFLOW_APPROVAL_SWEEP_SECONDS),
     },
 }
 

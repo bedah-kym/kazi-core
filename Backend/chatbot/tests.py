@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
-from django.test import SimpleTestCase, TransactionTestCase
+from django.test import SimpleTestCase, TransactionTestCase, override_settings
 
 from orchestration.coordinator import OrchestrationResult
 
@@ -217,3 +217,88 @@ class AgentLoopLockTests(SimpleTestCase):
 
         self.assertEqual(_agent_loop_locks, {})
         self.assertEqual(_agent_loop_lock_refs, {})
+
+
+class ChatConsumerRedisOutageTests(SimpleTestCase):
+    """F7.2: a Redis/channel-layer outage must not kill the WS handshake.
+
+    The consumer accepts the connection degraded — direct sends still work,
+    group events and presence are best-effort until Redis recovers.
+    """
+
+    def _make_consumer(self):
+        consumer = ChatConsumer()
+        consumer.scope = {
+            "user": MagicMock(is_authenticated=True, username="alice"),
+            "url_route": {"kwargs": {"room_name": "1"}},
+        }
+        consumer.channel_layer = MagicMock()
+        consumer.channel_layer.group_add = AsyncMock()
+        consumer.channel_layer.group_send = AsyncMock()
+        consumer.channel_name = "test-channel"
+        consumer.accept = AsyncMock()
+        consumer.close = AsyncMock()
+        consumer.send = AsyncMock()
+        consumer.get_chatroom_for_user = AsyncMock(return_value=MagicMock())
+        consumer.initialize_secure_session = AsyncMock(return_value=True)
+        consumer.get_chatroom_participants = AsyncMock(return_value=[])
+        return consumer
+
+    def test_connect_accepts_when_channel_layer_down(self):
+        async_to_sync(self._connect_channel_layer_down)()
+
+    async def _connect_channel_layer_down(self):
+        consumer = self._make_consumer()
+        consumer.channel_layer.group_add = AsyncMock(side_effect=ConnectionError("redis down"))
+        consumer.channel_layer.group_send = AsyncMock(side_effect=ConnectionError("redis down"))
+
+        with patch(
+            "chatbot.consumers.get_redis_connection",
+            side_effect=ConnectionError("redis down"),
+        ):
+            await consumer.connect()
+
+        consumer.accept.assert_awaited_once()
+        consumer.close.assert_not_awaited()
+        snapshot = json.loads(consumer.send.await_args.kwargs["text_data"])
+        self.assertEqual(snapshot["command"], "presence_snapshot")
+
+    def test_connect_accepts_and_still_broadcasts_presence_when_only_redis_down(self):
+        async_to_sync(self._connect_only_redis_down)()
+
+    async def _connect_only_redis_down(self):
+        consumer = self._make_consumer()
+
+        with patch(
+            "chatbot.consumers.get_redis_connection",
+            side_effect=ConnectionError("connection refused"),
+        ):
+            await consumer.connect()
+
+        consumer.accept.assert_awaited_once()
+        consumer.close.assert_not_awaited()
+        consumer.channel_layer.group_send.assert_awaited_once()
+        self.assertEqual(consumer.channel_layer.group_send.await_args[0][0], "chat_1")
+
+    def test_default_cache_configured_to_ignore_redis_exceptions(self):
+        from django.conf import settings
+
+        self.assertTrue(settings.REDIS_CACHE_IGNORE_EXCEPTIONS)
+
+    @override_settings(CACHES={
+        "default": {
+            "BACKEND": "django_redis.cache.RedisCache",
+            "LOCATION": "redis://127.0.0.1:1/9",
+            "OPTIONS": {
+                "CLIENT_CLASS": "django_redis.client.DefaultClient",
+                "IGNORE_EXCEPTIONS": True,
+                "CONNECTION_POOL_KWARGS": {"socket_connect_timeout": 0.2},
+            },
+        },
+    })
+    def test_cache_reads_and_writes_survive_unreachable_redis(self):
+        from django.core.cache import cache
+
+        self.assertIsNone(cache.get("ws-degrade-probe"))
+        self.assertFalse(cache.set("ws-degrade-probe", 1, timeout=10))
+        self.assertIsNone(cache.get("ws-degrade-probe"))

@@ -7,6 +7,7 @@ from django.conf import settings
 from django.core.management.base import BaseCommand
 
 from orchestration.intent_parser import parse_intent
+from orchestration.security_policy import is_prompt_injection, should_block_message
 from orchestration.workflow_planner import plan_user_request
 
 
@@ -73,9 +74,23 @@ class Command(BaseCommand):
             expected_mode = scenario.get("expected_mode")
             expected_actions = scenario.get("expected_actions") or []
             expected_intent_action = scenario.get("expected_intent_action")
+            expected_injection = scenario.get("expected_injection")
+            expected_blocked = scenario.get("expected_blocked")
 
             passed = True
             details: List[str] = []
+
+            if expected_injection is not None:
+                actual_injection = is_prompt_injection(message)
+                if actual_injection != expected_injection:
+                    passed = False
+                    details.append(f"injection {actual_injection} != {expected_injection}")
+
+            if expected_blocked is not None:
+                actual_blocked = should_block_message(message)
+                if actual_blocked != expected_blocked:
+                    passed = False
+                    details.append(f"blocked {actual_blocked} != {expected_blocked}")
 
             if expected_mode or expected_actions:
                 plan = async_to_sync(plan_user_request)(

@@ -1,3 +1,9 @@
+﻿import json
+import os
+from io import StringIO
+
+from django.conf import settings
+from django.core.management import call_command
 from django.test import SimpleTestCase, override_settings
 
 from asgiref.sync import async_to_sync
@@ -8,7 +14,13 @@ from orchestration.action_catalog import (
     get_action_definition,
     resolve_action_alias,
 )
-from orchestration.security_policy import sanitize_parameters, should_block_action
+from orchestration.security_policy import (
+    _INJECTION_PATTERNS,
+    is_prompt_injection,
+    sanitize_parameters,
+    should_block_action,
+    should_block_message,
+)
 
 
 class ConfirmationMatchingTests(SimpleTestCase):
@@ -216,6 +228,70 @@ class SkillRegistryTests(SimpleTestCase):
                 all_skills = {s["name"] for s in discover_skills(include_inactive=True)}
                 self.assertNotIn("draft-skill", active)
                 self.assertIn("draft-skill", all_skills)
+
+
+class InjectionCorpusTests(SimpleTestCase):
+    """The golden eval corpus must stay in lockstep with the prompt-injection
+    detector: every pattern family has a positive case, and benign messages
+    stay clean. Locks the detector against silent regressions in either
+    direction."""
+
+    def _scenarios(self):
+        path = os.path.join(settings.BASE_DIR, "orchestration", "eval", "golden_scenarios.json")
+        with open(path, "r", encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def test_corpus_matches_detector(self):
+        for scenario in self._scenarios():
+            if "expected_injection" not in scenario:
+                continue
+            actual = is_prompt_injection(scenario["message"])
+            self.assertEqual(
+                actual, scenario["expected_injection"], msg=scenario["id"],
+            )
+            if "expected_blocked" in scenario:
+                self.assertEqual(
+                    should_block_message(scenario["message"]),
+                    scenario["expected_blocked"],
+                    msg=scenario["id"],
+                )
+
+    def test_every_injection_pattern_has_a_positive_case(self):
+        scenarios = [
+            s for s in self._scenarios() if s.get("expected_injection") is True
+        ]
+        import re
+
+        for pattern in _INJECTION_PATTERNS:
+            regex = re.compile(pattern, re.IGNORECASE)
+            self.assertTrue(
+                any(regex.search(s["message"]) for s in scenarios),
+                msg=f"no corpus case exercises pattern: {pattern}",
+            )
+
+    def test_eval_runner_passes_whole_corpus(self):
+        out = StringIO()
+        call_command("run_golden_eval", stdout=out)
+        output = out.getvalue()
+        self.assertIn("Failed: 0", output)
+        self.assertIn("[PASS] inj_ignore_instructions_email", output)
+
+    def test_eval_runner_flags_injection_mismatch(self):
+        import tempfile
+
+        broken = [
+            {"id": "bad_case", "message": "What is the weather today?", "expected_injection": True},
+        ]
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
+            json.dump(broken, handle)
+            path = handle.name
+        try:
+            out = StringIO()
+            call_command("run_golden_eval", path=path, stdout=out)
+            self.assertIn("Failed: 1", out.getvalue())
+            self.assertIn("injection False != True", out.getvalue())
+        finally:
+            os.unlink(path)
 
 
 def _end_turn():

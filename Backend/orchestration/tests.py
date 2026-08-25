@@ -353,21 +353,28 @@ class RouterCapsToggleTests(SimpleTestCase):
 
         return object.__new__(MCPRouter)
 
-    def _counting_cache(self):
+    def _counting_redis(self):
         counter = {"n": 0}
-        fake_cache = MagicMock()
-        fake_cache.get = Mock(side_effect=lambda key: counter["n"])
-        fake_cache.set = Mock(
-            side_effect=lambda key, val, ttl=None: counter.__setitem__("n", val)
-        )
-        return fake_cache
+        conn = MagicMock()
+
+        def _incr(key):
+            counter["n"] += 1
+            return counter["n"]
+
+        conn.incr = Mock(side_effect=_incr)
+        conn.expire = Mock(return_value=True)
+        return conn
 
     def _validate_n_times(self, router, n):
+        from orchestration.mcp_router import MCPRouter
+
+        MCPRouter._local_rate_counters.clear()
+        conn = self._counting_redis()
+
         async def _prefs(user_id):
-            from orchestration.mcp_router import MCPRouter
             return dict(MCPRouter.DEFAULT_CAPABILITY_PREFS)
 
-        with patch("orchestration.mcp_router.cache", new=self._counting_cache()), \
+        with patch("orchestration.mcp_router.get_redis_connection", return_value=conn), \
                 patch.object(type(router), "_get_user_prefs", new=AsyncMock(side_effect=_prefs)), \
                 patch("orchestration.mcp_router.user_has_room_access", new=AsyncMock(return_value=True)):
             return [
@@ -504,6 +511,7 @@ class Te2FailClosedTests(SimpleTestCase):
         from orchestration.mcp_router import MCPRouter
 
         router = object.__new__(MCPRouter)
+        MCPRouter._local_rate_counters.clear()
         with patch(
             "orchestration.mcp_router.get_redis_connection",
             side_effect=ConnectionError("redis down"),

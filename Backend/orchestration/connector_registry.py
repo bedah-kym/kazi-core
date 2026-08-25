@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 # Singleton caches
 _discovered_connectors: Optional[Dict[str, Any]] = None
 _registered_catalog_entries: List[Dict[str, Any]] = []
+_contract_violations: List[Dict[str, Any]] = []
 
 
 def _env_flag_enabled(name: str, default: bool = False) -> bool:
@@ -36,6 +37,10 @@ def _validate_or_warn(connector_name: str, entry: Any) -> tuple:
     """Validate a catalog entry; log a warning and return (False, errors)
     on failure so the caller can skip the entry. See
     docs/contracts/tool-schema.md.
+
+    Violations are also recorded in ``_contract_violations`` so tests (and
+    operators) can sweep the whole live registry for contract drift instead
+    of relying on warnings scrolling past at boot.
     """
     from orchestration.contracts import validate_catalog_entry
 
@@ -47,6 +52,11 @@ def _validate_or_warn(connector_name: str, entry: Any) -> tuple:
             "contract v1.0 and will be skipped: %s",
             connector_name, action, "; ".join(errors),
         )
+        _contract_violations.append({
+            "connector": connector_name,
+            "action": action,
+            "errors": list(errors),
+        })
     return ok, errors
 
 
@@ -102,17 +112,34 @@ def _warn_on_actions_mismatch(connector, entries: List[Dict[str, Any]]) -> None:
 
 def _register_actions_and_entries(
     connector_map: Dict[str, Any], connector,
+    *, allow_override: bool = True,
 ) -> List[Dict[str, Any]]:
     """Register one connector's actions + catalog entries, with guardrails.
 
-    Returns the validated catalog entries (invalid ones are skipped with a
-    warning). Callers merge them into `_registered_catalog_entries` only for
+    ``allow_override=False`` (entry-point connectors) refuses to shadow an
+    action already owned by a different connector — a pip-installed package
+    must never silently replace a built-in's implementation. Returns the
+    validated catalog entries (invalid ones are skipped with a warning).
+    Callers merge them into `_registered_catalog_entries` only for
     connectors whose entries should surface in the global action catalog.
     """
     name = getattr(connector, "name", None) or connector.__class__.__name__
     _warn_if_not_async(connector)
 
     for action_name in connector.actions:
+        existing = connector_map.get(action_name)
+        if (
+            not allow_override
+            and existing is not None
+            and getattr(existing, "name", None) != name
+        ):
+            logger.warning(
+                "Entry-point connector %s tried to shadow action %r owned by "
+                "built-in connector %s; registration skipped for that action.",
+                name, action_name,
+                getattr(existing, "name", None) or existing.__class__.__name__,
+            )
+            continue
         _warn_on_conflict(connector_map, action_name, name)
         connector_map[action_name] = connector
 
@@ -213,14 +240,18 @@ def discover_connectors() -> Dict[str, Any]:
                 connector.name, connector.version, len(connector.actions),
             )
 
-    # Step 3: Scan entry points (for pip-installed community connectors)
+    # Step 3: Scan entry points (for pip-installed community connectors).
+    # Shadowing is refused: community packages may add new actions but can
+    # never replace a built-in connector's implementation of an existing one.
     entrypoint_connectors = _scan_entry_points()
     for connector in entrypoint_connectors:
         ok, msg = connector.validate_config()
         if not ok:
             logger.warning("Entry-point connector %s skipped: %s", connector.name, msg)
             continue
-        entries = _register_actions_and_entries(connector_map, connector)
+        entries = _register_actions_and_entries(
+            connector_map, connector, allow_override=False,
+        )
         _registered_catalog_entries.extend(entries)
         logger.info("Registered entry-point connector: %s v%s",
                     connector.name, connector.version)
@@ -242,11 +273,17 @@ def get_registered_catalog_entries() -> List[Dict[str, Any]]:
     return list(_registered_catalog_entries)
 
 
+def get_contract_violations() -> List[Dict[str, Any]]:
+    """Return contract violations recorded during the last discovery."""
+    return list(_contract_violations)
+
+
 def reset_registry() -> None:
     """Clear the registry (useful for testing)."""
-    global _discovered_connectors, _registered_catalog_entries
+    global _discovered_connectors, _registered_catalog_entries, _contract_violations
     _discovered_connectors = None
     _registered_catalog_entries = []
+    _contract_violations = []
 
 
 def _load_legacy_connectors() -> Dict[str, Any]:

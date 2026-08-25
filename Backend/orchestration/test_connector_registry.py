@@ -140,3 +140,117 @@ class ConnectorGuardTests(SimpleTestCase):
             self.assertTrue(any("violates tool-schema" in msg for msg in logs.output))
         finally:
             connector_registry.reset_registry()
+
+
+class EntryPointShadowingTests(SimpleTestCase):
+    """CR-3 companion guard: a pip-installed (entry-point) connector may add
+    NEW actions but must never replace a built-in's implementation of an
+    existing action."""
+
+    def _discover_with_entry_point(self, entry_point_connector):
+        legacy_owner = make_connector(name="builtin")
+        with mock.patch.object(connector_registry, "is_demo_mode", return_value=False), \
+                mock.patch.object(
+                    connector_registry, "_load_legacy_connectors",
+                    return_value={"ping": legacy_owner},
+                ), \
+                mock.patch.object(connector_registry, "_scan_examples_directory", return_value=[]), \
+                mock.patch.object(connector_registry, "_scan_connectors_directory", return_value=[]), \
+                mock.patch.object(
+                    connector_registry, "_scan_entry_points",
+                    return_value=[entry_point_connector],
+                ), \
+                mock.patch("orchestration.action_catalog.register_actions"):
+            connector_registry.reset_registry()
+            try:
+                return connector_registry.discover_connectors()
+            finally:
+                pass
+
+    def test_entry_point_cannot_shadow_builtin_action(self):
+        community = make_connector(name="community", actions=("ping", "novel"))
+        connector_map = self._discover_with_entry_point(community)
+
+        self.assertIs(getattr(connector_map["ping"], "name", None), "builtin")
+        self.assertIs(getattr(connector_map["novel"], "name", None), "community")
+
+    def test_shadowing_refusal_logs_warning(self):
+        community = make_connector(name="community", actions=("ping",))
+
+        with mock.patch.object(connector_registry, "is_demo_mode", return_value=False), \
+                mock.patch.object(
+                    connector_registry, "_load_legacy_connectors",
+                    return_value={"ping": make_connector(name="builtin")},
+                ), \
+                mock.patch.object(connector_registry, "_scan_examples_directory", return_value=[]), \
+                mock.patch.object(connector_registry, "_scan_connectors_directory", return_value=[]), \
+                mock.patch.object(
+                    connector_registry, "_scan_entry_points", return_value=[community],
+                ), \
+                mock.patch("orchestration.action_catalog.register_actions"):
+            connector_registry.reset_registry()
+            try:
+                with self.assertLogs("orchestration.connector_registry", level="WARNING") as logs:
+                    connector_registry.discover_connectors()
+            finally:
+                connector_registry.reset_registry()
+
+        self.assertTrue(any("shadow action" in msg for msg in logs.output))
+
+
+class ContractViolationRecordingTests(SimpleTestCase):
+    """Invalid catalog entries must be recorded, not just logged, so the
+    CR-3 sweep can observe them."""
+
+    @mock.patch.object(connector_registry, "is_demo_mode", return_value=False)
+    @mock.patch.object(connector_registry, "_load_legacy_connectors", return_value={})
+    @mock.patch.object(connector_registry, "_scan_examples_directory", return_value=[])
+    @mock.patch.object(connector_registry, "_scan_entry_points", return_value=[])
+    @mock.patch.object(connector_registry, "_scan_connectors_directory")
+    @mock.patch("orchestration.action_catalog.register_actions")
+    def test_invalid_entry_is_recorded(
+        self, mock_register_actions, mock_scan_directory,
+        mock_scan_entry_points, mock_scan_examples, mock_legacy, mock_demo,
+    ):
+        invalid = {"action": "Bad-Name!"}
+        connector = make_connector(actions=("Bad-Name!",), entries=[invalid])
+        mock_scan_directory.return_value = [connector]
+
+        connector_registry.reset_registry()
+        try:
+            connector_registry.discover_connectors()
+
+            violations = connector_registry.get_contract_violations()
+            self.assertEqual(len(violations), 1)
+            self.assertEqual(violations[0]["connector"], "test_conn")
+            self.assertEqual(violations[0]["action"], "Bad-Name!")
+            self.assertEqual([], [
+                e["action"] for e in connector_registry.get_registered_catalog_entries()
+            ])
+        finally:
+            connector_registry.reset_registry()
+
+
+class RegisteredConnectorsContractSweepTests(SimpleTestCase):
+    """CR-3: the whole live registry must satisfy the v1.0 tool-schema
+    contract. Boot-time validation drops invalid entries with only a
+    warning; this sweep fails CI if ANY real connector ships one."""
+
+    def test_live_registry_has_no_contract_violations(self):
+        from orchestration.contracts import validate_catalog_entry
+
+        connector_registry.reset_registry()
+        try:
+            connector_registry.discover_connectors()
+
+            violations = connector_registry.get_contract_violations()
+            self.assertEqual(violations, [])
+
+            bad = []
+            for entry in connector_registry.get_registered_catalog_entries():
+                ok, errors = validate_catalog_entry(entry)
+                if not ok:
+                    bad.append({"action": entry.get("action"), "errors": errors})
+            self.assertEqual(bad, [])
+        finally:
+            connector_registry.reset_registry()

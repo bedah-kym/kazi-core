@@ -57,17 +57,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Drift guard: regenerating the lock must be a no-op when requirements.txt
+      # and requirements.lock are in sync. A diff here means someone edited
+      # requirements.txt without recompiling — fail fast instead of testing a
+      # dependency set that differs from what contributors lock against.
+      - name: Lockfile freshness check
+        run: |
+          python -m pip install --upgrade pip
+          pip install uv
+          uv pip compile requirements.txt --universal -o requirements.lock
+          git diff --exit-code requirements.lock
+
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: requirements.lock
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements.lock
           pip install flake8 bandit coverage
 
       # v0.4 M6-1 phase 1: critical set now includes the real-bug rules
@@ -130,12 +141,12 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: requirements.lock
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements.lock
 
       - name: Run full suite without Postgres/Redis
         run: python Backend/manage.py test --noinput

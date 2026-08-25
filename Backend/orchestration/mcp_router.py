@@ -46,7 +46,12 @@ from orchestration.action_catalog import (
 from orchestration.contracts import build_orchestration_result
 from orchestration.user_preferences import enforce_agent_caps
 from .base_connector import BaseConnector
-from .security_policy import sanitize_parameters, should_block_action, user_has_room_access
+from .security_policy import (
+    conservative_capability_prefs,
+    sanitize_parameters,
+    should_block_action,
+    user_has_room_access,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +84,9 @@ class MCPRouter:
         "allow_email": True,
         "allow_calendar": True,
     }
+    RATE_LIMIT_PER_HOUR = 100
+    _local_rate_lock = threading.Lock()
+    _local_rate_counters: Dict[str, int] = {}
 
     def __init__(self):
         # Single source of truth for action -> connector resolution lives in
@@ -311,17 +319,10 @@ class MCPRouter:
         user_id = context.get("user_id")
         cache_key = f"mcp_rate:{user_id}"
 
-        try:
-            # get-then-set with fresh TTL (cache.incr on a fresh key creates
-            # it without a TTL, so the counter would never expire)
-            current = int(cache.get(cache_key) or 0) + 1
-            cache.set(cache_key, current, 3600)
-        except Exception:
-            cache.set(cache_key, 1, 3600)
-            current = 1
+        current = await self._count_request(cache_key)
 
         caps_enforced = await sync_to_async(enforce_agent_caps)(user_id)
-        if caps_enforced and current >= 100:
+        if caps_enforced and current >= self.RATE_LIMIT_PER_HOUR:
             return {"valid": False, "reason": "Rate limit exceeded. Try again in an hour."}
 
         action = resolve_action_alias(intent.get("action"))
@@ -342,6 +343,25 @@ class MCPRouter:
             return {"valid": False, "reason": "Room access check failed for this request."}
         return {"valid": True, "reason": None}
 
+    async def _count_request(self, cache_key: str) -> int:
+        """Increment the hourly request counter.
+
+        Uses the raw Redis client (INCR + EXPIRE) rather than the Django
+        cache so the cache's ignore-exceptions mode cannot silently reset
+        the counter to zero during an outage. When Redis is unreachable a
+        per-process fallback keeps counting instead of failing open.
+        """
+        try:
+            redis = get_redis_connection("default")
+            current = int(await sync_to_async(redis.incr)(cache_key))
+            await sync_to_async(redis.expire)(cache_key, 3600)
+            return current
+        except Exception:
+            with self._local_rate_lock:
+                current = self._local_rate_counters.get(cache_key, 0) + 1
+                self._local_rate_counters[cache_key] = current
+            return current
+
     async def _get_user_prefs(self, user_id: Optional[int]) -> Dict[str, Any]:
         if not user_id:
             return dict(self.DEFAULT_CAPABILITY_PREFS)
@@ -350,7 +370,22 @@ class MCPRouter:
             user = await sync_to_async(User.objects.get)(pk=user_id)
         except User.DoesNotExist:
             return dict(self.DEFAULT_CAPABILITY_PREFS)
-        profile = await sync_to_async(lambda: getattr(user, "profile", None))()
+        except Exception:
+            logger.warning(
+                "Capability preference lookup failed for user %s; falling back "
+                "to conservative (fail-closed) prefs for sensitive gates.",
+                user_id,
+            )
+            return conservative_capability_prefs(dict(self.DEFAULT_CAPABILITY_PREFS))
+        try:
+            profile = await sync_to_async(lambda: getattr(user, "profile", None))()
+        except Exception:
+            logger.warning(
+                "Profile read failed for user %s; falling back to conservative "
+                "(fail-closed) prefs for sensitive gates.",
+                user_id,
+            )
+            return conservative_capability_prefs(dict(self.DEFAULT_CAPABILITY_PREFS))
         prefs = dict(self.DEFAULT_CAPABILITY_PREFS)
         if profile and profile.notification_preferences:
             prefs.update(profile.notification_preferences)

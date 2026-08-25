@@ -25,7 +25,10 @@ class NotificationConsumer(AsyncJsonWebsocketConsumer):
         self.user = self.scope["user"]
         self.group_name = f"notifications_{self.user.id}"
 
-        await self.channel_layer.group_add(self.group_name, self.channel_name)
+        try:
+            await self.channel_layer.group_add(self.group_name, self.channel_name)
+        except Exception as exc:
+            logger.warning("Channel layer unavailable on connect (%s); notifications degraded", exc)
         await self.accept()
 
         # Send initial unread count on connection
@@ -36,9 +39,12 @@ class NotificationConsumer(AsyncJsonWebsocketConsumer):
 
     async def disconnect(self, close_code):
         if hasattr(self, "group_name"):
-            await self.channel_layer.group_discard(
-                self.group_name, self.channel_name
-            )
+            try:
+                await self.channel_layer.group_discard(
+                    self.group_name, self.channel_name
+                )
+            except Exception as exc:
+                logger.debug("group_discard skipped on disconnect: %s", exc)
 
     async def receive_json(self, content, **kwargs):
         """Handle client-side actions: mark_read, mark_all_read, dismiss."""

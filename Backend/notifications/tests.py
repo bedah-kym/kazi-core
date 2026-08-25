@@ -1,4 +1,5 @@
 """Tests for the unified notification service."""
+from asgiref.sync import async_to_sync
 from unittest.mock import AsyncMock, patch, MagicMock
 
 from django.contrib.auth import get_user_model
@@ -130,3 +131,50 @@ class WhatsAppDeliveryTaskTests(TestCase):
         self.assertEqual(params["phone_number"], "+254712345678")
         notification.refresh_from_db()
         self.assertTrue(notification.delivered_whatsapp)
+
+
+class NotificationConsumerRedisOutageTests(SimpleTestCase):
+    """F7.2: the notification socket must accept degraded when the channel
+    layer (Redis) is down, and disconnect must not raise either."""
+
+    def _make_consumer(self):
+        from notifications.consumers import NotificationConsumer
+
+        consumer = NotificationConsumer()
+        consumer.scope = {"user": MagicMock(is_authenticated=True, id=42)}
+        consumer.channel_layer = MagicMock()
+        consumer.channel_name = "test-channel"
+        consumer.accept = AsyncMock()
+        consumer.close = AsyncMock()
+        consumer.send_json = AsyncMock()
+        return consumer
+
+    def test_connect_accepts_when_channel_layer_down(self):
+        async_to_sync(self._connect_channel_layer_down)()
+
+    async def _connect_channel_layer_down(self):
+        consumer = self._make_consumer()
+        consumer.channel_layer.group_add = AsyncMock(side_effect=ConnectionError("redis down"))
+
+        with patch(
+            "notifications.services.NotificationService.aget_unread_count",
+            new=AsyncMock(return_value=0),
+        ):
+            await consumer.connect()
+
+        consumer.accept.assert_awaited_once()
+        consumer.close.assert_not_awaited()
+        init = consumer.send_json.await_args[0][0]
+        self.assertEqual(init["type"], "init")
+
+    def test_disconnect_swallows_group_discard_failure(self):
+        async_to_sync(self._disconnect_with_dead_layer)()
+
+    async def _disconnect_with_dead_layer(self):
+        consumer = self._make_consumer()
+        consumer.group_name = "notifications_42"
+        consumer.channel_layer.group_discard = AsyncMock(side_effect=ConnectionError("redis down"))
+
+        await consumer.disconnect(1001)
+
+        consumer.channel_layer.group_discard.assert_awaited_once()

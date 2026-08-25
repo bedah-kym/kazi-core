@@ -451,3 +451,134 @@ class Scenario11ThinkingTransparencyTest(SimpleTestCase):
         # Thinking events are UI markers with empty text; verify one exists
         thinking_event = next(e for e in events if e.kind == "thinking")
         self.assertIsInstance(thinking_event.data.get("text", ""), str)
+
+
+# ---------------------------------------------------------------------------
+#  AL-2: Sub-agent budget caps (iterations / tool calls / tokens)
+# ---------------------------------------------------------------------------
+
+class SubAgentBudgetTests(SimpleTestCase):
+    """delegate_task sub-agents must respect hard caps and report why they
+    stopped. The tool-call cap in particular must hold WITHIN a single
+    response batch, not just between iterations."""
+
+    def _run(self, llm_side_effect=None, llm_return_value=None):
+        from orchestration.agent_loop import _run_sub_agent
+
+        mock_llm = MagicMock()
+        if llm_side_effect is not None:
+            mock_llm.create_message = AsyncMock(side_effect=llm_side_effect)
+        else:
+            mock_llm.create_message = AsyncMock(return_value=llm_return_value)
+
+        with patch("orchestration.agent_loop.get_llm_client", return_value=mock_llm), \
+                patch(
+                    "orchestration.agent_loop._execute_with_timeout",
+                    new=AsyncMock(return_value={"status": "success"}),
+                ) as mock_exec, \
+                patch(
+                    "orchestration.agent_loop.update_memory_state",
+                    new=AsyncMock(),
+                ), \
+                patch("orchestration.agent_loop.record_event") as mock_record:
+            result = run_async(_run_sub_agent(
+                {"task": "Do the thing"},
+                {"user_id": 1, "room_id": 1},
+                None,
+                "system prompt",
+                [{"name": "get_weather", "input_schema": {}}],
+            ))
+        return result, mock_exec, mock_llm.create_message, mock_record
+
+    @patch("orchestration.agent_loop.SUB_AGENT_MAX_TOOL_CALLS", 3)
+    def test_tool_call_cap_enforced_within_single_batch(self):
+        # One response carries FIVE tool_use blocks; only 3 may execute.
+        response = _make_llm_response(
+            [
+                _tool_use_block(f"t{i}", "get_weather", {"city": "Nairobi"})
+                for i in range(5)
+            ],
+            stop_reason="tool_use",
+            usage={"input_tokens": 100, "output_tokens": 50},
+        )
+        result, mock_exec, create_message, mock_record = self._run(llm_return_value=response)
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["tool_calls"], 3)
+        self.assertEqual(result["stopped_reason"], "max_tool_calls")
+        self.assertEqual(mock_exec.await_count, 3)
+        self.assertEqual(create_message.await_count, 1)
+        mock_record.assert_called_once()
+        self.assertEqual(mock_record.call_args[0][0], "sub_agent_budget_exhausted")
+        self.assertEqual(mock_record.call_args[0][1]["reason"], "max_tool_calls")
+
+    @patch("orchestration.agent_loop.SUB_AGENT_TOKEN_BUDGET", 200)
+    def test_token_budget_stops_sub_agent(self):
+        # Each iteration costs ~150 tokens; the budget must stop the loop
+        # before the third LLM call.
+        side_effect = [
+            _make_llm_response(
+                [_text_block("Working."),
+                 _tool_use_block(f"t{i}", "get_weather", {})],
+                stop_reason="tool_use",
+                usage={"input_tokens": 100, "output_tokens": 50},
+            )
+            for i in range(4)
+        ]
+        result, _, create_message, _ = self._run(llm_side_effect=side_effect)
+
+        self.assertEqual(result["stopped_reason"], "token_budget")
+        self.assertGreaterEqual(result["tokens_used"], 200)
+        self.assertEqual(create_message.await_count, 2)
+
+    @patch("orchestration.agent_loop.SUB_AGENT_MAX_ITERATIONS", 2)
+    def test_iteration_cap_reports_max_iterations(self):
+        response = _make_llm_response(
+            [_tool_use_block("t1", "get_weather", {})],
+            stop_reason="tool_use",
+            usage={"input_tokens": 10, "output_tokens": 5},
+        )
+        result, _, _, _ = self._run(llm_return_value=response)
+
+        self.assertEqual(result["stopped_reason"], "max_iterations")
+        self.assertEqual(result["iterations"], 2)
+        self.assertEqual(result["tool_calls"], 2)
+
+    def test_normal_completion_reports_usage_and_no_stop_reason(self):
+        side_effect = [
+            _make_llm_response(
+                [_text_block("Checking."),
+                 _tool_use_block("t1", "get_weather", {"city": "Nairobi"})],
+                stop_reason="tool_use",
+                usage={"input_tokens": 40, "output_tokens": 30},
+            ),
+            _make_llm_response(
+                [_text_block("All done.")],
+                stop_reason="end_turn",
+                usage={"input_tokens": 20, "output_tokens": 10},
+            ),
+        ]
+        result, mock_exec, create_message, mock_record = self._run(llm_side_effect=side_effect)
+
+        self.assertEqual(result["status"], "success")
+        self.assertIsNone(result["stopped_reason"])
+        self.assertEqual(result["iterations"], 2)
+        self.assertEqual(result["tool_calls"], 1)
+        self.assertEqual(result["tokens_used"], 100)
+        self.assertIn("All done.", result["summary"])
+        mock_record.assert_not_called()
+
+    def test_token_budget_exhaustion_with_no_text_sets_explanatory_summary(self):
+        from orchestration.agent_loop import SUB_AGENT_TOKEN_BUDGET
+
+        side_effect = [
+            _make_llm_response(
+                [_tool_use_block("t0", "get_weather", {})],
+                stop_reason="tool_use",
+                usage={"input_tokens": SUB_AGENT_TOKEN_BUDGET, "output_tokens": 0},
+            ),
+        ]
+        result, _, _, _ = self._run(llm_side_effect=side_effect)
+
+        self.assertEqual(result["stopped_reason"], "token_budget")
+        self.assertIn("token budget", result["summary"].lower())

@@ -658,6 +658,7 @@ META_TOOL_DEFINITIONS = [
 # Sub-agent limits (tighter than parent)
 SUB_AGENT_MAX_ITERATIONS = 5
 SUB_AGENT_MAX_TOOL_CALLS = 8
+SUB_AGENT_TOKEN_BUDGET = 20000
 
 
 async def _execute_meta_tool(
@@ -721,6 +722,57 @@ def _load_skill(tool_input: Dict[str, Any], context: Dict[str, Any]) -> Dict[str
         return {"status": "error", "message": f"Could not load skill: {exc}"}
 
 
+async def _execute_scoped_tool_calls(
+    tool_calls: List[Dict[str, Any]],
+    context: Dict[str, Any],
+    preferences: Optional[Dict[str, Any]],
+    sub_tool_log: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], bool]:
+    """Execute one response's tool_use batch under the sub-agent cap.
+
+    The cap is enforced mid-batch — a single response can carry many
+    tool_use blocks, and only checking between iterations let one batch
+    blow far past the limit. Returns (result_blocks, capped).
+    """
+    result_blocks = []
+    caps_enforced = context.get("caps_enforced", True)
+    for tc in tool_calls:
+        if caps_enforced and len(sub_tool_log) >= SUB_AGENT_MAX_TOOL_CALLS:
+            return result_blocks, True
+
+        # Sub-agents cannot pause for confirmation; block high-risk actions.
+        risk = get_tool_risk_info(tc["name"], preferences)
+        if risk.get("requires_confirmation"):
+            result = {
+                "status": "error",
+                "message": (
+                    f"{tc['name']} requires explicit user confirmation. "
+                    "Please ask in the main conversation before executing it."
+                ),
+            }
+        else:
+            result = await _execute_with_timeout(tc["name"], tc["input"], context)
+        sub_tool_log.append({
+            "name": tc["name"],
+            "input": tc["input"],
+            "status": result.get("status"),
+        })
+        # Memory update
+        try:
+            await update_memory_state(
+                context, action=tc["name"],
+                params=tc["input"], result=result,
+            )
+        except Exception:
+            pass
+        result_blocks.append({
+            "type": "tool_result",
+            "tool_use_id": tc["id"],
+            "content": _sanitize_tool_result(json.dumps(result, default=str)),
+        })
+    return result_blocks, False
+
+
 async def _run_sub_agent(
     tool_input: Dict[str, Any],
     context: Dict[str, Any],
@@ -750,14 +802,23 @@ async def _run_sub_agent(
     collected_text: List[str] = []
     sub_tool_log: List[Dict[str, Any]] = []
     iteration = 0
+    tokens_used = 0
+    stopped_reason: Optional[str] = None
+    completed = False
 
     caps_enforced = context.get("caps_enforced", True)
     max_iterations = SUB_AGENT_MAX_ITERATIONS if caps_enforced else float("inf")
 
     while iteration < max_iterations:
-        iteration += 1
         if caps_enforced and len(sub_tool_log) >= SUB_AGENT_MAX_TOOL_CALLS:
+            stopped_reason = "max_tool_calls"
             break
+
+        if caps_enforced and tokens_used >= SUB_AGENT_TOKEN_BUDGET:
+            stopped_reason = "token_budget"
+            break
+
+        iteration += 1
 
         try:
             response = await llm.create_message(
@@ -775,55 +836,51 @@ async def _run_sub_agent(
         content_blocks = response.get("content", [])
         stop_reason = response.get("stop_reason", "end_turn")
         sub_messages.append({"role": "assistant", "content": content_blocks})
+        tokens_used += _get_response_tokens(response)
 
         text = _extract_text(content_blocks)
         if text:
             collected_text.append(text)
 
         if stop_reason == "end_turn":
+            completed = True
             break
 
         if stop_reason == "tool_use":
             tool_calls = _extract_tool_calls(content_blocks)
-            result_blocks = []
-            for tc in tool_calls:
-                # Sub-agents cannot pause for confirmation; block high-risk actions.
-                risk = get_tool_risk_info(tc["name"], preferences)
-                if risk.get("requires_confirmation"):
-                    result = {
-                        "status": "error",
-                        "message": (
-                            f"{tc['name']} requires explicit user confirmation. "
-                            "Please ask in the main conversation before executing it."
-                        ),
-                    }
-                else:
-                    result = await _execute_with_timeout(tc["name"], tc["input"], context)
-                sub_tool_log.append({
-                    "name": tc["name"],
-                    "input": tc["input"],
-                    "status": result.get("status"),
-                })
-                # Memory update
-                try:
-                    await update_memory_state(
-                        context, action=tc["name"],
-                        params=tc["input"], result=result,
-                    )
-                except Exception:
-                    pass
-                result_blocks.append({
-                    "type": "tool_result",
-                    "tool_use_id": tc["id"],
-                    "content": _sanitize_tool_result(json.dumps(result, default=str)),
-                })
+            result_blocks, capped = await _execute_scoped_tool_calls(
+                tool_calls, context, preferences, sub_tool_log,
+            )
             sub_messages.append({"role": "user", "content": result_blocks})
+            if capped:
+                stopped_reason = "max_tool_calls"
+                break
+
+    if stopped_reason is None and not completed:
+        stopped_reason = "max_iterations"
+
+    if stopped_reason:
+        record_event("sub_agent_budget_exhausted", {
+            "reason": stopped_reason,
+            "iterations": iteration,
+            "tool_calls": len(sub_tool_log),
+            "tokens_used": tokens_used,
+            "user_id": context.get("user_id"),
+            "room_id": context.get("room_id"),
+        })
+
+    summary = "\n".join(collected_text)
+    if not summary and stopped_reason == "token_budget":
+        summary = "Sub-task stopped early: token budget exhausted."
 
     return {
         "status": "success",
-        "summary": "\n".join(collected_text) or "Sub-task completed.",
+        "summary": summary or "Sub-task completed.",
         "tools_used": [e["name"] for e in sub_tool_log],
         "iterations": iteration,
+        "tokens_used": tokens_used,
+        "tool_calls": len(sub_tool_log),
+        "stopped_reason": stopped_reason,
     }
 
 

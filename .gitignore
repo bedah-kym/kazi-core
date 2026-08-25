@@ -6,6 +6,7 @@ __pycache__
 
 mathia
 Backend/db.sqlite3
+.dev_secret_key
 # Backup files #
 *.bak
 *.sqlite3

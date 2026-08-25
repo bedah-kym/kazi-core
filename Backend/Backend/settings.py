@@ -40,18 +40,35 @@ except Exception:
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.1/howto/deployment/checklist/
 
+def _load_or_create_dev_secret_key(key_file):
+    # Stable per-checkout dev key stored in a gitignored file so sessions
+    # survive across gunicorn workers and restarts. Silent by design: callers
+    # may only log the returned note, never the key itself.
+    try:
+        key = key_file.read_text().strip()
+    except OSError:
+        key = ''
+    if key:
+        return key, f"loaded from {key_file}"
+    import secrets
+    key = secrets.token_urlsafe(50)
+    try:
+        key_file.write_text(key)
+        note = f"persisted to {key_file} (gitignored)"
+    except OSError:
+        note = "NOT persisted — sessions reset between processes"
+    return key, note
+
+
 # SECURITY WARNING: keep the secret key used in production secret!
-# CRITICAL: SECRET_KEY must be set via environment variable in production
-# CRITICAL: SECRET_KEY must be set via environment variable in production
 # CRITICAL: SECRET_KEY must be set via environment variable in production
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
 if not SECRET_KEY:
     if os.environ.get('DJANGO_DEBUG', 'False').lower() in ('1', 'true', 'yes'):
-        # Development fallback - still unique per deployment
-        import secrets
-        SECRET_KEY = secrets.token_urlsafe(50)
-        print(f"⚠️  WARNING: Using auto-generated SECRET_KEY. Set DJANGO_SECRET_KEY in .env for consistency.")
-        print(f"Generated key: {SECRET_KEY}")
+        SECRET_KEY, _key_note = _load_or_create_dev_secret_key(
+            Path(os.environ.get('DJANGO_DEV_SECRET_KEY_FILE') or (BASE_DIR.parent / '.dev_secret_key'))
+        )
+        print(f"⚠️  DEV ONLY: auto-generated SECRET_KEY {_key_note}. Set DJANGO_SECRET_KEY in .env.")
     else:
         raise ValueError(
             "CRITICAL SECURITY ERROR: DJANGO_SECRET_KEY environment variable must be set in production. "
@@ -220,8 +237,9 @@ WORKFLOW_WITHDRAW_MAX = Decimal(os.environ.get('WORKFLOW_WITHDRAW_MAX', '10000')
 # Travel connectors: allow mock fallbacks in dev only
 TRAVEL_ALLOW_FALLBACK = os.environ.get('TRAVEL_ALLOW_FALLBACK', str(DEBUG)).lower() in ('1', 'true', 'yes')
 
-# Celery Results
-CELERY_RESULT_BACKEND = 'django-db'  # Using Django DB for results
+# Celery Results — env-overridable so deployments can switch backends
+# (e.g. redis://) without code changes; django-db remains the default.
+CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', 'django-db')
 CELERY_CACHE_BACKEND = 'django-cache'
 CELERY_TASK_IGNORE_RESULT = os.environ.get('CELERY_TASK_IGNORE_RESULT', 'True').lower() in ('1', 'true', 'yes')
 

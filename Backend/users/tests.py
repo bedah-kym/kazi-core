@@ -2,6 +2,7 @@
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.test import TestCase
 from django.urls import reverse
 
@@ -20,6 +21,11 @@ class AgentCapsToggleTests(TestCase):
         self.user = User.objects.create_user(username="caps-user", email="caps@example.com", password="secret")
         Workspace.objects.create(user=self.user, onboarding_completed=True)
         self.client.force_login(self.user)
+
+    def tearDown(self):
+        # The enforcement helper caches its answer per user; never let a
+        # disabled-caps value bleed into other tests in the same process.
+        cache.delete(f"agent_caps_enforced:{self.user.id}")
 
     def _post_capabilities(self, **extra):
         data = {"section": "capabilities", "capability_mode": "custom"}

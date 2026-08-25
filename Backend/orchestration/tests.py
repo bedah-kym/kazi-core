@@ -378,6 +378,24 @@ class AgentCapsToggleLoopTests(SimpleTestCase):
         kinds = self._collect_loop_events()
         self.assertEqual(kinds.count("tool_result"), 1)
 
+    @patch("orchestration.agent_loop.HARD_CAP_ITERATIONS", 3)
+    @patch("orchestration.agent_loop.enforce_agent_caps")
+    @patch("orchestration.agent_loop.get_llm_client")
+    @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)
+    @patch("orchestration.agent_loop.cache")
+    def test_hard_cap_terminates_loop_even_when_caps_disabled(self, mock_cache, mock_exec, mock_llm_client, mock_caps):
+        # Regression: an infinite-LLM mock plus a cached disabled-caps value
+        # used to produce a truly unbounded loop (hermetic CI hang).
+        mock_cache.get.return_value = None
+        mock_exec.return_value = {"status": "success"}
+        mock_caps.return_value = False
+        mock_llm = MagicMock()
+        mock_llm.create_message = AsyncMock(return_value=self._tool_use_response(1))
+        mock_llm_client.return_value = mock_llm
+
+        kinds = self._collect_loop_events()
+        self.assertEqual(kinds.count("tool_result"), 3)
+
     @patch("orchestration.agent_loop.SUB_AGENT_MAX_TOOL_CALLS", 1)
     @patch("orchestration.agent_loop.get_llm_client")
     @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)

@@ -176,6 +176,27 @@ def sensitive_refusal_message() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Capability prefs fallback (TE-2: fail closed on lookup failure)
+# ---------------------------------------------------------------------------
+
+SENSITIVE_CAPABILITY_GATES = ("allow_payments", "allow_whatsapp", "allow_email")
+
+
+def conservative_capability_prefs(prefs: Dict[str, Any]) -> Dict[str, Any]:
+    """Copy capability prefs with sensitive gates forced off.
+
+    Used when the preference store cannot be reached (DB error, profile
+    missing mid-request): a failed lookup must never widen what a caller is
+    allowed to do, so money/messaging gates default to denied while benign
+    gates keep their stored or default value.
+    """
+    conservative = dict(prefs)
+    for gate in SENSITIVE_CAPABILITY_GATES:
+        conservative[gate] = False
+    return conservative
+
+
+# ---------------------------------------------------------------------------
 # Secret + PII redaction (fail-plausible guard)
 # ---------------------------------------------------------------------------
 

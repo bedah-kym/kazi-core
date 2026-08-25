@@ -1,4 +1,4 @@
-import json
+﻿import json
 import os
 from io import StringIO
 
@@ -292,3 +292,162 @@ class InjectionCorpusTests(SimpleTestCase):
             self.assertIn("injection False != True", out.getvalue())
         finally:
             os.unlink(path)
+
+
+class Te2FailClosedTests(SimpleTestCase):
+    """TE-2: a failed capability-preference lookup must never widen what a
+    user can do. Money/messaging gates fall back to denied; the rate-limit
+    counter must keep counting when Redis is unreachable."""
+
+    def _run(self, coro):
+        import asyncio
+
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
+
+    def test_conservative_prefs_force_sensitive_gates_off(self):
+        from orchestration.security_policy import conservative_capability_prefs
+
+        prefs = {
+            "allow_payments": True,
+            "allow_whatsapp": True,
+            "allow_email": True,
+            "allow_travel": True,
+            "allow_web_search": True,
+            "custom_key": "kept",
+        }
+        conservative = conservative_capability_prefs(prefs)
+
+        self.assertFalse(conservative["allow_payments"])
+        self.assertFalse(conservative["allow_whatsapp"])
+        self.assertFalse(conservative["allow_email"])
+        self.assertTrue(conservative["allow_travel"])
+        self.assertTrue(conservative["allow_web_search"])
+        self.assertEqual(conservative["custom_key"], "kept")
+        # Input untouched
+        self.assertTrue(prefs["allow_payments"])
+
+    @patch("django.contrib.auth.get_user_model")
+    def test_planner_prefs_fail_closed_on_lookup_error(self, mock_get_user_model):
+        from orchestration.workflow_planner import _get_user_capability_prefs
+
+        mock_get_user_model.return_value.objects.get.side_effect = RuntimeError("db down")
+
+        prefs = self._run(_get_user_capability_prefs(42))
+
+        self.assertFalse(prefs["allow_payments"])
+        self.assertFalse(prefs["allow_whatsapp"])
+        self.assertFalse(prefs["allow_email"])
+        self.assertTrue(prefs["allow_travel"])
+
+    @patch("django.contrib.auth.get_user_model")
+    def test_manager_llm_disabled_on_lookup_error(self, mock_get_user_model):
+        from orchestration.workflow_planner import _manager_llm_enabled_for_user
+
+        mock_get_user_model.return_value.objects.get.side_effect = RuntimeError("db down")
+
+        self.assertFalse(self._run(_manager_llm_enabled_for_user(42)))
+
+    def test_planner_blocks_payment_step_when_lookup_fails(self):
+        # Old attack still blocked: with the lookup failing, a withdraw step
+        # must be refused, not silently allowed.
+        from orchestration.workflow_planner import _steps_allowed_for_user
+
+        steps = [{"action": "withdraw", "params": {"amount": 100}}]
+
+        with patch(
+            "orchestration.workflow_planner._get_user_capability_prefs",
+            new=AsyncMock(return_value={
+                "allow_payments": False,
+                "allow_travel": True,
+                "allow_email": False,
+                "allow_whatsapp": False,
+                "allow_reminders": True,
+                "allow_web_search": True,
+                "allow_calendar": True,
+            }),
+        ):
+            denial = self._run(_steps_allowed_for_user(steps, 42))
+
+        self.assertIsNotNone(denial)
+        self.assertIn("disabled", denial)
+
+    def test_router_prefs_fail_closed_on_unexpected_error(self):
+        from orchestration.mcp_router import MCPRouter
+
+        router = object.__new__(MCPRouter)
+        fake_user_model = MagicMock()
+        fake_user_model.DoesNotExist = type("DoesNotExist", (Exception,), {})
+        fake_user_model.objects.get.side_effect = RuntimeError("db down")
+
+        with patch("orchestration.mcp_router.get_user_model", return_value=fake_user_model):
+            prefs = self._run(router._get_user_prefs(42))
+
+        self.assertFalse(prefs["allow_payments"])
+        self.assertFalse(prefs["allow_whatsapp"])
+        self.assertFalse(prefs["allow_email"])
+
+    def test_router_missing_user_still_gets_defaults(self):
+        # Guard against over-hardening: a genuinely absent user is not an
+        # error path and keeps the documented default capabilities.
+        from orchestration.mcp_router import MCPRouter
+
+        router = object.__new__(MCPRouter)
+        fake_user_model = MagicMock()
+        fake_user_model.DoesNotExist = type("DoesNotExist", (Exception,), {})
+        fake_user_model.objects.get.side_effect = fake_user_model.DoesNotExist("gone")
+
+        with patch("orchestration.mcp_router.get_user_model", return_value=fake_user_model):
+            prefs = self._run(router._get_user_prefs(999999))
+
+        self.assertTrue(prefs["allow_payments"])
+
+    def test_rate_counter_keeps_counting_without_redis(self):
+        from orchestration.mcp_router import MCPRouter
+
+        router = object.__new__(MCPRouter)
+        with patch(
+            "orchestration.mcp_router.get_redis_connection",
+            side_effect=ConnectionError("redis down"),
+        ):
+            first = self._run(router._count_request("mcp_rate:7"))
+            second = self._run(router._count_request("mcp_rate:7"))
+            other = self._run(router._count_request("mcp_rate:8"))
+
+        self.assertEqual((first, second, other), (1, 2, 1))
+
+    def test_rate_limit_denies_at_threshold_with_live_redis(self):
+        # Old attack still blocked: once the counter passes the limit the
+        # request is refused.
+        from orchestration.mcp_router import MCPRouter
+
+        router = object.__new__(MCPRouter)
+        counter = {"n": 0}
+        conn = MagicMock()
+
+        def _incr(key):
+            counter["n"] += 1
+            return counter["n"]
+
+        conn.incr = Mock(side_effect=_incr)
+        conn.expire = Mock(return_value=True)
+
+        async def _prefs(user_id):
+            return dict(MCPRouter.DEFAULT_CAPABILITY_PREFS)
+
+        with patch("orchestration.mcp_router.get_redis_connection", return_value=conn), \
+                patch.object(MCPRouter, "RATE_LIMIT_PER_HOUR", 3), \
+                patch.object(MCPRouter, "_get_user_prefs", new=AsyncMock(side_effect=_prefs)), \
+                patch("orchestration.mcp_router.user_has_room_access", new=AsyncMock(return_value=True)):
+            outcomes = [
+                self._run(router._validate_request({"action": "get_weather"}, {"user_id": 7, "room_id": 1}))
+                for _ in range(4)
+            ]
+
+        self.assertTrue(outcomes[0]["valid"])
+        self.assertTrue(outcomes[1]["valid"])
+        self.assertFalse(outcomes[2]["valid"])
+        self.assertIn("Rate limit", outcomes[2]["reason"])

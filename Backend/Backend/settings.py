@@ -242,15 +242,20 @@ CELERY_WORKER_MAX_MEMORY_PER_CHILD = int(os.environ.get('CELERY_WORKER_MAX_MEMOR
 CELERY_RESULT_EXPIRES = int(os.environ.get('CELERY_RESULT_EXPIRES', 3600))  # 1 hour
 
 # Django Cache with local Redis
+# IGNORE_EXCEPTIONS: when Redis is down, HTTP views must still serve —
+# cache reads return the default and writes are skipped (logged) instead of 500ing.
+REDIS_CACHE_IGNORE_EXCEPTIONS = os.environ.get('REDIS_CACHE_IGNORE_EXCEPTIONS', '1').lower() in ('1', 'true', 'yes')
 CACHES = {
     "default": {
         "BACKEND": "django_redis.cache.RedisCache",
         "LOCATION": REDIS_URL,
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            "IGNORE_EXCEPTIONS": REDIS_CACHE_IGNORE_EXCEPTIONS,
         }
     }
 }
+DJANGO_REDIS_LOG_IGNORED_EXCEPTIONS = True
 
 # Channels Layer with local Redis
 CHANNEL_LAYERS = {
@@ -274,6 +279,7 @@ else:
 MODERATION_FLUSH_SECONDS = int(os.environ.get('MODERATION_FLUSH_SECONDS', 600))
 REMINDER_SWEEP_SECONDS = int(os.environ.get('REMINDER_SWEEP_SECONDS', 3600))
 WORKFLOW_REPLAY_SCHEDULE_SECONDS = int(os.environ.get('WORKFLOW_REPLAY_SCHEDULE_SECONDS', 300))
+WORKFLOW_APPROVAL_SWEEP_SECONDS = int(os.environ.get('WORKFLOW_APPROVAL_SWEEP_SECONDS', 300))
 
 CELERY_BEAT_SCHEDULE = {
     'nightly_ledger_reconciliation': {
@@ -295,6 +301,10 @@ CELERY_BEAT_SCHEDULE = {
     'send-trial-summary': {
         'task': 'users.tasks.send_trial_summary_task',
         'schedule': crontab(hour=7, minute=0),  # every day at 07:00
+    },
+    'sweep-stuck-approvals': {
+        'task': 'workflows.tasks.sweep_stuck_approvals',
+        'schedule': float(WORKFLOW_APPROVAL_SWEEP_SECONDS),
     },
 }
 

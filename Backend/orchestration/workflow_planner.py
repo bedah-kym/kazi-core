@@ -25,7 +25,11 @@ from orchestration.user_preferences import (
     format_style_prompt,
 )
 from orchestration.action_receipts import requires_confirmation
-from orchestration.security_policy import sanitize_parameters, should_block_message
+from orchestration.security_policy import (
+    conservative_capability_prefs,
+    sanitize_parameters,
+    should_block_message,
+)
 from workflows.capabilities import SYSTEM_CAPABILITIES, validate_workflow_definition
 from workflows.temporal_integration import start_workflow_execution
 
@@ -1089,7 +1093,8 @@ async def _manager_llm_enabled_for_user(user_id: Optional[int]) -> bool:
             return False
         return bool(prefs.get("manager_llm_enabled", True))
     except Exception:
-        return True
+        # Lookup failed — assume the feature is off rather than guessing on.
+        return False
 
 
 async def _get_user_capability_prefs(user_id: Optional[int]) -> Dict[str, Any]:
@@ -1115,7 +1120,12 @@ async def _get_user_capability_prefs(user_id: Optional[int]) -> Dict[str, Any]:
         merged.update(prefs)
         return merged
     except Exception:
-        return defaults
+        logger.warning(
+            "Capability preference lookup failed for user %s; falling back to "
+            "conservative (fail-closed) prefs for sensitive gates.",
+            user_id,
+        )
+        return conservative_capability_prefs(defaults)
 
 
 async def _steps_allowed_for_user(steps: List[Dict[str, Any]], user_id: Optional[int]) -> Optional[str]:

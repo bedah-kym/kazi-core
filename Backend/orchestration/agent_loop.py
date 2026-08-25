@@ -27,6 +27,7 @@ from orchestration.security_policy import redact_sensitive_text
 from orchestration.telemetry import record_event
 from orchestration.tool_executor import execute_tool, get_tool_risk_info
 from orchestration.tool_schemas import get_tool_definitions
+from orchestration.user_preferences import enforce_agent_caps
 
 logger = logging.getLogger(__name__)
 
@@ -750,9 +751,12 @@ async def _run_sub_agent(
     sub_tool_log: List[Dict[str, Any]] = []
     iteration = 0
 
-    while iteration < SUB_AGENT_MAX_ITERATIONS:
+    caps_enforced = context.get("caps_enforced", True)
+    max_iterations = SUB_AGENT_MAX_ITERATIONS if caps_enforced else float("inf")
+
+    while iteration < max_iterations:
         iteration += 1
-        if len(sub_tool_log) >= SUB_AGENT_MAX_TOOL_CALLS:
+        if caps_enforced and len(sub_tool_log) >= SUB_AGENT_MAX_TOOL_CALLS:
             break
 
         try:
@@ -936,6 +940,15 @@ async def run_agent_loop(
     room_id = context.get("room_id")
     user_caps = preferences or {}
 
+    # Install-level kill switch (Settings > Capabilities). Sub-agents inherit
+    # it via context so delegate_task never re-reads the flag.
+    caps_enforced = context.get(
+        "caps_enforced",
+        await sync_to_async(enforce_agent_caps)(user_id),
+    )
+    context["caps_enforced"] = caps_enforced
+    max_iterations = MAX_ITERATIONS if caps_enforced else float("inf")
+
     # Build tool definitions (filtered by user capabilities)
     tools = get_tool_definitions(
         user_capabilities=user_caps,
@@ -1050,10 +1063,10 @@ async def run_agent_loop(
     # ------------------------------------------------------------------ #
     #  Main ReAct loop                                                    #
     # ------------------------------------------------------------------ #
-    while state.iteration < MAX_ITERATIONS:
+    while state.iteration < max_iterations:
         # Timeout check
         elapsed = time.monotonic() - state.start_time
-        if elapsed > LOOP_TIMEOUT_SECONDS:
+        if caps_enforced and elapsed > LOOP_TIMEOUT_SECONDS:
             yield AgentEvent("error", {
                 "message": "I ran out of time on this request. "
                            "Here's what I managed so far.",
@@ -1061,7 +1074,7 @@ async def run_agent_loop(
             break
 
         # Tool call budget check
-        if state.tool_call_count >= MAX_TOOL_CALLS:
+        if caps_enforced and state.tool_call_count >= MAX_TOOL_CALLS:
             yield AgentEvent("error", {
                 "message": "I've reached the maximum number of tool calls "
                            "for this request.",
@@ -1074,7 +1087,7 @@ async def run_agent_loop(
         yield AgentEvent("thinking", {"text": ""})
 
         # Token budget check
-        if state.tokens_used >= LOOP_TOKEN_BUDGET:
+        if caps_enforced and state.tokens_used >= LOOP_TOKEN_BUDGET:
             yield AgentEvent("error", {
                 "message": "I've used up my thinking budget for this request. "
                            "Here's what I managed so far.",
@@ -1107,7 +1120,8 @@ async def run_agent_loop(
         state.tokens_used += iter_tokens
 
         if (
-            not state.budget_warning_sent
+            caps_enforced
+            and not state.budget_warning_sent
             and state.tokens_used >= LOOP_TOKEN_BUDGET * LOOP_TOKEN_WARNING_RATIO
         ):
             state.budget_warning_sent = True

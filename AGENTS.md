@@ -92,9 +92,10 @@ python Backend/manage.py runserver
 
 `requirements.txt` holds the declared minimums; `requirements.lock` is the
 compiled, fully-pinned set CI tests against (regenerate with
-`uv pip compile requirements.txt --universal -o requirements.lock`). If you
-edit `requirements.txt`, recompile the lock in the same commit — CI fails on a
-stale lock.
+`uv pip compile requirements.txt --universal --no-annotate --no-header
+-o requirements.lock`). The flat format is deliberate: it is byte-identical no
+matter which OS regenerates it. If you edit `requirements.txt`, recompile the
+lock in the same commit — CI fails on a stale lock.
 
 You need Postgres + Redis running and a `.env` in the repo root (one level above `Backend/`). Required keys: `DJANGO_SECRET_KEY`, `DATABASE_URL`, `REDIS_URL`, `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`. Optional: `ANTHROPIC_API_KEY`, `HF_API_TOKEN`, plus per-connector keys (`OPENWEATHER_API_KEY`, `CALENDLY_CLIENT_*`, etc.).
 

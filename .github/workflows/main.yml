@@ -57,15 +57,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Drift guard: regenerating the lock must be a no-op when requirements.txt
-      # and requirements.lock are in sync. A diff here means someone edited
-      # requirements.txt without recompiling — fail fast instead of testing a
-      # dependency set that differs from what contributors lock against.
+      # Drift guard: regenerating the lock must be byte-identical regardless of
+      # the generating OS. --no-annotate/--no-header keep the output flat and
+      # deterministic (uv's "# via" comments differ per platform, which made
+      # annotated locks churn). A diff here means requirements.txt changed
+      # without a recompile — fail fast instead of testing a dependency set
+      # that differs from what contributors lock against.
       - name: Lockfile freshness check
         run: |
           python -m pip install --upgrade pip
           pip install uv
-          uv pip compile requirements.txt --universal -o requirements.lock
+          uv pip compile requirements.txt --universal --no-annotate --no-header -o requirements.lock
           git diff --exit-code requirements.lock
 
       - name: Set up Python ${{ matrix.python-version }}

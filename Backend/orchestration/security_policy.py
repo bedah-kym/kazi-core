@@ -11,6 +11,7 @@ from django.core.cache import cache
 from chatbot.models import Chatroom
 
 ROOM_ACCESS_TTL_SECONDS = 300
+ROOM_ACCESS_EPOCH_KEY = "room_access_epoch"
 
 SENSITIVE_ACTIONS = {
     "send_email",
@@ -119,9 +120,11 @@ def sanitize_parameters(params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 async def user_has_room_access(user_id: Optional[int], room_id: Optional[int]) -> bool:
+    # Missing ids mean the request could not be scoped to a real membership;
+    # deny rather than grant (fail closed).
     if not user_id or not room_id:
-        return True
-    cache_key = f"room_access:{user_id}:{room_id}"
+        return False
+    cache_key = _room_access_cache_key(user_id, room_id)
     cached = cache.get(cache_key)
     if cached is not None:
         return bool(cached)
@@ -132,6 +135,27 @@ async def user_has_room_access(user_id: Optional[int], room_id: Optional[int]) -
     allowed = await sync_to_async(_check)()
     cache.set(cache_key, 1 if allowed else 0, ROOM_ACCESS_TTL_SECONDS)
     return bool(allowed)
+
+
+def _room_access_cache_key(user_id: int, room_id: int) -> str:
+    # The epoch segment makes every pre-bump entry unreachable at once — used
+    # when membership changes that we cannot enumerate precisely occur
+    # (e.g. cascade deletions of Members or whole rooms).
+    epoch = cache.get(ROOM_ACCESS_EPOCH_KEY) or 0
+    return f"room_access:v{epoch}:{user_id}:{room_id}"
+
+
+def invalidate_room_access_cache(user_ids, room_ids) -> None:
+    for uid in user_ids:
+        for rid in room_ids:
+            cache.delete(_room_access_cache_key(uid, rid))
+
+
+def bump_room_access_epoch() -> None:
+    try:
+        cache.incr(ROOM_ACCESS_EPOCH_KEY)
+    except ValueError:
+        cache.set(ROOM_ACCESS_EPOCH_KEY, 1, None)
 
 
 def sanitize_steps(steps: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:

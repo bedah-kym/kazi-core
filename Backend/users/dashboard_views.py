@@ -10,7 +10,6 @@ from django.core.cache import cache
 from django.http import JsonResponse
 from datetime import timedelta
 from chatbot.models import Chatroom, Message, Reminder
-from users.models import Wallet
 from users.decorators import workspace_required
 
 
@@ -63,7 +62,7 @@ def dashboard(request):
         recent_activity.append({
             'icon': 'fas fa-comment',
             'icon_class': 'stat-icon-info',
-            'text': f'New message in chatroom',
+            'text': 'New message in chatroom',
             'timestamp': msg.timestamp
         })
 
@@ -114,7 +113,7 @@ def _room_display_name(room, members, current_user):
 
     display = ", ".join([m.User.username for m in other_members[:2]])
     if len(other_members) > 2:
-        display += f" +{len(other_members)-2}"
+        display += f" +{len(other_members) - 2}"
     return display
 
 

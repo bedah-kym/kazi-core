@@ -25,7 +25,7 @@ async def test_orchestration():
     ]
 
     for query in test_queries:
-        print(f"\n\n{'='*60}")
+        print(f"\n\n{'=' * 60}")
         print(f"TESTING: {query}")
         print("=" * 60)
 
@@ -41,7 +41,7 @@ async def test_orchestration():
                 "room_id": 1
             })
 
-            print(f"✅ Intent parsed:")
+            print("✅ Intent parsed:")
             print(f"   - Action: {intent.get('action')}")
             print(f"   - Confidence: {intent.get('confidence')}")
             print(f"   - Parameters: {intent.get('parameters', {})}")
@@ -56,7 +56,7 @@ async def test_orchestration():
                     "username": "test_user"
                 })
 
-                print(f"✅ MCP Result:")
+                print("✅ MCP Result:")
                 print(f"   - Status: {result.get('status')}")
                 print(f"   - Message: {result.get('message', '')[:100]}")
 
@@ -72,9 +72,9 @@ async def test_orchestration():
                     response_text = "".join(full_response)
                     print(f"✅ Synthesized Response: {response_text[:200]}...")
                 else:
-                    print(f"⚠️  MCP failed, should fall back to LLM")
+                    print("⚠️  MCP failed, should fall back to LLM")
             else:
-                print(f"\n[2] Low confidence, falling back to LLM...")
+                print("\n[2] Low confidence, falling back to LLM...")
                 from orchestration.llm_client import get_llm_client
                 llm = get_llm_client()
 

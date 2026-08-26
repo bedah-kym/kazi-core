@@ -2,7 +2,7 @@
 import csv
 import os
 import tempfile
-from datetime import datetime, timedelta
+from datetime import timedelta
 from unittest.mock import AsyncMock, patch
 
 from asgiref.sync import async_to_sync

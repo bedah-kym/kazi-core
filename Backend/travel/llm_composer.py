@@ -1,6 +1,6 @@
 import logging
 import json
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any
 from orchestration.llm_client import get_llm_client, extract_json
 
 logger = logging.getLogger(__name__)
@@ -69,7 +69,7 @@ class LLMComposer:
 
     def _get_system_prompt(self) -> str:
         return """You are an expert travel agent. Your goal is to create the *perfect* itinerary from a list of options.
-        
+
 Rules:
 1. Logic: Ensure transport arrival times work with check-in times.
 2. Value: Balance price and quality.
@@ -78,7 +78,7 @@ Rules:
 """
 
     def _get_user_prompt(self, trip: Dict, options: Dict) -> str:
-        return f"""Plan a trip from {trip['origin']} to {trip['destination']} 
+        return f"""Plan a trip from {trip['origin']} to {trip['destination']}
 Dates: {trip['start_date']} to {trip['end_date']}
 
 Available Options (JSON):
@@ -94,7 +94,7 @@ JSON Response Format:
   "selected_items": [
     {{
       "type": "bus|flight|hotel|event",
-      "id": "unique_id_from_options", 
+      "id": "unique_id_from_options",
       "reason": "Why you chose this (short sentence)"
     }}
   ]
@@ -124,8 +124,10 @@ JSON Response Format:
                 }
 
                 # Add time info if available
-                if 'departure_time' in item: mini_item['time'] = f"{item['departure_time']} - {item.get('arrival_time')}"
-                if 'start_time' in item: mini_item['time'] = item['start_time']
+                if 'departure_time' in item:
+                    mini_item['time'] = f"{item['departure_time']} - {item.get('arrival_time')}"
+                if 'start_time' in item:
+                    mini_item['time'] = item['start_time']
 
                 minified[category].append(mini_item)
 

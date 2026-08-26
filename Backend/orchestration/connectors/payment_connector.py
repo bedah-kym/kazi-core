@@ -3,7 +3,6 @@ Read-Only Payment Connector for AI (Mathia)
 Strict permissions: Can only READ payment data, cannot initiate transactions
 """
 import logging
-from decimal import Decimal
 from orchestration.base_connector import BaseConnector
 
 logger = logging.getLogger(__name__)

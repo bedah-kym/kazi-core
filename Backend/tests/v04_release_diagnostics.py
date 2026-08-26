@@ -16,12 +16,9 @@ keys are configured, so don't wire it into CI without --skip flags.
 from __future__ import annotations
 
 import asyncio
-import json
 import os
-import sys
-import time
 import traceback
-from typing import Callable, Optional
+from typing import Callable
 
 
 RESULTS: list[tuple[str, str, str]] = []  # (category, name, outcome[+detail])
@@ -29,7 +26,7 @@ RESULTS: list[tuple[str, str, str]] = []  # (category, name, outcome[+detail])
 
 def _record(category: str, name: str, outcome: str) -> None:
     RESULTS.append((category, name, outcome))
-    print(f"  [{outcome.split(':',1)[0]:5}] {name}: {outcome.split(':',1)[1].strip() if ':' in outcome else ''}")
+    print(f"  [{outcome.split(':', 1)[0]:5}] {name}: {outcome.split(':', 1)[1].strip() if ':' in outcome else ''}")
 
 
 def check(category: str, name: str):
@@ -294,7 +291,8 @@ def _():
 
     User = get_user_model()
     user, _ = User.objects.get_or_create(username="diag-user", defaults={"email": "diag@example.com"})
-    user.set_password("x"); user.save()
+    user.set_password("x")
+    user.save()
     token, _ = Token.objects.get_or_create(user=user)
 
     # Use the seeded demo workflow if present, else create one with unsafe step
@@ -585,7 +583,7 @@ def _():
     if result.get("status") == "error" and "Unsupported" in (result.get("message") or result.get("error", "")):
         return f"FAIL: BUG #1 confirmed — {result.get('message') or result.get('error')}"
     if result.get("status") == "success":
-        return f"echo dispatched ok via workflow executor"
+        return "echo dispatched ok via workflow executor"
     return f"NOTE: unexpected result shape: {result}"
 
 

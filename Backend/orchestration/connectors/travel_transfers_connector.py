@@ -3,7 +3,7 @@ Travel Transfers Connector
 Searches for ground transfers using Amadeus Transfer Offers API
 """
 import logging
-from typing import Dict, Any, List
+from typing import Dict, List
 from asgiref.sync import sync_to_async
 from django.conf import settings
 from orchestration.connectors.base_travel_connector import BaseTravelConnector
@@ -150,8 +150,8 @@ class TravelTransfersConnector(BaseTravelConnector):
                 price_ksh = self._convert_to_ksh(total, currency)
 
                 results.append({
-                    'id': f"transfer_{i+1:03d}",
-                    'provider_id': str(offer.get('id', f"offer_{i+1}")),
+                    'id': f"transfer_{i + 1:03d}",
+                    'provider_id': str(offer.get('id', f"offer_{i + 1}")),
                     'provider': 'Amadeus',
                     'vehicle_type': vehicle.get('code', 'Sedan'),
                     'capacity': int(vehicle.get('seats', 4) or 4),

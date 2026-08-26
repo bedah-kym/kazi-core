@@ -1,8 +1,6 @@
 import logging
 import os
-import time
 import django
-from django.conf import settings
 from datetime import datetime
 from django.core.cache import cache
 
@@ -11,7 +9,6 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'Backend.settings')
 django.setup()
 
 from users.quota_service import QuotaService
-from chatbot.models import DocumentUpload
 from django.contrib.auth import get_user_model
 User = get_user_model()
 

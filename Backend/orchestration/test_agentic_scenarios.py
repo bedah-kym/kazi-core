@@ -475,11 +475,11 @@ class SubAgentBudgetTests(SimpleTestCase):
                 patch(
                     "orchestration.agent_loop._execute_with_timeout",
                     new=AsyncMock(return_value={"status": "success"}),
-                ) as mock_exec, \
+        ) as mock_exec, \
                 patch(
                     "orchestration.agent_loop.update_memory_state",
                     new=AsyncMock(),
-                ), \
+        ), \
                 patch("orchestration.agent_loop.record_event") as mock_record:
             result = run_async(_run_sub_agent(
                 {"task": "Do the thing"},

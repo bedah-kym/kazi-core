@@ -1221,7 +1221,7 @@ class LLMClient:
             start = clean_text.find("{")
             end = clean_text.rfind("}")
             if start != -1 and end != -1:
-                json_str = clean_text[start:end+1]
+                json_str = clean_text[start:end + 1]
                 # Primary attempt
                 try:
                     return json.loads(json_str)

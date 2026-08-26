@@ -4,11 +4,8 @@ User frontend views for Wallet, Reminders, Settings, and Profile pages
 from django.shortcuts import render, redirect
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
-from django.utils import timezone
 from datetime import datetime
 from chatbot.models import Reminder
-from users.models import Wallet, WalletTransaction
-from orchestration.connectors.intersend_connector import IntersendPayConnector
 
 
 # Wallet views moved to payments app

@@ -1,7 +1,6 @@
 
 import logging
 from datetime import timedelta
-from dateutil import parser
 from django.utils import timezone
 from .models import Reminder, Chatroom
 from django.contrib.auth import get_user_model
@@ -86,8 +85,6 @@ class ReminderService:
     @staticmethod
     def send_via_email(reminder):
         """Send reminder via Mailgun"""
-        from django.conf import settings
-        import requests
         # Using official SDK logic conceptually or requests if SDK wrapper not ready yet.
         # Ideally import mailgun
 

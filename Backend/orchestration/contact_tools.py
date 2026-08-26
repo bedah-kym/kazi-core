@@ -128,7 +128,7 @@ async def execute_lookup_contact(
 
         # Fallback: workspace members if no dedicated contacts found
         if not results:
-            from chatbot.models import Chatroom, Member
+            from chatbot.models import Chatroom
             try:
                 if room_id:
                     room = Chatroom.objects.get(id=room_id)

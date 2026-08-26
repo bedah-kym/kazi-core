@@ -4,13 +4,12 @@ High-level services for itinerary building, composition, and management
 """
 import logging
 import json
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Optional
 from datetime import datetime, timedelta
-from django.db import transaction
 from django.utils import timezone
 from asgiref.sync import sync_to_async
 
-from orchestration.llm_client import get_llm_client, extract_json
+from orchestration.llm_client import get_llm_client
 from travel.models import Itinerary, ItineraryItem, BookingReference
 from orchestration.tool_router import MCPRouter
 
@@ -114,15 +113,22 @@ class ItineraryBuilder:
                     cat = item_data.get('_category', 'other')
 
                     # Map category to item_type
-                    if 'bus' in cat: item_type = 'bus'
-                    elif 'flight' in cat: item_type = 'flight'
-                    elif 'hotel' in cat: item_type = 'hotel'
-                    elif 'event' in cat: item_type = 'event'
-                    elif 'transfer' in cat: item_type = 'transfer'
-                    else: item_type = 'activity'
+                    if 'bus' in cat:
+                        item_type = 'bus'
+                    elif 'flight' in cat:
+                        item_type = 'flight'
+                    elif 'hotel' in cat:
+                        item_type = 'hotel'
+                    elif 'event' in cat:
+                        item_type = 'event'
+                    elif 'transfer' in cat:
+                        item_type = 'transfer'
+                    else:
+                        item_type = 'activity'
 
                     # Create Item
-                    title = item_data.get('title') or item_data.get('name') or item_data.get('company') or f"{item_type.title()} Option"
+                    title = item_data.get('title') or item_data.get(
+                        'name') or item_data.get('company') or f"{item_type.title()} Option"
 
                     notes = item_data.get('ai_reasoning', '')
                     start_dt = _coerce_item_datetime(
@@ -160,7 +166,7 @@ class ItineraryBuilder:
             # Add buses
             for bus in search_results.get('buses', [])[:3]:  # Add top 3 buses
                 start_dt = _coerce_item_datetime(bus.get('departure_datetime'), start)
-                item = await sync_to_async(ItineraryItem.objects.create)(
+                await sync_to_async(ItineraryItem.objects.create)(
                     itinerary=itinerary,
                     item_type='bus',
                     title=f"{bus.get('company', 'Bus')} - {bus.get('departure_time')} to {bus.get('arrival_time')}",
@@ -177,7 +183,7 @@ class ItineraryBuilder:
                 nights = (end - start).days or 1
                 total_price = hotel.get('price_ksh', 0) * nights
 
-                item = await sync_to_async(ItineraryItem.objects.create)(
+                await sync_to_async(ItineraryItem.objects.create)(
                     itinerary=itinerary,
                     item_type='hotel',
                     title=f"{hotel.get('name', 'Hotel')} - {nights} nights",
@@ -193,7 +199,7 @@ class ItineraryBuilder:
             # Add flights if available
             for flight in search_results.get('flights', [])[:1]:  # Add top flight
                 start_dt = _coerce_item_datetime(flight.get('departure_datetime'), start)
-                item = await sync_to_async(ItineraryItem.objects.create)(
+                await sync_to_async(ItineraryItem.objects.create)(
                     itinerary=itinerary,
                     item_type='flight',
                     title=f"{flight.get('airline', 'Flight')} {flight.get('flight_number', '')} - {flight.get('departure_time')}",
@@ -208,7 +214,7 @@ class ItineraryBuilder:
             # Add transfers
             for transfer in search_results.get('transfers', [])[:1]:  # Add top transfer
                 start_dt = _coerce_item_datetime(transfer.get('travel_datetime'), start)
-                item = await sync_to_async(ItineraryItem.objects.create)(
+                await sync_to_async(ItineraryItem.objects.create)(
                     itinerary=itinerary,
                     item_type='transfer',
                     title=f"{transfer.get('provider', 'Transfer')} - {transfer.get('vehicle_type', 'Vehicle')}",
@@ -223,7 +229,7 @@ class ItineraryBuilder:
             # Add events
             for event in search_results.get('events', [])[:3]:  # Add top 3 events
                 start_dt = _coerce_item_datetime(event.get('start_datetime'), start)
-                item = await sync_to_async(ItineraryItem.objects.create)(
+                await sync_to_async(ItineraryItem.objects.create)(
                     itinerary=itinerary,
                     item_type='event',
                     title=event.get('title', 'Event'),
@@ -253,13 +259,13 @@ class ItineraryBuilder:
 
         prompt = f"""
         Generate a concise travel itinerary summary for this trip:
-        
+
         Trip: {itinerary.title}
         From {itinerary.start_date.date()} to {itinerary.end_date.date()}
-        
+
         Planned items:
         {chr(10).join(item_summaries)}
-        
+
         Provide a brief, engaging summary (2-3 sentences) highlighting the key activities and approximate budget.
         """
 
@@ -379,10 +385,10 @@ class ExportService:
         ical_lines = [
             "BEGIN:VCALENDAR",
             "VERSION:2.0",
-            f"PRODID:-//Mathia Travel//EN",
-            f"CALSCALE:GREGORIAN",
+            "PRODID:-//Mathia Travel//EN",
+            "CALSCALE:GREGORIAN",
             f"X-WR-CALNAME:{itinerary.title}",
-            f"X-WR-TIMEZONE:Africa/Nairobi",
+            "X-WR-TIMEZONE:Africa/Nairobi",
         ]
 
         for item in items:
@@ -496,9 +502,9 @@ class BookingOrchestrator:
         elif provider == 'buupass':
             # Add Buupass referral code
             if '?' in booking_url:
-                booking_url += f"&ref=MATHIA"
+                booking_url += "&ref=MATHIA"
             else:
-                booking_url += f"?ref=MATHIA"
+                booking_url += "?ref=MATHIA"
 
         logger.info(f"Generated booking URL for item {item_id}: {booking_url}")
         return booking_url

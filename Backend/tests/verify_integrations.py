@@ -1,7 +1,6 @@
 
 import os
 import django
-from django.conf import settings
 
 # Setup Django
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'Backend.settings')
@@ -9,8 +8,6 @@ django.setup()
 
 from users.models import User, Workspace, UserIntegration
 from users.integrations_views import encrypt_data, decrypt_data
-from django.test import RequestFactory
-from users.integrations_views import connect_whatsapp
 
 
 def verify():
@@ -22,7 +19,7 @@ def verify():
         User.objects.filter(username=username).delete()
 
     user = User.objects.create_user(username=username, password="password")
-    workspace = Workspace.objects.create(user=user, name="Test Workspace")
+    Workspace.objects.create(user=user, name="Test Workspace")
 
     print(f"Created user: {user.username}")
 
@@ -43,7 +40,7 @@ def verify():
         'phone_number': '+254700000000'
     }
 
-    integration = UserIntegration.objects.create(
+    UserIntegration.objects.create(
         user=user,
         integration_type='whatsapp',
         encrypted_credentials=encrypt_data(creds),

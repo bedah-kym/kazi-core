@@ -2,7 +2,6 @@ import asyncio
 import logging
 import os
 import django
-from django.conf import settings
 
 # Setup Django standalone
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'Backend.settings')

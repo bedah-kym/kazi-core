@@ -2,12 +2,11 @@
 Wallet, Reminders, and Settings views with workspace guards
 """
 from django.shortcuts import render, redirect
-from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django.utils import timezone
 from datetime import timedelta
 from users.decorators import workspace_required
-from users.models import Wallet, PlatformInvite
+from users.models import PlatformInvite
 from users.forms import UserForm, UserProfileForm
 from chatbot.models import Reminder
 

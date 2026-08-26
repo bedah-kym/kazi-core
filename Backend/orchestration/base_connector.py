@@ -10,7 +10,6 @@ import logging
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
-from orchestration.connectors.connector_error import ConnectorError
 
 logger = logging.getLogger(__name__)
 

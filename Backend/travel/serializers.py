@@ -1,6 +1,5 @@
 """REST Framework serializers for travel planner endpoints"""
 from rest_framework import serializers
-from django.contrib.auth.models import User
 from .models import Itinerary, ItineraryItem, Event, SearchCache, BookingReference
 
 

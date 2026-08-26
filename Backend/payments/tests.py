@@ -457,8 +457,10 @@ class DepositInitiationTests(TransactionTestCase):
             'INTASEND_API_KEY': 'test-sk',
             'INTASEND_IS_TEST': 'true',
         }
-        with patch.dict(sys.modules, {'intasend': self.fake_intasend}), \
-             patch.dict(os.environ, env):
+        with (
+            patch.dict(sys.modules, {'intasend': self.fake_intasend}),
+            patch.dict(os.environ, env),
+        ):
             return self.client.post('/payments/wallet/deposit/', {'amount': amount})
 
     def test_initiation_persists_intent_with_tracking_id(self):

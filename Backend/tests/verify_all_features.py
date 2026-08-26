@@ -2,15 +2,12 @@
 import os
 import django
 import asyncio
-import json
-from django.utils import timezone
-from datetime import timedelta
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "Backend.settings")
 django.setup()
 
 from django.contrib.auth import get_user_model
-from chatbot.models import Chatroom, RoomContext, RoomNote
+from chatbot.models import Chatroom
 from chatbot.context_manager import ContextManager
 from orchestration.intent_parser import parse_intent
 from orchestration.tool_router import route_intent

@@ -34,7 +34,7 @@ class WhatsAppConnector(BaseConnector):
         try:
             temp_client = Client(account_sid, auth_token)
             # Fetch account details to verify credentials
-            account = temp_client.api.v2010.accounts(account_sid).fetch()
+            temp_client.api.v2010.accounts(account_sid).fetch()
             return True, "Credentials valid"
         except Exception as e:
             logger.error(f"WhatsApp Validation Error: {e}")

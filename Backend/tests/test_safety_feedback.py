@@ -2,7 +2,6 @@ import asyncio
 import logging
 import os
 import django
-from django.conf import settings
 
 # Setup Django standalone
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'Backend.settings')
@@ -23,7 +22,8 @@ async def test_safety_scorer():
     # 1. Test High Risk (Static)
     res = await scorer.assess_location("Somalia Border")
     logger.info(f"Location: {res['location']}, Risk: {res['risk_level']}, Warn: {res['warnings']}")
-    if res['risk_level'] != 'High': logger.error("Expected High risk for border")
+    if res['risk_level'] != 'High':
+        logger.error("Expected High risk for border")
 
     # 2. Test Low Risk + LLM Advisory
     res = await scorer.assess_location("Diani Beach")
@@ -36,7 +36,8 @@ async def test_safety_scorer():
     ]
     alerts = await scorer.assess_itinerary_logistics(items)
     logger.info(f"Logistics Alerts: {alerts}")
-    if not alerts: logger.warning("Expected alert for late bus")
+    if not alerts:
+        logger.warning("Expected alert for late bus")
 
 
 async def test_feedback_collector():

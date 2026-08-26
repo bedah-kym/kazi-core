@@ -1,16 +1,13 @@
 import asyncio
-import json
 import logging
 import os
 import django
-from django.conf import settings
 
 # Setup Django standalone
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'Backend.settings')
 django.setup()
 
 from travel.llm_composer import LLMComposer
-from travel.services import ItineraryBuilder
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -27,8 +24,8 @@ MOCK_SEARCH_RESULTS = {
         {'id': 'hotel_2', 'name': 'Backpackers', 'price_ksh': 3000, 'rating': 4.2, 'location': 'City'},
     ],
     'activities': [
-         {'id': 'act_1', 'title': 'Marine Park', 'price_ksh': 1000, 'rating': 4.9},
-         {'id': 'act_2', 'title': 'Old Town Walk', 'price_ksh': 500, 'rating': 4.5},
+        {'id': 'act_1', 'title': 'Marine Park', 'price_ksh': 1000, 'rating': 4.9},
+        {'id': 'act_2', 'title': 'Old Town Walk', 'price_ksh': 500, 'rating': 4.5},
     ]
 }
 

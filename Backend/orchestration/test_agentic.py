@@ -6,9 +6,7 @@ confirmation pause/resume, error recovery, iteration/token limits, dedup,
 model selection, web search rate limiting, result sanitization, approval overrides.
 """
 import asyncio
-import json
-import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 from django.test import SimpleTestCase, override_settings
 

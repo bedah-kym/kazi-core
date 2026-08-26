@@ -1,7 +1,7 @@
 import logging
 import csv
 import os
-from typing import Dict, List, Optional
+from typing import Dict
 from django.conf import settings
 from orchestration.tool_router import route_intent
 
@@ -20,7 +20,8 @@ class VisaService:
         self.loaded = False
 
     def _load_data(self):
-        if self.loaded: return
+        if self.loaded:
+            return
 
         try:
             with open(self.dataset_path, 'r', encoding='utf-8') as f:

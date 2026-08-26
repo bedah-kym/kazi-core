@@ -1,6 +1,5 @@
 import os
 import django
-from django.conf import settings
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'Backend.settings')
 django.setup()
@@ -40,7 +39,6 @@ else:
         print("FAIL: No room created for user.")
 
 # Check for warnings/deprecation settings
-import warnings
 print("Checking settings...")
 # Basic check if it loaded without error
 print("Settings loaded successfully.")

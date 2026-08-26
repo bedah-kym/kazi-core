@@ -652,6 +652,65 @@ class Te2FailClosedTests(SimpleTestCase):
         self.assertIn("Rate limit", outcomes[2]["reason"])
 
 
+class MemoryStateEntityTests(SimpleTestCase):
+    """e7: tool RESULT payloads are vendor data — they must not overwrite the
+    user's own entities, persist into RoomContext.memory_facts, or masquerade
+    as confirmed knowledge in the memory summary."""
+
+    def setUp(self):
+        cache.clear()
+
+    def _update(self, *, params=None, result=None, user_id=701):
+        from orchestration.memory_state import update_memory_state
+
+        return async_to_sync(update_memory_state)(
+            {"user_id": user_id},
+            action="get_weather",
+            params=params,
+            result=result,
+        )
+
+    @patch("orchestration.memory_state._persist_entities_to_db", new_callable=AsyncMock)
+    def test_result_payloads_do_not_overwrite_user_entities(self, mock_persist):
+        state = self._update(params={"city": "Nairobi"})
+        self.assertEqual(state["entities"]["city"], "Nairobi")
+
+        state = self._update(
+            result={"city": "London", "email": "support@vendor.com"},
+        )
+        self.assertEqual(state["entities"]["city"], "Nairobi")
+        self.assertNotIn("email", state["entities"])
+
+    @patch("orchestration.memory_state._persist_entities_to_db", new_callable=AsyncMock)
+    def test_result_entities_are_provisional_only(self, mock_persist):
+        from orchestration.memory_state import build_memory_summary
+
+        state = self._update(
+            params={"origin": "NBO"},
+            result={"itinerary_id": "IT-99", "email": "booking@airline.example"},
+        )
+        self.assertEqual(state["result_entities"]["itinerary_id"], "IT-99")
+        self.assertNotIn("itinerary_id", state["entities"])
+        self.assertNotIn("email", state["entities"])
+
+        summary = build_memory_summary(state)
+        self.assertIn("Known entities: origin=NBO", summary)
+        self.assertIn("provisional", summary)
+        self.assertIn("itinerary_id=IT-99", summary)
+
+    @patch("orchestration.memory_state._persist_entities_to_db", new_callable=AsyncMock)
+    def test_persistence_receives_trusted_entities_only(self, mock_persist):
+        self._update(
+            params={"destination": "Mombasa"},
+            result={"email": "support@vendor.com", "amount": "999"},
+        )
+        mock_persist.assert_awaited_once()
+        persisted = mock_persist.await_args.args[1]
+        self.assertEqual(persisted.get("destination"), "Mombasa")
+        self.assertNotIn("email", persisted)
+        self.assertNotIn("amount", persisted)
+
+
 class RoomAccessCacheTests(TestCase):
     """e6: the room-access cache must never outlive a membership change and
     must fail closed when the request cannot be scoped to real ids."""

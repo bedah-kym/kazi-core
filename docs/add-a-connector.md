@@ -94,7 +94,8 @@ class WeatherConnectorTests(SimpleTestCase):
 
 - **Register the connector anywhere.** The registry scans the
   directory at boot.
-- **Touch `mcp_router.py`.** Connector resolution flows through
+- **Touch `tool_router.py`** (renamed from `mcp_router.py` in v0.5; the
+  old name is a deprecation shim). Connector resolution flows through
   `connector_registry.discover_connectors()` (v0.4 M2-1).
 - **Update `action_catalog.py`.** Your `get_action_catalog_entries()`
   return value is registered automatically.

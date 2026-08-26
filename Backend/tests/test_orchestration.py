@@ -49,7 +49,7 @@ async def test_orchestration():
             # Step 2: Route Intent (if high confidence)
             if intent.get('confidence', 0) >= 0.7:
                 print("\n[2] Routing Intent via MCP...")
-                from orchestration.mcp_router import route_intent
+                from orchestration.tool_router import route_intent
                 result = await route_intent(intent, {
                     "user_id": 1,
                     "room_id": 1,

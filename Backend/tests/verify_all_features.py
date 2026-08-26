@@ -13,7 +13,7 @@ from django.contrib.auth import get_user_model
 from chatbot.models import Chatroom, RoomContext, RoomNote
 from chatbot.context_manager import ContextManager
 from orchestration.intent_parser import parse_intent
-from orchestration.mcp_router import route_intent
+from orchestration.tool_router import route_intent
 
 User = get_user_model()
 

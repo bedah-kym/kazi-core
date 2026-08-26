@@ -108,7 +108,7 @@ class RecommendationService:
         """
         Verify an activity using online search, subject to rate limits.
         """
-        from orchestration.mcp_router import route_intent
+        from orchestration.tool_router import route_intent
 
         logger.info(f"Verifying activity online: {activity_name}")
 

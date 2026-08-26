@@ -93,7 +93,7 @@ async def async_search_proxy(payload, user):
     Actually, we can't easily call async view from sync script without test client async support.
     We will just skip the router execution and trust unit tests, focusing on DB integration here.
     """
-    from orchestration.mcp_router import MCPRouter
+    from orchestration.tool_router import MCPRouter
     router = MCPRouter()
     # verify router instantiates
     return {}

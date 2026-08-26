@@ -3,7 +3,7 @@ import csv
 import os
 from typing import Dict, List, Optional
 from django.conf import settings
-from orchestration.mcp_router import route_intent
+from orchestration.tool_router import route_intent
 
 logger = logging.getLogger(__name__)
 

@@ -301,7 +301,7 @@ def _load_legacy_connectors() -> Dict[str, Any]:
         from orchestration.connectors.travel_transfers_connector import TravelTransfersConnector
         from orchestration.connectors.travel_events_connector import TravelEventsConnector
         from orchestration.connectors.itinerary_connector import ItineraryConnector
-        from orchestration.mcp_router import (
+        from orchestration.tool_router import (
             CalendarConnector,
             SearchConnector,
             WeatherConnector,

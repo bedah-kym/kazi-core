@@ -456,3 +456,118 @@ class MetaToolTests(SimpleTestCase):
         from orchestration.agent_loop import _META_TOOL_NAMES
         self.assertIn("delegate_task", _META_TOOL_NAMES)
         self.assertIn("handoff_to_workflow", _META_TOOL_NAMES)
+
+
+# ---------------------------------------------------------------------------
+#  LLM stream fallback: buffer-or-discard policy
+# ---------------------------------------------------------------------------
+
+class LLMStreamFallbackTests(SimpleTestCase):
+    """
+    Once the first delta/event has reached the consumer, a provider failure must
+    surface instead of falling back — restarting generation duplicates partial
+    output in the chat UI.
+    """
+
+    def _client(self, *, anthropic=None, hf=None, deepseek=None):
+        from orchestration.llm_client import LLMClient
+        client = LLMClient()
+        client.anthropic_key = anthropic
+        client.hf_key = hf
+        client.deepseek_key = deepseek
+        return client
+
+    @staticmethod
+    def _stream_factory(chunks, exc=None, calls=None):
+        if calls is None:
+            calls = []
+
+        async def _gen(*args, **kwargs):
+            calls.append(args)
+            for chunk in chunks:
+                yield chunk
+            if exc is not None:
+                raise exc
+        return _gen
+
+    def test_stream_text_falls_back_before_first_delta(self):
+        from asgiref.sync import async_to_sync
+
+        async def run():
+            client = self._client(deepseek="fake-key", hf="fake-key")
+
+            def router(*args, **kwargs):
+                if kwargs.get("provider") == "deepseek":
+                    return LLMStreamFallbackTests._stream_factory(
+                        [], RuntimeError("ds down"))(*args, **kwargs)
+                return LLMStreamFallbackTests._stream_factory(["ok"])(*args, **kwargs)
+
+            client._stream_huggingface = router
+            collected = []
+            async for chunk in client.stream_text("sys", "usr"):
+                collected.append(chunk)
+            return collected
+
+        self.assertEqual(async_to_sync(run)(), ["ok"])
+
+    def test_stream_text_surfaces_error_after_first_delta(self):
+        from asgiref.sync import async_to_sync
+
+        async def run():
+            client = self._client(deepseek="fake-key", hf="fake-key")
+            fallback_seen = []
+
+            def router(*args, **kwargs):
+                if kwargs.get("provider") == "deepseek":
+                    return LLMStreamFallbackTests._stream_factory(
+                        ["par"], RuntimeError("ds mid-stream"))(*args, **kwargs)
+                return LLMStreamFallbackTests._stream_factory(
+                    ["duplicated"], calls=fallback_seen)(*args, **kwargs)
+
+            client._stream_huggingface = router
+            collected = []
+            with self.assertRaises(RuntimeError):
+                async for chunk in client.stream_text("sys", "usr"):
+                    collected.append(chunk)
+            return collected, fallback_seen
+
+        collected, fallback_seen = async_to_sync(run)()
+        self.assertEqual(collected, ["par"])
+        self.assertEqual(fallback_seen, [])
+
+    def test_stream_message_falls_back_before_first_event(self):
+        from asgiref.sync import async_to_sync
+
+        async def run():
+            client = self._client(anthropic="fake-key", hf="fake-key")
+            client._stream_anthropic_events = LLMStreamFallbackTests._stream_factory(
+                [], RuntimeError("anthropic down"))
+            client._stream_huggingface = LLMStreamFallbackTests._stream_factory(["fb"])
+            events = []
+            async for event in client.stream_message(messages=[], system="s"):
+                events.append(event)
+            return events
+
+        events = async_to_sync(run)()
+        self.assertEqual(events[0], {"type": "text", "text": "fb"})
+        self.assertEqual(events[-1]["type"], "message_done")
+
+    def test_stream_message_surfaces_error_after_first_event(self):
+        from asgiref.sync import async_to_sync
+
+        async def run():
+            client = self._client(anthropic="fake-key", hf="fake-key")
+            fallback_seen = []
+            client._stream_anthropic_events = LLMStreamFallbackTests._stream_factory(
+                [{"type": "text", "text": "par"}], RuntimeError("mid-stream"))
+            client._stream_huggingface = lambda *a, **k: (
+                LLMStreamFallbackTests._stream_factory([], calls=fallback_seen)(*a, **k))
+            events = []
+            with self.assertRaises(RuntimeError):
+                async for event in client.stream_message(messages=[], system="s"):
+                    events.append(event)
+            return events, fallback_seen
+
+        events, fallback_seen = async_to_sync(run)()
+        self.assertEqual(events, [{"type": "text", "text": "par"}])
+        self.assertEqual(fallback_seen, [])

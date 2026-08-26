@@ -133,8 +133,8 @@ jobs:
           coverage run --source=Backend --omit='*/migrations/*,*/tests/*,*/test_*.py,*/tests.py' \
             Backend/manage.py test --noinput --verbosity=2 orchestration workflows chatbot travel notifications tests users Api payments
           coverage xml -o coverage.xml
-          # Floor = measured 39% (2026-08) minus margin; ratchet upward as suites mature.
-          coverage report --skip-covered --fail-under=35
+          # Floor = measured 45% (2026-08) minus margin; ratchet upward as suites mature.
+          coverage report --skip-covered --fail-under=43
 
   # Proves the suite runs hermetically (SQLite + LocMem cache, no service
   # containers). Guards against tests silently requiring external infra.

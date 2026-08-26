@@ -104,7 +104,7 @@ class LedgerPostingTests(TransactionTestCase):
 class WalletDepositTests(TransactionTestCase):
     def setUp(self):
         self.user = get_user_model().objects.create_user(
-            username='deposit-user', email='example@example.com', password='fake-token',
+            username='deposit-user', email='example@example.com', password='fake-token',  # nosec B106 — test fixture — fake credential
         )
         self.wallet = WalletService.get_or_create_user_wallet(self.user)
 
@@ -147,7 +147,7 @@ class WalletDepositTests(TransactionTestCase):
 class WalletWithdrawalTests(TransactionTestCase):
     def setUp(self):
         self.user = get_user_model().objects.create_user(
-            username='withdraw-user', email='example@example.com', password='fake-token',
+            username='withdraw-user', email='example@example.com', password='fake-token',  # nosec B106 — test fixture — fake credential
         )
         self.wallet = WalletService.get_or_create_user_wallet(self.user)
 
@@ -192,7 +192,7 @@ class ConcurrentWithdrawalTests(TransactionTestCase):
         self.is_postgres = connection.vendor == 'postgresql'
 
         self.user = get_user_model().objects.create_user(
-            username='race-user', email='example@example.com', password='fake-token',
+            username='race-user', email='example@example.com', password='fake-token',  # nosec B106 — test fixture — fake credential
         )
         self.wallet = WalletService.get_or_create_user_wallet(self.user)
         _credit_balance(self.wallet, Decimal('100.00'))
@@ -237,7 +237,7 @@ class ConcurrentWithdrawalTests(TransactionTestCase):
 class InvoicePaymentTests(TransactionTestCase):
     def setUp(self):
         self.issuer = get_user_model().objects.create_user(
-            username='issuer-user', email='example@example.com', password='fake-token',
+            username='issuer-user', email='example@example.com', password='fake-token',  # nosec B106 — test fixture — fake credential
         )
         self.wallet = WalletService.get_or_create_user_wallet(self.issuer)
         self.invoice = PaymentRequest.objects.create(
@@ -280,13 +280,13 @@ class InvoicePaymentTests(TransactionTestCase):
         self.assertEqual(WalletTransaction.objects.count(), 0)
 
 
-@override_settings(INTASEND_WEBHOOK_SECRET='test-challenge-secret')
+@override_settings(INTASEND_WEBHOOK_SECRET='test-challenge-secret')  # nosec B106 — test fixture — fake credential
 @override_settings(CHANNEL_LAYERS={"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}})
 class WebhookCallbackTests(TransactionTestCase):
     def setUp(self):
         FeeSchedule.objects.create(transaction_type='DEPOSIT', platform_fee=Decimal('25.00'))
         self.user = get_user_model().objects.create_user(
-            username='webhook-user', email='webhook@example.com', password='fake-token',
+            username='webhook-user', email='webhook@example.com', password='fake-token',  # nosec B106 — test fixture — fake credential
         )
         self.wallet = WalletService.get_or_create_user_wallet(self.user)
         self.url = '/payments/wallet/callback/'
@@ -392,12 +392,12 @@ class WebhookCallbackTests(TransactionTestCase):
         self.assertEqual(WalletTransaction.objects.count(), 0)
 
 
-@override_settings(INTASEND_WEBHOOK_SECRET='test-challenge-secret')
+@override_settings(INTASEND_WEBHOOK_SECRET='test-challenge-secret')  # nosec B106 — test fixture — fake credential
 @override_settings(CHANNEL_LAYERS={"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}})
 class WebhookInvoiceRoutingTests(TransactionTestCase):
     def setUp(self):
         self.issuer = get_user_model().objects.create_user(
-            username='inv-route-user', email='inv-route@example.com', password='fake-token',
+            username='inv-route-user', email='inv-route@example.com', password='fake-token',  # nosec B106 — test fixture — fake credential
         )
         self.wallet = WalletService.get_or_create_user_wallet(self.issuer)
         self.invoice = PaymentRequest.objects.create(
@@ -440,7 +440,7 @@ class WebhookInvoiceRoutingTests(TransactionTestCase):
 class DepositInitiationTests(TransactionTestCase):
     def setUp(self):
         self.user = get_user_model().objects.create_user(
-            username='initiate-user', email='initiate@example.com', password='fake-token',
+            username='initiate-user', email='initiate@example.com', password='fake-token',  # nosec B106 — test fixture — fake credential
         )
         WalletService.get_or_create_user_wallet(self.user)
         self.client.force_login(self.user)
@@ -480,7 +480,7 @@ class DepositInitiationTests(TransactionTestCase):
 
     def test_tracking_id_owned_by_another_user_returns_409_and_keeps_owner(self):
         other = get_user_model().objects.create_user(
-            username='other-initiator', email='other@example.com', password='fake-token',
+            username='other-initiator', email='other@example.com', password='fake-token',  # nosec B106 — test fixture — fake credential
         )
         WalletService.get_or_create_user_wallet(other)
         DepositIntent.objects.create(
@@ -501,7 +501,7 @@ class DepositInitiationTests(TransactionTestCase):
 class DepositLedgerPostingTests(TransactionTestCase):
     def setUp(self):
         self.user = get_user_model().objects.create_user(
-            username='ledger-deposit-user', email='example@example.com', password='fake-token',
+            username='ledger-deposit-user', email='example@example.com', password='fake-token',  # nosec B106 — test fixture — fake credential
         )
         self.wallet = WalletService.get_or_create_user_wallet(self.user)
 
@@ -586,7 +586,7 @@ class DepositLedgerPostingTests(TransactionTestCase):
 class WithdrawalLedgerPostingTests(TransactionTestCase):
     def setUp(self):
         self.user = get_user_model().objects.create_user(
-            username='ledger-wd-user', email='example@example.com', password='fake-token',
+            username='ledger-wd-user', email='example@example.com', password='fake-token',  # nosec B106 — test fixture — fake credential
         )
         self.wallet = WalletService.get_or_create_user_wallet(self.user)
         _credit_balance(self.wallet, Decimal('500.00'))
@@ -605,7 +605,7 @@ class WithdrawalLedgerPostingTests(TransactionTestCase):
 class InvoiceJournalLinkTests(TransactionTestCase):
     def setUp(self):
         self.issuer = get_user_model().objects.create_user(
-            username='journal-inv-user', email='example@example.com', password='fake-token',
+            username='journal-inv-user', email='example@example.com', password='fake-token',  # nosec B106 — test fixture — fake credential
         )
         self.wallet = WalletService.get_or_create_user_wallet(self.issuer)
         self.invoice = PaymentRequest.objects.create(

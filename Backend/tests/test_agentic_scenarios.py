@@ -108,7 +108,7 @@ class Scenario2MultiToolChainTest(TransactionTestCase):
         self.user = get_user_model().objects.create_user(
             username='scenario2-user',
             email='example@example.com',
-            password='fake-token',
+            password='fake-token',  # nosec B106 — test fixture — fake credential
         )
 
     @patch("orchestration.agent_loop.get_llm_client")
@@ -339,7 +339,7 @@ class Scenario7ConfirmationFlowTest(TransactionTestCase):
         self.user = get_user_model().objects.create_user(
             username='scenario7-user',
             email='example@example.com',
-            password='fake-token',
+            password='fake-token',  # nosec B106 — test fixture — fake credential
         )
 
     @patch("orchestration.agent_loop.get_llm_client")
@@ -411,7 +411,7 @@ class Scenario9CancelPendingTest(TransactionTestCase):
         self.user = get_user_model().objects.create_user(
             username='scenario9-user',
             email='example@example.com',
-            password='fake-token',
+            password='fake-token',  # nosec B106 — test fixture — fake credential
         )
 
     @patch("orchestration.agent_loop.cache")

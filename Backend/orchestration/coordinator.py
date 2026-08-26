@@ -114,7 +114,7 @@ class OrchestrationCoordinator:
         get_context_prompt: Callable[[], Awaitable[str]],
         bump_signals: Callable[[List[Optional[str]]], None],
     ) -> OrchestrationResult:
-        stream_state = {"buffer": [], "last_send": 0, "first_token_sent": False, "full_response": []}
+        stream_state = {"buffer": [], "last_send": 0, "first_token_sent": False, "full_response": []}  # nosec B105 — state keys, not a credential
         turn_step_id = f"turn_{message_id}"
         correlation_id = uuid.uuid4().hex
 

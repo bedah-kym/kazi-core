@@ -18,7 +18,7 @@ class AgentCapsToggleTests(TestCase):
     switch; enforcement reads it with a fail-safe default of ON."""
 
     def setUp(self):
-        self.user = User.objects.create_user(username="caps-user", email="caps@example.com", password="secret")
+        self.user = User.objects.create_user(username="caps-user", email="caps@example.com", password="secret")  # nosec B106 — test fixture — fake credential
         Workspace.objects.create(user=self.user, onboarding_completed=True)
         self.client.force_login(self.user)
 

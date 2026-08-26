@@ -228,7 +228,7 @@ _MONTHS = {
 }
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _PHONE_RE = re.compile(r"\+?\d{7,15}")
-_AUTO_EMAIL_SUMMARY_TOKEN = "__AUTO_SUMMARY__"
+_AUTO_EMAIL_SUMMARY_TOKEN = "__AUTO_SUMMARY__"  # nosec B105 — sentinel marker, not a credential
 _DELIVERY_ACTIONS = {"send_email", "send_message"}
 _RESULT_TEXT_RE = re.compile(r"\b(results?|options?|summary|details)\b", re.IGNORECASE)
 

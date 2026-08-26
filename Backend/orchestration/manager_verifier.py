@@ -7,7 +7,7 @@ import copy
 from workflows.capabilities import SYSTEM_CAPABILITIES, find_dependency_cycle
 from orchestration.user_preferences import format_date_hint, format_time_hint
 
-_AUTO_EMAIL_SUMMARY_TOKEN = "__AUTO_SUMMARY__"
+_AUTO_EMAIL_SUMMARY_TOKEN = "__AUTO_SUMMARY__"  # nosec B105 — sentinel marker, not a credential
 _DELIVERY_ACTIONS = {"send_email", "send_message"}
 _OPTION_PARAM_HINTS = ("item_id", "option", "selection")
 

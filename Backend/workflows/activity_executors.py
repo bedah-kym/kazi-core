@@ -23,7 +23,7 @@ from orchestration.security_policy import should_block_action, sanitize_paramete
 from .runtime import resolve_step_idempotency_key
 from .utils import resolve_parameters
 
-_AUTO_EMAIL_SUMMARY_TOKEN = "__AUTO_SUMMARY__"
+_AUTO_EMAIL_SUMMARY_TOKEN = "__AUTO_SUMMARY__"  # nosec B105 — sentinel marker, not a credential
 _OPTION_PARAM_HINTS = ("item_id", "option", "selection")
 
 # Actions that are connector-level tools (invoked via the router/agent loop,

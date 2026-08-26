@@ -417,7 +417,7 @@ class CalendarConnector(BaseConnector):
     Uses httpx.AsyncClient for non-blocking HTTP in ASGI."""
 
     CALENDLY_EVENTS_URL = 'https://api.calendly.com/scheduled_events'
-    CALENDLY_TOKEN_URL = 'https://auth.calendly.com/oauth/token'
+    CALENDLY_TOKEN_URL = 'https://auth.calendly.com/oauth/token'  # nosec B105 — token URL, not a credential
 
     async def execute(self, parameters: Dict, context: Dict) -> Dict:
         """Execute Calendly actions"""
@@ -731,7 +731,7 @@ class GiphyConnector(BaseConnector):
                 if not gifs:
                     return {"status": "error", "message": f"No GIFs found for '{query}'."}
 
-                gif = random.choice(gifs)
+                gif = random.choice(gifs)  # nosec B311 — non-crypto choice for GIF display only
                 images = gif.get("images", {})
                 fixed = images.get("fixed_height", {})
                 original = images.get("original", {})

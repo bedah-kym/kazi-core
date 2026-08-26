@@ -115,7 +115,7 @@ class ChatConsumerRoutingTests(TransactionTestCase):
     @patch("orchestration.coordinator.OrchestrationCoordinator")
     def test_new_message_routes_ai_to_coordinator_and_persists(self, mock_coord):
         User = get_user_model()
-        alice = User.objects.create_user(username="alice", password="pw")
+        alice = User.objects.create_user(username="alice", password="pw")  # nosec B106 — test fixture — fake credential
         # The post_save signal already creates a Member + General Chatroom.
         # select_related('User') mirrors get_chatroom_participants, so the
         # FK is cached and `m.User.username` won't hit the DB in async code.
@@ -169,7 +169,7 @@ class ChatConsumerRoutingTests(TransactionTestCase):
     @patch("orchestration.coordinator.OrchestrationCoordinator")
     def test_new_message_serializes_agent_loop_per_room_user(self, mock_coord):
         User = get_user_model()
-        alice = User.objects.create_user(username="alice_lock", password="pw")
+        alice = User.objects.create_user(username="alice_lock", password="pw")  # nosec B106 — test fixture — fake credential
         member = Member.objects.select_related("User").get(User=alice)
         chatroom = Chatroom.objects.get(participants=member)
 
@@ -302,3 +302,28 @@ class ChatConsumerRedisOutageTests(SimpleTestCase):
         self.assertIsNone(cache.get("ws-degrade-probe"))
         self.assertFalse(cache.set("ws-degrade-probe", 1, timeout=10))
         self.assertIsNone(cache.get("ws-degrade-probe"))
+
+
+class JsonForScriptTests(SimpleTestCase):
+    """Room/user identifiers are injected into <script> context — the JSON
+    payload must never allow a value to break out of the script element."""
+
+    def test_script_breakout_sequences_are_neutralized(self):
+        from chatbot.views import _json_for_script
+
+        payload = _json_for_script("</script><script>alert(1)</script>")
+        self.assertNotIn("</script>", payload)
+        self.assertNotIn("<script>", payload)
+        self.assertIn("\\u003c", payload)
+
+    def test_plain_values_round_trip(self):
+        from chatbot.views import _json_for_script
+
+        payload = _json_for_script("room-a")
+        self.assertEqual(payload, '"room-a"')
+
+    def test_nested_data_still_json_encodes(self):
+        from chatbot.views import _json_for_script
+
+        payload = _json_for_script({"id": 1})
+        self.assertEqual(payload, '{"id": 1}')

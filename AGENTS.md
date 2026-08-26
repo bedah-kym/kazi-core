@@ -154,9 +154,14 @@ locked set is what every lane actually tests.
 
 **Lint + security:**
 ```bash
-flake8 Backend
-bandit -r Backend --skip B101
+flake8 Backend --max-line-length=127 --max-complexity=10
+bandit -r Backend --skip B101,B110
 ```
+
+Bandit medium+low is blocking in CI with two documented skips: B101 (asserts,
+pre-existing convention) and B110 (try/except/pass fail-soft blocks). Accepted
+findings carry an inline `# nosec <id>` plus a one-line reason on the same
+line; never add a bare `# nosec` without justification.
 
 **Test conventions** (see `Backend/tests/README.md` for the full version):
 - Deterministic, mocked, no real API calls. Use `example@example.com`, `fake-token`, etc.
@@ -197,7 +202,7 @@ Examples:
 ## 9. What NOT to do (common agent failure modes)
 
 - **Don't recreate or commit content under `frontend/` or `docs/`** without first checking `.gitignore` and confirming with a maintainer. These paths intentionally hold private Mathia-OS content that is not part of this OSS repo.
-- **Don't bypass safety checks** (`--no-verify`, `bandit --skip` beyond `B101`) to make CI green. Fix the root cause.
+- **Don't bypass safety checks** (`--no-verify`, `bandit --skip` beyond `B101,B110`) to make CI green. Fix the root cause.
 - **Don't add backwards-compatibility shims** for code you just changed. If a caller is internal, update the caller.
 - **Don't hand-roll JSON parsing of LLM output** — use `extract_json()` from `llm_client.py`.
 - **Don't introduce a new connector by editing many existing files.** A new connector should be one new file plus its tests.

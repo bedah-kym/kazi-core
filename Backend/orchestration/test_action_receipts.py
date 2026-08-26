@@ -16,7 +16,7 @@ class AppendOnlyReceiptTests(TransactionTestCase):
 
     def setUp(self):
         self.user = get_user_model().objects.create_user(
-            username="receipt-user", email="example@example.com", password="fake-token",
+            username="receipt-user", email="example@example.com", password="fake-token",  # nosec B106 — test fixture — fake credential
         )
         self.room = Chatroom.objects.create()
         self.room_id = self.room.id

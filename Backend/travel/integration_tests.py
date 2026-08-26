@@ -199,7 +199,7 @@ class ItineraryBuildingTests(TestCase):
     """Test itinerary composition from search results"""
 
     def setUp(self):
-        self.user = User.objects.create_user(username='testuser', password='12345')
+        self.user = User.objects.create_user(username='testuser', password='12345')  # nosec B106 — test fixture — fake credential
         self.builder = ItineraryBuilder()
 
     def test_create_itinerary_from_searches(self):
@@ -250,7 +250,7 @@ class ExportTests(TestCase):
     """Test itinerary export functionality"""
 
     def setUp(self):
-        self.user = User.objects.create_user(username='testuser', password='12345')
+        self.user = User.objects.create_user(username='testuser', password='12345')  # nosec B106 — test fixture — fake credential
 
         # Create test itinerary
         self.itinerary = Itinerary.objects.create(
@@ -300,7 +300,7 @@ class BookingOrchestratorTests(TestCase):
     """Test booking management"""
 
     def setUp(self):
-        self.user = User.objects.create_user(username='testuser', password='12345')
+        self.user = User.objects.create_user(username='testuser', password='12345')  # nosec B106 — test fixture — fake credential
         self.orchestrator = BookingOrchestrator()
 
         # Create test itinerary and item
@@ -361,7 +361,7 @@ class EndToEndWorkflowTests(TestCase):
     """End-to-end tests for complete travel planner workflow"""
 
     def setUp(self):
-        self.user = User.objects.create_user(username='testuser', password='12345')
+        self.user = User.objects.create_user(username='testuser', password='12345')  # nosec B106 — test fixture — fake credential
         self.router = MCPRouter()
         self.builder = ItineraryBuilder()
         self.orchestrator = BookingOrchestrator()

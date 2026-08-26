@@ -53,7 +53,7 @@ class NotificationServiceTests(TestCase):
     @classmethod
     def setUpTestData(cls):
         cls.user = User.objects.create_user(
-            username="testnotif", email="t@example.com", password="pass"
+            username="testnotif", email="t@example.com", password="pass"  # nosec B106 — test fixture — fake credential
         )
 
     @patch("notifications.services.NotificationService._push_ws")
@@ -104,7 +104,7 @@ class WhatsAppDeliveryTaskTests(TestCase):
     @classmethod
     def setUpTestData(cls):
         cls.user = User.objects.create_user(
-            username="wauser", email="wa@example.com", password="pass"
+            username="wauser", email="wa@example.com", password="pass"  # nosec B106 — test fixture — fake credential
         )
         profile = cls.user.profile
         profile.notification_preferences = {"phone_number": "+254712345678"}

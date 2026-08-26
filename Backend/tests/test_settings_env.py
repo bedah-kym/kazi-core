@@ -7,7 +7,7 @@
 """
 import io
 import os
-import subprocess
+import subprocess  # nosec B404 — test infra spawns manage.py with fixed argv
 import sys
 import tempfile
 from contextlib import redirect_stdout
@@ -29,7 +29,7 @@ class ResultBackendEnvTests(TestCase):
     def test_result_backend_honors_explicit_env(self):
         env = {k: v for k, v in os.environ.items() if not k.startswith("CELERY_")}
         env["CELERY_RESULT_BACKEND"] = "redis://fake-host:6379/2"
-        proc = subprocess.run(
+        proc = subprocess.run(  # nosec B603 — test infra spawns manage.py with fixed argv
             [sys.executable, str(BACKEND_DIR / "manage.py"), "shell", "-c",
              "from django.conf import settings; print('RB=' + settings.CELERY_RESULT_BACKEND)"],
             env=env, capture_output=True, text=True, cwd=str(BACKEND_DIR), timeout=300,
@@ -46,7 +46,7 @@ class ProductionSecretRequiredTests(TestCase):
             if not k.startswith(("DJANGO_", "CELERY_"))
         }
         env.pop("DJANGO_SECRET_KEY", None)
-        proc = subprocess.run(
+        proc = subprocess.run(  # nosec B603 — test infra spawns manage.py with fixed argv
             [sys.executable, str(BACKEND_DIR / "manage.py"), "check"],
             env=env, capture_output=True, text=True, cwd=str(BACKEND_DIR), timeout=300,
         )

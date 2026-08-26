@@ -346,7 +346,7 @@ class PendingApprovalRecordTests(TransactionTestCase):
         self.user = get_user_model().objects.create_user(
             username='approval-user',
             email='example@example.com',
-            password='fake-token',
+            password='fake-token',  # nosec B106 — test fixture — fake credential
         )
 
     def test_false_without_pending_record(self):
@@ -390,7 +390,7 @@ class ConsumePendingApprovalTests(TransactionTestCase):
         self.user = get_user_model().objects.create_user(
             username='consume-user',
             email='example@example.com',
-            password='fake-token',
+            password='fake-token',  # nosec B106 — test fixture — fake credential
         )
 
     def _make_pending(self, room_id=1):
@@ -430,7 +430,7 @@ class ConsumePendingApprovalTests(TransactionTestCase):
         other_user = get_user_model().objects.create_user(
             username='other-user',
             email='other@example.com',
-            password='fake-token',
+            password='fake-token',  # nosec B106 — test fixture — fake credential
         )
         self._make_pending(room_id=2)
         self.assertFalse(_consume_pending_approval_sync(1, other_user.id, other_user.id))

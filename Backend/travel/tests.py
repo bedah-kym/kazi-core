@@ -34,7 +34,7 @@ class ItineraryModelTests(TestCase):
     """Test Itinerary model"""
 
     def setUp(self):
-        self.user = User.objects.create_user(username='testuser', email='test@example.com', password='pass123')
+        self.user = User.objects.create_user(username='testuser', email='test@example.com', password='pass123')  # nosec B106 — test fixture — fake credential
 
     def test_create_itinerary(self):
         """Test creating an itinerary"""
@@ -85,7 +85,7 @@ class ItineraryItemModelTests(TestCase):
     """Test ItineraryItem model"""
 
     def setUp(self):
-        self.user = User.objects.create_user(username='testuser', email='test@example.com', password='pass123')
+        self.user = User.objects.create_user(username='testuser', email='test@example.com', password='pass123')  # nosec B106 — test fixture — fake credential
         self.itinerary = Itinerary.objects.create(
             user=self.user,
             title='Test Trip',
@@ -242,7 +242,7 @@ class BookingReferenceModelTests(TestCase):
     """Test BookingReference model"""
 
     def setUp(self):
-        self.user = User.objects.create_user(username='booker', email='booker@example.com', password='pass123')
+        self.user = User.objects.create_user(username='booker', email='booker@example.com', password='pass123')  # nosec B106 — test fixture — fake credential
         self.itinerary = Itinerary.objects.create(
             user=self.user,
             title='Booking Trip',
@@ -282,7 +282,7 @@ class TripFeedbackModelTests(TestCase):
     """Test TripFeedback model"""
 
     def test_feedback_defaults_and_str(self):
-        user = User.objects.create_user(username='reviewer', email='rev@example.com', password='pass123')
+        user = User.objects.create_user(username='reviewer', email='rev@example.com', password='pass123')  # nosec B106 — test fixture — fake credential
         itinerary = Itinerary.objects.create(
             user=user,
             title='Review Trip',
@@ -447,7 +447,7 @@ class ItineraryBuilderTests(TestCase):
     """Test itinerary builder behavior"""
 
     def setUp(self):
-        self.user = User.objects.create_user(username='builder', email='builder@example.com', password='pass123')
+        self.user = User.objects.create_user(username='builder', email='builder@example.com', password='pass123')  # nosec B106 — test fixture — fake credential
         self.builder = ItineraryBuilder()
 
     def test_create_from_searches_fallback(self):
@@ -499,7 +499,7 @@ class ExportServiceTests(TestCase):
     """Test export services"""
 
     def setUp(self):
-        self.user = User.objects.create_user(username='exporter', email='export@example.com', password='pass123')
+        self.user = User.objects.create_user(username='exporter', email='export@example.com', password='pass123')  # nosec B106 — test fixture — fake credential
         self.itinerary = Itinerary.objects.create(
             user=self.user,
             title='Export Trip',
@@ -533,7 +533,7 @@ class BookingOrchestratorTests(TestCase):
     """Test booking orchestration helpers"""
 
     def setUp(self):
-        self.user = User.objects.create_user(username='booker2', email='booker2@example.com', password='pass123')
+        self.user = User.objects.create_user(username='booker2', email='booker2@example.com', password='pass123')  # nosec B106 — test fixture — fake credential
         self.itinerary = Itinerary.objects.create(
             user=self.user,
             title='Booking Trip',

@@ -24,6 +24,7 @@ from workflows.models import (
     UserWorkflow,
 )
 from workflows.tasks import replay_deferred_workflows, sweep_stuck_approvals
+from workflows.utils import safe_eval_condition
 
 from datetime import timedelta
 
@@ -174,7 +175,7 @@ LOW_RISK_DEFINITION = {
 @patch("orchestration.workflow_planner._run_inline", new_callable=AsyncMock)
 class AdhocIdempotencyTests(TestCase):
     def setUp(self):
-        self.user = User.objects.create_user(
+        self.user = User.objects.create_user(  # nosec B106 — test fixture — fake credential
             username="idem-user", email="idem@example.com", password="fake-token",
         )
 
@@ -199,7 +200,7 @@ class AdhocIdempotencyTests(TestCase):
 
     def test_same_key_for_different_user_is_not_a_duplicate(self, mock_run_inline):
         mock_run_inline.return_value = {"weather": {"status": "success"}}
-        other_user = User.objects.create_user(
+        other_user = User.objects.create_user(  # nosec B106 — test fixture — fake credential
             username="second-user", email="second@example.com", password="fake-token",
         )
 
@@ -241,7 +242,7 @@ class AdhocIdempotencyTests(TestCase):
 class WorkflowApiTests(TestCase):
     def setUp(self):
         self.client = APIClient()
-        self.user = User.objects.create_user(username="qa-user", email="qa@example.com", password="secret")
+        self.user = User.objects.create_user(username="qa-user", email="qa@example.com", password="secret")  # nosec B106 — test fixture — fake credential
         self.client.force_authenticate(self.user)
         self.workflow = UserWorkflow.objects.create(
             user=self.user,
@@ -423,8 +424,8 @@ class WorkflowApiTests(TestCase):
 
 
 class DeferredReplayTaskTests(TestCase):
-    def test_replay_task_marks_dead_letter_and_recovery_hint(self):
-        user = User.objects.create_user(username="replay-user", password="secret")
+    def test_replay_task_marks_dead_letter_and_recovery_hint(self):  # nosec B106 — test fixture — fake credential
+        user = User.objects.create_user(username="replay-user", password="secret")  # nosec B106 — test fixture — fake credential
         workflow = UserWorkflow.objects.create(
             user=user,
             name="Replay me",
@@ -455,8 +456,8 @@ class SweepStuckApprovalsTaskTests(TestCase):
     """F2.2: approvals orphaned by a dead agent loop / Temporal worker must be
     swept to a terminal status instead of sitting pending forever."""
 
-    def setUp(self):
-        self.user = User.objects.create_user(username="sweep-user", email="sweep@example.com", password="secret")
+    def setUp(self):  # nosec B106 — test fixture — fake credential
+        self.user = User.objects.create_user(username="sweep-user", email="sweep@example.com", password="secret")  # nosec B106 — test fixture — fake credential
         self.workflow = UserWorkflow.objects.create(
             user=self.user,
             name="Sweep workflow",
@@ -567,7 +568,7 @@ class TemporalDeadHandleApiTests(TestCase):
 
     def setUp(self):
         self.client = APIClient()
-        self.user = User.objects.create_user(username="dead-handle-user", email="dh@example.com", password="secret")
+        self.user = User.objects.create_user(username="dead-handle-user", email="dh@example.com", password="secret")  # nosec B106 — test fixture — fake credential
         self.client.force_authenticate(self.user)
         self.workflow = UserWorkflow.objects.create(
             user=self.user,
@@ -657,8 +658,7 @@ class SeedDemoWorkflowCommandTests(TestCase):
     def test_command_creates_user_workflow_from_example_json(self):
         from io import StringIO
         from django.core.management import call_command
-
-        user = User.objects.create_user(username="demo-seed", password="secret")
+        user = User.objects.create_user(username="demo-seed", password="secret")  # nosec B106 — test fixture — fake credential
         out = StringIO()
 
         call_command("seed_demo_workflow", "--user", "demo-seed", stdout=out)
@@ -678,8 +678,7 @@ class SeedDemoWorkflowCommandTests(TestCase):
     def test_command_is_idempotent(self):
         from io import StringIO
         from django.core.management import call_command
-
-        user = User.objects.create_user(username="demo-seed-2", password="secret")
+        user = User.objects.create_user(username="demo-seed-2", password="secret")  # nosec B106 — test fixture — fake credential
         call_command("seed_demo_workflow", "--user", "demo-seed-2", stdout=StringIO())
         call_command("seed_demo_workflow", "--user", "demo-seed-2", stdout=StringIO())
 
@@ -731,8 +730,8 @@ class ReplaySafetyRegressionTests(TestCase):
 class RerunEndpointReplaySafetyTests(TestCase):
     """v0.4.1 Bug #2B — rerun HTTP view honors documented from_step + force."""
 
-    def setUp(self):
-        self.user = User.objects.create_user(username="rerun-user", password="x")
+    def setUp(self):  # nosec B106 — test fixture — fake credential
+        self.user = User.objects.create_user(username="rerun-user", password="x")  # nosec B106 — test fixture — fake credential
         self.workflow = UserWorkflow.objects.create(
             user=self.user,
             name="Two-step",
@@ -884,3 +883,48 @@ class WorkflowExecutorRegistryFallbackTests(TestCase):
         # The echo connector echoes the input back in `data.input`
         data = result.get("data") if isinstance(result.get("data"), dict) else result
         self.assertIn("ping", str(data))
+
+
+class SafeConditionEvaluatorTests(TestCase):
+    """Conditions run through a whitelisted AST interpreter, not eval —
+    escape chains and object-attribute traversal must never execute."""
+
+    def test_comparison_conditions_evaluate(self):
+        context = {"amount": 150, "status": "ok", "approved": True}
+        self.assertTrue(safe_eval_condition("amount > 100", context))
+        self.assertTrue(safe_eval_condition("status == 'ok'", context))
+        self.assertTrue(safe_eval_condition("amount >= 50 and approved", context))
+        self.assertFalse(safe_eval_condition("amount < 100 or not approved", context))
+
+    def test_arithmetic_and_containment(self):
+        context = {"price": 40, "nights": 3, "city": "Nairobi"}
+        self.assertTrue(safe_eval_condition("price * nights < 500", context))
+        self.assertTrue(safe_eval_condition("city in ['Nairobi', 'Mombasa']", context))
+        self.assertFalse(safe_eval_condition("'Kisumu' in city", context))
+
+    def test_attribute_chains_resolve_through_context_dicts(self):
+        context = {"user": {"profile": {"plan": "pro"}}}
+        self.assertTrue(safe_eval_condition("user.profile.plan == 'pro'", context))
+        self.assertFalse(safe_eval_condition("user.profile.plan == 'free'", context))
+
+    def test_unknown_names_are_falsy_not_fatal(self):
+        self.assertFalse(safe_eval_condition("ghost_name == 'x'", {}))
+
+    def test_dunder_escape_chains_are_inert(self):
+        context = {"payload": "data"}
+        for attack in (
+            "payload.__class__",
+            "payload.__class__.__mro__",
+            "payload.__class__.__bases__[0]",
+            "().__class__.__bases__",
+        ):
+            result = safe_eval_condition(attack, context)
+            self.assertFalse(result, f"attack expression evaluated truthy: {attack}")
+
+    def test_non_whitelisted_calls_are_rejected(self):
+        self.assertFalse(safe_eval_condition("__import__('os')", {}))
+        self.assertFalse(safe_eval_condition("getattr(payload, 'x')", {"payload": "data"}))
+
+    def test_malformed_expressions_return_false(self):
+        self.assertFalse(safe_eval_condition("amount >", {"amount": 1}))
+        self.assertFalse(safe_eval_condition("1 +* 2", {}))

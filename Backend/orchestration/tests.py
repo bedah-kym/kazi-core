@@ -89,7 +89,7 @@ class ActionCatalogTests(SimpleTestCase):
         cleaned = sanitize_parameters({
             "to": "user@example.com",
             "metadata": {
-                "token": "secret-token",
+                "token": "secret-token",  # nosec B105 — test fixture — fake credential
                 "nested": {"api_key": "k", "ok": "yes"},
             },
             "items": [
@@ -720,7 +720,7 @@ class RoomAccessCacheTests(TestCase):
 
         cache.clear()
         self.user = get_user_model().objects.create_user(
-            username="room-access-user", email="room-access@example.com", password="fake-token",
+            username="room-access-user", email="room-access@example.com", password="fake-token",  # nosec B106 — test fixture — fake credential
         )
         self.member = Member.objects.create(User=self.user)
         self.room = Chatroom.objects.create()

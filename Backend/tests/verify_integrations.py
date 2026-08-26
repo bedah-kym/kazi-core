@@ -18,7 +18,7 @@ def verify():
     if User.objects.filter(username=username).exists():
         User.objects.filter(username=username).delete()
 
-    user = User.objects.create_user(username=username, password="password")
+    user = User.objects.create_user(username=username, password="password")  # nosec B106 — test fixture — fake credential
     Workspace.objects.create(user=user, name="Test Workspace")
 
     print(f"Created user: {user.username}")
@@ -36,7 +36,7 @@ def verify():
 
     creds = {
         'account_sid': 'AC123',
-        'auth_token': 'secret',
+        'auth_token': 'secret',  # nosec B105 — test fixture — fake credential
         'phone_number': '+254700000000'
     }
 

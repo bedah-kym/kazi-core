@@ -116,9 +116,14 @@ jobs:
       - name: Security scan - high severity (must pass)
         run: bandit -r Backend --skip B101 -lll
 
-      - name: Security scan - medium+low (advisory until v0.4 cleanup)
-        continue-on-error: true
-        run: bandit -r Backend --skip B101
+      # v0.5: medium+low is now blocking. Skips:
+      #   - B101 (asserts): pre-existing convention.
+      #   - B110 (try/except/pass): the fail-soft degradation blocks from the
+      #     resilience work; converting them to logging changes production
+      #     behavior for zero security gain. Tracked separately.
+      # Accepted findings carry an inline `# nosec <id>` with the reason.
+      - name: Security scan - medium+low (must pass)
+        run: bandit -r Backend --skip B101,B110
 
       - name: Django system checks
         run: python Backend/manage.py check

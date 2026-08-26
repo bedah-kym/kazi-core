@@ -944,7 +944,7 @@ class LLMClient:
 
                     try:
                         event = json.loads(payload)
-                    except Exception:
+                    except json.JSONDecodeError:
                         continue
 
                     event_type = event.get("type", "")
@@ -1082,7 +1082,7 @@ class LLMClient:
                             text = delta.get("text")
                             if text:
                                 yield text
-                    except Exception:
+                    except (json.JSONDecodeError, KeyError, IndexError, TypeError):
                         continue
 
     async def _call_huggingface(
@@ -1191,7 +1191,7 @@ class LLMClient:
                             delta = data["choices"][0]["delta"]
                             if "content" in delta:
                                 yield delta["content"]
-                        except Exception:
+                        except (json.JSONDecodeError, KeyError, IndexError, TypeError):
                             continue
 
     def extract_json(self, text: str) -> Dict:

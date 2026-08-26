@@ -9,7 +9,11 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from orchestration.workflow_planner import execute_adhoc_workflow
+from orchestration.workflow_planner import (
+    IDEMPOTENCY_TTL_SECONDS,
+    _idempotency_key,
+    execute_adhoc_workflow,
+)
 from workflows.capabilities import validate_workflow_definition
 from workflows.models import (
     DeferredWorkflowExecution,
@@ -116,17 +120,14 @@ class AdhocWorkflowFallbackTests(TestCase):
     @patch("orchestration.workflow_planner._create_adhoc_workflow", new_callable=AsyncMock)
     @patch("orchestration.workflow_planner._enqueue_deferred_execution", new_callable=AsyncMock)
     @patch("orchestration.workflow_planner._run_inline", new_callable=AsyncMock)
-    @patch("orchestration.workflow_planner.cache")
     def test_high_risk_workflow_is_queued_when_temporal_disabled(
         self,
-        mock_cache,
         mock_run_inline,
         mock_enqueue,
         mock_create_adhoc,
     ):
-        mock_cache.add.return_value = True
         mock_enqueue.return_value = 55
-        mock_create_adhoc.return_value = MagicMock(id=88)
+        mock_create_adhoc.return_value = (MagicMock(id=88), False)
         definition = {
             "workflow_name": "Withdraw money",
             "workflow_description": "High risk",
@@ -142,15 +143,12 @@ class AdhocWorkflowFallbackTests(TestCase):
     @override_settings(TEMPORAL_DISABLED=True)
     @patch("orchestration.workflow_planner._create_adhoc_workflow", new_callable=AsyncMock)
     @patch("orchestration.workflow_planner._run_inline", new_callable=AsyncMock)
-    @patch("orchestration.workflow_planner.cache")
     def test_low_risk_workflow_can_still_run_inline(
         self,
-        mock_cache,
         mock_run_inline,
         mock_create_adhoc,
     ):
-        mock_cache.add.return_value = True
-        mock_create_adhoc.return_value = MagicMock(id=89)
+        mock_create_adhoc.return_value = (MagicMock(id=89), False)
         mock_run_inline.return_value = {"weather": {"status": "success"}}
         definition = {
             "workflow_name": "Check weather",
@@ -162,6 +160,81 @@ class AdhocWorkflowFallbackTests(TestCase):
 
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["mode"], "inline")
+        mock_run_inline.assert_awaited_once()
+
+
+LOW_RISK_DEFINITION = {
+    "workflow_name": "Check weather",
+    "workflow_description": "Low risk",
+    "steps": [{"service": "weather", "action": "get_weather", "params": {"city": "Nairobi"}}],
+}
+
+
+@override_settings(TEMPORAL_DISABLED=True)
+@patch("orchestration.workflow_planner._run_inline", new_callable=AsyncMock)
+class AdhocIdempotencyTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="idem-user", email="idem@example.com", password="fake-token",
+        )
+
+    def _execute(self, user_id=None):
+        return async_to_sync(execute_adhoc_workflow)(
+            LOW_RISK_DEFINITION,
+            user_id=user_id or self.user.id,
+            room_id=None,
+            trigger_data={"city": "Nairobi"},
+        )
+
+    def test_duplicate_request_within_window_is_rejected_without_second_run(self, mock_run_inline):
+        mock_run_inline.return_value = {"weather": {"status": "success"}}
+        first = self._execute()
+        second = self._execute()
+
+        self.assertEqual(first["status"], "completed")
+        self.assertEqual(second["status"], "duplicate")
+        self.assertIsNone(second["workflow"])
+        mock_run_inline.assert_awaited_once()
+        self.assertEqual(UserWorkflow.objects.count(), 1)
+
+    def test_same_key_for_different_user_is_not_a_duplicate(self, mock_run_inline):
+        mock_run_inline.return_value = {"weather": {"status": "success"}}
+        other_user = User.objects.create_user(
+            username="second-user", email="second@example.com", password="fake-token",
+        )
+
+        first = self._execute()
+        other = self._execute(user_id=other_user.id)
+
+        self.assertEqual(first["status"], "completed")
+        self.assertEqual(other["status"], "completed")
+        self.assertEqual(UserWorkflow.objects.count(), 2)
+
+    def test_stale_dedupe_row_releases_key_for_deliberate_retry(self, mock_run_inline):
+        mock_run_inline.return_value = {"weather": {"status": "success"}}
+        first = self._execute()
+        self.assertEqual(first["status"], "completed")
+
+        row = UserWorkflow.objects.get()
+        self.assertEqual(row.idempotency_key, _idempotency_key(LOW_RISK_DEFINITION, {"city": "Nairobi"}))
+
+        UserWorkflow.objects.update(created_at=timezone.now() - timedelta(seconds=IDEMPOTENCY_TTL_SECONDS + 5))
+        retry = self._execute()
+
+        self.assertEqual(retry["status"], "completed")
+        self.assertEqual(UserWorkflow.objects.count(), 2)
+        self.assertTrue(UserWorkflow.objects.filter(idempotency_key__isnull=True).exists())
+
+    def test_dedupe_survives_cache_flush(self, mock_run_inline):
+        from django.core.cache import cache
+
+        mock_run_inline.return_value = {"weather": {"status": "success"}}
+        first = self._execute()
+        cache.clear()
+        second = self._execute()
+
+        self.assertEqual(first["status"], "completed")
+        self.assertEqual(second["status"], "duplicate")
         mock_run_inline.assert_awaited_once()
 
 

@@ -54,10 +54,18 @@ class UserWorkflow(models.Model):
     created_from_room = models.ForeignKey('chatbot.Chatroom', on_delete=models.SET_NULL, null=True, blank=True)
     created_from_draft = models.ForeignKey(WorkflowDraft, on_delete=models.SET_NULL, null=True, blank=True)
 
+    # Ad-hoc execution dedupe: sha256 digest of definition+trigger data. NULL
+    # for scheduled/manual workflows; unique per user so a cache flush or slow
+    # retry cannot admit a duplicate execution inside the dedupe window.
+    idempotency_key = models.CharField(max_length=64, null=True, blank=True)
+
     class Meta:
         ordering = ['-created_at']
         indexes = [
             models.Index(fields=['user', 'status']),
+        ]
+        constraints = [
+            models.UniqueConstraint(fields=['user', 'idempotency_key'], name='uniq_userworkflow_user_idemkey'),
         ]
 
     def __str__(self):

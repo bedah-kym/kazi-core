@@ -62,21 +62,21 @@ class DevSecretKeyFallbackTests(TestCase):
     def test_generates_persists_and_reuses_stable_key(self):
         with tempfile.TemporaryDirectory() as tmp:
             key_file = Path(tmp) / "k"
-            key1, note1 = self._call(key_file)
+            key1, persisted1 = self._call(key_file)
             self.assertTrue(key1)
+            self.assertTrue(persisted1)
             self.assertTrue(key_file.exists())
             self.assertEqual(key_file.read_text().strip(), key1)
-            key2, note2 = self._call(key_file)
+            key2, persisted2 = self._call(key_file)
             self.assertEqual(key1, key2)
-            self.assertIn("loaded from", note2)
-            self.assertNotIn(key1, note1)
+            self.assertTrue(persisted2)
 
     def test_unwritable_path_yields_key_with_warning_note(self):
         with tempfile.TemporaryDirectory() as tmp:
             missing_dir = Path(tmp) / "nope" / "k"
-            key, note = self._call(missing_dir)
+            key, persisted = self._call(missing_dir)
             self.assertTrue(key)
-            self.assertIn("NOT persisted", note)
+            self.assertFalse(persisted)
 
     def test_function_never_writes_key_to_stdout(self):
         with tempfile.TemporaryDirectory() as tmp:

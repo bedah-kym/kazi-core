@@ -42,22 +42,21 @@ except Exception:
 
 def _load_or_create_dev_secret_key(key_file):
     # Stable per-checkout dev key stored in a gitignored file so sessions
-    # survive across gunicorn workers and restarts. Silent by design: callers
-    # may only log the returned note, never the key itself.
+    # survive across gunicorn workers and restarts. Returns (key, persisted).
+    # Silent by design: callers must never log the key itself.
     try:
         key = key_file.read_text().strip()
     except OSError:
         key = ''
     if key:
-        return key, f"loaded from {key_file}"
+        return key, True
     import secrets
     key = secrets.token_urlsafe(50)
     try:
         key_file.write_text(key)
-        note = f"persisted to {key_file} (gitignored)"
+        return key, True
     except OSError:
-        note = "NOT persisted — sessions reset between processes"
-    return key, note
+        return key, False
 
 
 # SECURITY WARNING: keep the secret key used in production secret!
@@ -65,10 +64,13 @@ def _load_or_create_dev_secret_key(key_file):
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
 if not SECRET_KEY:
     if os.environ.get('DJANGO_DEBUG', 'False').lower() in ('1', 'true', 'yes'):
-        SECRET_KEY, _key_note = _load_or_create_dev_secret_key(
+        SECRET_KEY, _key_persisted = _load_or_create_dev_secret_key(
             Path(os.environ.get('DJANGO_DEV_SECRET_KEY_FILE') or (BASE_DIR.parent / '.dev_secret_key'))
         )
-        print(f"⚠️  DEV ONLY: auto-generated SECRET_KEY {_key_note}. Set DJANGO_SECRET_KEY in .env.")
+        if _key_persisted:
+            print("⚠️  DEV ONLY: SECRET_KEY served from the gitignored .dev_secret_key fallback. Set DJANGO_SECRET_KEY in .env.")
+        else:
+            print("⚠️  DEV ONLY: auto-generated SECRET_KEY could not be persisted; sessions reset between processes. Set DJANGO_SECRET_KEY in .env.")
     else:
         raise ValueError(
             "CRITICAL SECURITY ERROR: DJANGO_SECRET_KEY environment variable must be set in production. "

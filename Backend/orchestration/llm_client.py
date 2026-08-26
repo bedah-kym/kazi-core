@@ -9,7 +9,7 @@ import threading
 import logging
 import httpx
 import hashlib
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any
 from django.conf import settings
 from django.core.cache import cache
 

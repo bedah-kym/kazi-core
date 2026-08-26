@@ -3,8 +3,10 @@ import os
 from io import StringIO
 
 from django.conf import settings
+from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.core.management import call_command
-from django.test import SimpleTestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 
 from asgiref.sync import async_to_sync
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -648,3 +650,64 @@ class Te2FailClosedTests(SimpleTestCase):
         self.assertTrue(outcomes[1]["valid"])
         self.assertFalse(outcomes[2]["valid"])
         self.assertIn("Rate limit", outcomes[2]["reason"])
+
+
+class RoomAccessCacheTests(TestCase):
+    """e6: the room-access cache must never outlive a membership change and
+    must fail closed when the request cannot be scoped to real ids."""
+
+    def setUp(self):
+        from chatbot.models import Chatroom, Member
+
+        cache.clear()
+        self.user = get_user_model().objects.create_user(
+            username="room-access-user", email="room-access@example.com", password="fake-token",
+        )
+        self.member = Member.objects.create(User=self.user)
+        self.room = Chatroom.objects.create()
+
+    def _has_access(self):
+        from orchestration.security_policy import user_has_room_access
+
+        return async_to_sync(user_has_room_access)(self.user.id, self.room.id)
+
+    def test_missing_ids_fail_closed(self):
+        from orchestration.security_policy import user_has_room_access
+
+        self.assertFalse(async_to_sync(user_has_room_access)(None, self.room.id))
+        self.assertFalse(async_to_sync(user_has_room_access)(self.user.id, None))
+
+    def test_member_gains_access(self):
+        self.room.participants.add(self.member)
+        self.assertTrue(self._has_access())
+
+    def test_epoch_bump_orphans_entries_cached_before_it(self):
+        from django.core.cache import cache
+
+        from orchestration.security_policy import _room_access_cache_key, bump_room_access_epoch
+
+        self.room.participants.add(self.member)
+        self.assertTrue(self._has_access())
+        old_key = _room_access_cache_key(self.user.id, self.room.id)
+        self.assertIsNotNone(cache.get(old_key))
+
+        bump_room_access_epoch()
+        self.assertIsNone(cache.get(_room_access_cache_key(self.user.id, self.room.id)))
+
+    def test_m2m_remove_signal_alone_invalidates_cached_entry(self):
+        self.room.participants.add(self.member)
+        self.assertTrue(self._has_access())
+        self.room.participants.remove(self.member)
+        self.assertFalse(self._has_access())
+
+    def test_negative_cache_flips_on_join(self):
+        self.assertFalse(self._has_access())
+        self.room.participants.add(self.member)
+        self.assertTrue(self._has_access())
+
+    def test_member_delete_cascades_past_the_cache(self):
+        self.room.participants.add(self.member)
+        self.assertTrue(self._has_access())
+
+        self.member.delete()
+        self.assertFalse(self._has_access())

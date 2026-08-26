@@ -2,7 +2,7 @@
 Enterprise Payment Services
 Implements ACID-compliant ledger operations and payment workflows
 """
-from django.db import transaction, models
+from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
 from django.contrib.auth import get_user_model
@@ -184,7 +184,6 @@ class LedgerService:
         Nightly reconciliation job
         Compares internal ledger against IntaSend API
         """
-        from intasend import APIService
         import os
 
         system_accounts = LedgerService.get_system_accounts()

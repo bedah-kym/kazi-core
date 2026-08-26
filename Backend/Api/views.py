@@ -2,7 +2,6 @@ from .serializers import MathiaReplySerializer
 from chatbot.models import Chatroom
 from chatbot.serializers import ChatroomSerializer
 from rest_framework import generics
-from .permissions import IsStaffEditorPermissions
 from .models import MathiaReply
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
@@ -59,7 +58,7 @@ def calendly_connect(request):
 def calendly_callback(request):
     """Handle OAuth callback from Calendly and store tokens."""
     code = request.GET.get('code')
-    state = request.GET.get('state')
+    request.GET.get('state')
     if not code:
         return Response({'error': 'code missing'}, status=400)
     token_url = 'https://auth.calendly.com/oauth/token'

@@ -13,12 +13,10 @@ Examples:
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timedelta
 import re
-from difflib import SequenceMatcher
 
 from asgiref.sync import sync_to_async
 from django.utils import timezone
 from django.contrib.auth import get_user_model
-from django.core.cache import cache
 
 User = get_user_model()
 
@@ -158,7 +156,7 @@ class ReferenceResolver:
                     }
                     contact_str = ", ".join([c.get('name', c.get('email', '?')) for c in contacts[:3]])
                     if len(contacts) > 3:
-                        contact_str += f" and {len(contacts)-3} others"
+                        contact_str += f" and {len(contacts) - 3} others"
                     replaced_message = replaced_message.replace(
                         match.group(0),
                         f"[{contact_str}]"
@@ -232,7 +230,7 @@ class ReferenceResolver:
         replacements = {}
 
         now = timezone.now()
-        user_tz = timezone.get_current_timezone()
+        timezone.get_current_timezone()
 
         temporal_patterns = [
             (r'\bnext\s+(week|monday|tuesday|wednesday|thursday|friday|saturday|sunday|month)\b', 'next'),

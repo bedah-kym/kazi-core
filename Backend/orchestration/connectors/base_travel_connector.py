@@ -7,8 +7,7 @@ import json
 import logging
 import asyncio
 from typing import Dict, Any, Optional, List
-from datetime import datetime, timedelta
-from django.core.cache import cache
+from datetime import timedelta
 from django.utils import timezone
 from django_redis import get_redis_connection
 from asgiref.sync import sync_to_async

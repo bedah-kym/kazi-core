@@ -153,13 +153,13 @@ class EntryPointShadowingTests(SimpleTestCase):
                 mock.patch.object(
                     connector_registry, "_load_legacy_connectors",
                     return_value={"ping": legacy_owner},
-                ), \
+        ), \
                 mock.patch.object(connector_registry, "_scan_examples_directory", return_value=[]), \
                 mock.patch.object(connector_registry, "_scan_connectors_directory", return_value=[]), \
                 mock.patch.object(
                     connector_registry, "_scan_entry_points",
                     return_value=[entry_point_connector],
-                ), \
+        ), \
                 mock.patch("orchestration.action_catalog.register_actions"):
             connector_registry.reset_registry()
             try:
@@ -181,12 +181,12 @@ class EntryPointShadowingTests(SimpleTestCase):
                 mock.patch.object(
                     connector_registry, "_load_legacy_connectors",
                     return_value={"ping": make_connector(name="builtin")},
-                ), \
+        ), \
                 mock.patch.object(connector_registry, "_scan_examples_directory", return_value=[]), \
                 mock.patch.object(connector_registry, "_scan_connectors_directory", return_value=[]), \
                 mock.patch.object(
                     connector_registry, "_scan_entry_points", return_value=[community],
-                ), \
+        ), \
                 mock.patch("orchestration.action_catalog.register_actions"):
             connector_registry.reset_registry()
             try:

@@ -18,7 +18,7 @@ import logging
 import asyncio
 from typing import Dict, Tuple
 from .models import Message, Member, Chatroom, UserModerationStatus, ModerationBatch, RoomReadState
-from .tasks import moderate_message_batch, generate_ai_response, generate_voice_response
+from .tasks import moderate_message_batch, generate_voice_response
 from orchestration.user_preferences import get_user_preferences
 from orchestration.adaptive_task import load_task_state
 from django.conf import settings
@@ -688,7 +688,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 })
                 return
 
-            logger.info(f"Step 4: Rate limit check...")
+            logger.info("Step 4: Rate limit check...")
             # Rate limiting check
             if not await self.check_rate_limit(member_user.id):
                 await self.send_chat_message({
@@ -698,7 +698,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 })
                 return
 
-            logger.info(f"Step 5: Get member...")
+            logger.info("Step 5: Get member...")
             get_member = sync_to_async(Member.objects.filter(User=member_user).first)
             member = await get_member()
 
@@ -722,11 +722,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 })
                 return
 
-            logger.info(f"Step 8: Regular message, checking key rotation...")
+            logger.info("Step 8: Regular message, checking key rotation...")
             # Check for key rotation
             await self.check_key_rotation()
 
-            logger.info(f"Step 9: Encrypting message...")
+            logger.info("Step 9: Encrypting message...")
             # Encrypt the message content
             encrypted_message = await self.encrypt_message({
                 'content': message_content,
@@ -741,11 +741,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 })
                 return
 
-            logger.info(f"Step 10: Creating message in DB...")
+            logger.info("Step 10: Creating message in DB...")
             create_message = sync_to_async(Message.objects.create)
             payload = json.dumps({
-                'data':     encrypted_message['data'],
-                'nonce':    encrypted_message['nonce'],
+                'data': encrypted_message['data'],
+                'nonce': encrypted_message['nonce'],
             })
             message = await create_message(
                 member=member,
@@ -754,7 +754,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 parent_id=data.get('reply_to')
             )
 
-            logger.info(f"Step 11: Getting chatroom...")
+            logger.info("Step 11: Getting chatroom...")
             current_chat = await self.get_current_chatroom(room_id)
             if not current_chat:
                 await self.send_chat_message({
@@ -764,18 +764,18 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 })
                 return
 
-            logger.info(f"Step 12: Getting room members...")
+            logger.info("Step 12: Getting room members...")
             room_members = await self.get_chatroom_participants(current_chat)
             mathia_member = next((m for m in room_members if m.User.username == 'mathia'), None)
             human_members = [m for m in room_members if m.User.username != 'mathia']
             is_ai_room = bool(mathia_member) and len(human_members) == 1
 
             if member in room_members:
-                logger.info(f"Step 13: Adding message to chatroom...")
+                logger.info("Step 13: Adding message to chatroom...")
                 await sync_to_async(current_chat.chats.add)(message)
                 await sync_to_async(current_chat.save)()
 
-                logger.info(f"Step 14: Buffering for moderation...")
+                logger.info("Step 14: Buffering for moderation...")
                 # === NEW: Buffer message for moderation ===
                 try:
                     await self.buffer_message_for_moderation(room_id, message.id)
@@ -785,7 +785,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     logger.error(traceback.format_exc())
                     raise
 
-                logger.info(f"Step 15: Sending to clients...")
+                logger.info("Step 15: Sending to clients...")
                 message_json = await self.message_to_json(message)
                 content = {
                     "command": "new_message",
@@ -1133,7 +1133,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 'member': 'security system',
                 'content': "Error processing file",
                 'timestamp': str(timezone.now())
-                })
+            })
 
     async def voice_message(self, data):
         """
@@ -1299,7 +1299,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         # fan out typing to all group members
         await self.send(text_data=json.dumps({
             "command": "typing",
-            "from":    event["from"],
+            "from": event["from"],
         }))
 
     async def ai_voice_ready(self, event):
@@ -1333,7 +1333,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         """
         try:
             ai_reply = event.get('ai_reply')
-            user_id = event.get('user_id')
+            event.get('user_id')
 
             # Encrypt AI response
             encrypted_message = await self.encrypt_message({
@@ -1484,8 +1484,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
         current_time = timezone.now()
         self.messages_since_rotation += 1
 
-        if ((current_time - self.last_key_rotation).total_seconds() >= self.KEY_ROTATION_INTERVAL or
-                self.messages_since_rotation >= self.MESSAGES_BEFORE_ROTATION):
+        if ((current_time - self.last_key_rotation).total_seconds() >= self.KEY_ROTATION_INTERVAL
+                or self.messages_since_rotation >= self.MESSAGES_BEFORE_ROTATION):
             # Pass the current room_name to re-initialize the secure session
             await self.initialize_secure_session(self.room_name)
             self.last_key_rotation = current_time

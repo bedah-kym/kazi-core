@@ -1,18 +1,15 @@
 import os
 import django
 import asyncio
-import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # Setup Django
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'Backend.settings')
 django.setup()
 
 from django.contrib.auth import get_user_model
-from django.test import RequestFactory
 from rest_framework.test import APIClient
-from travel.models import Itinerary, ItineraryItem
 from users.quota_service import QuotaService
 
 # Config
@@ -94,7 +91,7 @@ async def async_search_proxy(payload, user):
     We will just skip the router execution and trust unit tests, focusing on DB integration here.
     """
     from orchestration.tool_router import MCPRouter
-    router = MCPRouter()
+    MCPRouter()
     # verify router instantiates
     return {}
 

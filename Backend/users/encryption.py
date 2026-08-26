@@ -16,7 +16,6 @@ logger = logging.getLogger(__name__)
 
 class EncryptionKeyError(Exception):
     """Raised when encryption key is not properly configured."""
-    pass
 
 
 class TokenEncryption:

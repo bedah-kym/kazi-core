@@ -10,8 +10,8 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'Backend.settings')
 django.setup()
 
 from django.contrib.auth import get_user_model
-from payments.services import LedgerService, WalletService, InvoiceService
-from payments.models import LedgerAccount, FeeSchedule, PaymentRequest
+from payments.services import LedgerService, WalletService
+from payments.models import FeeSchedule
 
 User = get_user_model()
 

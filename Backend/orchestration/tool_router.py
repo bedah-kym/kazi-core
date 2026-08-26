@@ -16,7 +16,7 @@ are still slated to move into per-file modules under
 import json
 import logging
 import threading
-from typing import Dict, List, Optional, Any
+from typing import Dict, Optional, Any
 from datetime import datetime, timedelta
 from django.core.cache import cache
 from django_redis import get_redis_connection
@@ -421,7 +421,6 @@ class CalendarConnector(BaseConnector):
 
     async def execute(self, parameters: Dict, context: Dict) -> Dict:
         """Execute Calendly actions"""
-        from users.models import CalendlyProfile
         from django.contrib.auth import get_user_model
 
         User = get_user_model()

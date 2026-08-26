@@ -1,7 +1,6 @@
 
 import logging
 import os
-from django.conf import settings
 from ..base_connector import BaseConnector
 from decimal import Decimal, InvalidOperation
 from users.models import WalletTransaction

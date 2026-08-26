@@ -91,13 +91,24 @@ jobs:
         run: |
           flake8 Backend --count --select=E9,F63,F7,F82,F811,F202,E712,E722,E731 --show-source --statistics
 
-      # v0.4 M6-1 phase 1: ~80% reduction in advisory findings (autopep8 sweep
-      # for whitespace / tabs / blank lines / inline-comment spacing). The
-      # remaining ~487 findings are mostly E501 long lines, F401 unused
-      # imports, F841 unused locals, and complexity (C901) — these need
-      # per-file judgement and land as v0.5 cleanups before this job flips
-      # to blocking.
-      - name: Lint - full PEP 8 (advisory until v0.5 cleanup completes)
+      # v0.5: the mechanical PEP8 backlog (whitespace, unused imports/locals,
+      # f-string hygiene, indentation) is cleaned across Backend/. This job
+      # flips to blocking for every E/W/F rule except:
+      #   - E501 (163 long lines) and E402 (53 deferred imports): tracked for
+      #     the full-PEP8 flip; E402 often guards circular imports and needs
+      #     per-file judgement.
+      #   - W503 (black-style operator-at-line-start): the standard flake8
+      #     exemption, mutually exclusive with W504.
+      # C901 complexity (~89 functions) is deliberately out of this job's
+      # select set and lands with the function-splitting refactors.
+      - name: Lint - PEP 8 blocking subset (must pass)
+        run: |
+          flake8 Backend --count --statistics --select=E,W,F --ignore=E501,E402,W503 --max-line-length=127 --max-complexity=10
+
+      # Remaining advisory surface: E501 long lines, E402 deferred imports,
+      # and C901 complexity — each needs per-file judgement before this job
+      # can flip to blocking (tracked as v0.5 follow-ups).
+      - name: Lint - full PEP 8 (advisory until E501/E402/C901 land)
         continue-on-error: true
         run: |
           flake8 Backend --count --statistics

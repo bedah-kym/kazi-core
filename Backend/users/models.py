@@ -87,9 +87,9 @@ class UserProfile(models.Model):
 
     # Professional Profile (NEW)
     user_type = models.CharField(max_length=20, choices=[
-            ('personal', 'Personal Brand'),
-            ('team', 'Team'),
-            ('business', 'Business')
+        ('personal', 'Personal Brand'),
+        ('team', 'Team'),
+        ('business', 'Business')
     ], default='personal', help_text="Account type")
 
     industry = models.CharField(max_length=100, blank=True,
@@ -99,12 +99,12 @@ class UserProfile(models.Model):
                                     help_text="Company or brand name")
 
     company_size = models.CharField(max_length=20, blank=True, choices=[
-            ('1', 'Just me'),
-            ('2-5', '2-5 people'),
-            ('6-10', '6-10 people'),
-            ('11-25', '11-25 people'),
-            ('26-50', '26-50 people'),
-            ('50+', '50+ people')
+        ('1', 'Just me'),
+        ('2-5', '2-5 people'),
+        ('6-10', '6-10 people'),
+        ('11-25', '11-25 people'),
+        ('26-50', '26-50 people'),
+        ('50+', '50+ people')
     ])
 
     role = models.CharField(max_length=100, blank=True,
@@ -139,9 +139,9 @@ class UserProfile(models.Model):
                                                 help_text='{"email_notifications": true, "push_notifications": false, "digest_frequency": "daily"}')
 
     theme_preference = models.CharField(max_length=10, choices=[
-            ('light', 'Light'),
-            ('dark', 'Dark'),
-            ('auto', 'Auto')
+        ('light', 'Light'),
+        ('dark', 'Dark'),
+        ('auto', 'Auto')
     ], default='auto')
 
     # Existing preferences

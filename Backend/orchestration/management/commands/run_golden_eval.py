@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Any, Dict, List
+from typing import List
 
 from asgiref.sync import async_to_sync
 from django.conf import settings

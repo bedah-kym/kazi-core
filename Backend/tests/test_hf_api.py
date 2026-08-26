@@ -41,7 +41,7 @@ async def test_hf_api():
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            print(f"\n⏳ Sending test request...")
+            print("\n⏳ Sending test request...")
             response = await client.post(
                 url,
                 headers={
@@ -56,17 +56,17 @@ async def test_hf_api():
             if response.status_code == 200:
                 data = response.json()
                 content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-                print(f"✅ API Call Successful!")
+                print("✅ API Call Successful!")
                 print(f"📝 Response: {content[:200]}")
             else:
-                print(f"❌ API Call Failed")
+                print("❌ API Call Failed")
                 print(f"📋 Response: {response.text[:500]}")
 
     except httpx.ConnectError as e:
         print(f"❌ Connection Error: {e}")
         print("   This suggests network/DNS issues within the container")
     except httpx.TimeoutException:
-        print(f"❌ Timeout Error: Request took too long")
+        print("❌ Timeout Error: Request took too long")
     except Exception as e:
         print(f"❌ Error: {type(e).__name__}: {e}")
 

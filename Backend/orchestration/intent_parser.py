@@ -41,7 +41,7 @@ class IntentParser:
     ]))
 
     SYSTEM_PROMPT = """You are an intent classifier for Mathia, a personal assistant with travel planning.
-    
+
 Your job: Parse user messages into structured JSON.
 
 Supported actions:

@@ -6,14 +6,12 @@ confirmation pause/resume, error recovery, iteration/token limits, dedup,
 model selection, web search rate limiting, result sanitization, approval overrides.
 """
 import asyncio
-import json
-import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 from asgiref.sync import async_to_sync, sync_to_async
 from django.contrib.auth import get_user_model
 from django.db import connections
-from django.test import SimpleTestCase, TransactionTestCase, override_settings
+from django.test import SimpleTestCase, TransactionTestCase
 
 
 def run_with_db_cleanup(coro):

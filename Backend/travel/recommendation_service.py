@@ -1,6 +1,5 @@
 import logging
-import json
-from typing import Dict, List, Any, Optional
+from typing import Dict, List
 from orchestration.llm_client import get_llm_client, extract_json
 
 logger = logging.getLogger(__name__)
@@ -26,15 +25,15 @@ class RecommendationService:
 
         prompt = f"""
         Suggest 5 unique activities for a trip to {destination}.
-        
+
         Current Itinerary Context:
         {context_summary}
-        
+
         User Interests: {', '.join(interests) if interests else 'General sightseeing'}
-        
+
         Goal: Suggest activities that COMPLEMENT the existing schedule (e.g. if they have a morning tour, suggest an evening activity).
         Avoid duplicating existing items.
-        
+
         Return JSON array:
         [
             {{
@@ -55,7 +54,7 @@ class RecommendationService:
         prompt = f"""
         Suggest 5 top-rated dining spots in {destination}.
         {f"Preference: {cuisine_pref}" if cuisine_pref else "Mix of local and international cuisine."}
-        
+
         Return JSON array:
         [
             {{
@@ -75,7 +74,7 @@ class RecommendationService:
         prompt = f"""
         Identify 3 'hidden gem' locations in {destination} that most tourists miss.
         Focus on authentic local experiences, quiet spots, or unique cultural sites.
-        
+
         Return JSON array:
         [
             {{
@@ -97,8 +96,10 @@ class RecommendationService:
                 json_mode=True
             )
             data = extract_json(response)
-            if isinstance(data, list): return data
-            if isinstance(data, dict) and 'items' in data: return data['items']  # Handle wrapped responses
+            if isinstance(data, list):
+                return data
+            if isinstance(data, dict) and 'items' in data:
+                return data['items']  # Handle wrapped responses
             return []
         except Exception as e:
             logger.error(f"Error getting recommendations: {e}")
@@ -135,7 +136,8 @@ class RecommendationService:
 
     def _summarize_context(self, items: List[Dict]) -> str:
         """Minimize context tokens"""
-        if not items: return "Nothing booked yet."
+        if not items:
+            return "Nothing booked yet."
         summary = []
         for item in items:
             title = item.get('title', 'Unknown')

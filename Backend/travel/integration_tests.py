@@ -3,13 +3,12 @@ Integration tests for travel planner Week 2 implementation
 Tests real API integrations, caching, and end-to-end workflows
 """
 import asyncio
-import json
 from datetime import datetime, timedelta
-from django.test import TestCase, AsyncTestCase
+from django.test import TestCase
 from django.contrib.auth.models import User
 from django.core.cache import cache
 
-from travel.models import Itinerary, ItineraryItem, SearchCache, BookingReference
+from travel.models import Itinerary, ItineraryItem, BookingReference
 from travel.services import ItineraryBuilder, ExportService, BookingOrchestrator
 from orchestration.tool_router import MCPRouter
 from orchestration.connectors.travel_buses_connector import TravelBusesConnector
@@ -159,7 +158,7 @@ class CachingIntegrationTests(TestCase):
 
         # First search (cache miss)
         result1 = loop.run_until_complete(self.connector.execute(parameters, self.context))
-        cached1 = result1.get('cached', False)
+        result1.get('cached', False)
 
         # Second search (cache hit)
         result2 = loop.run_until_complete(self.connector.execute(parameters, self.context))

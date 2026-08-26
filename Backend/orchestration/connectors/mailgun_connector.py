@@ -6,13 +6,14 @@ from ..base_connector import BaseConnector
 
 logger = logging.getLogger(__name__)
 
+
 class MailgunConnector(BaseConnector):
     """
     Connector for Mailgun Email Service.
     Capabilities:
     - Send simple emails
     """
-    
+
     def __init__(self):
         use_sandbox = os.environ.get('MAILGUN_USE_SANDBOX', '').lower() in ('1', 'true', 'yes')
         sandbox_domain = os.environ.get('MAILGUN_DOMAIN_SANDBOX')
@@ -29,13 +30,13 @@ class MailgunConnector(BaseConnector):
 
         self.base_url = f"https://api.mailgun.net/v3/{self.domain}" if self.domain else None
         self.use_sandbox = use_sandbox
-        
+
     async def execute(self, parameters: dict, context: dict) -> dict:
         """
         Execute Email actions.
         """
         action = parameters.get("action")
-        
+
         if action == "send_email":
             return await self.send_email(
                 to=parameters.get("to"),
@@ -44,7 +45,7 @@ class MailgunConnector(BaseConnector):
                 html=parameters.get("html"),
                 from_email=parameters.get("from")
             )
-            
+
         return {"error": f"Unknown Mailgun action: {action}"}
 
     async def send_email(self, to, subject, text, html=None, from_email=None):
@@ -58,11 +59,11 @@ class MailgunConnector(BaseConnector):
         if not self.api_key or not self.domain:
             logger.warning("[Mailgun] Missing credentials. Mocking email send.")
             return {
-                "status": "success", 
+                "status": "success",
                 "message": f"Simulated email to {to}: {subject}",
                 "mock": True
             }
-            
+
         if not from_email:
             from_email = f"Mathia <mailgun@{self.domain}>"
 
@@ -75,16 +76,16 @@ class MailgunConnector(BaseConnector):
                 "subject": subject,
                 "text": text
             }
-            
+
             if html:
                 data["html"] = html
-                
+
             async with httpx.AsyncClient(timeout=20.0) as client:
                 response = await client.post(url, auth=auth, data=data)
-                
+
                 if response.status_code == 200:
                     return {
-                        "status": "success", 
+                        "status": "success",
                         "id": response.json().get("id"),
                         "message": "Email sent successfully",
                         "sandbox": self.use_sandbox
@@ -96,7 +97,7 @@ class MailgunConnector(BaseConnector):
                         "details": response.text,
                         "sandbox": self.use_sandbox
                     }
-                    
+
         except Exception as e:
             logger.error(f"Mailgun Connector Error: {str(e)}")
             return {"error": str(e)}

@@ -3,7 +3,6 @@ import django
 import asyncio
 import sys
 from unittest.mock import MagicMock, patch
-from datetime import datetime
 
 
 # Setup Django environment

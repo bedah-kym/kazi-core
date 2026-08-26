@@ -5,7 +5,6 @@ Supports itinerary creation, item management, event discovery, and booking refer
 from django.db import models
 from django.contrib.auth.models import User
 from django.utils import timezone
-import json
 
 
 class Itinerary(models.Model):

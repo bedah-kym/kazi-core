@@ -788,7 +788,6 @@ class OrchestrationCoordinator:
                     exc_info=True,
                 )
                 # Fall through to classic path below
-                pass
             else:
                 pending_handled = True
 

@@ -13,7 +13,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Any, AsyncGenerator, Callable, Dict, List, Optional, Tuple
+from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 from asgiref.sync import sync_to_async
 from django.conf import settings

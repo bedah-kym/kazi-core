@@ -105,7 +105,7 @@ You need Postgres + Redis running and a `.env` in the repo root (one level above
 
 ## 4. Code style
 
-- **Python:** flake8 enforced in CI with `--max-line-length=127 --max-complexity=10`. Match existing style in the touched module rather than imposing your own.
+- **Python:** flake8 enforced in CI with `--max-line-length=127 --max-complexity=10`. The blocking job covers every E/W/F rule except E501 (long lines), E402 (deferred imports), and W503 (black-style operator breaks) — those three plus C901 complexity remain advisory until their tracked cleanups land. Match existing style in the touched module rather than imposing your own.
 - **Comments:** default to none. Only comment when the *why* is non-obvious (a hidden constraint, a workaround for a specific bug). Don't narrate what the code does.
 - **Imports:** standard → third-party → local, blank line between groups.
 - **Async:** orchestration code is async-first. Use `asgiref.sync.sync_to_async` when calling Django ORM from async paths. Never block the event loop.

@@ -44,6 +44,7 @@ Backend/
     tasks.py               # Watchdog + retry tasks
     management/commands/
       seed_demo_workflow.py
+      sync_beat_schedule.py  # Mirror settings.CELERY_BEAT_SCHEDULE into the DB scheduler
   travel/                  # Travel search + booking connectors (showcase module)
   payments/                # Double-entry ledger, invoices, wallets (showcase module)
   users/                   # Auth, profiles, quotas, encryption keys

@@ -348,6 +348,12 @@ if not TEMPORAL_DISABLED:
         },
     })
 
+# Beat runs off the DB scheduler so runtime edits survive deploys and the
+# settings-dict clobber class of bug (#73) is structurally dead. The dict above
+# stays the source of truth: `manage.py sync_beat_schedule` mirrors it into the
+# database (and disables entries that are no longer declared here).
+CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
+
 # AI Moderation Settings
 MODERATION_BATCH_SIZE = 10
 MODERATION_BATCH_TIMEOUT = 5

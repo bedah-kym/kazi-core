@@ -23,7 +23,7 @@ def run_verification():
 
     # 1. Setup User
     username = f"verify_user_{int(datetime.now().timestamp())}"
-    user = User.objects.create_user(username=username, password="testpassword123")
+    user = User.objects.create_user(username=username, password="testpassword123")  # nosec B106 — test fixture — fake credential
     logger.info(f"✅ Created Test User: {user.username}")
 
     # 2. Verify Quota Service (Initial State)

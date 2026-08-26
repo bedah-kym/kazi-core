@@ -28,8 +28,8 @@ from workflows.models import WorkflowApprovalRecord
 class DurableApprovalTests(TransactionTestCase):
     def setUp(self):
         User = get_user_model()
-        self.alice = User.objects.create_user(username="alice", password="pw")
-        self.bob = User.objects.create_user(username="bob", password="pw")
+        self.alice = User.objects.create_user(username="alice", password="pw")  # nosec B106 — test fixture — fake credential
+        self.bob = User.objects.create_user(username="bob", password="pw")  # nosec B106 — test fixture — fake credential
 
     # -- helpers --------------------------------------------------------- #
 

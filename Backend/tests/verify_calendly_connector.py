@@ -29,7 +29,7 @@ async def verify_calendly():
         user = await sync_to_async(User.objects.get)(username=username)
         print(f"Found existing user: {username}")
     except User.DoesNotExist:
-        user = await sync_to_async(User.objects.create_user)(username=username, password="password123")
+        user = await sync_to_async(User.objects.create_user)(username=username, password="password123")  # nosec B106 — test fixture — fake credential
         print(f"Created user: {username}")
 
     # Ensure profile exists

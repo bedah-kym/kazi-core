@@ -61,7 +61,7 @@ def calendly_callback(request):
     request.GET.get('state')
     if not code:
         return Response({'error': 'code missing'}, status=400)
-    token_url = 'https://auth.calendly.com/oauth/token'
+    token_url = 'https://auth.calendly.com/oauth/token'  # nosec B105 — token URL, not a credential
     client_id = getattr(settings, 'CALENDLY_CLIENT_ID', None)
     client_secret = getattr(settings, 'CALENDLY_CLIENT_SECRET', None)
     redirect_uri = request.build_absolute_uri('/api/calendly/callback/')

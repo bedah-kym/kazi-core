@@ -65,7 +65,7 @@ def _make_execution(workflow, **overrides):
 
 class KaziTraceCommandTests(TestCase):
     def setUp(self):
-        self.user = User.objects.create_user(username="trace-user", password="x")
+        self.user = User.objects.create_user(username="trace-user", password="x")  # nosec B106 — test fixture — fake credential
         self.workflow = _make_workflow(self.user)
 
     def test_pretty_output_lists_steps_and_status(self):

@@ -193,8 +193,8 @@ def _():
     raw = {
         "to": "alex@example.com",
         "api_key": "sk-secret-12345",
-        "token": "tok-secret-67890",
-        "password": "hunter2",
+        "token": "tok-secret-67890",  # nosec B105 — test fixture — fake credential
+        "password": "hunter2",  # nosec B105 — test fixture — fake credential
         "message": "hi",
     }
     cleaned = sanitize_parameters(raw)
@@ -638,7 +638,7 @@ def _summary():
     print("\n" + "=" * 72)
     print("  v0.4 RELEASE DIAGNOSTICS — SUMMARY")
     print("=" * 72)
-    by_outcome = {"PASS": 0, "FAIL": 0, "SKIP": 0, "ERROR": 0, "NOTE": 0}
+    by_outcome = {"PASS": 0, "FAIL": 0, "SKIP": 0, "ERROR": 0, "NOTE": 0}  # nosec B105 — test fixture — fake credential
     by_cat = {}
     for cat, name, outcome in RESULTS:
         kind = outcome.split(":", 1)[0].strip()

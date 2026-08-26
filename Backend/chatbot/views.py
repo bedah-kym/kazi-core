@@ -58,6 +58,13 @@ def _is_ai_only_room_members(members):
     return has_mathia and len(human_members) == 1
 
 
+def _json_for_script(value):
+    # JSON output injected into a <script> context: escape '<'/'>' so a value
+    # containing "</script>" cannot break out of the script element. nosec:
+    # payload is JSON-escaped plus script-tag neutralized before mark_safe.
+    return mark_safe(json.dumps(value).replace("<", "\\u003c").replace(">", "\\u003e"))  # nosec B308 B703
+
+
 @login_required
 def home(request, room_name):
     # Security Fix: Only show rooms where the user is a participant
@@ -133,9 +140,9 @@ def home(request, room_name):
     return render(
         request, "chatbot/chatbase.html",
         {
-            "room_name": mark_safe(json.dumps(room_name)),
+            "room_name": _json_for_script(room_name),
             "room_id": room.id,
-            "username": mark_safe(json.dumps(request.user.username)),
+            "username": _json_for_script(request.user.username),
             "chatrooms": chatrooms_data,  # Passing processed data
             "room_member": current_room_name,
             "is_ai_room": is_ai_room,

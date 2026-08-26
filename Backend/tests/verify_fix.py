@@ -10,7 +10,7 @@ from chatbot.models import Chatroom, Member
 User = get_user_model()
 username = 'test_user_fix_verify'
 email = 'test_verify@example.com'
-password = 'Password123!'
+password = 'Password123!'  # nosec B105 — test fixture — fake credential
 
 # Clean up if exists
 try:

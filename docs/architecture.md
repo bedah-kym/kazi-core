@@ -67,7 +67,8 @@ The gateway between the agent and connectors. Before executing any tool:
 
 Auto-discovers connectors from three sources:
 1. Built-in connectors in `orchestration/connectors/`
-2. Legacy connectors in `orchestration/mcp_router.py`
+2. Legacy connectors in `orchestration/tool_router.py` (formerly
+   `mcp_router.py`; the old name is a one-cycle deprecation shim)
 3. Pip-installed packages with `kazi.connectors` entry points
 
 ### Security Policy (`orchestration/security_policy.py`)

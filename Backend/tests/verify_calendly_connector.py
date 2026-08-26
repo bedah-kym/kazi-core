@@ -15,7 +15,7 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'Backend.settings')
 django.setup()
 
 from django.contrib.auth import get_user_model
-from orchestration.mcp_router import CalendarConnector
+from orchestration.tool_router import CalendarConnector
 from users.models import CalendlyProfile
 
 

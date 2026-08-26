@@ -402,7 +402,7 @@ class RecommendationServiceTests(TestCase):
 
     def test_verify_activity_rate_limit(self):
         service = RecommendationService()
-        with patch('orchestration.mcp_router.route_intent', new=AsyncMock(return_value={
+        with patch('orchestration.tool_router.route_intent', new=AsyncMock(return_value={
             'status': 'success',
             'data': {'error': 'rate_limit_exceeded'}
         })):

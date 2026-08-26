@@ -71,7 +71,7 @@ from orchestration.agent_loop import (
     cancel_pending_action,
     dismiss_pending_confirmation,
 )
-from orchestration.mcp_router import route_intent
+from orchestration.tool_router import route_intent
 from orchestration.data_synthesizer import synthesize_response, synthesize_response_stream
 from orchestration.workflow_planner import (
     plan_user_request,

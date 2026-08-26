@@ -207,7 +207,7 @@ class ConnectorRegistryUngatingTests(SimpleTestCase):
     @patch.dict(os.environ, {"KAZI_DEMO_MODE": "false"}, clear=False)
     def test_router_integrity_still_passes_after_dynamic_discovery(self):
         from orchestration.connector_registry import discover_connectors, reset_registry
-        from orchestration.mcp_router import MCPRouter
+        from orchestration.tool_router import MCPRouter
 
         reset_registry()
         discover_connectors()
@@ -218,7 +218,7 @@ class ConnectorRegistryUngatingTests(SimpleTestCase):
         # v0.4 M2-1: MCPRouter no longer maintains its own action->connector dict;
         # it must reflect exactly what connector_registry.discover_connectors() exposes.
         from orchestration.connector_registry import discover_connectors, reset_registry
-        from orchestration.mcp_router import MCPRouter
+        from orchestration.tool_router import MCPRouter
 
         reset_registry()
         registry_map = discover_connectors()

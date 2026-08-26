@@ -11,7 +11,7 @@ from django.core.cache import cache
 
 from travel.models import Itinerary, ItineraryItem, SearchCache, BookingReference
 from travel.services import ItineraryBuilder, ExportService, BookingOrchestrator
-from orchestration.mcp_router import MCPRouter
+from orchestration.tool_router import MCPRouter
 from orchestration.connectors.travel_buses_connector import TravelBusesConnector
 from orchestration.connectors.travel_hotels_connector import TravelHotelsConnector
 from orchestration.connectors.travel_flights_connector import TravelFlightsConnector

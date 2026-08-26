@@ -32,7 +32,8 @@ Backend/
     llm_client.py          # LLM provider abstraction (Anthropic first, HF fallback)
     telemetry.py           # JSONL event log
     eval/                  # Golden scenario evaluator (run via run_golden_eval)
-    mcp_router.py          # Legacy filename — being renamed tool_router.py in v0.5
+    mcp_router.py          # Deprecation shim for tool_router.py (removed in v0.6)
+    tool_router.py         # Legacy filename was mcp_router.py — renamed in v0.5
     connectors/            # Built-in connectors — add yours here
     management/commands/
       kazi_trace.py        # Render a human-readable trace for any execution
@@ -61,7 +62,7 @@ scripts/
   demo.sh                  # Single-command driver for the canonical demo
 ```
 
-When in doubt, read `Backend/orchestration/agent_loop.py` first — that's where the ReAct loop lives. Tool dispatch is handled by `Backend/orchestration/connector_registry.py` (the single source of truth — collapsed in v0.4 M2-1) and routed by `Backend/orchestration/mcp_router.py` (filename is legacy; the "MCP" predates Anthropic's Model Context Protocol and is being renamed to `tool_router.py` in v0.5 — see the deprecation note at the top of the file).
+When in doubt, read `Backend/orchestration/agent_loop.py` first — that's where the ReAct loop lives. Tool dispatch is handled by `Backend/orchestration/connector_registry.py` (the single source of truth — collapsed in v0.4 M2-1) and routed by `Backend/orchestration/tool_router.py` (renamed from `mcp_router.py` in v0.5; the old name remains as a deprecation shim).
 
 For a "what is in this repo right now?" overview, read `docs/v0.4-brief.md` and `docs/v0.4-roadmap.md` — they describe the cycle, the freeze (no new connectors), and the milestones already shipped vs. queued.
 
@@ -128,7 +129,7 @@ Full guide: [`docs/add-a-connector.md`](docs/add-a-connector.md) (workflow-orien
 
 ### Touching the LLM client
 
-Keep `generate_text` and `stream_text` semantics stable — `mcp_router.py`, `agent_loop.py`, and the chatbot consumers all depend on them. Use `get_llm_client()` to reuse the singleton; don't instantiate provider clients directly. Use `extract_json()` when expecting structured output.
+Keep `generate_text` and `stream_text` semantics stable — `tool_router.py`, `agent_loop.py`, and the chatbot consumers all depend on them. Use `get_llm_client()` to reuse the singleton; don't instantiate provider clients directly. Use `extract_json()` when expecting structured output.
 
 ### Touching security boundaries
 

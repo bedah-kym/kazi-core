@@ -69,7 +69,7 @@ def _run_async(coro):
 def _():
     if not os.environ.get("OPENWEATHER_API_KEY"):
         return "SKIP: OPENWEATHER_API_KEY not set"
-    from orchestration.mcp_router import WeatherConnector
+    from orchestration.tool_router import WeatherConnector
     result = _run_async(WeatherConnector().execute(
         {"action": "get_weather", "city": "Nairobi"},
         {"user_id": 1},
@@ -83,7 +83,7 @@ def _():
 def _():
     if not os.environ.get("EXCHANGE_RATE_API_KEY"):
         return "SKIP: EXCHANGE_RATE_API_KEY not set"
-    from orchestration.mcp_router import CurrencyConnector
+    from orchestration.tool_router import CurrencyConnector
     result = _run_async(CurrencyConnector().execute(
         {"action": "convert_currency", "amount": 100, "from_currency": "USD", "to_currency": "KES"},
         {"user_id": 1},
@@ -97,7 +97,7 @@ def _():
 def _():
     if not os.environ.get("GIPHY_API_KEY"):
         return "SKIP: GIPHY_API_KEY not set"
-    from orchestration.mcp_router import GiphyConnector
+    from orchestration.tool_router import GiphyConnector
     result = _run_async(GiphyConnector().execute(
         {"action": "search_gif", "query": "cat"},
         {"user_id": 1},

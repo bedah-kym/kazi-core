@@ -1,4 +1,4 @@
-﻿import json
+import json
 import os
 from io import StringIO
 
@@ -75,7 +75,7 @@ class ActionCatalogTests(SimpleTestCase):
 
     def test_router_integrity(self):
         try:
-            from orchestration.mcp_router import MCPRouter
+            from orchestration.tool_router import MCPRouter
         except Exception as exc:
             self.skipTest(f"Router import failed: {exc}")
             return
@@ -445,7 +445,7 @@ class RouterCapsToggleTests(SimpleTestCase):
             loop.close()
 
     def _router(self):
-        from orchestration.mcp_router import MCPRouter
+        from orchestration.tool_router import MCPRouter
 
         return object.__new__(MCPRouter)
 
@@ -462,7 +462,7 @@ class RouterCapsToggleTests(SimpleTestCase):
         return conn
 
     def _validate_n_times(self, router, n):
-        from orchestration.mcp_router import MCPRouter
+        from orchestration.tool_router import MCPRouter
 
         MCPRouter._local_rate_counters.clear()
         conn = self._counting_redis()
@@ -470,9 +470,9 @@ class RouterCapsToggleTests(SimpleTestCase):
         async def _prefs(user_id):
             return dict(MCPRouter.DEFAULT_CAPABILITY_PREFS)
 
-        with patch("orchestration.mcp_router.get_redis_connection", return_value=conn), \
+        with patch("orchestration.tool_router.get_redis_connection", return_value=conn), \
                 patch.object(type(router), "_get_user_prefs", new=AsyncMock(side_effect=_prefs)), \
-                patch("orchestration.mcp_router.user_has_room_access", new=AsyncMock(return_value=True)):
+                patch("orchestration.tool_router.user_has_room_access", new=AsyncMock(return_value=True)):
             return [
                 self._run(router._validate_request(
                     {"action": "get_weather"}, {"user_id": 7, "room_id": 1},
@@ -480,12 +480,12 @@ class RouterCapsToggleTests(SimpleTestCase):
                 for _ in range(n)
             ]
 
-    @patch("orchestration.mcp_router.enforce_agent_caps", new=MagicMock(return_value=False))
+    @patch("orchestration.tool_router.enforce_agent_caps", new=MagicMock(return_value=False))
     def test_rate_limit_lifted_when_caps_disabled(self):
         outcomes = self._validate_n_times(self._router(), 120)
         self.assertTrue(all(o["valid"] for o in outcomes))
 
-    @patch("orchestration.mcp_router.enforce_agent_caps", new=MagicMock(return_value=True))
+    @patch("orchestration.tool_router.enforce_agent_caps", new=MagicMock(return_value=True))
     def test_rate_limit_still_applies_when_caps_enabled(self):
         outcomes = self._validate_n_times(self._router(), 105)
         self.assertTrue(outcomes[0]["valid"])
@@ -574,14 +574,14 @@ class Te2FailClosedTests(SimpleTestCase):
         self.assertIn("disabled", denial)
 
     def test_router_prefs_fail_closed_on_unexpected_error(self):
-        from orchestration.mcp_router import MCPRouter
+        from orchestration.tool_router import MCPRouter
 
         router = object.__new__(MCPRouter)
         fake_user_model = MagicMock()
         fake_user_model.DoesNotExist = type("DoesNotExist", (Exception,), {})
         fake_user_model.objects.get.side_effect = RuntimeError("db down")
 
-        with patch("orchestration.mcp_router.get_user_model", return_value=fake_user_model):
+        with patch("orchestration.tool_router.get_user_model", return_value=fake_user_model):
             prefs = self._run(router._get_user_prefs(42))
 
         self.assertFalse(prefs["allow_payments"])
@@ -591,25 +591,25 @@ class Te2FailClosedTests(SimpleTestCase):
     def test_router_missing_user_still_gets_defaults(self):
         # Guard against over-hardening: a genuinely absent user is not an
         # error path and keeps the documented default capabilities.
-        from orchestration.mcp_router import MCPRouter
+        from orchestration.tool_router import MCPRouter
 
         router = object.__new__(MCPRouter)
         fake_user_model = MagicMock()
         fake_user_model.DoesNotExist = type("DoesNotExist", (Exception,), {})
         fake_user_model.objects.get.side_effect = fake_user_model.DoesNotExist("gone")
 
-        with patch("orchestration.mcp_router.get_user_model", return_value=fake_user_model):
+        with patch("orchestration.tool_router.get_user_model", return_value=fake_user_model):
             prefs = self._run(router._get_user_prefs(999999))
 
         self.assertTrue(prefs["allow_payments"])
 
     def test_rate_counter_keeps_counting_without_redis(self):
-        from orchestration.mcp_router import MCPRouter
+        from orchestration.tool_router import MCPRouter
 
         router = object.__new__(MCPRouter)
         MCPRouter._local_rate_counters.clear()
         with patch(
-            "orchestration.mcp_router.get_redis_connection",
+            "orchestration.tool_router.get_redis_connection",
             side_effect=ConnectionError("redis down"),
         ):
             first = self._run(router._count_request("mcp_rate:7"))
@@ -621,7 +621,7 @@ class Te2FailClosedTests(SimpleTestCase):
     def test_rate_limit_denies_at_threshold_with_live_redis(self):
         # Old attack still blocked: once the counter passes the limit the
         # request is refused.
-        from orchestration.mcp_router import MCPRouter
+        from orchestration.tool_router import MCPRouter
 
         router = object.__new__(MCPRouter)
         counter = {"n": 0}
@@ -637,10 +637,10 @@ class Te2FailClosedTests(SimpleTestCase):
         async def _prefs(user_id):
             return dict(MCPRouter.DEFAULT_CAPABILITY_PREFS)
 
-        with patch("orchestration.mcp_router.get_redis_connection", return_value=conn), \
+        with patch("orchestration.tool_router.get_redis_connection", return_value=conn), \
                 patch.object(MCPRouter, "RATE_LIMIT_PER_HOUR", 3), \
                 patch.object(MCPRouter, "_get_user_prefs", new=AsyncMock(side_effect=_prefs)), \
-                patch("orchestration.mcp_router.user_has_room_access", new=AsyncMock(return_value=True)):
+                patch("orchestration.tool_router.user_has_room_access", new=AsyncMock(return_value=True)):
             outcomes = [
                 self._run(router._validate_request({"action": "get_weather"}, {"user_id": 7, "room_id": 1}))
                 for _ in range(4)
@@ -653,7 +653,7 @@ class Te2FailClosedTests(SimpleTestCase):
 
 
 class MemoryStateEntityTests(SimpleTestCase):
-    """e7: tool RESULT payloads are vendor data — they must not overwrite the
+    """e7: tool RESULT payloads are vendor data � they must not overwrite the
     user's own entities, persist into RoomContext.memory_facts, or masquerade
     as confirmed knowledge in the memory summary."""
 

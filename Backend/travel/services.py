@@ -12,7 +12,7 @@ from asgiref.sync import sync_to_async
 
 from orchestration.llm_client import get_llm_client, extract_json
 from travel.models import Itinerary, ItineraryItem, BookingReference
-from orchestration.mcp_router import MCPRouter
+from orchestration.tool_router import MCPRouter
 
 logger = logging.getLogger(__name__)
 

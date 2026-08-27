@@ -232,6 +232,9 @@ TEMPORAL_HOST = os.environ.get('TEMPORAL_HOST', 'localhost:7233')
 TEMPORAL_NAMESPACE = os.environ.get('TEMPORAL_NAMESPACE', 'default')
 TEMPORAL_TASK_QUEUE = os.environ.get('TEMPORAL_TASK_QUEUE', 'user-workflows')
 TEMPORAL_DISABLED = os.environ.get('TEMPORAL_DISABLED', 'False').lower() in ('1', 'true', 'yes')
+# Approval decisions go through the Workflow Update API (typed request/response
+# per approval id) instead of fire-and-forget signals. Default off — reversible.
+WORKFLOW_APPROVALS_UPDATE_API = os.environ.get('WORKFLOW_APPROVALS_UPDATE_API', 'False').lower() in ('1', 'true', 'yes')
 
 # Workflow safety limits
 WORKFLOW_WITHDRAW_MAX = Decimal(os.environ.get('WORKFLOW_WITHDRAW_MAX', '10000'))

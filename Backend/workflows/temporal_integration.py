@@ -17,8 +17,10 @@ from temporalio.client import (
     SchedulePolicy,
     ScheduleSpec,
     ScheduleOverlapPolicy,
+    WorkflowUpdateFailedError,
 )
 from temporalio.common import RetryPolicy
+from temporalio.exceptions import ApplicationError
 
 from orchestration.security_policy import sanitize_parameters, user_has_room_access
 
@@ -306,6 +308,21 @@ class DynamicUserWorkflow:
     def cancel_run(self, reason: str = "") -> None:
         self._cancel_requested = True
         self._cancel_reason = reason or "Cancelled by operator"
+
+    @workflow.update
+    def record_approval_decision(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        # Update API path: typed request/response correlated per approval id.
+        # A stale or duplicated approve/reject raises instead of silently
+        # landing on a different pending approval (the signal path cannot
+        # detect that).
+        if self._state.get("pending_approval_id") != payload.get("approval_id"):
+            raise ApplicationError(
+                "approval id does not match the pending approval",
+                type="ApprovalMismatch",
+                non_retryable=True,
+            )
+        self._approval_response = dict(payload or {})
+        return {"status": "recorded", "approval_id": payload.get("approval_id")}
 
     @workflow.query
     def get_runtime_state(self) -> Dict[str, Any]:
@@ -781,14 +798,29 @@ async def submit_execution_approval(
 ) -> None:
     client = await get_temporal_client()
     handle = client.get_workflow_handle(execution.temporal_workflow_id, run_id=execution.temporal_run_id or None)
+    payload = {
+        "approval_id": approval_id,
+        "reviewed_by_id": reviewer_id,
+        "decision": decision,
+        "comment": comment,
+    }
+
+    if getattr(settings, "WORKFLOW_APPROVALS_UPDATE_API", False):
+        try:
+            await handle.execute_update(
+                DynamicUserWorkflow.record_approval_decision,
+                payload,
+            )
+        except WorkflowUpdateFailedError as exc:
+            cause = exc.cause
+            if isinstance(cause, ApplicationError):
+                raise RuntimeError(str(cause)) from exc
+            raise
+        return
+
     await handle.signal(
         DynamicUserWorkflow.submit_approval,
-        {
-            "approval_id": approval_id,
-            "reviewed_by_id": reviewer_id,
-            "decision": decision,
-            "comment": comment,
-        },
+        payload,
     )
 
 

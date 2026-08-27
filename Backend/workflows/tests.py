@@ -938,7 +938,7 @@ class TemporalUpdateApprovalTests(TestCase):
     def setUp(self):
         self.client = APIClient()
         self.user = User.objects.create_user(
-            username="update-approval-user", email="ua@example.com", password="fake-token",
+            username="update-approval-user", email="ua@example.com", password="fake-token",  # nosec B106 — test fixture — fake credential
         )
         self.client.force_authenticate(self.user)
         self.workflow = UserWorkflow.objects.create(

@@ -285,7 +285,17 @@ CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            "hosts": [REDIS_URL],
+            "hosts": [
+                {
+                    "address": REDIS_URL,
+                    # redis-py 8.0.0 defaults socket_timeout to 5s, which
+                    # collides with channels_redis's 5s bzpopmin poll and
+                    # tears down otherwise-idle WebSockets. None restores the
+                    # pre-8.0 behaviour; bzpopmin still returns on its own
+                    # 5s poll without raising.
+                    "socket_timeout": None,
+                }
+            ],
         },
     },
 }

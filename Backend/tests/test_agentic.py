@@ -637,3 +637,153 @@ class LLMModelLeakTests(SimpleTestCase):
         self.assertEqual(captured["provider"], "deepseek")
         self.assertEqual(captured["model_name"], expected)
         self.assertNotEqual(captured["model_name"], "claude-haiku-4-5-20251001")
+
+
+# ---------------------------------------------------------------------------
+#  Model catalog + provider routing
+# ---------------------------------------------------------------------------
+
+class ModelCatalogTests(SimpleTestCase):
+    def test_model_id_uses_provider_slash_model(self):
+        from orchestration.model_catalog import CATALOG, model_id
+        self.assertEqual(model_id(CATALOG[0]), "deepseek/deepseek-v4-pro")
+
+    def test_parse_model_id_round_trip(self):
+        from orchestration.model_catalog import parse_model_id
+        self.assertEqual(
+            parse_model_id("deepseek/deepseek-v4-flash"),
+            ("deepseek", "deepseek-v4-flash"),
+        )
+
+    def test_parse_model_id_rejects_malformed(self):
+        from orchestration.model_catalog import parse_model_id
+        self.assertIsNone(parse_model_id(""))
+        self.assertIsNone(parse_model_id("no-slash"))
+        self.assertIsNone(parse_model_id("/missing-provider"))
+        self.assertIsNone(parse_model_id("deepseek/"))
+
+    def test_pick_returns_model_for_tier(self):
+        from orchestration.model_catalog import pick
+        self.assertEqual(pick("deepseek", "fast"), "deepseek-v4-flash")
+        self.assertEqual(pick("anthropic", "high"), "claude-sonnet-4-6")
+        self.assertIsNone(pick("huggingface", "high"))
+
+    def test_available_models_filters_by_configured_key(self):
+        from django.test import override_settings
+        from orchestration.model_catalog import available_models
+
+        with override_settings(
+            ANTHROPIC_API_KEY="", DEEPSEEK_API_KEY="ds-key", HF_API_TOKEN="",
+        ):
+            models = available_models()
+            providers = {m.provider for m in models}
+            self.assertIn("deepseek", providers)
+            self.assertNotIn("anthropic", providers)
+            self.assertNotIn("huggingface", providers)
+
+    def test_available_models_empty_when_no_keys(self):
+        from django.test import override_settings
+        from orchestration.model_catalog import available_models
+
+        with override_settings(
+            ANTHROPIC_API_KEY="", DEEPSEEK_API_KEY="", HF_API_TOKEN="",
+        ):
+            self.assertEqual(available_models(), [])
+
+
+class ProviderRoutingTests(SimpleTestCase):
+    def _client(self, *, anthropic=None, hf=None, deepseek=None):
+        from orchestration.llm_client import LLMClient
+        client = LLMClient()
+        client.anthropic_key = anthropic
+        client.hf_key = hf
+        client.deepseek_key = deepseek
+        return client
+
+    def test_create_message_routes_deepseek_directly(self):
+        from asgiref.sync import async_to_sync
+        from unittest.mock import AsyncMock
+
+        async def run():
+            client = self._client(deepseek="fake-key")
+            client._create_openai_message = AsyncMock(
+                return_value={"content": [], "stop_reason": "end_turn", "usage": {}}
+            )
+            await client.create_message(
+                messages=[{"role": "user", "content": "hi"}],
+                system="s",
+                provider="deepseek",
+                model="deepseek-v4-pro",
+            )
+            return client._create_openai_message.await_args.kwargs
+
+        kwargs = async_to_sync(run)()
+        self.assertEqual(kwargs["provider"], "deepseek")
+        self.assertEqual(kwargs["model"], "deepseek-v4-pro")
+
+    def test_create_message_routes_huggingface_directly(self):
+        from asgiref.sync import async_to_sync
+        from unittest.mock import AsyncMock
+
+        async def run():
+            client = self._client(hf="fake-key")
+            client._create_hf_fallback_message = AsyncMock(
+                return_value={"content": [], "stop_reason": "end_turn", "usage": {}}
+            )
+            await client.create_message(
+                messages=[{"role": "user", "content": "hi"}],
+                system="s",
+                provider="huggingface",
+                model="meta-llama/Llama-3.1-8B-Instruct",
+            )
+            return client._create_hf_fallback_message.await_args.kwargs
+
+        kwargs = async_to_sync(run)()
+        self.assertEqual(kwargs["provider"], "huggingface")
+        self.assertEqual(kwargs["model"], "meta-llama/Llama-3.1-8B-Instruct")
+
+    def test_create_message_routes_anthropic_directly(self):
+        from asgiref.sync import async_to_sync
+        from unittest.mock import AsyncMock
+
+        async def run():
+            client = self._client(anthropic="fake-key", deepseek="fake-key")
+            client._call_anthropic_create = AsyncMock(
+                return_value={"content": [], "stop_reason": "end_turn", "usage": {}}
+            )
+            await client.create_message(
+                messages=[{"role": "user", "content": "hi"}],
+                system="s",
+                provider="anthropic",
+                model="claude-haiku-4-5-20251001",
+            )
+            return client._call_anthropic_create.await_args.kwargs
+
+        kwargs = async_to_sync(run)()
+        self.assertEqual(kwargs["model"], "claude-haiku-4-5-20251001")
+
+    def test_stream_message_routes_deepseek_directly(self):
+        from asgiref.sync import async_to_sync
+
+        async def run():
+            client = self._client(deepseek="fake-key")
+            captured = {}
+
+            async def fake_stream(*args, **kwargs):
+                captured["model_name"] = kwargs.get("model_name")
+                captured["provider"] = kwargs.get("provider")
+                if False:
+                    yield
+
+            client._stream_huggingface = fake_stream
+            events = []
+            async for event in client.stream_message(
+                messages=[], system="s", provider="deepseek", model="deepseek-v4-flash"
+            ):
+                events.append(event)
+            return captured, events
+
+        captured, events = async_to_sync(run)()
+        self.assertEqual(captured["provider"], "deepseek")
+        self.assertEqual(captured["model_name"], "deepseek-v4-flash")
+        self.assertEqual(events[-1]["type"], "message_done")

@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
-from django.test import TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -928,3 +928,150 @@ class SafeConditionEvaluatorTests(TestCase):
     def test_malformed_expressions_return_false(self):
         self.assertFalse(safe_eval_condition("amount >", {"amount": 1}))
         self.assertFalse(safe_eval_condition("1 +* 2", {}))
+
+
+class TemporalUpdateApprovalTests(TestCase):
+    """Phase 4 (d): with WORKFLOW_APPROVALS_UPDATE_API on, approval decisions
+    go through the Workflow Update API — typed, correlated per approval id —
+    instead of fire-and-forget signals."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username="update-approval-user", email="ua@example.com", password="fake-token",  # nosec B106 — test fixture — fake credential
+        )
+        self.client.force_authenticate(self.user)
+        self.workflow = UserWorkflow.objects.create(
+            user=self.user,
+            name="Update approval workflow",
+            description="Update API",
+            definition={"workflow_name": "w", "workflow_description": "d", "triggers": [], "steps": []},
+        )
+
+    def _waiting_execution_with_pending_approval(self, suffix):
+        execution = WorkflowExecution.objects.create(
+            workflow=self.workflow,
+            temporal_workflow_id=f"wf-upd-{suffix}",
+            temporal_run_id=f"run-upd-{suffix}",
+            trigger_type="manual",
+            trigger_data={},
+            status="waiting",
+            waiting_on="approval",
+        )
+        approval = WorkflowApprovalRecord.objects.create(
+            workflow=self.workflow,
+            execution=execution,
+            requested_by=self.user,
+            step_id="email_step",
+            service="gmail",
+            action="send_email",
+            status="pending",
+        )
+        execution.pending_approval = approval
+        execution.save(update_fields=["pending_approval"])
+        return execution
+
+    def _submission_env(self, *, update_side_effect=None):
+        from workflows import temporal_integration as ti
+
+        client = MagicMock()
+        handle = MagicMock()
+        handle.execute_update = AsyncMock(side_effect=update_side_effect)
+        handle.signal = AsyncMock()
+        client.get_workflow_handle = MagicMock(return_value=handle)
+        return ti, client, handle
+
+    @override_settings(WORKFLOW_APPROVALS_UPDATE_API=False)
+    def test_flag_off_uses_fire_and_forget_signal(self):
+
+        ti, client, handle = self._submission_env()
+        execution = MagicMock()
+        with patch.object(ti, "get_temporal_client", new=AsyncMock(return_value=client)):
+            async_to_sync(ti.submit_execution_approval)(
+                execution, approval_id=7, reviewer_id=1, decision="approved",
+            )
+        handle.signal.assert_awaited_once()
+        handle.execute_update.assert_not_awaited()
+
+    @override_settings(WORKFLOW_APPROVALS_UPDATE_API=True)
+    def test_flag_on_uses_update_api_with_typed_payload(self):
+
+        ti, client, handle = self._submission_env()
+        execution = MagicMock()
+        with patch.object(ti, "get_temporal_client", new=AsyncMock(return_value=client)):
+            async_to_sync(ti.submit_execution_approval)(
+                execution, approval_id=7, reviewer_id=1, decision="approved", comment="ok",
+            )
+        handle.signal.assert_not_awaited()
+        handle.execute_update.assert_awaited_once()
+        args = handle.execute_update.await_args.args
+        payload = args[1]
+        self.assertEqual(payload["approval_id"], 7)
+        self.assertEqual(payload["decision"], "approved")
+        self.assertEqual(payload["reviewed_by_id"], 1)
+
+    @override_settings(WORKFLOW_APPROVALS_UPDATE_API=True)
+    def test_flag_on_conflict_surfaces_error_instead_of_silent_drop(self):
+        from temporalio.client import WorkflowUpdateFailedError
+        from temporalio.exceptions import ApplicationError
+
+        failure = WorkflowUpdateFailedError(
+            cause=ApplicationError(
+                "approval id does not match the pending approval",
+                type="ApprovalMismatch",
+                non_retryable=True,
+            )
+        )
+        ti, client, handle = self._submission_env(update_side_effect=failure)
+        execution = MagicMock()
+        with patch.object(ti, "get_temporal_client", new=AsyncMock(return_value=client)):
+            with self.assertRaises(RuntimeError) as ctx:
+                async_to_sync(ti.submit_execution_approval)(
+                    execution, approval_id=7, reviewer_id=1, decision="approved",
+                )
+        self.assertIn("does not match", str(ctx.exception))
+        handle.signal.assert_not_awaited()
+
+    def test_approve_endpoint_returns_409_on_update_conflict(self):
+        execution = self._waiting_execution_with_pending_approval("update-conflict")
+        with override_settings(WORKFLOW_APPROVALS_UPDATE_API=True), patch(
+            "workflows.views.submit_execution_approval",
+            new=AsyncMock(side_effect=RuntimeError("approval id does not match the pending approval")),
+        ):
+            response = self.client.post(f"/api/workflows/executions/{execution.id}/approve/", {}, format="json")
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("approval id does not match", response.json()["detail"])
+
+
+class ApprovalUpdateHandlerTests(SimpleTestCase):
+    """The update validator itself: only the pending approval id is accepted."""
+
+    def test_update_records_decision_when_id_matches(self):
+        from workflows.temporal_integration import DynamicUserWorkflow
+
+        wf = DynamicUserWorkflow()
+        wf._state["pending_approval_id"] = 7
+        result = wf.record_approval_decision({"approval_id": 7, "decision": "approved"})
+        self.assertEqual(result["status"], "recorded")
+        self.assertEqual(wf._approval_response["decision"], "approved")
+
+    def test_update_rejects_mismatched_approval_id(self):
+        from temporalio.exceptions import ApplicationError
+
+        from workflows.temporal_integration import DynamicUserWorkflow
+
+        wf = DynamicUserWorkflow()
+        wf._state["pending_approval_id"] = 7
+        with self.assertRaises(ApplicationError):
+            wf.record_approval_decision({"approval_id": 8, "decision": "approved"})
+        self.assertIsNone(wf._approval_response)
+
+    def test_update_requires_approval_id(self):
+        from temporalio.exceptions import ApplicationError
+
+        from workflows.temporal_integration import DynamicUserWorkflow
+
+        wf = DynamicUserWorkflow()
+        wf._state["pending_approval_id"] = 7
+        with self.assertRaises(ApplicationError):
+            wf.record_approval_decision({"decision": "approved"})

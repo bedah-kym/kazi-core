@@ -673,7 +673,7 @@ class ModelCatalogTests(SimpleTestCase):
         from orchestration.model_catalog import available_models
 
         with override_settings(
-            ANTHROPIC_API_KEY="", DEEPSEEK_API_KEY="ds-key", HF_API_TOKEN="",
+            ANTHROPIC_API_KEY="", DEEPSEEK_API_KEY="ds-key", HF_API_TOKEN="",  # nosec B106 — test fixture — fake credential
         ):
             models = available_models()
             providers = {m.provider for m in models}
@@ -686,7 +686,7 @@ class ModelCatalogTests(SimpleTestCase):
         from orchestration.model_catalog import available_models
 
         with override_settings(
-            ANTHROPIC_API_KEY="", DEEPSEEK_API_KEY="", HF_API_TOKEN="",
+            ANTHROPIC_API_KEY="", DEEPSEEK_API_KEY="", HF_API_TOKEN="",  # nosec B106 — test fixture — fake credential
         ):
             self.assertEqual(available_models(), [])
 

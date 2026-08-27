@@ -133,6 +133,90 @@ class WhatsAppDeliveryTaskTests(TestCase):
         self.assertTrue(notification.delivered_whatsapp)
 
 
+class NotificationCenterViewTests(TestCase):
+    """The /notifications/ page renders the human-facing inbox."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(
+            username="notifcenter", email="nc@example.com", password="pass"  # nosec B106 — test fixture — fake credential
+        )
+        from notifications.models import Notification
+
+        for index in range(25):
+            Notification.objects.create(
+                user=cls.user,
+                event_type="system.info" if index % 2 == 0 else "payment.deposit",
+                title=f"Item {index}",
+                body=f"Body {index}",
+                severity="info" if index % 2 == 0 else "success",
+                is_read=index < 5,
+            )
+
+    def test_requires_login(self):
+        response = self.client.get("/notifications/")
+        self.assertRedirects(
+            response, "/accounts/login/?next=/notifications/", fetch_redirect_response=False
+        )
+
+    def test_renders_notifications_newest_first(self):
+        self.client.force_login(self.user)
+        response = self.client.get("/notifications/")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Item 24")
+        self.assertNotContains(response, "Item 0")  # page 1 shows latest 20
+
+    def test_pagination_exposes_older_pages(self):
+        self.client.force_login(self.user)
+        response = self.client.get("/notifications/?page=2")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Item 4")
+        self.assertContains(response, "Page 2 of 2")
+
+    def test_unread_filter_shows_only_unread(self):
+        self.client.force_login(self.user)
+        response = self.client.get("/notifications/?unread=1")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Item 20")
+        self.assertNotContains(response, "Item 4")  # read items hidden
+
+    def test_invalid_event_type_falls_back_to_all(self):
+        self.client.force_login(self.user)
+        response = self.client.get("/notifications/?event_type=not.a.type")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Item 24")
+        self.assertContains(response, "Item 23")
+
+    def test_dismissed_notifications_are_hidden(self):
+        from notifications.models import Notification
+
+        latest = Notification.objects.filter(user=self.user).first()
+        latest.is_dismissed = True
+        latest.save()
+        self.client.force_login(self.user)
+        response = self.client.get("/notifications/")
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Item 24")
+
+    def test_related_room_links_to_chat(self):
+        from chatbot.models import Chatroom
+        from notifications.models import Notification
+
+        room = Chatroom.objects.create()
+        Notification.objects.create(
+            user=self.user,
+            event_type="message.unread",
+            title="New message",
+            body="Someone said hi",
+            severity="info",
+            related_room=room,
+        )
+        self.client.force_login(self.user)
+        response = self.client.get("/notifications/?unread=1")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, f"/chatbot/home/{room.id}/")
+
+
 class NotificationConsumerRedisOutageTests(SimpleTestCase):
     """F7.2: the notification socket must accept degraded when the channel
     layer (Redis) is down, and disconnect must not raise either."""

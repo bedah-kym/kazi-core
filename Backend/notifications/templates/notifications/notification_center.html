@@ -1,0 +1,394 @@
+{% load static %}
+{% load humanize %}
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Your Mathia notification center - alerts, approvals and activity in one inbox.">
+    <title>Notifications - Mathia</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="{% static 'css/app.css' %}" rel="stylesheet">
+    <link rel="icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
+    <style>
+        .notif-item {
+            display: flex;
+            gap: 14px;
+            padding: 16px 18px;
+            border-bottom: 1px solid hsl(var(--border));
+            transition: background 140ms ease;
+        }
+
+        .notif-item:last-child {
+            border-bottom: none;
+        }
+
+        .notif-item:hover {
+            background: hsl(var(--accent));
+        }
+
+        .notif-item.unread {
+            background: color-mix(in srgb, hsl(var(--primary)) 4%, transparent);
+        }
+
+        .notif-item.unread:hover {
+            background: hsl(var(--accent));
+        }
+
+        .notif-icon {
+            width: 36px;
+            height: 36px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+
+        .notif-icon.severity-info {
+            background: color-mix(in srgb, hsl(var(--info)) 14%, transparent);
+            color: hsl(var(--info));
+        }
+
+        .notif-icon.severity-success {
+            background: color-mix(in srgb, hsl(var(--success)) 14%, transparent);
+            color: hsl(var(--success));
+        }
+
+        .notif-icon.severity-warning {
+            background: color-mix(in srgb, hsl(var(--warning)) 16%, transparent);
+            color: color-mix(in srgb, hsl(var(--warning)) 80%, hsl(var(--foreground)));
+        }
+
+        .notif-icon.severity-error {
+            background: color-mix(in srgb, hsl(var(--destructive)) 14%, transparent);
+            color: hsl(var(--destructive));
+        }
+
+        .notif-body {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .notif-title {
+            font-size: 14px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .unread-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: hsl(var(--primary));
+            flex-shrink: 0;
+        }
+
+        .notif-text {
+            font-size: 13.5px;
+            color: hsl(var(--muted-foreground));
+            margin-top: 3px;
+            overflow-wrap: break-word;
+        }
+
+        .notif-meta {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 6px;
+            flex-wrap: wrap;
+        }
+
+        .notif-actions {
+            display: flex;
+            align-items: flex-start;
+            gap: 4px;
+            flex-shrink: 0;
+            opacity: 0;
+            transition: opacity 140ms ease;
+        }
+
+        .notif-item:hover .notif-actions,
+        .notif-item:focus-within .notif-actions {
+            opacity: 1;
+        }
+
+        @media (max-width: 640px) {
+            .notif-actions {
+                opacity: 1;
+                flex-direction: column;
+            }
+        }
+
+        .pager {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 18px;
+            border-top: 1px solid hsl(var(--border));
+        }
+    </style>
+</head>
+
+<body class="app-page">
+    <header class="app-topbar">
+        <div class="app-topbar-inner">
+            <a href="{% url 'users:dashboard' %}" class="app-brand">
+                <span class="app-brand-mark"><i class="fas fa-robot"></i></span>
+                Mathia
+            </a>
+            <nav class="app-nav" aria-label="Primary">
+                <a class="app-nav-link" href="{% url 'users:dashboard' %}">
+                    <i class="fas fa-home"></i><span class="nav-label">Dashboard</span>
+                </a>
+                <a class="app-nav-link" href="{% url 'payments:wallet_dashboard' %}">
+                    <i class="fas fa-wallet"></i><span class="nav-label">Wallet</span>
+                </a>
+                <a class="app-nav-link" href="{% url 'users:settings' %}">
+                    <i class="fas fa-plug"></i><span class="nav-label">Settings</span>
+                </a>
+                <a class="app-nav-link active" href="{% url 'notifications:notification-center' %}" aria-current="page">
+                    <i class="fas fa-bell"></i><span class="nav-label">Notifications</span>
+                </a>
+            </nav>
+            <div class="app-topbar-actions">
+                <button class="app-icon-btn" id="themeToggle" aria-label="Toggle dark mode">
+                    <i class="fas fa-moon"></i>
+                </button>
+                <a class="app-icon-btn" href="{% url 'users:logout' %}" title="Sign out" aria-label="Sign out">
+                    <i class="fas fa-sign-out-alt"></i>
+                </a>
+            </div>
+        </div>
+    </header>
+
+    <main class="app-container">
+        <div class="app-header">
+            <div>
+                <div class="app-eyebrow">Workspace</div>
+                <h1 class="app-title">Notifications</h1>
+                <p class="app-subtitle">Alerts, workflow approvals and activity in one inbox.</p>
+            </div>
+            <div class="app-header-actions">
+                {% if unread_count %}
+                <button class="app-btn app-btn-outline" id="markAllReadBtn" type="button">
+                    <i class="fas fa-check-double"></i> Mark all read
+                </button>
+                {% endif %}
+                <a class="app-btn app-btn-primary" href="{% url 'users:dashboard' %}">
+                    <i class="fas fa-comments"></i> Back to chat
+                </a>
+            </div>
+        </div>
+
+        <div class="app-tabs" role="tablist">
+            <a class="app-tab{% if not unread_only %} active{% endif %}" href="{% url 'notifications:notification-center' %}{% if event_type %}?event_type={{ event_type|urlencode }}{% endif %}">
+                All
+                <span class="app-tab-count">{{ total_count }}</span>
+            </a>
+            <a class="app-tab{% if unread_only %} active{% endif %}" href="?unread=1{% if event_type %}&event_type={{ event_type|urlencode }}{% endif %}">
+                Unread
+                <span class="app-tab-count">{{ unread_count }}</span>
+            </a>
+            <form class="ms-auto d-flex align-items-center gap-2" method="get" action="{% url 'notifications:notification-center' %}">
+                {% if unread_only %}<input type="hidden" name="unread" value="1">{% endif %}
+                <label for="eventTypeFilter" class="app-meta" style="white-space: nowrap;">Filter</label>
+                <select id="eventTypeFilter" name="event_type" class="app-btn app-btn-outline app-btn-sm" onchange="this.form.submit()">
+                    <option value="">All types</option>
+                    {% for value, label in event_types %}
+                    <option value="{{ value }}"{% if event_type == value %} selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </form>
+        </div>
+
+        <section class="app-card" aria-label="Notification list">
+            {% if page_obj.object_list %}
+            <ul style="list-style: none; margin: 0; padding: 0;" id="notifList">
+                {% for n in page_obj.object_list %}
+                <li class="notif-item{% if not n.is_read %} unread{% endif %}" data-id="{{ n.id }}">
+                    <div class="notif-icon severity-{{ n.severity }}">
+                        {% if n.severity == "success" %}<i class="fas fa-check-circle"></i>
+                        {% elif n.severity == "warning" %}<i class="fas fa-triangle-exclamation"></i>
+                        {% elif n.severity == "error" %}<i class="fas fa-circle-exclamation"></i>
+                        {% else %}<i class="fas fa-circle-info"></i>{% endif %}
+                    </div>
+                    <div class="notif-body">
+                        <div class="notif-title">
+                            {% if not n.is_read %}<span class="unread-dot" aria-label="Unread"></span>{% endif %}
+                            {{ n.title }}
+                        </div>
+                        {% if n.body %}<div class="notif-text">{{ n.body|linebreaksbr }}</div>{% endif %}
+                        <div class="notif-meta">
+                            <span class="app-meta"><i class="far fa-clock me-1"></i>{{ n.created_at|naturaltime }}</span>
+                            {% for value, label in event_types %}{% if value == n.event_type %}
+                            <span class="app-pill app-pill-muted">{{ label }}</span>
+                            {% endif %}{% endfor %}
+                            {% if n.related_room_id %}
+                            <a href="{% url 'chatbot:bot-home' n.related_room_id %}" class="app-meta" style="text-decoration: none; font-weight: 500;">
+                                <i class="fas fa-arrow-up-right-from-square me-1"></i>Open chat
+                            </a>
+                            {% elif n.related_invoice %}
+                            <a href="{% url 'payments:invoice_detail' n.related_invoice.reference_id %}" class="app-meta" style="text-decoration: none; font-weight: 500;">
+                                <i class="fas fa-arrow-up-right-from-square me-1"></i>View invoice
+                            </a>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="notif-actions">
+                        {% if not n.is_read %}
+                        <button class="app-icon-btn" type="button" data-action="read" data-id="{{ n.id }}" title="Mark as read" aria-label="Mark as read">
+                            <i class="fas fa-check"></i>
+                        </button>
+                        {% endif %}
+                        <button class="app-icon-btn" type="button" data-action="dismiss" data-id="{{ n.id }}" title="Dismiss" aria-label="Dismiss">
+                            <i class="fas fa-xmark"></i>
+                        </button>
+                    </div>
+                </li>
+                {% endfor %}
+            </ul>
+            {% if page_obj.paginator.num_pages > 1 %}
+            <div class="pager">
+                <span class="app-meta">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span>
+                <div style="display: flex; gap: 8px;">
+                    {% if page_obj.has_previous %}
+                    <a class="app-btn app-btn-outline app-btn-sm" href="?page={{ page_obj.previous_page_number }}{% if unread_only %}&unread=1{% endif %}{% if event_type %}&event_type={{ event_type|urlencode }}{% endif %}">
+                        <i class="fas fa-arrow-left"></i> Newer
+                    </a>
+                    {% endif %}
+                    {% if page_obj.has_next %}
+                    <a class="app-btn app-btn-outline app-btn-sm" href="?page={{ page_obj.next_page_number }}{% if unread_only %}&unread=1{% endif %}{% if event_type %}&event_type={{ event_type|urlencode }}{% endif %}">
+                        Older <i class="fas fa-arrow-right"></i>
+                    </a>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
+            {% elif unread_only %}
+            <div class="app-empty">
+                <div class="app-empty-icon"><i class="fas fa-bell-slash"></i></div>
+                <h2 class="app-empty-title">You're all caught up</h2>
+                <p class="app-empty-text">No unread notifications. New alerts will appear here as they arrive.</p>
+                <a class="app-btn app-btn-outline app-btn-sm" href="{% url 'notifications:notification-center' %}">View all notifications</a>
+            </div>
+            {% else %}
+            <div class="app-empty">
+                <div class="app-empty-icon"><i class="fas fa-bell"></i></div>
+                <h2 class="app-empty-title">No notifications yet</h2>
+                <p class="app-empty-text">When something needs your attention - a payment, a reminder, or a workflow approval - it will land here.</p>
+            </div>
+            {% endif %}
+        </section>
+    </main>
+
+    <div class="app-toast" id="appToast" role="status" aria-live="polite"></div>
+
+    <script src="{% static 'js/main.js' %}"></script>
+    <script>
+        (function () {
+            const list = document.getElementById('notifList');
+            const toast = document.getElementById('appToast');
+            const markAllBtn = document.getElementById('markAllReadBtn');
+            const unreadCountEl = document.querySelector('.app-tab.active .app-tab-count');
+
+            function showToast(message) {
+                if (!toast) return;
+                toast.textContent = message;
+                toast.classList.add('show');
+                setTimeout(() => toast.classList.remove('show'), 2400);
+            }
+
+            function csrfToken() {
+                return typeof getCookie === 'function' ? getCookie('csrftoken') : null;
+            }
+
+            function post(url) {
+                const csrf = csrfToken();
+                return fetch(url, {
+                    method: 'POST',
+                    headers: csrf ? { 'X-CSRFToken': csrf } : {},
+                    credentials: 'same-origin',
+                });
+            }
+
+            function decrementUnread(el) {
+                const wasUnread = el && el.classList.contains('unread');
+                if (wasUnread && unreadCountEl) {
+                    unreadCountEl.textContent = Math.max(0, parseInt(unreadCountEl.textContent, 10) - 1);
+                }
+                return wasUnread;
+            }
+
+            if (list) {
+                list.addEventListener('click', (event) => {
+                    const btn = event.target.closest('[data-action]');
+                    if (!btn) return;
+                    const item = btn.closest('.notif-item');
+                    const id = btn.dataset.id;
+
+                    if (btn.dataset.action === 'read') {
+                        decrementUnread(item);
+                        item.classList.remove('unread');
+                        item.querySelector('.unread-dot')?.remove();
+                        btn.remove();
+                        post(`/notifications/api/${id}/read/`)
+                            .catch(() => showToast('Could not update - try again'));
+                    } else if (btn.dataset.action === 'dismiss') {
+                        decrementUnread(item);
+                        item.remove();
+                        post(`/notifications/api/${id}/dismiss/`)
+                            .catch(() => showToast('Could not update - try again'));
+                        if (!list.querySelector('.notif-item')) {
+                            window.location.reload();
+                        }
+                    }
+                });
+            }
+
+            if (markAllBtn) {
+                markAllBtn.addEventListener('click', () => {
+                    post('/notifications/api/read-all/')
+                        .then(() => {
+                            if (list) {
+                                list.querySelectorAll('.notif-item').forEach((item) => {
+                                    item.classList.remove('unread');
+                                    item.querySelector('.unread-dot')?.remove();
+                                    item.querySelector('[data-action="read"]')?.remove();
+                                });
+                            }
+                            if (unreadCountEl) unreadCountEl.textContent = '0';
+                            showToast('All notifications marked as read');
+                        })
+                        .catch(() => showToast('Could not update - try again'));
+                });
+            }
+
+            const themeToggle = document.getElementById('themeToggle');
+            if (themeToggle) {
+                themeToggle.addEventListener('click', () => {
+                    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+                    const next = isDark ? 'light' : 'dark';
+                    document.documentElement.setAttribute('data-theme', next);
+                    document.body.setAttribute('data-theme', next);
+                    document.body.classList.toggle('dark-mode', next === 'dark');
+                    try { localStorage.setItem('theme', next); } catch (e) { /* storage unavailable */ }
+                    const icon = themeToggle.querySelector('i');
+                    if (icon) icon.className = next === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
+                });
+                if (localStorage.getItem('theme') === 'dark') {
+                    themeToggle.querySelector('i').className = 'fas fa-sun';
+                }
+            }
+        })();
+    </script>
+</body>
+
+</html>

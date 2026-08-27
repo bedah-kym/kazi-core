@@ -5,6 +5,7 @@ from . import views
 app_name = "notifications"
 
 urlpatterns = [
+    path("", views.notification_center, name="notification-center"),
     path("api/", views.notification_list, name="notification-list"),
     path("api/counts/", views.notification_counts, name="notification-counts"),
     path("api/<int:pk>/read/", views.mark_read, name="mark-read"),

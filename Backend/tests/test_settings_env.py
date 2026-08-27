@@ -84,3 +84,22 @@ class DevSecretKeyFallbackTests(TestCase):
             with redirect_stdout(buffer):
                 key, _note = self._call(Path(tmp) / "k")
             self.assertNotIn(key, buffer.getvalue())
+
+
+class ChannelLayerSocketTimeoutTests(TestCase):
+    """redis-py 8.0.0 defaults socket_timeout to 5s, which collides with
+    channels_redis's 5s bzpopmin poll and drops idle WebSockets in a
+    reconnect loop. The host config must disable the socket timeout so
+    bzpopmin returns cleanly on its own poll interval."""
+
+    def test_channel_layer_host_socket_timeout_is_none(self):
+        channel_layer = settings.CHANNEL_LAYERS["default"]
+        self.assertEqual(channel_layer["BACKEND"], "channels_redis.core.RedisChannelLayer")
+        hosts = channel_layer["CONFIG"]["hosts"]
+        self.assertTrue(hosts, "channel layer must declare at least one Redis host")
+        self.assertIsNone(hosts[0]["socket_timeout"])
+
+    def test_channel_layer_host_keeps_redis_address(self):
+        host = settings.CHANNEL_LAYERS["default"]["CONFIG"]["hosts"][0]
+        self.assertTrue(host["address"])
+        self.assertTrue(host["address"].startswith(("redis://", "rediss://")))

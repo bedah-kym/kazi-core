@@ -569,3 +569,71 @@ class LLMStreamFallbackTests(SimpleTestCase):
         events, fallback_seen = async_to_sync(run)()
         self.assertEqual(events, [{"type": "text", "text": "par"}])
         self.assertEqual(fallback_seen, [])
+
+
+# ---------------------------------------------------------------------------
+#  DeepSeek model-leak regression
+# ---------------------------------------------------------------------------
+
+class LLMModelLeakTests(SimpleTestCase):
+    """
+    The agent loop passes Anthropic model names (claude-haiku-*, claude-sonnet-*)
+    as the `model` argument. When no Anthropic key is configured the fallback
+    must NOT forward those names to DeepSeek — DeepSeek rejects them and the
+    request fails. The OpenAI-compatible fallback resolves its own provider
+    model instead.
+    """
+
+    def _client(self, *, anthropic=None, hf=None, deepseek=None):
+        from orchestration.llm_client import LLMClient
+        client = LLMClient()
+        client.anthropic_key = anthropic
+        client.hf_key = hf
+        client.deepseek_key = deepseek
+        return client
+
+    def test_create_message_does_not_leak_anthropic_model_to_deepseek(self):
+        from asgiref.sync import async_to_sync
+        from unittest.mock import AsyncMock
+
+        async def run():
+            client = self._client(deepseek="fake-key")
+            client._create_openai_message = AsyncMock(
+                return_value={"content": [], "stop_reason": "end_turn", "usage": {}}
+            )
+            await client.create_message(
+                messages=[{"role": "user", "content": "hi"}],
+                system="s",
+                model="claude-haiku-4-5-20251001",
+            )
+            return client._create_openai_message.await_args.kwargs
+
+        kwargs = async_to_sync(run)()
+        self.assertEqual(kwargs["provider"], "deepseek")
+        self.assertIsNone(kwargs["model"])
+
+    def test_stream_message_does_not_leak_anthropic_model_to_deepseek(self):
+        from asgiref.sync import async_to_sync
+
+        async def run():
+            client = self._client(deepseek="fake-key")
+            captured = {}
+
+            async def fake_stream(*args, **kwargs):
+                captured["model_name"] = kwargs.get("model_name")
+                captured["provider"] = kwargs.get("provider")
+                if False:
+                    yield
+
+            client._stream_huggingface = fake_stream
+            events = []
+            async for event in client.stream_message(
+                messages=[], system="s", model="claude-haiku-4-5-20251001"
+            ):
+                events.append(event)
+            return captured, client._model_for("deepseek", "executor")
+
+        captured, expected = async_to_sync(run)()
+        self.assertEqual(captured["provider"], "deepseek")
+        self.assertEqual(captured["model_name"], expected)
+        self.assertNotEqual(captured["model_name"], "claude-haiku-4-5-20251001")

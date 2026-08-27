@@ -654,6 +654,71 @@ class LLMClient:
     #  Agent loop methods — full Messages API with tool_use support       #
     # ------------------------------------------------------------------ #
 
+    async def _call_anthropic_create(
+        self,
+        *,
+        messages: List[Dict[str, Any]],
+        system: str,
+        tools: Optional[List[Dict[str, Any]]],
+        temperature: float,
+        max_tokens: int,
+        user_id: Optional[int],
+        model: str,
+        use_prompt_cache: bool,
+    ) -> Dict[str, Any]:
+        """POST a single turn to the Anthropic Messages API and return the body."""
+        body: Dict[str, Any] = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "messages": messages,
+        }
+        if system:
+            if use_prompt_cache:
+                # Structured system prompt with cache_control for prompt caching
+                body["system"] = [
+                    {
+                        "type": "text",
+                        "text": system,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ]
+            else:
+                body["system"] = system
+        if tools:
+            if use_prompt_cache and tools:
+                # Mark the last tool with cache_control so the entire
+                # system prompt + tool definitions block is cached together.
+                cached_tools = [dict(t) for t in tools]
+                last = cached_tools[-1]
+                # Only add cache_control to regular tool defs (not server tools)
+                if "input_schema" in last:
+                    last["cache_control"] = {"type": "ephemeral"}
+                body["tools"] = cached_tools
+            else:
+                body["tools"] = tools
+
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.post(
+                self.anthropic_url,
+                headers={
+                    "x-api-key": self.anthropic_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json=body,
+            )
+            if response.status_code != 200:
+                raise Exception(f"Anthropic Error {response.status_code}: {response.text}")
+
+            data = response.json()
+
+        output_tokens = data.get("usage", {}).get("output_tokens", 0)
+        input_tokens = data.get("usage", {}).get("input_tokens", 0)
+        self._record_token_usage(input_tokens + output_tokens, user_id)
+
+        return data
+
     async def create_message(
         self,
         *,
@@ -665,12 +730,16 @@ class LLMClient:
         user_id: Optional[int] = None,
         model: Optional[str] = None,
         use_prompt_cache: bool = False,
+        provider: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Call the Anthropic Messages API with full tool_use support.
 
         Args:
             model: Override model (e.g. "claude-haiku-4-5-20251001" for simple tasks).
+            provider: If set ("anthropic" | "deepseek" | "huggingface"), route
+                directly to that provider using `model`; when None, fall back to
+                the provider ordering heuristic.
             use_prompt_cache: If True, wraps the system prompt with cache_control
                 for Anthropic prompt caching (~90% cost reduction on cached tokens).
 
@@ -695,59 +764,55 @@ class LLMClient:
                 f"Please try again later."
             )
 
+        if provider == "deepseek":
+            return await self._create_openai_message(
+                provider="deepseek",
+                messages=messages,
+                system=system,
+                tools=tools,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                user_id=user_id,
+                model=model,
+            )
+        if provider == "huggingface":
+            return await self._create_hf_fallback_message(
+                messages=messages,
+                system=system,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                user_id=user_id,
+                model=model,
+                tools=tools,
+                provider="huggingface",
+            )
+        if provider == "anthropic":
+            if not self.anthropic_key:
+                raise Exception("Anthropic API key is not configured.")
+            return await self._call_anthropic_create(
+                messages=messages,
+                system=system,
+                tools=tools,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                user_id=user_id,
+                model=model or self.claude_model,
+                use_prompt_cache=use_prompt_cache,
+            )
+
+        # Auto routing (provider is None)
         if self.anthropic_key:
-            body: Dict[str, Any] = {
-                "model": model or self.claude_model,
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-                "messages": messages,
-            }
-            if system:
-                if use_prompt_cache:
-                    # Structured system prompt with cache_control for prompt caching
-                    body["system"] = [
-                        {
-                            "type": "text",
-                            "text": system,
-                            "cache_control": {"type": "ephemeral"},
-                        }
-                    ]
-                else:
-                    body["system"] = system
-            if tools:
-                if use_prompt_cache and tools:
-                    # Mark the last tool with cache_control so the entire
-                    # system prompt + tool definitions block is cached together.
-                    cached_tools = [dict(t) for t in tools]
-                    last = cached_tools[-1]
-                    # Only add cache_control to regular tool defs (not server tools)
-                    if "input_schema" in last:
-                        last["cache_control"] = {"type": "ephemeral"}
-                    body["tools"] = cached_tools
-                else:
-                    body["tools"] = tools
-
             try:
-                async with httpx.AsyncClient(timeout=120.0) as client:
-                    response = await client.post(
-                        self.anthropic_url,
-                        headers={
-                            "x-api-key": self.anthropic_key,
-                            "anthropic-version": "2023-06-01",
-                            "content-type": "application/json",
-                        },
-                        json=body,
-                    )
-                    if response.status_code != 200:
-                        raise Exception(f"Anthropic Error {response.status_code}: {response.text}")
-
-                    data = response.json()
-
-                output_tokens = data.get("usage", {}).get("output_tokens", 0)
-                input_tokens = data.get("usage", {}).get("input_tokens", 0)
-                self._record_token_usage(input_tokens + output_tokens, user_id)
-
-                return data
+                return await self._call_anthropic_create(
+                    messages=messages,
+                    system=system,
+                    tools=tools,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    user_id=user_id,
+                    model=model or self.claude_model,
+                    use_prompt_cache=use_prompt_cache,
+                )
             except Exception as exc:
                 if not self.hf_key and not self.deepseek_key:
                     raise
@@ -779,6 +844,51 @@ class LLMClient:
             provider="huggingface",
         )
 
+    async def _stream_openai_fallback(
+        self,
+        *,
+        messages: List[Dict[str, Any]],
+        system: str,
+        tools: Optional[List[Dict[str, Any]]],
+        temperature: float,
+        max_tokens: int,
+        user_id: Optional[int],
+        provider: str,
+        model: Optional[str] = None,
+    ):
+        """Text-only stream fallback via an OpenAI-compatible provider."""
+        fallback_prompt = self._messages_to_plain_text(messages)
+        _agent = getattr(self, "_agent_name", "Kazi")
+        fallback_system = system or f"You are {_agent}, a helpful AI assistant."
+        if tools:
+            fallback_system += (
+                "\n\nTool execution is currently unavailable in this mode. "
+                "Answer directly, and briefly mention any missing external actions."
+            )
+        collected_chunks: List[str] = []
+        async for chunk in self._stream_huggingface(
+            fallback_system,
+            fallback_prompt,
+            temperature,
+            max_tokens,
+            model_name=model or self._model_for(provider, "executor"),
+            provider=provider,
+        ):
+            if chunk:
+                collected_chunks.append(chunk)
+                yield {"type": "text", "text": chunk}
+        input_tokens = self._estimate_tokens(fallback_system) + self._estimate_tokens(fallback_prompt)
+        output_tokens = self._estimate_tokens("".join(collected_chunks))
+        self._record_token_usage(input_tokens + output_tokens, user_id)
+        yield {
+            "type": "message_done",
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+            },
+        }
+
     async def stream_message(
         self,
         *,
@@ -790,6 +900,7 @@ class LLMClient:
         user_id: Optional[int] = None,
         model: Optional[str] = None,
         use_prompt_cache: bool = False,
+        provider: Optional[str] = None,
     ):
         """
         Stream from Anthropic Messages API with tool_use support.
@@ -803,6 +914,47 @@ class LLMClient:
         """
         if not self.anthropic_key and not self.hf_key and not self.deepseek_key:
             raise Exception("No valid API keys configured for DeepSeek, Anthropic, or Hugging Face.")
+
+        if provider == "deepseek":
+            async for event in self._stream_openai_fallback(
+                messages=messages,
+                system=system,
+                tools=tools,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                user_id=user_id,
+                provider="deepseek",
+                model=model,
+            ):
+                yield event
+            return
+        if provider == "huggingface":
+            async for event in self._stream_openai_fallback(
+                messages=messages,
+                system=system,
+                tools=tools,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                user_id=user_id,
+                provider="huggingface",
+                model=model,
+            ):
+                yield event
+            return
+        if provider == "anthropic":
+            if not self.anthropic_key:
+                raise Exception("Anthropic API key is not configured.")
+            async for event in self._stream_anthropic_events(
+                messages=messages,
+                system=system,
+                tools=tools,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                model=model,
+                use_prompt_cache=use_prompt_cache,
+            ):
+                yield event
+            return
 
         if self.anthropic_key:
             emitted = False
@@ -833,38 +985,18 @@ class LLMClient:
                 )
 
         # Fallback stream: text-only (no tool_use blocks)
-        fallback_prompt = self._messages_to_plain_text(messages)
-        _agent = getattr(self, "_agent_name", "Kazi")
-        fallback_system = system or f"You are {_agent}, a helpful AI assistant."
-        if tools:
-            fallback_system += (
-                "\n\nTool execution is currently unavailable in this mode. "
-                "Answer directly, and briefly mention any missing external actions."
-            )
         fallback_provider = "deepseek" if self.deepseek_key else "huggingface"
-        collected_chunks: List[str] = []
-        async for chunk in self._stream_huggingface(
-            fallback_system,
-            fallback_prompt,
-            temperature,
-            max_tokens,
-            model_name=self._model_for(fallback_provider, "executor"),
+        async for event in self._stream_openai_fallback(
+            messages=messages,
+            system=system,
+            tools=tools,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            user_id=user_id,
             provider=fallback_provider,
+            model=None,
         ):
-            if chunk:
-                collected_chunks.append(chunk)
-                yield {"type": "text", "text": chunk}
-        input_tokens = self._estimate_tokens(fallback_system) + self._estimate_tokens(fallback_prompt)
-        output_tokens = self._estimate_tokens("".join(collected_chunks))
-        self._record_token_usage(input_tokens + output_tokens, user_id)
-        yield {
-            "type": "message_done",
-            "stop_reason": "end_turn",
-            "usage": {
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-            },
-        }
+            yield event
 
     async def _stream_anthropic_events(
         self,

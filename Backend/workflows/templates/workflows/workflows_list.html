@@ -1,0 +1,347 @@
+{% load static %}
+{% load humanize %}
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Your Mathia automations - workflows, schedules and triggers.">
+    <title>Automations - Mathia</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="{% static 'css/app.css' %}" rel="stylesheet">
+    <link rel="icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
+    <style>
+        .wf-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 16px;
+        }
+
+        .wf-card {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            padding: 18px;
+            transition: border-color 140ms ease, transform 140ms ease;
+        }
+
+        .wf-card:hover {
+            border-color: hsl(var(--ring));
+            transform: translateY(-2px);
+        }
+
+        .wf-card-top {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 10px;
+        }
+
+        .wf-name {
+            font-size: 15px;
+            font-weight: 600;
+            margin: 0;
+        }
+
+        .wf-desc {
+            font-size: 13px;
+            color: hsl(var(--muted-foreground));
+            margin: 0;
+        }
+
+        .wf-triggers {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .trigger-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            padding: 4px 9px;
+            border-radius: 8px;
+            background: hsl(var(--muted));
+            color: hsl(var(--muted-foreground));
+        }
+
+        .trigger-chip.off {
+            opacity: 0.6;
+            text-decoration: line-through;
+        }
+
+        .wf-meta {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            font-size: 12.5px;
+            color: hsl(var(--muted-foreground));
+        }
+
+        .wf-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: auto;
+            padding-top: 4px;
+        }
+
+        .run-form {
+            flex: 1;
+            display: flex;
+        }
+
+        .run-form button {
+            flex: 1;
+        }
+
+        .run-payload {
+            width: 100%;
+            margin-top: 10px;
+        }
+
+        .run-payload textarea {
+            width: 100%;
+            min-height: 64px;
+            border: 1px solid hsl(var(--border));
+            border-radius: 8px;
+            background: hsl(var(--background));
+            color: hsl(var(--foreground));
+            font-family: var(--font-mono);
+            font-size: 12.5px;
+            padding: 8px 10px;
+            resize: vertical;
+        }
+
+        .run-payload summary {
+            font-size: 12.5px;
+            color: hsl(var(--muted-foreground));
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .toast-stack {
+            position: fixed;
+            bottom: 22px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            z-index: 200;
+            pointer-events: none;
+        }
+
+        .toast-stack .app-toast {
+            position: static;
+            transform: none;
+            opacity: 1;
+            pointer-events: auto;
+        }
+    </style>
+</head>
+
+<body class="app-page">
+    <header class="app-topbar">
+        <div class="app-topbar-inner">
+            <a href="{% url 'users:dashboard' %}" class="app-brand">
+                <span class="app-brand-mark"><i class="fas fa-robot"></i></span>
+                Mathia
+            </a>
+            <nav class="app-nav" aria-label="Primary">
+                <a class="app-nav-link" href="{% url 'users:dashboard' %}">
+                    <i class="fas fa-home"></i><span class="nav-label">Dashboard</span>
+                </a>
+                <a class="app-nav-link" href="{% url 'payments:wallet_dashboard' %}">
+                    <i class="fas fa-wallet"></i><span class="nav-label">Wallet</span>
+                </a>
+                <a class="app-nav-link" href="{% url 'users:settings' %}">
+                    <i class="fas fa-plug"></i><span class="nav-label">Settings</span>
+                </a>
+                <a class="app-nav-link active" href="{% url 'workflows:workflows_list' %}" aria-current="page">
+                    <i class="fas fa-diagram-project"></i><span class="nav-label">Automations</span>
+                </a>
+            </nav>
+            <div class="app-topbar-actions">
+                <button class="app-icon-btn" id="themeToggle" aria-label="Toggle dark mode">
+                    <i class="fas fa-moon"></i>
+                </button>
+                <a class="app-icon-btn" href="{% url 'users:logout' %}" title="Sign out" aria-label="Sign out">
+                    <i class="fas fa-sign-out-alt"></i>
+                </a>
+            </div>
+        </div>
+    </header>
+
+    <main class="app-container">
+        <div class="app-header">
+            <div>
+                <div class="app-eyebrow">Operations</div>
+                <h1 class="app-title">Automations</h1>
+                <p class="app-subtitle">Workflows Mathia runs for you - scheduled, triggered or on demand.</p>
+            </div>
+            <div class="app-header-actions">
+                <a class="app-btn app-btn-outline" href="{% url 'workflows:operations_inbox' %}">
+                    <i class="fas fa-inbox"></i> Operations inbox
+                </a>
+            </div>
+        </div>
+
+        {% if workflows %}
+        <div class="wf-grid">
+            {% for workflow in workflows %}
+            <section class="app-card wf-card">
+                <div class="wf-card-top">
+                    <div>
+                        <h2 class="wf-name">{{ workflow.name }}</h2>
+                        {% if workflow.status == "active" %}
+                        <span class="app-pill app-pill-success">Active</span>
+                        {% elif workflow.status == "paused" %}
+                        <span class="app-pill app-pill-warning">Paused</span>
+                        {% elif workflow.status == "failed" %}
+                        <span class="app-pill app-pill-destructive">Failed</span>
+                        {% else %}
+                        <span class="app-pill app-pill-muted">{{ workflow.get_status_display }}</span>
+                        {% endif %}
+                    </div>
+                    <i class="fas fa-diagram-project app-meta" style="font-size: 18px;"></i>
+                </div>
+                <p class="wf-desc">{{ workflow.description|default:"No description"|truncatechars:140 }}</p>
+                <div class="wf-triggers">
+                    {% for trigger in workflow.registered_triggers.all %}
+                    {% if trigger.trigger_type == "schedule" %}
+                    <span class="trigger-chip{% if trigger.schedule_status != 'active' %} off{% endif %}" title="{{ trigger.schedule_cron }} ({{ trigger.schedule_timezone }})">
+                        <i class="fas fa-clock"></i>{{ trigger.schedule_cron|default:"schedule" }}
+                    </span>
+                    {% elif trigger.trigger_type == "webhook" %}
+                    <span class="trigger-chip{% if not trigger.is_active %} off{% endif %}" title="{{ trigger.webhook_url }}">
+                        <i class="fas fa-link"></i>Webhook
+                    </span>
+                    {% else %}
+                    <span class="trigger-chip{% if not trigger.is_active %} off{% endif %}">
+                        <i class="fas fa-hand-pointer"></i>Manual
+                    </span>
+                    {% endif %}
+                    {% empty %}
+                    <span class="trigger-chip"><i class="fas fa-hand-pointer"></i>Manual</span>
+                    {% endfor %}
+                </div>
+                <div class="wf-meta">
+                    <span><i class="fas fa-rotate me-1"></i>{{ workflow.execution_count }} run{{ workflow.execution_count|pluralize }}</span>
+                    {% if workflow.last_executed_at %}
+                    <span><i class="far fa-clock me-1"></i>{{ workflow.last_executed_at|naturaltime }}</span>
+                    {% endif %}
+                </div>
+                <div class="wf-actions">
+                    {% if workflow.status == "active" %}
+                    <form class="run-form" method="post" action="{% url 'workflows:run_workflow' workflow.id %}">
+                        {% csrf_token %}
+                        <button class="app-btn app-btn-primary" type="submit">
+                            <i class="fas fa-play"></i> Run now
+                        </button>
+                    </form>
+                    {% endif %}
+                    <a class="app-btn app-btn-outline" href="{% url 'workflows:workflow_executions' workflow.id %}">
+                        <i class="fas fa-list"></i> Runs
+                    </a>
+                </div>
+                {% if workflow.status == "active" %}
+                <details class="run-payload">
+                    <summary>Run with input data</summary>
+                    <form method="post" action="{% url 'workflows:run_workflow' workflow.id %}">
+                        {% csrf_token %}
+                        <textarea name="trigger_data" placeholder='{&quot;room_id&quot;: 1}' spellcheck="false"></textarea>
+                        <div style="display: flex; justify-content: flex-end; margin-top: 8px;">
+                            <button class="app-btn app-btn-outline app-btn-sm" type="submit">
+                                <i class="fas fa-play"></i> Run with data
+                            </button>
+                        </div>
+                    </form>
+                </details>
+                {% endif %}
+                {% for trigger in workflow.registered_triggers.all %}
+                {% if trigger.trigger_type == "schedule" %}
+                <div style="border-top: 1px solid hsl(var(--border)); padding-top: 10px;">
+                    {% if trigger.schedule_status == "active" %}
+                    <form method="post" action="{% url 'workflows:toggle_trigger' trigger.id %}">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="pause">
+                        <button class="app-btn app-btn-ghost app-btn-sm" type="submit">
+                            <i class="fas fa-pause"></i> Pause schedule
+                        </button>
+                    </form>
+                    {% else %}
+                    <form method="post" action="{% url 'workflows:toggle_trigger' trigger.id %}">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="resume">
+                        <button class="app-btn app-btn-ghost app-btn-sm" type="submit">
+                            <i class="fas fa-play"></i> Resume schedule
+                        </button>
+                    </form>
+                    {% endif %}
+                </div>
+                {% endif %}
+                {% endfor %}
+            </section>
+            {% endfor %}
+        </div>
+        {% else %}
+        <section class="app-card">
+            <div class="app-empty">
+                <div class="app-empty-icon"><i class="fas fa-diagram-project"></i></div>
+                <h2 class="app-empty-title">No automations yet</h2>
+                <p class="app-empty-text">
+                    Describe what you want automated in a chat with Mathia - it will draft
+                    the workflow, and you can review and run it here.
+                </p>
+                <a class="app-btn app-btn-primary app-btn-sm" href="{% url 'users:dashboard' %}">
+                    <i class="fas fa-comments"></i> Start a chat
+                </a>
+            </div>
+        </section>
+        {% endif %}
+    </main>
+
+    {% if messages %}
+    <div class="toast-stack">
+        {% for message in messages %}
+        <div class="app-toast show" role="status" data-auto-dismiss>{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <script src="{% static 'js/main.js' %}"></script>
+    <script>
+        (function () {
+            document.querySelectorAll('[data-auto-dismiss]').forEach((el) => {
+                setTimeout(() => {
+                    el.style.opacity = '0';
+                    el.style.transform = 'translateY(8px)';
+                    setTimeout(() => el.remove(), 300);
+                }, 3600);
+            });
+            const themeToggle = document.getElementById('themeToggle');
+            if (themeToggle) {
+                themeToggle.addEventListener('click', () => {
+                    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+                    const next = isDark ? 'light' : 'dark';
+                    document.documentElement.setAttribute('data-theme', next);
+                    document.body.setAttribute('data-theme', next);
+                    document.body.classList.toggle('dark-mode', next === 'dark');
+                    try { localStorage.setItem('theme', next); } catch (e) { /* storage unavailable */ }
+                    const icon = themeToggle.querySelector('i');
+                    if (icon) icon.className = next === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
+                });
+                if (localStorage.getItem('theme') === 'dark') {
+                    themeToggle.querySelector('i').className = 'fas fa-sun';
+                }
+            }
+        })();
+    </script>
+</body>
+
+</html>

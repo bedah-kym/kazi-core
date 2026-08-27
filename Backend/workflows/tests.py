@@ -1075,3 +1075,193 @@ class ApprovalUpdateHandlerTests(SimpleTestCase):
         wf._state["pending_approval_id"] = 7
         with self.assertRaises(ApplicationError):
             wf.record_approval_decision({"decision": "approved"})
+
+
+class WorkflowUiTests(TestCase):
+    """HTML operations surface: list, inbox, executions, and HITL actions."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="ui-user", email="ui@example.com", password="secret"  # nosec B106 - test fixture - fake credential
+        )
+        self.client.force_login(self.user)
+        self.workflow = UserWorkflow.objects.create(
+            user=self.user,
+            name="Ops workflow",
+            description="Review and send",
+            definition={
+                "workflow_name": "Ops workflow",
+                "workflow_description": "Review and send",
+                "triggers": [{"trigger_type": "manual"}],
+                "steps": [
+                    {
+                        "id": "email_step",
+                        "service": "gmail",
+                        "action": "send_email",
+                        "params": {"to": "ops@example.com", "subject": "Hi", "text": "Body"},
+                    }
+                ],
+            },
+        )
+
+    def _waiting_execution(self, workflow_id="wf-ui-1"):
+        execution = WorkflowExecution.objects.create(
+            workflow=self.workflow,
+            temporal_workflow_id=workflow_id,
+            trigger_type="manual",
+            trigger_data={},
+            status="waiting",
+            current_step="email_step",
+            waiting_on="approval",
+        )
+        approval = WorkflowApprovalRecord.objects.create(
+            workflow=self.workflow,
+            execution=execution,
+            requested_by=self.user,
+            step_id="email_step",
+            service="gmail",
+            action="send_email",
+            approval_message="Approve the email",
+            sanitized_params={"to": "ops@example.com"},
+        )
+        execution.pending_approval = approval
+        execution.save(update_fields=["pending_approval"])
+        return execution, approval
+
+    def test_workflows_list_renders_workflow_and_requires_login(self):
+        client = self.client_class()
+        response = client.get("/workflows/")
+        self.assertRedirects(
+            response, "/accounts/login/?next=/workflows/", fetch_redirect_response=False
+        )
+
+        response = self.client.get("/workflows/")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Ops workflow")
+        self.assertContains(response, "Run now")
+
+    def test_operations_inbox_renders_approval_and_attention_rows(self):
+        execution, _ = self._waiting_execution()
+        WorkflowExecution.objects.create(
+            workflow=self.workflow,
+            temporal_workflow_id="wf-ui-failed",
+            trigger_type="manual",
+            trigger_data={},
+            status="failed",
+            current_step="email_step",
+            failure_summary="SMTP timeout",
+            recovery_suggestion="Retry from email_step",
+        )
+        DeferredWorkflowExecution.objects.create(
+            workflow=self.workflow,
+            user=self.user,
+            status="queued",
+            last_error="Temporal unavailable",
+            recovery_hint="Replay will retry automatically",
+        )
+        WorkflowImprovementSuggestion.objects.create(
+            workflow=self.workflow,
+            execution=execution,
+            user=self.user,
+            suggestion_type="retry_policy",
+            title="Raise max_attempts",
+            summary="The email step retried 3 times and failed.",
+            proposed_changes={"max_attempts": 5},
+        )
+
+        response = self.client.get("/workflows/inbox/")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Approve the email")
+        self.assertContains(response, "SMTP timeout")
+        self.assertContains(response, "Retry from email_step")
+        self.assertContains(response, "Raise max_attempts")
+        self.assertContains(response, "ops@example.com")  # sanitized params disclosed
+
+    def test_inbox_empty_state(self):
+        response = self.client.get("/workflows/inbox/")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "All quiet")
+
+    def test_approve_ui_signals_temporal_and_redirects(self):
+        execution, _ = self._waiting_execution()
+        with patch("workflows.ui_views.submit_execution_approval", new=AsyncMock()) as mock_submit:
+            response = self.client.post(
+                f"/workflows/executions/{execution.id}/approve/",
+                {"comment": "Looks good"},
+            )
+        self.assertRedirects(response, "/workflows/inbox/")
+        mock_submit.assert_awaited_once()
+
+    def test_approve_ui_rejects_foreign_execution(self):
+        other_user = User.objects.create_user(
+            username="ui-other", email="other@example.com", password="secret"  # nosec B106 - test fixture - fake credential
+        )
+        other_workflow = UserWorkflow.objects.create(
+            user=other_user,
+            name="Other",
+            description="x",
+            definition={"steps": []},
+        )
+        foreign = WorkflowExecution.objects.create(
+            workflow=other_workflow,
+            temporal_workflow_id="wf-foreign",
+            status="waiting",
+        )
+        approval = WorkflowApprovalRecord.objects.create(
+            workflow=other_workflow,
+            execution=foreign,
+            requested_by=other_user,
+            step_id="x",
+            action="y",
+        )
+        foreign.pending_approval = approval
+        foreign.save(update_fields=["pending_approval"])
+
+        response = self.client.post(f"/workflows/executions/{foreign.id}/approve/")
+        self.assertRedirects(response, "/workflows/inbox/")
+
+    def test_run_ui_starts_execution_and_redirects(self):
+        with patch("workflows.ui_views.start_workflow_execution", new=AsyncMock()) as mock_start:
+            mock_start.return_value = WorkflowExecution(
+                id=123,
+                workflow=self.workflow,
+                temporal_workflow_id="wf-new",
+                trigger_type="manual",
+                status="pending",
+            )
+            response = self.client.post(f"/workflows/{self.workflow.id}/run/", {})
+        self.assertRedirects(response, "/workflows/executions/123/", fetch_redirect_response=False)
+        mock_start.assert_awaited_once()
+
+    def test_run_ui_rejects_invalid_trigger_data(self):
+        response = self.client.post(
+            f"/workflows/{self.workflow.id}/run/",
+            {"trigger_data": "{not json"},
+        )
+        self.assertRedirects(response, "/workflows/")
+
+    def test_executions_page_filters_by_status(self):
+        self._waiting_execution("wf-ui-2")
+        WorkflowExecution.objects.create(
+            workflow=self.workflow,
+            temporal_workflow_id="wf-ui-done",
+            trigger_type="manual",
+            trigger_data={},
+            status="completed",
+        )
+        response = self.client.get(f"/workflows/{self.workflow.id}/executions/?status=waiting")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["executions"].count(), 1)
+        self.assertContains(response, "Waiting")
+
+    def test_execution_detail_renders_state_and_degrades_without_temporal(self):
+        execution, _ = self._waiting_execution("wf-ui-3")
+        with patch(
+            "workflows.ui_views.fetch_execution_runtime_state",
+            new=AsyncMock(side_effect=ConnectionError("temporal down")),
+        ):
+            response = self.client.get(f"/workflows/executions/{execution.id}/")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Live runtime state is unavailable")
+        self.assertContains(response, "email_step")
+        self.assertContains(response, "Approve")

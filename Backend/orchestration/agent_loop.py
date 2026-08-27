@@ -23,6 +23,7 @@ from django.utils import timezone
 from orchestration.agent_prompts import build_confirmation_prompt, build_system_prompt
 from orchestration.llm_client import get_llm_client
 from orchestration.memory_state import update_memory_state, save_memory_summary
+from orchestration.model_catalog import find_model, model_pref_key, parse_model_id, provider_configured
 from orchestration.security_policy import redact_sensitive_text
 from orchestration.telemetry import record_event
 from orchestration.tool_executor import execute_tool, get_tool_risk_info
@@ -455,6 +456,26 @@ def _select_model(user_message: str, iteration: int) -> str:
         return MODEL_SONNET
 
     return MODEL_HAIKU
+
+
+def _resolve_model_override(room_id: Optional[int]) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Read the per-room model preference (``model_pref:{room_id}``) and return a
+    (provider, model) pair. Returns (None, None) for Auto — no override, an
+    unset/empty key, or a preference that is no longer in the catalog/configured.
+    """
+    if not room_id:
+        return None, None
+    raw = cache.get(model_pref_key(room_id))
+    if not raw:
+        return None, None
+    parsed = parse_model_id(str(raw))
+    if not parsed:
+        return None, None
+    provider, model = parsed
+    if find_model(provider, model) is None or not provider_configured(provider):
+        return None, None
+    return provider, model
 
 
 async def _execute_with_timeout(
@@ -1161,6 +1182,7 @@ async def run_agent_loop(
 
         # ---- Call LLM ------------------------------------------------ #
         selected_model = _select_model(user_message, state.iteration)
+        override_provider, override_model = _resolve_model_override(room_id)
         try:
             response = await llm.create_message(
                 messages=state.messages,
@@ -1169,7 +1191,8 @@ async def run_agent_loop(
                 temperature=0.3,
                 max_tokens=4096,
                 user_id=user_id,
-                model=selected_model,
+                model=override_model if override_model else selected_model,
+                provider=override_provider,
                 use_prompt_cache=True,
             )
         except Exception as exc:

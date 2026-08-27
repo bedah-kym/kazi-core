@@ -329,7 +329,8 @@
                         <div class="col-4 text-end d-flex align-items-center justify-content-end">
                             <!-- Single mobile menu — merges navigation + chat actions -->
                             <div class="dropdown d-lg-none me-2">
-                                <button class="btn btn-light" data-bs-toggle="dropdown" aria-label="Menu">
+                                <button class="btn btn-light" data-bs-toggle="dropdown" data-bs-auto-close="outside"
+                                    aria-label="Menu">
                                     <i class="fas fa-bars"></i>
                                 </button>
                                 <ul class="dropdown-menu dropdown-menu-end shadow-sm">
@@ -359,6 +360,19 @@
                                     </li>
                                     <li>
                                         <h6 class="dropdown-header">Chat Actions</h6>
+                                    </li>
+
+                                    <li>
+                                        <div class="dropdown model-selector">
+                                            <button class="dropdown-item dropdown-toggle" type="button"
+                                                data-bs-toggle="dropdown" data-bs-display="static"
+                                                aria-expanded="false">
+                                                <i class="fas fa-robot me-2"></i>Model:
+                                                <span class="model-selector-label ms-1">Auto</span>
+                                            </button>
+                                            <ul class="dropdown-menu shadow-sm model-selector-menu"
+                                                style="max-height: 320px; overflow-y: auto;"></ul>
+                                        </div>
                                     </li>
 
                                     {% if can_invite %}
@@ -430,6 +444,15 @@
                             </div>
                             <!-- Desktop: chat action buttons -->
                             <div class="d-none d-lg-flex align-items-center">
+                                <div class="dropdown model-selector me-2">
+                                    <button class="btn btn-light dropdown-toggle" type="button"
+                                        data-bs-toggle="dropdown" aria-expanded="false" title="Select model">
+                                        <i class="fas fa-robot me-1"></i>
+                                        <span class="model-selector-label">Auto</span>
+                                    </button>
+                                    <ul class="dropdown-menu dropdown-menu-end shadow-sm model-selector-menu"
+                                        style="max-height: 320px; overflow-y: auto;"></ul>
+                                </div>
                                 {% if can_invite %}
                                 <button class="btn btn-light me-2 invite-user-action" data-bs-toggle="modal"
                                     data-bs-target="#inviteUserModal" title="Invite User">
@@ -819,6 +842,109 @@
                 msgEl.innerHTML = '<span class="text-danger">Network error. Please try again.</span>';
             });
         }
+    </script>
+
+    <script>
+        (function () {
+            var API_URL = "{% url 'chatbot:room-model' room_id %}";
+            var models = [];
+            var selected = null;
+
+            function esc(s) {
+                return String(s).replace(/[&<>"']/g, function (c) {
+                    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+                });
+            }
+
+            function tierBadge(tier) {
+                var map = {
+                    fast: '<span class="badge text-bg-info ms-1">Fast</span>',
+                    high: '<span class="badge text-bg-primary ms-1">High</span>',
+                    vision: '<span class="badge text-bg-warning ms-1">Vision</span>'
+                };
+                return map[tier] || '';
+            }
+
+            function providerName(provider) {
+                var map = {
+                    deepseek: 'DeepSeek',
+                    anthropic: 'Anthropic',
+                    huggingface: 'Hugging Face'
+                };
+                return map[provider] || provider;
+            }
+
+            function renderMenus() {
+                var groups = {};
+                models.forEach(function (m) {
+                    (groups[m.provider] = groups[m.provider] || []).push(m);
+                });
+
+                var html = '';
+                html += '<li><button class="dropdown-item model-option' + (selected ? '' : ' active') + '" data-model="">'
+                    + '<i class="fas fa-wand-magic-sparkles me-1"></i>Auto'
+                    + '<span class="text-muted small ms-2">smart routing</span></button></li>';
+                html += '<li><hr class="dropdown-divider"></li>';
+                Object.keys(groups).forEach(function (provider) {
+                    html += '<li><h6 class="dropdown-header">' + esc(providerName(provider)) + '</h6></li>';
+                    groups[provider].forEach(function (m) {
+                        html += '<li><button class="dropdown-item model-option' + (selected === m.id ? ' active' : '') + '" data-model="' + esc(m.id) + '">'
+                            + esc(m.label) + tierBadge(m.tier) + '</button></li>';
+                    });
+                });
+
+                document.querySelectorAll('.model-selector-menu').forEach(function (menu) {
+                    menu.innerHTML = html;
+                });
+            }
+
+            function updateLabels() {
+                var label = selected ? models.find(function (m) { return m.id === selected; }) : null;
+                var text = label ? label.label : 'Auto';
+                document.querySelectorAll('.model-selector-label').forEach(function (el) {
+                    el.textContent = text;
+                });
+            }
+
+            function csrfToken() {
+                return document.querySelector('[name=csrfmiddlewaretoken]')?.value || '';
+            }
+
+            function select(modelId) {
+                selected = modelId || null;
+                updateLabels();
+                renderMenus();
+                fetch(API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken() },
+                    body: JSON.stringify({ model: modelId })
+                }).catch(function () {});
+            }
+
+            function init() {
+                document.querySelectorAll('.model-selector-menu').forEach(function (menu) {
+                    menu.addEventListener('click', function (e) {
+                        var btn = e.target.closest('.model-option');
+                        if (!btn) return;
+                        select(btn.getAttribute('data-model') || '');
+                    });
+                });
+
+                fetch(API_URL, { credentials: 'same-origin' })
+                    .then(function (r) { return r.json(); })
+                    .then(function (data) {
+                        models = data.models || [];
+                        selected = data.selected || null;
+                        updateLabels();
+                        renderMenus();
+                    })
+                    .catch(function () {
+                        renderMenus();
+                    });
+            }
+
+            document.addEventListener('DOMContentLoaded', init);
+        })();
     </script>
 
     <script src="{% static 'js/main.js'%}"></script>

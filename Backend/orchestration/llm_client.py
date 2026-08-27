@@ -766,7 +766,7 @@ class LLMClient:
                 temperature=temperature,
                 max_tokens=max_tokens,
                 user_id=user_id,
-                model=model,
+                model=None,
             )
         return await self._create_hf_fallback_message(
             messages=messages,
@@ -774,7 +774,7 @@ class LLMClient:
             temperature=temperature,
             max_tokens=max_tokens,
             user_id=user_id,
-            model=model,
+            model=None,
             tools=tools,
             provider="huggingface",
         )
@@ -848,7 +848,7 @@ class LLMClient:
             fallback_prompt,
             temperature,
             max_tokens,
-            model_name=model or self._model_for(fallback_provider, "executor"),
+            model_name=self._model_for(fallback_provider, "executor"),
             provider=fallback_provider,
         ):
             if chunk:

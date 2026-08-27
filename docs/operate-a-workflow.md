@@ -15,13 +15,25 @@ through five surfaces:
 
 | Surface | Use it to |
 |---|---|
+| **Web UI at `/workflows/`** | Browser operations console: automations list, inbox, run history, execution detail with approve/reject/cancel/rerun forms. |
 | `kazi_trace` CLI | See what's happening on a specific execution. |
 | `GET /api/workflows/inbox/` | List runs that need attention (pending approvals, dead-letters). |
 | `GET /api/workflows/executions/<id>/` | Read the full execution detail. |
 | `POST /api/workflows/executions/<id>/approve` (and friends) | Drive the run forward. |
 | Django admin | Same operations with a UI for non-CLI workflows. |
 
+The Web UI (HTML views in `workflows/ui_views.py`, mounted at
+`/workflows/`) reuses the same runtime helpers as the JSON API, so
+approval, replay-safety, cancellation, and trigger semantics are
+identical across surfaces.
+
 ## Step 1 — Find what needs you
+
+**In the browser:** open `/workflows/inbox/` — pending approvals,
+failed runs with recovery suggestions, deferred runs, and improvement
+suggestions in one place.
+
+**Or via API:**
 
 ```bash
 curl http://localhost:8000/api/workflows/inbox/

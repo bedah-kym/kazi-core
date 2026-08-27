@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
 from django.test import SimpleTestCase, TransactionTestCase, override_settings
+from rest_framework.test import APIRequestFactory, force_authenticate
 
 from orchestration.coordinator import OrchestrationResult
 
@@ -24,6 +25,7 @@ from .consumers import (
     _get_agent_loop_lock,
     _release_agent_loop_lock,
 )
+from .model_api import room_model
 from .models import Chatroom, Member
 
 
@@ -327,3 +329,94 @@ class JsonForScriptTests(SimpleTestCase):
 
         payload = _json_for_script({"id": 1})
         self.assertEqual(payload, '{"id": 1}')
+
+
+class RoomModelApiTests(TransactionTestCase):
+    """Per-room model preference API: catalog + selection, set/clear, access."""
+
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username="model-user", password="pw")  # nosec B106 — test fixture — fake credential
+        self.member = Member.objects.select_related("User").get(User=self.user)
+        self.chatroom = Chatroom.objects.get(participants=self.member)
+        self.factory = APIRequestFactory()
+
+    def _get(self, user=None):
+        request = self.factory.get(f"/api/rooms/{self.chatroom.id}/model/")
+        force_authenticate(request, user=user or self.user)
+        return room_model(request, self.chatroom.id)
+
+    def _post(self, payload, user=None):
+        request = self.factory.post(
+            f"/api/rooms/{self.chatroom.id}/model/", payload, format="json"
+        )
+        force_authenticate(request, user=user or self.user)
+        return room_model(request, self.chatroom.id)
+
+    @staticmethod
+    def _models():
+        from orchestration.model_catalog import ModelInfo
+
+        return [
+            ModelInfo("deepseek", "deepseek-v4-pro", "DeepSeek Pro", "high"),
+            ModelInfo("deepseek", "deepseek-v4-flash", "DeepSeek Flash", "fast"),
+        ]
+
+    @patch("chatbot.model_api.available_models")
+    @patch("chatbot.model_api.cache")
+    def test_get_returns_models_and_null_selection(self, mock_cache, mock_models):
+        mock_models.return_value = self._models()
+        mock_cache.get.return_value = None
+
+        resp = self._get()
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertIsNone(resp.data["selected"])
+        ids = {m["id"] for m in resp.data["models"]}
+        self.assertEqual(ids, {"deepseek/deepseek-v4-pro", "deepseek/deepseek-v4-flash"})
+
+    @patch("chatbot.model_api.available_models")
+    @patch("chatbot.model_api.cache")
+    def test_post_sets_override(self, mock_cache, mock_models):
+        from orchestration.model_catalog import model_pref_key
+
+        mock_models.return_value = self._models()
+        mock_cache.get.return_value = "deepseek/deepseek-v4-flash"
+
+        resp = self._post({"model": "deepseek/deepseek-v4-flash"})
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["selected"], "deepseek/deepseek-v4-flash")
+        mock_cache.set.assert_called_once_with(
+            model_pref_key(self.chatroom.id), "deepseek/deepseek-v4-flash", timeout=None
+        )
+
+    @patch("chatbot.model_api.available_models")
+    @patch("chatbot.model_api.cache")
+    def test_post_clears_override_on_empty(self, mock_cache, mock_models):
+        from orchestration.model_catalog import model_pref_key
+
+        mock_models.return_value = self._models()
+        mock_cache.get.return_value = None
+
+        resp = self._post({"model": ""})
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertIsNone(resp.data["selected"])
+        mock_cache.delete.assert_called_once_with(model_pref_key(self.chatroom.id))
+
+    @patch("chatbot.model_api.available_models")
+    def test_post_rejects_unavailable_model(self, mock_models):
+        mock_models.return_value = self._models()
+
+        resp = self._post({"model": "anthropic/claude-sonnet-4-6"})
+
+        self.assertEqual(resp.status_code, 400)
+
+    def test_requires_room_access(self):
+        User = get_user_model()
+        outsider = User.objects.create_user(username="model-outsider", password="pw")  # nosec B106 — test fixture — fake credential
+
+        resp = self._get(user=outsider)
+
+        self.assertEqual(resp.status_code, 403)

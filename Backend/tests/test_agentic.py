@@ -787,3 +787,50 @@ class ProviderRoutingTests(SimpleTestCase):
         self.assertEqual(captured["provider"], "deepseek")
         self.assertEqual(captured["model_name"], "deepseek-v4-flash")
         self.assertEqual(events[-1]["type"], "message_done")
+
+
+# ---------------------------------------------------------------------------
+#  Per-room model override resolution
+# ---------------------------------------------------------------------------
+
+class ModelOverrideTests(SimpleTestCase):
+    @patch("orchestration.agent_loop.cache")
+    def test_no_override_when_room_id_missing(self, mock_cache):
+        from orchestration.agent_loop import _resolve_model_override
+        self.assertEqual(_resolve_model_override(None), (None, None))
+        mock_cache.get.assert_not_called()
+
+    @patch("orchestration.agent_loop.cache")
+    def test_override_auto_when_unset(self, mock_cache):
+        from orchestration.agent_loop import _resolve_model_override
+        mock_cache.get.return_value = None
+        self.assertEqual(_resolve_model_override(7), (None, None))
+
+    @patch("orchestration.agent_loop.cache")
+    @patch("orchestration.agent_loop.provider_configured", return_value=True)
+    def test_override_parses_valid_preference(self, mock_configured, mock_cache):
+        from orchestration.agent_loop import _resolve_model_override
+        mock_cache.get.return_value = "deepseek/deepseek-v4-pro"
+        self.assertEqual(
+            _resolve_model_override(7),
+            ("deepseek", "deepseek-v4-pro"),
+        )
+
+    @patch("orchestration.agent_loop.cache")
+    def test_override_auto_when_malformed(self, mock_cache):
+        from orchestration.agent_loop import _resolve_model_override
+        mock_cache.get.return_value = "garbage-no-slash"
+        self.assertEqual(_resolve_model_override(7), (None, None))
+
+    @patch("orchestration.agent_loop.cache")
+    def test_override_auto_when_unknown_model(self, mock_cache):
+        from orchestration.agent_loop import _resolve_model_override
+        mock_cache.get.return_value = "deepseek/not-a-real-model"
+        self.assertEqual(_resolve_model_override(7), (None, None))
+
+    @patch("orchestration.agent_loop.cache")
+    @patch("orchestration.agent_loop.provider_configured", return_value=False)
+    def test_override_auto_when_provider_unconfigured(self, mock_configured, mock_cache):
+        from orchestration.agent_loop import _resolve_model_override
+        mock_cache.get.return_value = "deepseek/deepseek-v4-pro"
+        self.assertEqual(_resolve_model_override(7), (None, None))

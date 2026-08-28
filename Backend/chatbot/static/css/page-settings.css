@@ -1,0 +1,198 @@
+/* Settings page */
+.settings-layout {
+    display: flex;
+    gap: 2rem;
+}
+
+.settings-sidebar {
+    width: 220px;
+    flex-shrink: 0;
+    position: sticky;
+    top: 76px;
+    align-self: flex-start;
+}
+
+.settings-sidebar .nav-link {
+    color: var(--ink);
+    padding: 0.6rem 1rem;
+    border-radius: 10px;
+    margin-bottom: 0.25rem;
+    transition: all 0.2s;
+    font-size: 0.9rem;
+}
+
+.settings-sidebar .nav-link:hover {
+    background: var(--clay-tint);
+}
+
+.settings-sidebar .nav-link.active {
+    background: var(--clay);
+    color: #fff;
+}
+
+.settings-content {
+    flex: 1;
+    min-width: 0;
+}
+
+.settings-section {
+    background: var(--raised);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 2rem;
+    margin-bottom: 2rem;
+}
+
+.form-input {
+    width: 100%;
+    padding: 0.5rem 1rem;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--paper);
+    color: var(--ink);
+}
+
+.form-input:focus {
+    border-color: var(--clay);
+    box-shadow: 0 0 0 3px var(--clay-tint);
+    outline: none;
+}
+
+/* Avatar widget */
+.avatar-upload-wrapper {
+    position: relative;
+    width: 128px;
+    height: 128px;
+    cursor: pointer;
+    margin-bottom: 1.5rem;
+}
+
+.avatar-upload-wrapper img {
+    width: 128px;
+    height: 128px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 3px solid var(--line);
+}
+
+.avatar-upload-overlay {
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.2s;
+    color: white;
+    font-size: 1.5rem;
+}
+
+.avatar-upload-wrapper:hover .avatar-upload-overlay {
+    opacity: 1;
+}
+
+/* Integration cards */
+.integration-card {
+    background: var(--raised);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 1.5rem;
+    margin-bottom: 1rem;
+    transition: all 0.2s;
+}
+
+.integration-card:hover {
+    border-color: var(--clay);
+    box-shadow: 0 2px 8px rgba(61, 57, 41, 0.08);
+}
+
+.integration-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 1rem;
+}
+
+.integration-icon {
+    width: 3rem;
+    height: 3rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 10px;
+    font-size: 1.5rem;
+    margin-right: 1rem;
+}
+
+.integration-status {
+    padding: 0.25rem 0.75rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.status-connected {
+    background: var(--success-soft);
+    color: var(--success-hex);
+}
+
+.status-disconnected {
+    background: hsl(var(--muted));
+    color: hsl(var(--muted-foreground));
+}
+
+.capability-hint {
+    color: var(--ink-soft);
+    font-size: 0.85rem;
+}
+
+.plan-badge {
+    display: inline-block;
+    padding: 0.25rem 0.75rem;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-transform: capitalize;
+}
+
+.assistant-tooltip-panel {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    border: 1px dashed var(--line);
+    border-radius: 12px;
+    background: hsl(var(--accent));
+    color: var(--ink);
+    font-size: 0.9rem;
+}
+
+.assistant-tooltip-panel i {
+    color: var(--clay);
+    margin-top: 0.15rem;
+}
+
+.assistant-tooltip-panel .hint-title {
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+}
+
+@media (max-width: 768px) {
+    .settings-layout {
+        flex-direction: column;
+    }
+
+    .settings-sidebar {
+        width: 100%;
+        position: static;
+        overflow-x: auto;
+        white-space: nowrap;
+    }
+
+    .settings-sidebar .nav {
+        flex-wrap: nowrap;
+    }
+}

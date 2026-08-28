@@ -29,38 +29,17 @@
             </a>
 
             <nav class="app-nav" aria-label="Primary">
-                <div class="app-nav-section">Workspace</div>
-                <a class="app-nav-item{% if active_nav == 'dashboard' %} active{% endif %}" href="{% url 'users:dashboard' %}" {% if active_nav == 'dashboard' %}aria-current="page"{% endif %}>
-                    <i class="fas fa-home"></i><span>Dashboard</span>
+                {% for section in nav_sections %}
+                <div class="app-nav-section">{{ section.label }}</div>
+                {% for item in section.items %}
+                <a class="app-nav-item{% if item.active %} active{% endif %}" href="{{ item.url }}"{% if item.active %} aria-current="page"{% endif %}>
+                    <i class="fas {{ item.icon }}"></i><span>{{ item.label }}</span>
+                    {% if item.key == 'chats' and unread_rooms %}<span class="app-nav-badge" id="navUnreadRooms">{{ unread_rooms }}</span>{% endif %}
+                    {% if item.key == 'reminders' and pending_reminders %}<span class="app-nav-badge" id="navPendingReminders">{{ pending_reminders }}</span>{% endif %}
+                    {% if item.key == 'notifications' %}<span class="app-nav-badge d-none" id="navUnreadNotifications">0</span>{% endif %}
                 </a>
-                <a class="app-nav-item{% if active_nav == 'chats' %} active{% endif %}" href="{% url 'chatbot:redirect_to_home' %}" {% if active_nav == 'chats' %}aria-current="page"{% endif %}>
-                    <i class="fas fa-comment-dots"></i><span>Chats</span>
-                    {% if unread_rooms %}<span class="app-nav-badge" id="navUnreadRooms">{{ unread_rooms }}</span>{% endif %}
-                </a>
-
-                <div class="app-nav-section">Tools</div>
-                <a class="app-nav-item{% if active_nav == 'workflows' %} active{% endif %}" href="{% url 'workflows:workflows_list' %}" {% if active_nav == 'workflows' %}aria-current="page"{% endif %}>
-                    <i class="fas fa-diagram-project"></i><span>Automations</span>
-                </a>
-                <a class="app-nav-item{% if active_nav == 'wallet' %} active{% endif %}" href="{% url 'payments:wallet_dashboard' %}" {% if active_nav == 'wallet' %}aria-current="page"{% endif %}>
-                    <i class="fas fa-wallet"></i><span>Wallet</span>
-                </a>
-                <a class="app-nav-item{% if active_nav == 'reminders' %} active{% endif %}" href="{% url 'users:reminders' %}" {% if active_nav == 'reminders' %}aria-current="page"{% endif %}>
-                    <i class="fas fa-clock"></i><span>Reminders</span>
-                    {% if pending_reminders %}<span class="app-nav-badge" id="navPendingReminders">{{ pending_reminders }}</span>{% endif %}
-                </a>
-                <a class="app-nav-item{% if active_nav == 'notifications' %} active{% endif %}" href="{% url 'notifications:notification-center' %}" {% if active_nav == 'notifications' %}aria-current="page"{% endif %}>
-                    <i class="fas fa-bell"></i><span>Notifications</span>
-                    <span class="app-nav-badge d-none" id="navUnreadNotifications">0</span>
-                </a>
-                <a class="app-nav-item{% if active_nav == 'travel' %} active{% endif %}" href="{% url 'travel:plan_trip' %}" {% if active_nav == 'travel' %}aria-current="page"{% endif %}>
-                    <i class="fas fa-plane"></i><span>Travel</span>
-                </a>
-
-                <div class="app-nav-section">System</div>
-                <a class="app-nav-item{% if active_nav == 'settings' %} active{% endif %}" href="{% url 'users:settings' %}" {% if active_nav == 'settings' %}aria-current="page"{% endif %}>
-                    <i class="fas fa-gear"></i><span>Settings</span>
-                </a>
+                {% endfor %}
+                {% endfor %}
             </nav>
 
             <div class="app-sidebar-footer">
@@ -72,7 +51,7 @@
                     {% endif %}
                     <span class="app-user-meta">
                         <span class="app-user-name d-block">{{ user.get_full_name|default:user.username }}</span>
-                        <span class="app-user-plan d-block">{{ workspace.get_plan_display|default:workspace.plan|title }}</span>
+                        <span class="app-user-plan d-block">{% if workspace %}{{ workspace.get_plan_display|default:workspace.plan|title }}{% endif %}</span>
                     </span>
                 </a>
                 <button class="app-icon-btn" id="darkModeToggle" aria-label="Toggle dark mode" title="Theme">

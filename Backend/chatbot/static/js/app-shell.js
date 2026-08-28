@@ -54,6 +54,27 @@
         }
     }
 
+    function csrfToken() {
+        var cookies = document.cookie.split(';');
+        for (var i = 0; i < cookies.length; i++) {
+            var c = cookies[i].trim();
+            if (c.indexOf('csrftoken=') === 0) {
+                return c.substring('csrftoken='.length);
+            }
+        }
+        return '';
+    }
+
+    function initToastDismiss() {
+        document.querySelectorAll('[data-auto-dismiss]').forEach(function (el) {
+            setTimeout(function () {
+                el.style.opacity = '0';
+                el.style.transform = 'translateY(8px)';
+                setTimeout(function () { el.remove(); }, 300);
+            }, 3600);
+        });
+    }
+
     function init() {
         applyTheme(readTheme());
 
@@ -65,12 +86,15 @@
 
         var backdrop = document.getElementById('appBackdrop');
         if (backdrop) backdrop.addEventListener('click', function () { toggleDrawer(false); });
+
+        initToastDismiss();
     }
 
     window.AppShell = {
         applyTheme: applyTheme,
         toggleTheme: toggleTheme,
-        setBadge: setBadge
+        setBadge: setBadge,
+        csrfToken: csrfToken
     };
 
     if (document.readyState === 'loading') {

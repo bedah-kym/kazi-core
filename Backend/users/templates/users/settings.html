@@ -1,1006 +1,701 @@
+{% extends "users/base_app.html" %}
 {% load static %}
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="utf-8">
-    <title>Settings - Mathia</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-    <link href="{% static 'css/chatbase.css' %}" rel="stylesheet">
-    <link href="{% static 'css/context-panel.css' %}" rel="stylesheet">
-    <link href="{% static 'css/app.css' %}" rel="stylesheet">
-    <link rel="icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
-    <!-- Cropper.js CSS -->
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.css" rel="stylesheet">
 
-    <style>
-        .settings-container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 2rem;
-            background: hsl(var(--background));
-            min-height: 100vh;
-        }
-        .settings-layout {
-            display: flex;
-            gap: 2rem;
-        }
-        .settings-sidebar {
-            width: 220px;
-            flex-shrink: 0;
-            position: sticky;
-            top: 2rem;
-            align-self: flex-start;
-        }
-        .settings-sidebar .nav-link {
-            color: hsl(var(--foreground));
-            padding: 0.6rem 1rem;
-            border-radius: calc(var(--radius) - 2px);
-            margin-bottom: 0.25rem;
-            transition: all 0.2s;
-            font-size: 0.9rem;
-        }
-        .settings-sidebar .nav-link:hover {
-            background: hsl(var(--accent));
-        }
-        .settings-sidebar .nav-link.active {
-            background: hsl(var(--primary));
-            color: hsl(var(--primary-foreground));
-        }
-        .settings-content {
-            flex: 1;
-            min-width: 0;
-        }
-        .settings-section {
-            background: hsl(var(--card));
-            border: 1px solid hsl(var(--border));
-            border-radius: var(--radius);
-            padding: 2rem;
-            margin-bottom: 2rem;
-        }
-        .form-input {
-            width: 100%;
-            padding: 0.5rem 1rem;
-            border: 1px solid hsl(var(--input));
-            border-radius: var(--radius);
-            background: hsl(var(--background));
-            color: hsl(var(--foreground));
-        }
-        /* Avatar widget */
-        .avatar-upload-wrapper {
-            position: relative;
-            width: 128px;
-            height: 128px;
-            cursor: pointer;
-            margin-bottom: 1.5rem;
-        }
-        .avatar-upload-wrapper img {
-            width: 128px;
-            height: 128px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 3px solid hsl(var(--border));
-        }
-        .avatar-upload-overlay {
-            position: absolute;
-            inset: 0;
-            border-radius: 50%;
-            background: rgba(0,0,0,0.4);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            opacity: 0;
-            transition: opacity 0.2s;
-            color: white;
-            font-size: 1.5rem;
-        }
-        .avatar-upload-wrapper:hover .avatar-upload-overlay {
-            opacity: 1;
-        }
-        /* Integration card styles */
-        .integration-card {
-            background: hsl(var(--card));
-            border: 1px solid hsl(var(--border));
-            border-radius: var(--radius);
-            padding: 1.5rem;
-            margin-bottom: 1rem;
-            transition: all 0.2s;
-        }
-        .integration-card:hover {
-            border-color: hsl(var(--ring));
-            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-        }
-        .integration-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: 1rem;
-        }
-        .integration-icon {
-            width: 3rem;
-            height: 3rem;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border-radius: var(--radius);
-            font-size: 1.5rem;
-            margin-right: 1rem;
-        }
-        .integration-status {
-            padding: 0.25rem 0.75rem;
-            border-radius: calc(var(--radius) - 2px);
-            font-size: 0.75rem;
-            font-weight: 500;
-        }
-        .status-connected {
-            background: hsl(140, 60%, 95%);
-            color: hsl(140, 60%, 30%);
-        }
-        .status-disconnected {
-            background: hsl(var(--muted));
-            color: hsl(var(--muted-foreground));
-        }
-        .dark-mode .status-connected {
-            background: hsl(140, 60%, 15%);
-            color: hsl(140, 60%, 75%);
-        }
-        .capability-hint {
-            color: hsl(var(--muted-foreground));
-            font-size: 0.85rem;
-        }
-        .plan-badge {
-            display: inline-block;
-            padding: 0.25rem 0.75rem;
-            border-radius: calc(var(--radius) - 2px);
-            font-size: 0.8rem;
-            font-weight: 600;
-            text-transform: capitalize;
-        }
-        .assistant-tooltip-panel {
-            display: flex;
-            align-items: flex-start;
-            gap: 0.75rem;
-            padding: 0.75rem 1rem;
-            border: 1px dashed hsl(var(--border));
-            border-radius: var(--radius);
-            background: hsl(var(--accent));
-            color: hsl(var(--foreground));
-            font-size: 0.9rem;
-        }
-        .assistant-tooltip-panel i { color: hsl(var(--primary)); margin-top: 0.15rem; }
-        .assistant-tooltip-panel .hint-title { font-weight: 600; margin-bottom: 0.25rem; }
-        @media (max-width: 768px) {
-            .settings-layout { flex-direction: column; }
-            .settings-sidebar {
-                width: 100%;
-                position: static;
-                overflow-x: auto;
-                white-space: nowrap;
-            }
-            .settings-sidebar .nav { flex-wrap: nowrap; }
-        }
-    </style>
-</head>
-<body>
-    <header class="app-topbar">
-        <div class="app-topbar-inner">
-            <a href="{% url 'users:dashboard' %}" class="app-brand">
-                <span class="app-brand-mark"><i class="fas fa-robot"></i></span>
-                Mathia
-            </a>
-            <nav class="app-nav" aria-label="Primary">
-                <a class="app-nav-link" href="{% url 'users:dashboard' %}">
-                    <i class="fas fa-home"></i><span class="nav-label">Dashboard</span>
-                </a>
-                <a class="app-nav-link" href="{% url 'payments:wallet_dashboard' %}">
-                    <i class="fas fa-wallet"></i><span class="nav-label">Wallet</span>
-                </a>
-                <a class="app-nav-link" href="{% url 'users:reminders' %}">
-                    <i class="fas fa-bell"></i><span class="nav-label">Reminders</span>
-                </a>
-                <a class="app-nav-link active" href="{% url 'users:settings' %}" aria-current="page">
-                    <i class="fas fa-plug"></i><span class="nav-label">Settings</span>
-                </a>
-            </nav>
-            <div class="app-topbar-actions">
-                <button class="app-icon-btn" id="darkModeToggle" aria-label="Toggle dark mode">
-                    <i class="fas fa-moon"></i>
+{% block title %}Settings - Mathia{% endblock %}
+
+{% block breadcrumb %}
+<a href="{% url 'users:dashboard' %}">Dashboard</a><span class="crumb-sep">&#8250;</span><span class="crumb-current">Settings</span>
+{% endblock %}
+
+{% block head %}
+<link href="{% static 'css/page-settings.css' %}" rel="stylesheet">
+<link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.css" rel="stylesheet">
+{% endblock %}
+
+{% block content %}
+<div class="app-header">
+    <div>
+        <div class="app-eyebrow">System</div>
+        <h1 class="app-title"><i class="fas fa-gear me-2"></i>Settings</h1>
+        <p class="app-subtitle">Manage your profile, integrations, and preferences.</p>
+    </div>
+</div>
+
+<div class="settings-layout" data-bs-spy="scroll" data-bs-target="#settingsNav" data-bs-offset="80" tabindex="0">
+    <div class="settings-sidebar" id="settingsNav">
+        <nav class="nav nav-pills flex-column">
+            <a class="nav-link active" href="#profile"><i class="fas fa-user me-2"></i>Profile</a>
+            <a class="nav-link" href="#ai"><i class="fas fa-brain me-2"></i>AI</a>
+            <a class="nav-link" href="#capabilities"><i class="fas fa-sliders-h me-2"></i>Capabilities</a>
+            <a class="nav-link" href="#notifications"><i class="fas fa-bell me-2"></i>Notifications</a>
+            <a class="nav-link" href="#integrations"><i class="fas fa-plug me-2"></i>Integrations</a>
+            {% if can_send_invites %}<a class="nav-link" href="#invites"><i class="fas fa-envelope me-2"></i>Invites</a>{% endif %}
+            <a class="nav-link" href="#workspace"><i class="fas fa-briefcase me-2"></i>Workspace</a>
+        </nav>
+    </div>
+
+    <div class="settings-content">
+        <div id="profile" class="settings-section">
+            <h3 class="mb-4">Profile</h3>
+            <form method="post" enctype="multipart/form-data">
+                {% csrf_token %}
+                <input type="hidden" name="section" value="profile">
+
+                <div class="avatar-upload-wrapper" data-avatar-widget>
+                    <img src="{{ user.profile.get_avatar_url }}" data-avatar-img alt="Avatar">
+                    <div class="avatar-upload-overlay"><i class="fas fa-camera"></i></div>
+                    <input type="file" accept="image/*" data-avatar-input style="display:none">
+                </div>
+
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <label class="form-label">First Name</label>
+                        {{ user_form.first_name }}
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Last Name</label>
+                        {{ user_form.last_name }}
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Email</label>
+                    {{ user_form.email }}
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Bio</label>
+                    {{ profile_form.bio }}
+                </div>
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <label class="form-label">Location</label>
+                        {{ profile_form.location }}
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Website</label>
+                        {{ profile_form.website }}
+                    </div>
+                </div>
+
+                <h5 class="mt-4 mb-3">Professional</h5>
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <label class="form-label">Role / Title</label>
+                        {{ profile_form.role }}
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Industry</label>
+                        {{ profile_form.industry }}
+                    </div>
+                </div>
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <label class="form-label">Company Name</label>
+                        {{ profile_form.company_name }}
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Company Size</label>
+                        {{ profile_form.company_size }}
+                    </div>
+                </div>
+
+                <h5 class="mt-4 mb-3">Social Links</h5>
+                <div class="row mb-3">
+                    <div class="col-md-4">
+                        <label class="form-label">Twitter / X</label>
+                        {{ profile_form.twitter_handle }}
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">LinkedIn</label>
+                        {{ profile_form.linkedin_url }}
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">GitHub</label>
+                        {{ profile_form.github_url }}
+                    </div>
+                </div>
+
+                <h5 class="mt-4 mb-3">Preferences</h5>
+                <div class="row mb-3">
+                    <div class="col-md-4">
+                        <label class="form-label">Theme</label>
+                        {{ profile_form.theme_preference }}
+                    </div>
+                </div>
+
+                <h5 class="mt-4 mb-3">Assistant Style</h5>
+                <div class="assistant-tooltip-panel mb-3">
+                    <i class="fas fa-circle-info"></i>
+                    <div>
+                        <div class="hint-title">How this helps</div>
+                        <div class="text-muted">
+                            These settings tune how Mathia speaks, interprets dates, and formats times/currency.
+                            Leave blank to auto-detect.
+                        </div>
+                    </div>
+                </div>
+                <div class="row mb-3">
+                    <div class="col-md-4">
+                        <label class="form-label">Tone</label>
+                        {{ profile_form.assistant_tone }}
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Verbosity</label>
+                        {{ profile_form.assistant_verbosity }}
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Directness</label>
+                        {{ profile_form.assistant_directness }}
+                    </div>
+                </div>
+                <div class="row mb-3">
+                    <div class="col-md-3">
+                        <label class="form-label">Locale</label>
+                        {{ profile_form.assistant_locale }}
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Date order</label>
+                        {{ profile_form.assistant_date_order }}
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Time format</label>
+                        {{ profile_form.assistant_time_format }}
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Currency</label>
+                        {{ profile_form.assistant_currency }}
+                    </div>
+                </div>
+
+                <h5 class="mt-4 mb-3">Notifications</h5>
+                <div class="mb-3">
+                    <div class="form-check">
+                        {{ profile_form.email_notifications }}
+                        <label class="form-check-label" for="{{ profile_form.email_notifications.id_for_label }}">Email updates</label>
+                    </div>
+                    <div class="form-check">
+                        {{ profile_form.push_notifications }}
+                        <label class="form-check-label" for="{{ profile_form.push_notifications.id_for_label }}">Push notifications</label>
+                    </div>
+                    <div class="mt-2">
+                        <label class="form-label">Digest frequency</label>
+                        {{ profile_form.digest_frequency }}
+                    </div>
+                </div>
+
+                <button type="submit" class="app-btn app-btn-primary">
+                    <i class="fas fa-save me-2"></i>Save Profile
                 </button>
-                <a class="app-icon-btn" href="{% url 'users:logout' %}" title="Sign out" aria-label="Sign out">
-                    <i class="fas fa-sign-out-alt"></i>
-                </a>
+            </form>
+        </div>
+
+        <div id="ai" class="settings-section">
+            <h3 class="mb-4">AI Personalization</h3>
+            <form method="post">
+                {% csrf_token %}
+                <input type="hidden" name="section" value="ai">
+                <p class="text-muted mb-3">When enabled, Mathia uses your profile data (role, industry, preferences) to give more relevant suggestions.</p>
+                <div class="form-check form-switch mb-3">
+                    <input class="form-check-input" type="checkbox" id="aiPersonalizationToggle"
+                        name="ai_personalization_enabled"
+                        {% if ai_personalization_enabled %}checked{% endif %}>
+                    <label class="form-check-label" for="aiPersonalizationToggle">Enable AI personalization</label>
+                </div>
+                <button type="submit" class="app-btn app-btn-primary">
+                    <i class="fas fa-save me-2"></i>Save AI Settings
+                </button>
+            </form>
+        </div>
+
+        <div id="capabilities" class="settings-section">
+            <h3 class="mb-4">Capability Controls</h3>
+            <form method="post">
+                {% csrf_token %}
+                <input type="hidden" name="section" value="capabilities">
+
+                <div class="mb-4">
+                    <h6 class="text-muted text-uppercase fw-bold mb-2">Mode</h6>
+                    <p class="capability-hint mb-3">Pick a mode or choose "Custom" to fine-tune below.</p>
+                    <div class="row g-3">
+                        <div class="col-md-3">
+                            <div class="form-check">
+                                <input class="form-check-input" type="radio" name="capability_mode" id="modeCustom" value="custom"
+                                    {% if capability_prefs.capability_mode == 'custom' %}checked{% endif %}>
+                                <label class="form-check-label" for="modeCustom">Custom</label>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="form-check">
+                                <input class="form-check-input" type="radio" name="capability_mode" id="modeConserve" value="conserve"
+                                    {% if capability_prefs.capability_mode == 'conserve' %}checked{% endif %}>
+                                <label class="form-check-label" for="modeConserve">Conserve</label>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="form-check">
+                                <input class="form-check-input" type="radio" name="capability_mode" id="modeBalanced" value="balanced"
+                                    {% if capability_prefs.capability_mode == 'balanced' %}checked{% endif %}>
+                                <label class="form-check-label" for="modeBalanced">Balanced</label>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="form-check">
+                                <input class="form-check-input" type="radio" name="capability_mode" id="modeMax" value="max"
+                                    {% if capability_prefs.capability_mode == 'max' %}checked{% endif %}>
+                                <label class="form-check-label" for="modeMax">Max</label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mb-4">
+                    <h6 class="text-muted text-uppercase fw-bold mb-2">Assistant Behavior</h6>
+                    <div class="form-check form-switch mb-2">
+                        <input class="form-check-input" type="checkbox" id="proactiveToggle" name="proactive_assistant_enabled"
+                            {% if capability_prefs.proactive_assistant_enabled %}checked{% endif %}>
+                        <label class="form-check-label" for="proactiveToggle">Proactive suggestions</label>
+                    </div>
+                    <div class="form-check form-switch mb-2">
+                        <input class="form-check-input" type="checkbox" id="voiceToggle" name="ai_voice_enabled"
+                            {% if capability_prefs.ai_voice_enabled %}checked{% endif %}>
+                        <label class="form-check-label" for="voiceToggle">AI voice replies</label>
+                    </div>
+                    <div class="form-check form-switch mb-2">
+                        <input class="form-check-input" type="checkbox" id="managerToggle" name="manager_llm_enabled"
+                            {% if capability_prefs.manager_llm_enabled %}checked{% endif %}>
+                        <label class="form-check-label" for="managerToggle">Manager LLM fallback</label>
+                    </div>
+                    <div class="form-check form-switch mb-2">
+                        <input class="form-check-input" type="checkbox" id="capsToggle" name="enforce_agent_caps"
+                            {% if capability_prefs.enforce_agent_caps %}checked{% endif %}>
+                        <label class="form-check-label" for="capsToggle">Enforce agent budget caps</label>
+                        <div class="form-text">
+                            Stops long-running agent tasks at iteration, token and tool-call
+                            budgets, plus hourly request limits. Leave on for shared installs;
+                            single-operator installs may turn this off so tasks are never cut short.
+                        </div>
+                    </div>
+                    <div class="mt-2">
+                        <label class="form-label small text-muted">Nudge frequency</label>
+                        <select class="form-select form-select-sm" name="nudge_frequency">
+                            <option value="low" {% if capability_prefs.nudge_frequency == 'low' %}selected{% endif %}>Low</option>
+                            <option value="medium" {% if capability_prefs.nudge_frequency == 'medium' %}selected{% endif %}>Medium</option>
+                            <option value="high" {% if capability_prefs.nudge_frequency == 'high' %}selected{% endif %}>High</option>
+                        </select>
+                    </div>
+                    <div class="mt-2">
+                        <label class="form-label small text-muted">Snooze nudges</label>
+                        <select class="form-select form-select-sm" name="proactive_snooze_hours">
+                            <option value="0">Not snoozed</option>
+                            <option value="1">1 hour</option>
+                            <option value="8">8 hours</option>
+                            <option value="24">24 hours</option>
+                            <option value="72">3 days</option>
+                        </select>
+                        {% if capability_prefs.proactive_snooze_until %}
+                            <div class="form-text">Snoozed until {{ capability_prefs.proactive_snooze_until }}</div>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <div class="mb-4">
+                    <h6 class="text-muted text-uppercase fw-bold mb-2">Tool Access</h6>
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="travelToggle" name="allow_travel"
+                                    {% if capability_prefs.allow_travel %}checked{% endif %}>
+                                <label class="form-check-label" for="travelToggle">Travel &amp; bookings</label>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="paymentsToggle" name="allow_payments"
+                                    {% if capability_prefs.allow_payments %}checked{% endif %}>
+                                <label class="form-check-label" for="paymentsToggle">Payments &amp; invoices</label>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="remindersToggle" name="allow_reminders"
+                                    {% if capability_prefs.allow_reminders %}checked{% endif %}>
+                                <label class="form-check-label" for="remindersToggle">Reminders</label>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="searchToggle" name="allow_web_search"
+                                    {% if capability_prefs.allow_web_search %}checked{% endif %}>
+                                <label class="form-check-label" for="searchToggle">Search &amp; research</label>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="emailToggle" name="allow_email"
+                                    {% if capability_prefs.allow_email %}checked{% endif %}>
+                                <label class="form-check-label" for="emailToggle">Send email</label>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="whatsappToggle" name="allow_whatsapp"
+                                    {% if capability_prefs.allow_whatsapp %}checked{% endif %}>
+                                <label class="form-check-label" for="whatsappToggle">Send WhatsApp</label>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="calendarToggle" name="allow_calendar"
+                                    {% if capability_prefs.allow_calendar %}checked{% endif %}>
+                                <label class="form-check-label" for="calendarToggle">Scheduling</label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <button type="submit" class="app-btn app-btn-primary">
+                    <i class="fas fa-save me-2"></i>Save Capabilities
+                </button>
+            </form>
+        </div>
+
+        <div id="notifications" class="settings-section">
+            <h3 class="mb-4">Notification Preferences</h3>
+            <p class="text-muted mb-3">Choose how you want to be notified for each event type.</p>
+            <form method="post">
+                {% csrf_token %}
+                <input type="hidden" name="section" value="notifications">
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle">
+                        <thead>
+                            <tr>
+                                <th style="min-width:180px">Event</th>
+                                <th class="text-center">In-App</th>
+                                <th class="text-center">Email</th>
+                                <th class="text-center">WhatsApp</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for event_type, channels in notify_matrix.items %}
+                            <tr>
+                                <td>
+                                    {% for key, val in notify_event_labels.items %}
+                                        {% if key == event_type %}{{ val }}{% endif %}
+                                    {% endfor %}
+                                </td>
+                                {% for channel in notify_channels %}
+                                    <td class="text-center">
+                                        <input type="checkbox" class="form-check-input"
+                                            name="notif__{{ event_type }}__{{ channel }}"
+                                            {% for ch_name, ch_val in channels.items %}
+                                                {% if ch_name == channel and ch_val %}checked{% endif %}
+                                            {% endfor %}
+                                        >
+                                    </td>
+                                {% endfor %}
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                <button type="submit" class="app-btn app-btn-primary">
+                    <i class="fas fa-save me-2"></i>Save Notification Preferences
+                </button>
+            </form>
+        </div>
+
+        <div id="integrations" class="settings-section">
+            <h3 class="mb-4">Connected Platforms</h3>
+
+            <h6 class="text-muted text-uppercase fw-bold mb-3"><i class="fas fa-comments me-2"></i>Communication</h6>
+            <div class="row g-4 mb-4">
+                <div class="col-md-6">
+                    <div class="integration-card h-100">
+                        <div class="integration-header">
+                            <div class="d-flex align-items-center">
+                                <div class="integration-icon" style="background: hsl(140, 100%, 95%); color: hsl(140, 100%, 30%);">
+                                    <i class="fab fa-whatsapp"></i>
+                                </div>
+                                <div>
+                                    <h5 class="mb-1">WhatsApp Business</h5>
+                                    <p class="text-muted small mb-0">Send invoices and sync messages</p>
+                                </div>
+                            </div>
+                            {% if whatsapp_connected %}
+                            <span class="integration-status status-connected"><i class="fas fa-check-circle me-1"></i>Connected</span>
+                            {% else %}
+                            <span class="integration-status status-disconnected">Disconnected</span>
+                            {% endif %}
+                        </div>
+                        {% if whatsapp_connected %}
+                        <form action="{% url 'users:disconnect_integration' 'whatsapp' %}" method="post" class="d-inline">
+                            {% csrf_token %}
+                            <button type="submit" class="btn btn-outline-danger btn-sm w-100 mt-2">
+                                <i class="fas fa-unlink me-2"></i>Disconnect
+                            </button>
+                        </form>
+                        {% else %}
+                        <button class="app-btn app-btn-primary app-btn-sm w-100 mt-2" data-bs-toggle="modal" data-bs-target="#whatsappModal">
+                            <i class="fas fa-link me-2"></i>Connect WhatsApp
+                        </button>
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="integration-card h-100">
+                        <div class="integration-header">
+                            <div class="d-flex align-items-center">
+                                <div class="integration-icon" style="background: hsl(0, 70%, 95%); color: hsl(0, 70%, 40%);">
+                                    <i class="fab fa-google"></i>
+                                </div>
+                                <div>
+                                    <h5 class="mb-1">Gmail</h5>
+                                    <p class="text-muted small mb-0">Send emails from your Gmail (send-only)</p>
+                                    {% if gmail_address %}
+                                    <p class="text-muted small mb-0">Connected as {{ gmail_address }}</p>
+                                    {% endif %}
+                                </div>
+                            </div>
+                            {% if gmail_connected %}
+                            <span class="integration-status status-connected"><i class="fas fa-check-circle me-1"></i>Connected</span>
+                            {% else %}
+                            <span class="integration-status status-disconnected">Disconnected</span>
+                            {% endif %}
+                        </div>
+                        {% if gmail_connected %}
+                        <form action="{% url 'users:disconnect_gmail' %}" method="post" class="d-inline">
+                            {% csrf_token %}
+                            <button type="submit" class="btn btn-outline-danger btn-sm w-100 mt-2">
+                                <i class="fas fa-unlink me-2"></i>Disconnect Gmail
+                            </button>
+                        </form>
+                        {% else %}
+                        <a href="{% url 'users:connect_gmail' %}" class="app-btn app-btn-primary app-btn-sm w-100 mt-2">
+                            <i class="fas fa-link me-2"></i>Connect Gmail
+                        </a>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <h6 class="text-muted text-uppercase fw-bold mb-3"><i class="fas fa-credit-card me-2"></i>Payments</h6>
+            <div class="row g-4 mb-4">
+                <div class="col-md-6">
+                    <div class="integration-card h-100">
+                        <div class="integration-header">
+                            <div class="d-flex align-items-center">
+                                <div class="integration-icon" style="background: hsl(210, 100%, 95%); color: hsl(210, 100%, 35%);">
+                                    <i class="fas fa-wallet"></i>
+                                </div>
+                                <div>
+                                    <h5 class="mb-1">IntaSend Pay (Kenya)</h5>
+                                    <p class="text-muted small mb-0">M-Pesa, Card, Bank payments</p>
+                                </div>
+                            </div>
+                            {% if intasend_connected %}
+                            <span class="integration-status status-connected"><i class="fas fa-check-circle me-1"></i>Connected</span>
+                            {% else %}
+                            <span class="integration-status status-disconnected">Disconnected</span>
+                            {% endif %}
+                        </div>
+                        {% if intasend_connected %}
+                        <form action="{% url 'users:disconnect_integration' 'intasend' %}" method="post" class="d-inline">
+                            {% csrf_token %}
+                            <button type="submit" class="btn btn-outline-danger btn-sm w-100 mt-2">
+                                <i class="fas fa-unlink me-2"></i>Disconnect
+                            </button>
+                        </form>
+                        {% else %}
+                        <button class="app-btn app-btn-primary app-btn-sm w-100 mt-2" data-bs-toggle="modal" data-bs-target="#intasendModal">
+                            <i class="fas fa-link me-2"></i>Connect IntaSend
+                        </button>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <h6 class="text-muted text-uppercase fw-bold mb-3"><i class="fas fa-calendar-alt me-2"></i>Scheduling</h6>
+            <div class="row g-4">
+                <div class="col-md-6">
+                    <div class="integration-card h-100">
+                        <div class="integration-header">
+                            <div class="d-flex align-items-center">
+                                <div class="integration-icon" style="background: hsl(210, 100%, 95%); color: hsl(210, 100%, 35%);">
+                                    <i class="fas fa-calendar"></i>
+                                </div>
+                                <div>
+                                    <h5 class="mb-1">Calendly</h5>
+                                    <p class="text-muted small mb-0">Client meeting scheduling</p>
+                                </div>
+                            </div>
+                            {% if calendly_connected %}
+                            <span class="integration-status status-connected"><i class="fas fa-check-circle me-1"></i>Connected</span>
+                            {% else %}
+                            <span class="integration-status status-disconnected">Disconnected</span>
+                            {% endif %}
+                        </div>
+                        <button class="app-btn app-btn-outline app-btn-sm w-100 mt-2">
+                            <i class="fas fa-gear me-2"></i>Configure
+                        </button>
+                    </div>
+                </div>
             </div>
         </div>
-    </header>
 
-    <div class="settings-container">
-        {% if messages %}
-        <div class="messages mb-4">
-            {% for message in messages %}
-            <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
-                {{ message }}
-                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        {% if can_send_invites %}
+        <div id="invites" class="settings-section">
+            <h3 class="mb-4">Invite People</h3>
+            <p class="text-muted mb-3">You can invite up to 3 people to join Mathia. They'll be able to collaborate in rooms but won't be able to send their own platform invites.</p>
+
+            <div class="mb-4">
+                <span class="plan-badge" style="background: var(--clay-tint); color: var(--clay-strong);">
+                    {{ invites_remaining }} of 3 invites remaining
+                </span>
             </div>
-            {% endfor %}
+
+            {% if invites_remaining > 0 %}
+            <div class="row g-2 mb-4">
+                <div class="col">
+                    <input type="email" id="inviteEmail" class="form-input" placeholder="colleague@example.com">
+                </div>
+                <div class="col-auto">
+                    <button type="button" id="sendInviteBtn" class="app-btn app-btn-primary" data-invite-url="{% url 'users:send_platform_invite' %}">
+                        <i class="fas fa-paper-plane me-2"></i>Send Invite
+                    </button>
+                </div>
+            </div>
+            <div id="inviteAlert" class="alert d-none mb-3" role="alert"></div>
+            {% endif %}
+
+            {% if sent_invites %}
+            <h6 class="text-muted text-uppercase fw-bold mb-3">Sent Invites</h6>
+            <div class="table-responsive">
+                <table class="table table-sm">
+                    <thead>
+                        <tr>
+                            <th>Email</th>
+                            <th>Status</th>
+                            <th>Sent</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for inv in sent_invites %}
+                        <tr>
+                            <td>{{ inv.email }}</td>
+                            <td>
+                                {% if inv.status == 'activated' %}
+                                <span class="integration-status status-connected">Activated</span>
+                                {% elif inv.is_expired %}
+                                <span class="integration-status" style="background:var(--danger-soft);color:var(--danger-hex);">Expired</span>
+                                {% else %}
+                                <span class="integration-status" style="background:var(--warning-soft);color:var(--warning-hex);">Pending</span>
+                                {% endif %}
+                            </td>
+                            <td class="text-muted">{{ inv.sent_at|date:"M d, Y" }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
         </div>
         {% endif %}
 
-        <div class="wallet-header mb-4">
-            <div>
-                <h1 class="dashboard-title"><i class="fas fa-cog me-2"></i>Settings</h1>
-                <p class="dashboard-subtitle">Manage your profile, integrations, and preferences</p>
-            </div>
-            <a href="{% url 'users:dashboard' %}" class="btn btn-outline-secondary">
-                <i class="fas fa-arrow-left me-2"></i>Back
-            </a>
-        </div>
-
-        <div class="settings-layout" data-bs-spy="scroll" data-bs-target="#settingsNav" data-bs-offset="80" tabindex="0">
-            <!-- Sidebar -->
-            <div class="settings-sidebar" id="settingsNav">
-                <nav class="nav nav-pills flex-column">
-                    <a class="nav-link active" href="#profile"><i class="fas fa-user me-2"></i>Profile</a>
-                    <a class="nav-link" href="#ai"><i class="fas fa-brain me-2"></i>AI</a>
-                    <a class="nav-link" href="#capabilities"><i class="fas fa-sliders-h me-2"></i>Capabilities</a>
-                    <a class="nav-link" href="#notifications"><i class="fas fa-bell me-2"></i>Notifications</a>
-                    <a class="nav-link" href="#integrations"><i class="fas fa-plug me-2"></i>Integrations</a>
-                    {% if can_send_invites %}<a class="nav-link" href="#invites"><i class="fas fa-envelope me-2"></i>Invites</a>{% endif %}
-                    <a class="nav-link" href="#workspace"><i class="fas fa-briefcase me-2"></i>Workspace</a>
-                </nav>
-            </div>
-
-            <!-- Content -->
-            <div class="settings-content">
-
-                <!-- ===== PROFILE ===== -->
-                <div id="profile" class="settings-section">
-                    <h3 class="mb-4">Profile</h3>
-                    <form method="post" enctype="multipart/form-data">
-                        {% csrf_token %}
-                        <input type="hidden" name="section" value="profile">
-
-                        <!-- Avatar Upload Widget -->
-                        <div class="avatar-upload-wrapper" data-avatar-widget>
-                            <img src="{{ user.profile.get_avatar_url }}" data-avatar-img alt="Avatar">
-                            <div class="avatar-upload-overlay">
-                                <i class="fas fa-camera"></i>
-                            </div>
-                            <input type="file" accept="image/*" data-avatar-input style="display:none">
-                        </div>
-
-                        <div class="row mb-3">
-                            <div class="col-md-6">
-                                <label class="form-label">First Name</label>
-                                {{ user_form.first_name }}
-                            </div>
-                            <div class="col-md-6">
-                                <label class="form-label">Last Name</label>
-                                {{ user_form.last_name }}
-                            </div>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">Email</label>
-                            {{ user_form.email }}
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">Bio</label>
-                            {{ profile_form.bio }}
-                        </div>
-                        <div class="row mb-3">
-                            <div class="col-md-6">
-                                <label class="form-label">Location</label>
-                                {{ profile_form.location }}
-                            </div>
-                            <div class="col-md-6">
-                                <label class="form-label">Website</label>
-                                {{ profile_form.website }}
-                            </div>
-                        </div>
-
-                        <h5 class="mt-4 mb-3">Professional</h5>
-                        <div class="row mb-3">
-                            <div class="col-md-6">
-                                <label class="form-label">Role / Title</label>
-                                {{ profile_form.role }}
-                            </div>
-                            <div class="col-md-6">
-                                <label class="form-label">Industry</label>
-                                {{ profile_form.industry }}
-                            </div>
-                        </div>
-                        <div class="row mb-3">
-                            <div class="col-md-6">
-                                <label class="form-label">Company Name</label>
-                                {{ profile_form.company_name }}
-                            </div>
-                            <div class="col-md-6">
-                                <label class="form-label">Company Size</label>
-                                {{ profile_form.company_size }}
-                            </div>
-                        </div>
-
-                        <h5 class="mt-4 mb-3">Social Links</h5>
-                        <div class="row mb-3">
-                            <div class="col-md-4">
-                                <label class="form-label">Twitter / X</label>
-                                {{ profile_form.twitter_handle }}
-                            </div>
-                            <div class="col-md-4">
-                                <label class="form-label">LinkedIn</label>
-                                {{ profile_form.linkedin_url }}
-                            </div>
-                            <div class="col-md-4">
-                                <label class="form-label">GitHub</label>
-                                {{ profile_form.github_url }}
-                            </div>
-                        </div>
-
-                        <h5 class="mt-4 mb-3">Preferences</h5>
-                        <div class="row mb-3">
-                            <div class="col-md-4">
-                                <label class="form-label">Theme</label>
-                                {{ profile_form.theme_preference }}
-                            </div>
-                        </div>
-
-                        <h5 class="mt-4 mb-3">Assistant Style</h5>
-                        <div class="assistant-tooltip-panel mb-3">
-                            <i class="fas fa-circle-info"></i>
-                            <div>
-                                <div class="hint-title">How this helps</div>
-                                <div class="text-muted">
-                                    These settings tune how Mathia speaks, interprets dates, and formats times/currency.
-                                    Leave blank to auto-detect.
-                                </div>
-                            </div>
-                        </div>
-                        <div class="row mb-3">
-                            <div class="col-md-4">
-                                <label class="form-label">Tone</label>
-                                {{ profile_form.assistant_tone }}
-                            </div>
-                            <div class="col-md-4">
-                                <label class="form-label">Verbosity</label>
-                                {{ profile_form.assistant_verbosity }}
-                            </div>
-                            <div class="col-md-4">
-                                <label class="form-label">Directness</label>
-                                {{ profile_form.assistant_directness }}
-                            </div>
-                        </div>
-                        <div class="row mb-3">
-                            <div class="col-md-3">
-                                <label class="form-label">Locale</label>
-                                {{ profile_form.assistant_locale }}
-                            </div>
-                            <div class="col-md-3">
-                                <label class="form-label">Date order</label>
-                                {{ profile_form.assistant_date_order }}
-                            </div>
-                            <div class="col-md-3">
-                                <label class="form-label">Time format</label>
-                                {{ profile_form.assistant_time_format }}
-                            </div>
-                            <div class="col-md-3">
-                                <label class="form-label">Currency</label>
-                                {{ profile_form.assistant_currency }}
-                            </div>
-                        </div>
-
-                        <h5 class="mt-4 mb-3">Notifications</h5>
-                        <div class="mb-3">
-                            <div class="form-check">
-                                {{ profile_form.email_notifications }}
-                                <label class="form-check-label" for="{{ profile_form.email_notifications.id_for_label }}">Email updates</label>
-                            </div>
-                            <div class="form-check">
-                                {{ profile_form.push_notifications }}
-                                <label class="form-check-label" for="{{ profile_form.push_notifications.id_for_label }}">Push notifications</label>
-                            </div>
-                            <div class="mt-2">
-                                <label class="form-label">Digest frequency</label>
-                                {{ profile_form.digest_frequency }}
-                            </div>
-                        </div>
-
-                        <button type="submit" class="btn btn-primary">
-                            <i class="fas fa-save me-2"></i>Save Profile
-                        </button>
-                    </form>
+        <div id="workspace" class="settings-section">
+            <h3 class="mb-4">Workspace</h3>
+            <form method="post">
+                {% csrf_token %}
+                <input type="hidden" name="section" value="workspace">
+                <div class="mb-3">
+                    <label class="form-label">Workspace Name</label>
+                    <input type="text" name="workspace_name" class="form-input" value="{{ workspace.name }}">
                 </div>
-
-                <!-- ===== AI PERSONALIZATION ===== -->
-                <div id="ai" class="settings-section">
-                    <h3 class="mb-4">AI Personalization</h3>
-                    <form method="post">
-                        {% csrf_token %}
-                        <input type="hidden" name="section" value="ai">
-                        <p class="text-muted mb-3">When enabled, Mathia uses your profile data (role, industry, preferences) to give more relevant suggestions.</p>
-                        <div class="form-check form-switch mb-3">
-                            <input class="form-check-input" type="checkbox" id="aiPersonalizationToggle"
-                                name="ai_personalization_enabled"
-                                {% if ai_personalization_enabled %}checked{% endif %}>
-                            <label class="form-check-label" for="aiPersonalizationToggle">
-                                Enable AI personalization
-                            </label>
-                        </div>
-                        <button type="submit" class="btn btn-primary">
-                            <i class="fas fa-save me-2"></i>Save AI Settings
-                        </button>
-                    </form>
-                </div>
-
-                <!-- ===== CAPABILITIES ===== -->
-                <div id="capabilities" class="settings-section">
-                    <h3 class="mb-4">Capability Controls</h3>
-                    <form method="post">
-                        {% csrf_token %}
-                        <input type="hidden" name="section" value="capabilities">
-
-                        <div class="mb-4">
-                            <h6 class="text-muted text-uppercase fw-bold mb-2">Mode</h6>
-                            <p class="capability-hint mb-3">Pick a mode or choose "Custom" to fine-tune below.</p>
-                            <div class="row g-3">
-                                <div class="col-md-3">
-                                    <div class="form-check">
-                                        <input class="form-check-input" type="radio" name="capability_mode" id="modeCustom" value="custom"
-                                            {% if capability_prefs.capability_mode == 'custom' %}checked{% endif %}>
-                                        <label class="form-check-label" for="modeCustom">Custom</label>
-                                    </div>
-                                </div>
-                                <div class="col-md-3">
-                                    <div class="form-check">
-                                        <input class="form-check-input" type="radio" name="capability_mode" id="modeConserve" value="conserve"
-                                            {% if capability_prefs.capability_mode == 'conserve' %}checked{% endif %}>
-                                        <label class="form-check-label" for="modeConserve">Conserve</label>
-                                    </div>
-                                </div>
-                                <div class="col-md-3">
-                                    <div class="form-check">
-                                        <input class="form-check-input" type="radio" name="capability_mode" id="modeBalanced" value="balanced"
-                                            {% if capability_prefs.capability_mode == 'balanced' %}checked{% endif %}>
-                                        <label class="form-check-label" for="modeBalanced">Balanced</label>
-                                    </div>
-                                </div>
-                                <div class="col-md-3">
-                                    <div class="form-check">
-                                        <input class="form-check-input" type="radio" name="capability_mode" id="modeMax" value="max"
-                                            {% if capability_prefs.capability_mode == 'max' %}checked{% endif %}>
-                                        <label class="form-check-label" for="modeMax">Max</label>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="mb-4">
-                            <h6 class="text-muted text-uppercase fw-bold mb-2">Assistant Behavior</h6>
-                            <div class="form-check form-switch mb-2">
-                                <input class="form-check-input" type="checkbox" id="proactiveToggle" name="proactive_assistant_enabled"
-                                    {% if capability_prefs.proactive_assistant_enabled %}checked{% endif %}>
-                                <label class="form-check-label" for="proactiveToggle">Proactive suggestions</label>
-                            </div>
-                            <div class="form-check form-switch mb-2">
-                                <input class="form-check-input" type="checkbox" id="voiceToggle" name="ai_voice_enabled"
-                                    {% if capability_prefs.ai_voice_enabled %}checked{% endif %}>
-                                <label class="form-check-label" for="voiceToggle">AI voice replies</label>
-                            </div>
-                            <div class="form-check form-switch mb-2">
-                                <input class="form-check-input" type="checkbox" id="managerToggle" name="manager_llm_enabled"
-                                    {% if capability_prefs.manager_llm_enabled %}checked{% endif %}>
-                                <label class="form-check-label" for="managerToggle">Manager LLM fallback</label>
-                            </div>
-                            <div class="form-check form-switch mb-2">
-                                <input class="form-check-input" type="checkbox" id="capsToggle" name="enforce_agent_caps"
-                                    {% if capability_prefs.enforce_agent_caps %}checked{% endif %}>
-                                <label class="form-check-label" for="capsToggle">Enforce agent budget caps</label>
-                                <div class="form-text">
-                                    Stops long-running agent tasks at iteration, token and tool-call
-                                    budgets, plus hourly request limits. Leave on for shared installs;
-                                    single-operator installs may turn this off so tasks are never cut short.
-                                </div>
-                            </div>
-                            <div class="mt-2">
-                                <label class="form-label small text-muted">Nudge frequency</label>
-                                <select class="form-select form-select-sm" name="nudge_frequency">
-                                    <option value="low" {% if capability_prefs.nudge_frequency == 'low' %}selected{% endif %}>Low</option>
-                                    <option value="medium" {% if capability_prefs.nudge_frequency == 'medium' %}selected{% endif %}>Medium</option>
-                                    <option value="high" {% if capability_prefs.nudge_frequency == 'high' %}selected{% endif %}>High</option>
-                                </select>
-                            </div>
-                            <div class="mt-2">
-                                <label class="form-label small text-muted">Snooze nudges</label>
-                                <select class="form-select form-select-sm" name="proactive_snooze_hours">
-                                    <option value="0">Not snoozed</option>
-                                    <option value="1">1 hour</option>
-                                    <option value="8">8 hours</option>
-                                    <option value="24">24 hours</option>
-                                    <option value="72">3 days</option>
-                                </select>
-                                {% if capability_prefs.proactive_snooze_until %}
-                                    <div class="form-text">Snoozed until {{ capability_prefs.proactive_snooze_until }}</div>
-                                {% endif %}
-                            </div>
-                        </div>
-
-                        <div class="mb-4">
-                            <h6 class="text-muted text-uppercase fw-bold mb-2">Tool Access</h6>
-                            <div class="row g-3">
-                                <div class="col-md-4">
-                                    <div class="form-check form-switch">
-                                        <input class="form-check-input" type="checkbox" id="travelToggle" name="allow_travel"
-                                            {% if capability_prefs.allow_travel %}checked{% endif %}>
-                                        <label class="form-check-label" for="travelToggle">Travel & bookings</label>
-                                    </div>
-                                </div>
-                                <div class="col-md-4">
-                                    <div class="form-check form-switch">
-                                        <input class="form-check-input" type="checkbox" id="paymentsToggle" name="allow_payments"
-                                            {% if capability_prefs.allow_payments %}checked{% endif %}>
-                                        <label class="form-check-label" for="paymentsToggle">Payments & invoices</label>
-                                    </div>
-                                </div>
-                                <div class="col-md-4">
-                                    <div class="form-check form-switch">
-                                        <input class="form-check-input" type="checkbox" id="remindersToggle" name="allow_reminders"
-                                            {% if capability_prefs.allow_reminders %}checked{% endif %}>
-                                        <label class="form-check-label" for="remindersToggle">Reminders</label>
-                                    </div>
-                                </div>
-                                <div class="col-md-4">
-                                    <div class="form-check form-switch">
-                                        <input class="form-check-input" type="checkbox" id="searchToggle" name="allow_web_search"
-                                            {% if capability_prefs.allow_web_search %}checked{% endif %}>
-                                        <label class="form-check-label" for="searchToggle">Search & research</label>
-                                    </div>
-                                </div>
-                                <div class="col-md-4">
-                                    <div class="form-check form-switch">
-                                        <input class="form-check-input" type="checkbox" id="emailToggle" name="allow_email"
-                                            {% if capability_prefs.allow_email %}checked{% endif %}>
-                                        <label class="form-check-label" for="emailToggle">Send email</label>
-                                    </div>
-                                </div>
-                                <div class="col-md-4">
-                                    <div class="form-check form-switch">
-                                        <input class="form-check-input" type="checkbox" id="whatsappToggle" name="allow_whatsapp"
-                                            {% if capability_prefs.allow_whatsapp %}checked{% endif %}>
-                                        <label class="form-check-label" for="whatsappToggle">Send WhatsApp</label>
-                                    </div>
-                                </div>
-                                <div class="col-md-4">
-                                    <div class="form-check form-switch">
-                                        <input class="form-check-input" type="checkbox" id="calendarToggle" name="allow_calendar"
-                                            {% if capability_prefs.allow_calendar %}checked{% endif %}>
-                                        <label class="form-check-label" for="calendarToggle">Scheduling</label>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <button type="submit" class="btn btn-primary">
-                            <i class="fas fa-save me-2"></i>Save Capabilities
-                        </button>
-                    </form>
-                </div>
-
-                <!-- ===== NOTIFICATIONS ===== -->
-                <div id="notifications" class="settings-section">
-                    <h3 class="mb-4">Notification Preferences</h3>
-                    <p class="text-muted mb-3">Choose how you want to be notified for each event type.</p>
-                    <form method="post">
-                        {% csrf_token %}
-                        <input type="hidden" name="section" value="notifications">
-                        <div class="table-responsive">
-                            <table class="table table-sm align-middle">
-                                <thead>
-                                    <tr>
-                                        <th style="min-width:180px">Event</th>
-                                        <th class="text-center">In-App</th>
-                                        <th class="text-center">Email</th>
-                                        <th class="text-center">WhatsApp</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {% for event_type, channels in notify_matrix.items %}
-                                    <tr>
-                                        <td>
-                                            {% with label=notify_event_labels|default_if_none:"" %}
-                                                {% for key, val in notify_event_labels.items %}
-                                                    {% if key == event_type %}{{ val }}{% endif %}
-                                                {% endfor %}
-                                            {% endwith %}
-                                        </td>
-                                        {% for channel in notify_channels %}
-                                            <td class="text-center">
-                                                <input type="checkbox" class="form-check-input"
-                                                    name="notif__{{ event_type }}__{{ channel }}"
-                                                    {% for ch_name, ch_val in channels.items %}
-                                                        {% if ch_name == channel and ch_val %}checked{% endif %}
-                                                    {% endfor %}
-                                                >
-                                            </td>
-                                        {% endfor %}
-                                    </tr>
-                                    {% endfor %}
-                                </tbody>
-                            </table>
-                        </div>
-                        <button type="submit" class="btn btn-primary">
-                            <i class="fas fa-save me-2"></i>Save Notification Preferences
-                        </button>
-                    </form>
-                </div>
-
-                <!-- ===== INTEGRATIONS ===== -->
-                <div id="integrations" class="settings-section">
-                    <h3 class="mb-4">Connected Platforms</h3>
-
-                    <h6 class="text-muted text-uppercase fw-bold mb-3"><i class="fas fa-comments me-2"></i>Communication</h6>
-                    <div class="row g-4 mb-4">
-                        <!-- WhatsApp -->
-                        <div class="col-md-6">
-                            <div class="integration-card h-100">
-                                <div class="integration-header">
-                                    <div class="d-flex align-items-center">
-                                        <div class="integration-icon" style="background: hsl(140, 100%, 95%); color: hsl(140, 100%, 30%);">
-                                            <i class="fab fa-whatsapp"></i>
-                                        </div>
-                                        <div>
-                                            <h5 class="mb-1">WhatsApp Business</h5>
-                                            <p class="text-muted small mb-0">Send invoices and sync messages</p>
-                                        </div>
-                                    </div>
-                                    {% if whatsapp_connected %}
-                                    <span class="integration-status status-connected"><i class="fas fa-check-circle me-1"></i>Connected</span>
-                                    {% else %}
-                                    <span class="integration-status status-disconnected">Disconnected</span>
-                                    {% endif %}
-                                </div>
-                                {% if whatsapp_connected %}
-                                <form action="{% url 'users:disconnect_integration' 'whatsapp' %}" method="post" class="d-inline">
-                                    {% csrf_token %}
-                                    <button type="submit" class="btn btn-outline-danger btn-sm w-100 mt-2">
-                                        <i class="fas fa-unlink me-2"></i>Disconnect
-                                    </button>
-                                </form>
-                                {% else %}
-                                <button class="btn btn-primary btn-sm w-100 mt-2" data-bs-toggle="modal" data-bs-target="#whatsappModal">
-                                    <i class="fas fa-link me-2"></i>Connect WhatsApp
-                                </button>
-                                {% endif %}
-                            </div>
-                        </div>
-                        <!-- Gmail -->
-                        <div class="col-md-6">
-                            <div class="integration-card h-100">
-                                <div class="integration-header">
-                                    <div class="d-flex align-items-center">
-                                        <div class="integration-icon" style="background: hsl(0, 70%, 95%); color: hsl(0, 70%, 40%);">
-                                            <i class="fab fa-google"></i>
-                                        </div>
-                                        <div>
-                                            <h5 class="mb-1">Gmail</h5>
-                                            <p class="text-muted small mb-0">Send emails from your Gmail (send-only)</p>
-                                            {% if gmail_address %}
-                                            <p class="text-muted small mb-0">Connected as {{ gmail_address }}</p>
-                                            {% endif %}
-                                        </div>
-                                    </div>
-                                    {% if gmail_connected %}
-                                    <span class="integration-status status-connected"><i class="fas fa-check-circle me-1"></i>Connected</span>
-                                    {% else %}
-                                    <span class="integration-status status-disconnected">Disconnected</span>
-                                    {% endif %}
-                                </div>
-                                {% if gmail_connected %}
-                                <form action="{% url 'users:disconnect_gmail' %}" method="post" class="d-inline">
-                                    {% csrf_token %}
-                                    <button type="submit" class="btn btn-outline-danger btn-sm w-100 mt-2">
-                                        <i class="fas fa-unlink me-2"></i>Disconnect Gmail
-                                    </button>
-                                </form>
-                                {% else %}
-                                <a href="{% url 'users:connect_gmail' %}" class="btn btn-primary btn-sm w-100 mt-2">
-                                    <i class="fas fa-link me-2"></i>Connect Gmail
-                                </a>
-                                {% endif %}
-                            </div>
-                        </div>
-                    </div>
-
-                    <h6 class="text-muted text-uppercase fw-bold mb-3"><i class="fas fa-credit-card me-2"></i>Payments</h6>
-                    <div class="row g-4 mb-4">
-                        <div class="col-md-6">
-                            <div class="integration-card h-100">
-                                <div class="integration-header">
-                                    <div class="d-flex align-items-center">
-                                        <div class="integration-icon" style="background: hsl(210, 100%, 95%); color: hsl(210, 100%, 35%);">
-                                            <i class="fas fa-wallet"></i>
-                                        </div>
-                                        <div>
-                                            <h5 class="mb-1">IntaSend Pay (Kenya)</h5>
-                                            <p class="text-muted small mb-0">M-Pesa, Card, Bank payments</p>
-                                        </div>
-                                    </div>
-                                    {% if intasend_connected %}
-                                    <span class="integration-status status-connected"><i class="fas fa-check-circle me-1"></i>Connected</span>
-                                    {% else %}
-                                    <span class="integration-status status-disconnected">Disconnected</span>
-                                    {% endif %}
-                                </div>
-                                {% if intasend_connected %}
-                                <form action="{% url 'users:disconnect_integration' 'intasend' %}" method="post" class="d-inline">
-                                    {% csrf_token %}
-                                    <button type="submit" class="btn btn-outline-danger btn-sm w-100 mt-2">
-                                        <i class="fas fa-unlink me-2"></i>Disconnect
-                                    </button>
-                                </form>
-                                {% else %}
-                                <button class="btn btn-primary btn-sm w-100 mt-2" data-bs-toggle="modal" data-bs-target="#intasendModal">
-                                    <i class="fas fa-link me-2"></i>Connect IntaSend
-                                </button>
-                                {% endif %}
-                            </div>
-                        </div>
-                    </div>
-
-                    <h6 class="text-muted text-uppercase fw-bold mb-3"><i class="fas fa-calendar-alt me-2"></i>Scheduling</h6>
-                    <div class="row g-4">
-                        <div class="col-md-6">
-                            <div class="integration-card h-100">
-                                <div class="integration-header">
-                                    <div class="d-flex align-items-center">
-                                        <div class="integration-icon" style="background: hsl(210, 100%, 95%); color: hsl(210, 100%, 35%);">
-                                            <i class="fas fa-calendar"></i>
-                                        </div>
-                                        <div>
-                                            <h5 class="mb-1">Calendly</h5>
-                                            <p class="text-muted small mb-0">Client meeting scheduling</p>
-                                        </div>
-                                    </div>
-                                    {% if calendly_connected %}
-                                    <span class="integration-status status-connected"><i class="fas fa-check-circle me-1"></i>Connected</span>
-                                    {% else %}
-                                    <span class="integration-status status-disconnected">Disconnected</span>
-                                    {% endif %}
-                                </div>
-                                <button class="btn btn-outline-secondary btn-sm w-100 mt-2">
-                                    <i class="fas fa-cog me-2"></i>Configure
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- ===== INVITES (depth-0 only) ===== -->
-                {% if can_send_invites %}
-                <div id="invites" class="settings-section">
-                    <h3 class="mb-4">Invite People</h3>
-                    <p class="text-muted mb-3">You can invite up to 3 people to join Mathia. They'll be able to collaborate in rooms but won't be able to send their own platform invites.</p>
-
-                    <div class="mb-4">
-                        <span class="plan-badge" style="background: hsl(210,100%,95%); color: hsl(210,100%,35%);">
-                            {{ invites_remaining }} of 3 invites remaining
+                <div class="mb-3">
+                    <label class="form-label">Plan</label>
+                    <div>
+                        <span class="plan-badge" style="background: {% if workspace.plan == 'pro' %}var(--clay-tint);color:var(--clay-strong){% elif workspace.plan == 'agency' %}var(--danger-soft);color:var(--danger-hex){% elif workspace.plan == 'trial' %}var(--warning-soft);color:var(--warning-hex){% else %}hsl(var(--muted));color:hsl(var(--muted-foreground)){% endif %}">
+                            {{ workspace.get_plan_display }}
                         </span>
                     </div>
-
-                    {% if invites_remaining > 0 %}
-                    <div class="row g-2 mb-4">
-                        <div class="col">
-                            <input type="email" id="inviteEmail" class="form-input" placeholder="colleague@example.com">
-                        </div>
-                        <div class="col-auto">
-                            <button type="button" id="sendInviteBtn" class="btn btn-primary">
-                                <i class="fas fa-paper-plane me-2"></i>Send Invite
-                            </button>
-                        </div>
-                    </div>
-                    <div id="inviteAlert" class="alert d-none mb-3" role="alert"></div>
-                    {% endif %}
-
-                    {% if sent_invites %}
-                    <h6 class="text-muted text-uppercase fw-bold mb-3">Sent Invites</h6>
-                    <div class="table-responsive">
-                        <table class="table table-sm">
-                            <thead>
-                                <tr>
-                                    <th>Email</th>
-                                    <th>Status</th>
-                                    <th>Sent</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {% for inv in sent_invites %}
-                                <tr>
-                                    <td>{{ inv.email }}</td>
-                                    <td>
-                                        {% if inv.status == 'activated' %}
-                                        <span class="integration-status status-connected">Activated</span>
-                                        {% elif inv.is_expired %}
-                                        <span class="integration-status" style="background:hsl(0,70%,95%);color:hsl(0,70%,40%);">Expired</span>
-                                        {% else %}
-                                        <span class="integration-status" style="background:hsl(40,100%,95%);color:hsl(40,100%,30%);">Pending</span>
-                                        {% endif %}
-                                    </td>
-                                    <td class="text-muted">{{ inv.sent_at|date:"M d, Y" }}</td>
-                                </tr>
-                                {% endfor %}
-                            </tbody>
-                        </table>
-                    </div>
-                    {% endif %}
                 </div>
-                {% endif %}
-
-                <!-- ===== WORKSPACE ===== -->
-                <div id="workspace" class="settings-section">
-                    <h3 class="mb-4">Workspace</h3>
-                    <form method="post">
-                        {% csrf_token %}
-                        <input type="hidden" name="section" value="workspace">
-                        <div class="mb-3">
-                            <label class="form-label">Workspace Name</label>
-                            <input type="text" name="workspace_name" class="form-input" value="{{ workspace.name }}">
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">Plan</label>
-                            <div>
-                                <span class="plan-badge" style="background: {% if workspace.plan == 'pro' %}hsl(210,100%,95%);color:hsl(210,100%,35%){% elif workspace.plan == 'agency' %}hsl(0,70%,95%);color:hsl(0,70%,40%){% elif workspace.plan == 'trial' %}hsl(40,100%,95%);color:hsl(40,100%,30%){% else %}hsl(var(--muted));color:hsl(var(--muted-foreground)){% endif %}">
-                                    {{ workspace.get_plan_display }}
-                                </span>
-                            </div>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">Account Type</label>
-                            <div class="text-muted">{{ workspace.get_account_type_display }}</div>
-                        </div>
-                        <button type="submit" class="btn btn-primary">
-                            <i class="fas fa-save me-2"></i>Save Workspace
-                        </button>
-                    </form>
+                <div class="mb-3">
+                    <label class="form-label">Account Type</label>
+                    <div class="text-muted">{{ workspace.get_account_type_display }}</div>
                 </div>
-
-            </div>
+                <button type="submit" class="app-btn app-btn-primary">
+                    <i class="fas fa-save me-2"></i>Save Workspace
+                </button>
+            </form>
         </div>
     </div>
+</div>
 
-    <!-- WhatsApp Modal -->
-    <div class="modal fade" id="whatsappModal" tabindex="-1">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <form action="{% url 'users:connect_whatsapp' %}" method="POST">
-                    {% csrf_token %}
-                    <div class="modal-header">
-                        <h5 class="modal-title">Connect WhatsApp Business</h5>
-                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+<div class="modal fade" id="whatsappModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form action="{% url 'users:connect_whatsapp' %}" method="POST">
+                {% csrf_token %}
+                <div class="modal-header">
+                    <h5 class="modal-title">Connect WhatsApp Business</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Phone Number</label>
+                        <input type="text" name="phone_number" class="form-control" placeholder="+254..." required>
                     </div>
-                    <div class="modal-body">
-                        <div class="mb-3">
-                            <label class="form-label">Phone Number</label>
-                            <input type="text" name="phone_number" class="form-control" placeholder="+254..." required>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">Twilio Account SID</label>
-                            <input type="text" name="account_sid" class="form-control" required>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">Twilio Auth Token</label>
-                            <input type="password" name="auth_token" class="form-control" required>
-                        </div>
+                    <div class="mb-3">
+                        <label class="form-label">Twilio Account SID</label>
+                        <input type="text" name="account_sid" class="form-control" required>
                     </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
-                        <button type="submit" class="btn btn-primary">Connect</button>
+                    <div class="mb-3">
+                        <label class="form-label">Twilio Auth Token</label>
+                        <input type="password" name="auth_token" class="form-control" required>
                     </div>
-                </form>
-            </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Connect</button>
+                </div>
+            </form>
         </div>
     </div>
+</div>
 
-    <!-- IntaSend Modal -->
-    <div class="modal fade" id="intasendModal" tabindex="-1">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <form action="{% url 'users:connect_intasend' %}" method="POST">
-                    {% csrf_token %}
-                    <div class="modal-header">
-                        <h5 class="modal-title">Connect IntaSend Pay</h5>
-                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+<div class="modal fade" id="intasendModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form action="{% url 'users:connect_intasend' %}" method="POST">
+                {% csrf_token %}
+                <div class="modal-header">
+                    <h5 class="modal-title">Connect IntaSend Pay</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Publishable Key</label>
+                        <input type="text" name="public_key" class="form-control" placeholder="ISPubKey..." required>
                     </div>
-                    <div class="modal-body">
-                        <div class="mb-3">
-                            <label class="form-label">Publishable Key</label>
-                            <input type="text" name="public_key" class="form-control" placeholder="ISPubKey..." required>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">API Key (Secret)</label>
-                            <input type="password" name="api_key" class="form-control" placeholder="ISSecret..." required>
-                        </div>
-                        <div class="form-check">
-                            <input type="checkbox" name="is_test" class="form-check-input" id="isTest" checked>
-                            <label class="form-check-label" for="isTest">Test Mode / Sandbox</label>
-                        </div>
+                    <div class="mb-3">
+                        <label class="form-label">API Key (Secret)</label>
+                        <input type="password" name="api_key" class="form-control" placeholder="ISSecret..." required>
                     </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
-                        <button type="submit" class="btn btn-primary">Connect</button>
+                    <div class="form-check">
+                        <input type="checkbox" name="is_test" class="form-check-input" id="isTest" checked>
+                        <label class="form-check-label" for="isTest">Test Mode / Sandbox</label>
                     </div>
-                </form>
-            </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Connect</button>
+                </div>
+            </form>
         </div>
     </div>
+</div>
+{% endblock %}
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="{% static 'js/main.js' %}"></script>
-    <!-- Cropper.js -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js"></script>
-    <!-- Avatar Upload Widget -->
-    <script src="{% static 'js/avatar-upload.js' %}"></script>
-    <script>
-        // Scrollspy: highlight sidebar link on scroll
-        document.addEventListener('DOMContentLoaded', function() {
-            // Handle hash-based navigation
-            if (window.location.hash) {
-                const el = document.querySelector(window.location.hash);
-                if (el) el.scrollIntoView({behavior: 'smooth'});
-            }
-            // Activate scrollspy on sidebar links
-            const links = document.querySelectorAll('#settingsNav .nav-link');
-            const sections = document.querySelectorAll('.settings-section');
-            function onScroll() {
-                let current = '';
-                sections.forEach(s => {
-                    if (window.scrollY >= s.offsetTop - 120) current = s.id;
-                });
-                links.forEach(l => {
-                    l.classList.toggle('active', l.getAttribute('href') === '#' + current);
-                });
-            }
-            window.addEventListener('scroll', onScroll);
-            onScroll();
-
-            // Invite sending
-            const sendBtn = document.getElementById('sendInviteBtn');
-            if (sendBtn) {
-                sendBtn.addEventListener('click', function() {
-                    const emailInput = document.getElementById('inviteEmail');
-                    const alertDiv = document.getElementById('inviteAlert');
-                    const email = emailInput.value.trim();
-                    if (!email) return;
-
-                    sendBtn.disabled = true;
-                    fetch('{% url "users:send_platform_invite" %}', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/x-www-form-urlencoded',
-                            'X-CSRFToken': '{{ csrf_token }}'
-                        },
-                        body: 'email=' + encodeURIComponent(email)
-                    })
-                    .then(r => r.json())
-                    .then(data => {
-                        alertDiv.classList.remove('d-none', 'alert-danger', 'alert-success');
-                        if (data.ok) {
-                            alertDiv.classList.add('alert-success');
-                            alertDiv.textContent = 'Invite sent to ' + email + '! ' + data.remaining + ' remaining.';
-                            emailInput.value = '';
-                            setTimeout(() => location.reload(), 1500);
-                        } else {
-                            alertDiv.classList.add('alert-danger');
-                            alertDiv.textContent = data.error;
-                        }
-                        sendBtn.disabled = false;
-                    })
-                    .catch(() => {
-                        alertDiv.classList.remove('d-none', 'alert-success');
-                        alertDiv.classList.add('alert-danger');
-                        alertDiv.textContent = 'Something went wrong. Please try again.';
-                        sendBtn.disabled = false;
-                    });
-                });
-            }
-        });
-    </script>
-</body>
-</html>
+{% block scripts %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js"></script>
+<script src="{% static 'js/avatar-upload.js' %}"></script>
+<script src="{% static 'js/page-settings.js' %}"></script>
+{% endblock %}

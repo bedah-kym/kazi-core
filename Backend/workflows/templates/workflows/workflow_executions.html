@@ -1,254 +1,114 @@
+{% extends "users/base_app.html" %}
 {% load static %}
 {% load humanize %}
-<!DOCTYPE html>
-<html lang="en">
 
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Run history for {{ workflow.name }}.">
-    <title>Runs - {{ workflow.name }} - Mathia</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-    <link href="{% static 'css/app.css' %}" rel="stylesheet">
-    <link rel="icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
-    <style>
-        .exec-grid {
-            display: grid;
-            grid-template-columns: 1fr;
-            gap: 8px;
-        }
+{% block title %}Runs - {{ workflow.name }} - Mathia{% endblock %}
 
-        .exec-row {
-            display: flex;
-            align-items: center;
-            gap: 14px;
-            padding: 14px 18px;
-            border: 1px solid hsl(var(--border));
-            border-radius: var(--radius);
-            text-decoration: none;
-            transition: border-color 140ms ease, transform 140ms ease;
-        }
+{% block meta_description %}Run history for {{ workflow.name }}.{% endblock %}
 
-        .exec-row:hover {
-            border-color: hsl(var(--ring));
-            transform: translateY(-1px);
-        }
+{% block breadcrumb %}
+<a href="{% url 'users:dashboard' %}">Dashboard</a><span class="crumb-sep">&#8250;</span><a href="{% url 'workflows:workflows_list' %}">Automations</a><span class="crumb-sep">&#8250;</span><span class="crumb-current">{{ workflow.name }}</span>
+{% endblock %}
 
-        .exec-id {
-            font-family: var(--font-mono);
-            font-size: 13px;
-            font-weight: 600;
-        }
+{% block head %}
+<link href="{% static 'css/page-workflows.css' %}" rel="stylesheet">
+{% endblock %}
 
-        .exec-cells {
-            flex: 1;
-            display: flex;
-            align-items: center;
-            gap: 14px;
-            flex-wrap: wrap;
-        }
-
-        .cell {
-            display: flex;
-            flex-direction: column;
-            gap: 2px;
-        }
-
-        .cell-label {
-            font-size: 10.5px;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
-            color: hsl(var(--muted-foreground));
-        }
-
-        .cell-value {
-            font-size: 13px;
-        }
-
-        .toast-stack {
-            position: fixed;
-            bottom: 22px;
-            left: 50%;
-            transform: translateX(-50%);
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            z-index: 200;
-            pointer-events: none;
-        }
-
-        .toast-stack .app-toast {
-            position: static;
-            transform: none;
-            opacity: 1;
-            pointer-events: auto;
-        }
-    </style>
-</head>
-
-<body class="app-page">
-    <header class="app-topbar">
-        <div class="app-topbar-inner">
-            <a href="{% url 'users:dashboard' %}" class="app-brand">
-                <span class="app-brand-mark"><i class="fas fa-robot"></i></span>
-                Mathia
-            </a>
-            <nav class="app-nav" aria-label="Primary">
-                <a class="app-nav-link" href="{% url 'users:dashboard' %}">
-                    <i class="fas fa-home"></i><span class="nav-label">Dashboard</span>
-                </a>
-                <a class="app-nav-link" href="{% url 'payments:wallet_dashboard' %}">
-                    <i class="fas fa-wallet"></i><span class="nav-label">Wallet</span>
-                </a>
-                <a class="app-nav-link" href="{% url 'users:settings' %}">
-                    <i class="fas fa-plug"></i><span class="nav-label">Settings</span>
-                </a>
-                <a class="app-nav-link active" href="{% url 'workflows:workflows_list' %}" aria-current="page">
-                    <i class="fas fa-diagram-project"></i><span class="nav-label">Automations</span>
-                </a>
-            </nav>
-            <div class="app-topbar-actions">
-                <button class="app-icon-btn" id="themeToggle" aria-label="Toggle dark mode">
-                    <i class="fas fa-moon"></i>
-                </button>
-                <a class="app-icon-btn" href="{% url 'users:logout' %}" title="Sign out" aria-label="Sign out">
-                    <i class="fas fa-sign-out-alt"></i>
-                </a>
-            </div>
+{% block content %}
+<div class="app-header">
+    <div>
+        <div class="app-eyebrow">
+            <a href="{% url 'workflows:workflows_list' %}" style="color: inherit; text-decoration: none;">Automations</a>
+            &nbsp;/&nbsp; {{ workflow.name }}
         </div>
-    </header>
-
-    <main class="app-container">
-        <div class="app-header">
-            <div>
-                <div class="app-eyebrow">
-                    <a href="{% url 'workflows:workflows_list' %}" style="color: inherit; text-decoration: none;">Automations</a>
-                    &nbsp;/&nbsp; {{ workflow.name }}
-                </div>
-                <h1 class="app-title">Run history</h1>
-                <p class="app-subtitle">{{ workflow.execution_count }} run{{ workflow.execution_count|pluralize }} recorded.</p>
-            </div>
-            <div class="app-header-actions">
-                {% if workflow.status == "active" %}
-                <form method="post" action="{% url 'workflows:run_workflow' workflow.id %}">
-                    {% csrf_token %}
-                    <button class="app-btn app-btn-primary" type="submit">
-                        <i class="fas fa-play"></i> Run now
-                    </button>
-                </form>
-                {% endif %}
-            </div>
-        </div>
-
-        <div class="app-tabs">
-            <a class="app-tab{% if not status_filter %} active{% endif %}" href="{% url 'workflows:workflow_executions' workflow.id %}">All</a>
-            {% for value, label in status_choices %}
-            <a class="app-tab{% if status_filter == value %} active{% endif %}" href="?status={{ value }}">{{ label }}</a>
-            {% endfor %}
-        </div>
-
-        {% if executions %}
-        <div class="exec-grid">
-            {% for execution in executions %}
-            <a class="exec-row" href="{% url 'workflows:execution_detail' execution.id %}">
-                <span class="exec-id">#{{ execution.id }}</span>
-                <div class="exec-cells">
-                    <div class="cell">
-                        <span class="cell-label">Status</span>
-                        <span>
-                            {% if execution.status == "completed" %}
-                            <span class="app-pill app-pill-success">Completed</span>
-                            {% elif execution.status == "running" %}
-                            <span class="app-pill app-pill-info">Running</span>
-                            {% elif execution.status == "waiting" %}
-                            <span class="app-pill app-pill-warning">Waiting</span>
-                            {% elif execution.status == "failed" %}
-                            <span class="app-pill app-pill-destructive">Failed</span>
-                            {% else %}
-                            <span class="app-pill app-pill-muted">{{ execution.get_status_display }}</span>
-                            {% endif %}
-                        </span>
-                    </div>
-                    <div class="cell">
-                        <span class="cell-label">Current step</span>
-                        <span class="cell-value{% if not execution.current_step %} app-meta{% endif %}">{{ execution.current_step|default:"-" }}</span>
-                    </div>
-                    <div class="cell">
-                        <span class="cell-label">Trigger</span>
-                        <span class="cell-value">{{ execution.trigger_type }}</span>
-                    </div>
-                    <div class="cell">
-                        <span class="cell-label">Started</span>
-                        <span class="cell-value">{{ execution.started_at|naturaltime }}</span>
-                    </div>
-                    <div class="cell">
-                        <span class="cell-label">Finished</span>
-                        <span class="cell-value">{{ execution.completed_at|naturaltime|default:"-" }}</span>
-                    </div>
-                </div>
-                <i class="fas fa-chevron-right app-meta"></i>
-            </a>
-            {% endfor %}
-        </div>
-        {% else %}
-        <section class="app-card">
-            <div class="app-empty">
-                <div class="app-empty-icon"><i class="fas fa-list"></i></div>
-                <h2 class="app-empty-title">
-                    {% if status_filter %}No {{ status_filter }} runs{% else %}No runs yet{% endif %}
-                </h2>
-                <p class="app-empty-text">
-                    {% if status_filter %}
-                    There are no runs with this status. Try another filter.
-                    {% else %}
-                    Run this workflow to see its execution history here.
-                    {% endif %}
-                </p>
-            </div>
-        </section>
-        {% endif %}
-    </main>
-
-    {% if messages %}
-    <div class="toast-stack">
-        {% for message in messages %}
-        <div class="app-toast show" role="status" data-auto-dismiss>{{ message }}</div>
-        {% endfor %}
+        <h1 class="app-title">Run history</h1>
+        <p class="app-subtitle">{{ workflow.execution_count }} run{{ workflow.execution_count|pluralize }} recorded.</p>
     </div>
-    {% endif %}
+    <div class="app-header-actions">
+        {% if workflow.status == "active" %}
+        <form method="post" action="{% url 'workflows:run_workflow' workflow.id %}">
+            {% csrf_token %}
+            <button class="app-btn app-btn-primary" type="submit">
+                <i class="fas fa-play"></i> Run now
+            </button>
+        </form>
+        {% endif %}
+    </div>
+</div>
 
-    <script src="{% static 'js/main.js' %}"></script>
-    <script>
-        (function () {
-            document.querySelectorAll('[data-auto-dismiss]').forEach((el) => {
-                setTimeout(() => {
-                    el.style.opacity = '0';
-                    el.style.transform = 'translateY(8px)';
-                    setTimeout(() => el.remove(), 300);
-                }, 3600);
-            });
-            const themeToggle = document.getElementById('themeToggle');
-            if (themeToggle) {
-                themeToggle.addEventListener('click', () => {
-                    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-                    const next = isDark ? 'light' : 'dark';
-                    document.documentElement.setAttribute('data-theme', next);
-                    document.body.setAttribute('data-theme', next);
-                    document.body.classList.toggle('dark-mode', next === 'dark');
-                    try { localStorage.setItem('theme', next); } catch (e) { /* storage unavailable */ }
-                    const icon = themeToggle.querySelector('i');
-                    if (icon) icon.className = next === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
-                });
-                if (localStorage.getItem('theme') === 'dark') {
-                    themeToggle.querySelector('i').className = 'fas fa-sun';
-                }
-            }
-        })();
-    </script>
-</body>
+<div class="app-tabs">
+    <a class="app-tab{% if not status_filter %} active{% endif %}" href="{% url 'workflows:workflow_executions' workflow.id %}">All</a>
+    {% for value, label in status_choices %}
+    <a class="app-tab{% if status_filter == value %} active{% endif %}" href="?status={{ value }}">{{ label }}</a>
+    {% endfor %}
+</div>
 
-</html>
+{% if executions %}
+<div class="exec-grid">
+    {% for execution in executions %}
+    <a class="exec-card" href="{% url 'workflows:execution_detail' execution.id %}">
+        <span class="exec-id">#{{ execution.id }}</span>
+        <div class="exec-cells">
+            <div class="cell">
+                <span class="cell-label">Status</span>
+                <span>
+                    {% if execution.status == "completed" %}
+                    <span class="app-pill app-pill-success">Completed</span>
+                    {% elif execution.status == "running" %}
+                    <span class="app-pill app-pill-info">Running</span>
+                    {% elif execution.status == "waiting" %}
+                    <span class="app-pill app-pill-warning">Waiting</span>
+                    {% elif execution.status == "failed" %}
+                    <span class="app-pill app-pill-destructive">Failed</span>
+                    {% else %}
+                    <span class="app-pill app-pill-muted">{{ execution.get_status_display }}</span>
+                    {% endif %}
+                </span>
+            </div>
+            <div class="cell">
+                <span class="cell-label">Current step</span>
+                <span class="cell-value{% if not execution.current_step %} app-meta{% endif %}">{{ execution.current_step|default:"-" }}</span>
+            </div>
+            <div class="cell">
+                <span class="cell-label">Trigger</span>
+                <span class="cell-value">{{ execution.trigger_type }}</span>
+            </div>
+            <div class="cell">
+                <span class="cell-label">Started</span>
+                <span class="cell-value">{{ execution.started_at|naturaltime }}</span>
+            </div>
+            <div class="cell">
+                <span class="cell-label">Finished</span>
+                <span class="cell-value">{{ execution.completed_at|naturaltime|default:"-" }}</span>
+            </div>
+        </div>
+        <i class="fas fa-chevron-right app-meta"></i>
+    </a>
+    {% endfor %}
+</div>
+{% else %}
+<section class="app-card">
+    <div class="app-empty">
+        <div class="app-empty-icon"><i class="fas fa-list"></i></div>
+        <h2 class="app-empty-title">
+            {% if status_filter %}No {{ status_filter }} runs{% else %}No runs yet{% endif %}
+        </h2>
+        <p class="app-empty-text">
+            {% if status_filter %}
+            There are no runs with this status. Try another filter.
+            {% else %}
+            Run this workflow to see its execution history here.
+            {% endif %}
+        </p>
+    </div>
+</section>
+{% endif %}
+
+{% if messages %}
+<div class="toast-stack">
+    {% for message in messages %}
+    <div class="app-toast show" role="status" data-auto-dismiss>{{ message }}</div>
+    {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

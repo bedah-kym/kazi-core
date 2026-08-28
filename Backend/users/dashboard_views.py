@@ -17,11 +17,7 @@ from users.decorators import workspace_required
 @workspace_required
 def dashboard(request):
     """Render the dashboard command center (data hydrates via the API)."""
-    context = {
-        'active_nav': 'dashboard',
-        'workspace': request.user.workspace,
-    }
-    return render(request, 'users/dashboard.html', context)
+    return render(request, 'users/dashboard.html')
 
 
 def _room_display_name(room, members, current_user):

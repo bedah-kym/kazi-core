@@ -1,538 +1,258 @@
+{% extends "users/base_app.html" %}
 {% load static %}
 {% load humanize %}
-<!DOCTYPE html>
-<html lang="en">
 
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Run #{{ execution.id }} of {{ workflow.name }}.">
-    <title>Run #{{ execution.id }} - {{ workflow.name }} - Mathia</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-    <link href="{% static 'css/app.css' %}" rel="stylesheet">
-    <link rel="icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
-    <style>
-        .detail-grid {
-            display: grid;
-            grid-template-columns: minmax(0, 1.5fr) minmax(280px, 1fr);
-            gap: 16px;
-            align-items: start;
-        }
+{% block title %}Run #{{ execution.id }} - {{ workflow.name }} - Mathia{% endblock %}
 
-        @media (max-width: 860px) {
-            .detail-grid {
-                grid-template-columns: 1fr;
-            }
-        }
+{% block meta_description %}Run #{{ execution.id }} of {{ workflow.name }}.{% endblock %}
 
-        .panel-body {
-            padding: 16px 18px;
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-        }
+{% block breadcrumb %}
+<a href="{% url 'users:dashboard' %}">Dashboard</a><span class="crumb-sep">&#8250;</span><a href="{% url 'workflows:workflows_list' %}">Automations</a><span class="crumb-sep">&#8250;</span><a href="{% url 'workflows:workflow_executions' workflow.id %}">{{ workflow.name }}</a><span class="crumb-sep">&#8250;</span><span class="crumb-current">Run #{{ execution.id }}</span>
+{% endblock %}
 
-        .kv {
-            display: flex;
-            justify-content: space-between;
-            gap: 14px;
-            font-size: 13px;
-        }
+{% block head %}
+<link href="{% static 'css/page-workflows.css' %}" rel="stylesheet">
+{% endblock %}
 
-        .kv-label {
-            color: hsl(var(--muted-foreground));
-            flex-shrink: 0;
-        }
-
-        .kv-value {
-            text-align: right;
-            overflow-wrap: anywhere;
-        }
-
-        .attempts-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 13px;
-        }
-
-        .attempts-table th,
-        .attempts-table td {
-            text-align: left;
-            padding: 7px 10px;
-            border-bottom: 1px solid hsl(var(--border));
-        }
-
-        .attempts-table th {
-            font-size: 11px;
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
-            color: hsl(var(--muted-foreground));
-        }
-
-        .attempts-table tr:last-child td {
-            border-bottom: none;
-        }
-
-        .failure-box {
-            background: color-mix(in srgb, hsl(var(--destructive)) 8%, transparent);
-            border: 1px solid color-mix(in srgb, hsl(var(--destructive)) 30%, transparent);
-            border-radius: var(--radius);
-            padding: 14px 16px;
-        }
-
-        .failure-box h3 {
-            font-size: 13px;
-            font-weight: 600;
-            margin: 0 0 6px;
-            color: hsl(var(--destructive));
-        }
-
-        .failure-box p {
-            font-size: 13px;
-            margin: 0 0 8px;
-        }
-
-        .recovery-box {
-            background: color-mix(in srgb, hsl(var(--info)) 8%, transparent);
-            border: 1px solid color-mix(in srgb, hsl(var(--info)) 30%, transparent);
-            border-radius: var(--radius);
-            padding: 14px 16px;
-        }
-
-        .recovery-box h3 {
-            font-size: 13px;
-            font-weight: 600;
-            margin: 0 0 6px;
-            color: hsl(var(--info));
-        }
-
-        .recovery-box p {
-            font-size: 13px;
-            margin: 0;
-        }
-
-        .runtime-note {
-            font-size: 12.5px;
-            color: hsl(var(--muted-foreground));
-            background: hsl(var(--muted));
-            border-radius: 8px;
-            padding: 8px 12px;
-            display: flex;
-            gap: 8px;
-            align-items: center;
-        }
-
-        .approval-banner {
-            background: color-mix(in srgb, hsl(var(--warning)) 10%, transparent);
-            border: 1px solid color-mix(in srgb, hsl(var(--warning)) 35%, transparent);
-            border-radius: var(--radius);
-            padding: 16px 18px;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-
-        .approval-banner h3 {
-            font-size: 14px;
-            font-weight: 600;
-            margin: 0;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .approval-banner .approval-params pre {
-            background: hsl(var(--background));
-            border: 1px solid hsl(var(--border));
-            border-radius: 8px;
-            padding: 10px 12px;
-            font-size: 12px;
-            overflow-x: auto;
-            margin: 8px 0 0;
-        }
-
-        .approval-banner .approval-params summary {
-            font-size: 12.5px;
-            cursor: pointer;
-            color: hsl(var(--muted-foreground));
-        }
-
-        .form-grid {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-
-        .field {
-            display: flex;
-            flex-direction: column;
-            gap: 5px;
-        }
-
-        .field label {
-            font-size: 12px;
-            font-weight: 600;
-            color: hsl(var(--muted-foreground));
-        }
-
-        .field select,
-        .field input[type="text"] {
-            border: 1px solid hsl(var(--border));
-            border-radius: 8px;
-            background: hsl(var(--background));
-            color: hsl(var(--foreground));
-            font-size: 13px;
-            padding: 8px 10px;
-        }
-
-        .checkbox-row {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            font-size: 13px;
-        }
-
-        .toast-stack {
-            position: fixed;
-            bottom: 22px;
-            left: 50%;
-            transform: translateX(-50%);
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            z-index: 200;
-            pointer-events: none;
-        }
-
-        .toast-stack .app-toast {
-            position: static;
-            transform: none;
-            opacity: 1;
-            pointer-events: auto;
-        }
-    </style>
-</head>
-
-<body class="app-page">
-    <header class="app-topbar">
-        <div class="app-topbar-inner">
-            <a href="{% url 'users:dashboard' %}" class="app-brand">
-                <span class="app-brand-mark"><i class="fas fa-robot"></i></span>
-                Mathia
-            </a>
-            <nav class="app-nav" aria-label="Primary">
-                <a class="app-nav-link" href="{% url 'users:dashboard' %}">
-                    <i class="fas fa-home"></i><span class="nav-label">Dashboard</span>
-                </a>
-                <a class="app-nav-link" href="{% url 'payments:wallet_dashboard' %}">
-                    <i class="fas fa-wallet"></i><span class="nav-label">Wallet</span>
-                </a>
-                <a class="app-nav-link" href="{% url 'users:settings' %}">
-                    <i class="fas fa-plug"></i><span class="nav-label">Settings</span>
-                </a>
-                <a class="app-nav-link active" href="{% url 'workflows:workflows_list' %}" aria-current="page">
-                    <i class="fas fa-diagram-project"></i><span class="nav-label">Automations</span>
-                </a>
-            </nav>
-            <div class="app-topbar-actions">
-                <button class="app-icon-btn" id="themeToggle" aria-label="Toggle dark mode">
-                    <i class="fas fa-moon"></i>
-                </button>
-                <a class="app-icon-btn" href="{% url 'users:logout' %}" title="Sign out" aria-label="Sign out">
-                    <i class="fas fa-sign-out-alt"></i>
-                </a>
-            </div>
+{% block content %}
+<div class="app-header">
+    <div>
+        <div class="app-eyebrow">
+            <a href="{% url 'workflows:workflows_list' %}" style="color: inherit; text-decoration: none;">Automations</a>
+            &nbsp;/&nbsp;
+            <a href="{% url 'workflows:workflow_executions' workflow.id %}" style="color: inherit; text-decoration: none;">{{ workflow.name }}</a>
+            &nbsp;/&nbsp; Run #{{ execution.id }}
         </div>
-    </header>
+        <h1 class="app-title">
+            Run #{{ execution.id }}
+            {% if execution.status == "completed" %}
+            <span class="app-pill app-pill-success">Completed</span>
+            {% elif execution.status == "running" %}
+            <span class="app-pill app-pill-info">Running</span>
+            {% elif execution.status == "waiting" %}
+            <span class="app-pill app-pill-warning">Waiting</span>
+            {% elif execution.status == "failed" %}
+            <span class="app-pill app-pill-destructive">Failed</span>
+            {% else %}
+            <span class="app-pill app-pill-muted">{{ execution.get_status_display }}</span>
+            {% endif %}
+        </h1>
+        <p class="app-subtitle">
+            {{ execution.trigger_type|title }} trigger &middot; started {{ execution.started_at|naturaltime }}
+            {% if execution.completed_at %}&middot; finished {{ execution.completed_at|naturaltime }}{% endif %}
+        </p>
+    </div>
+    <div class="app-header-actions">
+        <a class="app-btn app-btn-outline" href="{% url 'workflows:operations_inbox' %}">
+            <i class="fas fa-inbox"></i> Inbox
+        </a>
+    </div>
+</div>
 
-    <main class="app-container">
-        <div class="app-header">
-            <div>
-                <div class="app-eyebrow">
-                    <a href="{% url 'workflows:workflows_list' %}" style="color: inherit; text-decoration: none;">Automations</a>
-                    &nbsp;/&nbsp;
-                    <a href="{% url 'workflows:workflow_executions' workflow.id %}" style="color: inherit; text-decoration: none;">{{ workflow.name }}</a>
-                    &nbsp;/&nbsp; Run #{{ execution.id }}
-                </div>
-                <h1 class="app-title">
-                    Run #{{ execution.id }}
-                    {% if execution.status == "completed" %}
-                    <span class="app-pill app-pill-success">Completed</span>
-                    {% elif execution.status == "running" %}
-                    <span class="app-pill app-pill-info">Running</span>
-                    {% elif execution.status == "waiting" %}
-                    <span class="app-pill app-pill-warning">Waiting</span>
-                    {% elif execution.status == "failed" %}
-                    <span class="app-pill app-pill-destructive">Failed</span>
-                    {% else %}
-                    <span class="app-pill app-pill-muted">{{ execution.get_status_display }}</span>
-                    {% endif %}
-                </h1>
-                <p class="app-subtitle">
-                    {{ execution.trigger_type|title }} trigger &middot; started {{ execution.started_at|naturaltime }}
-                    {% if execution.completed_at %}&middot; finished {{ execution.completed_at|naturaltime }}{% endif %}
-                </p>
-            </div>
-            <div class="app-header-actions">
-                <a class="app-btn app-btn-outline" href="{% url 'workflows:operations_inbox' %}">
-                    <i class="fas fa-inbox"></i> Inbox
-                </a>
-            </div>
-        </div>
+{% if not runtime_state %}
+<div class="runtime-note" style="margin-bottom: 16px;">
+    <i class="fas fa-cloud-slash"></i>
+    Live runtime state is unavailable (Temporal unreachable) - showing the last saved snapshot.
+</div>
+{% endif %}
 
-        {% if not runtime_state %}
-        <div class="runtime-note" style="margin-bottom: 16px;">
-            <i class="fas fa-cloud-slash"></i>
-            Live runtime state is unavailable (Temporal unreachable) - showing the last saved snapshot.
-        </div>
+{% if approval %}
+<section class="approval-banner" style="margin-bottom: 16px;" aria-label="Pending approval">
+    <h3><i class="fas fa-user-check"></i> This run is paused and waiting for your approval</h3>
+    <div>
+        <span class="app-pill app-pill-warning">Step: {{ approval.service }}{% if approval.service and approval.action %}.{% endif %}{{ approval.action }}</span>
+        {% if approval.expires_at %}
+        <span class="app-meta ms-2" data-expires="{{ approval.expires_at|date:'c' }}">
+            <i class="far fa-hourglass me-1"></i><span data-expiry-label>Expires {{ approval.expires_at|naturaltime }}</span>
+        </span>
         {% endif %}
+    </div>
+    {% if approval.approval_message %}
+    <p style="margin: 0; font-size: 13.5px;">{{ approval.approval_message }}</p>
+    {% endif %}
+    {% if approval.sanitized_params %}
+    <details class="approval-params">
+        <summary><i class="fas fa-shield-halved me-1"></i>Review what this step will do</summary>
+        <pre>{{ approval.sanitized_params|pprint }}</pre>
+    </details>
+    {% endif %}
+    <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+        <form method="post" action="{% url 'workflows:approve_execution' execution.id %}">
+            {% csrf_token %}
+            <input class="comment-input" type="text" name="comment" placeholder="Comment (optional)" maxlength="500" style="margin-right: 8px;">
+            <button class="app-btn app-btn-primary" type="submit"><i class="fas fa-check"></i> Approve</button>
+        </form>
+        <form method="post" action="{% url 'workflows:reject_execution' execution.id %}">
+            {% csrf_token %}
+            <button class="app-btn app-btn-outline" type="submit" style="border-color: var(--danger-hex); color: var(--danger-hex);">
+                <i class="fas fa-xmark"></i> Reject
+            </button>
+        </form>
+    </div>
+</section>
+{% endif %}
 
-        {% if approval %}
-        <section class="approval-banner" style="margin-bottom: 16px;" aria-label="Pending approval">
-            <h3><i class="fas fa-user-check"></i> This run is paused and waiting for your approval</h3>
-            <div>
-                <span class="app-pill app-pill-warning">Step: {{ approval.service }}{% if approval.service and approval.action %}.{% endif %}{{ approval.action }}</span>
-                {% if approval.expires_at %}
-                <span class="app-meta ms-2" data-expires="{{ approval.expires_at|date:'c' }}">
-                    <i class="far fa-hourglass me-1"></i><span data-expiry-label>Expires {{ approval.expires_at|naturaltime }}</span>
-                </span>
+<div class="detail-grid">
+    <div style="display: flex; flex-direction: column; gap: 16px;">
+        <section class="app-card" aria-labelledby="progress-title">
+            <div class="app-card-header">
+                <div>
+                    <h2 class="app-card-title" id="progress-title">Progress</h2>
+                    <p class="app-card-subtitle">Where the agent is in this run</p>
+                </div>
+            </div>
+            <div class="panel-body">
+                <div class="kv">
+                    <span class="kv-label">Current step</span>
+                    <span class="kv-value">{{ execution.current_step|default:"-" }}</span>
+                </div>
+                <div class="kv">
+                    <span class="kv-label">Last completed</span>
+                    <span class="kv-value">{{ execution.last_completed_step|default:"-" }}</span>
+                </div>
+                <div class="kv">
+                    <span class="kv-label">Waiting on</span>
+                    <span class="kv-value">{{ execution.waiting_on|default:"-" }}</span>
+                </div>
+                {% if execution.attempts %}
+                <table class="attempts-table">
+                    <thead>
+                        <tr><th>Step</th><th>Attempts</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for step_id, count in execution.attempts.items %}
+                        <tr><td class="app-mono">{{ step_id }}</td><td>{{ count }}</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
                 {% endif %}
             </div>
-            {% if approval.approval_message %}
-            <p style="margin: 0; font-size: 13.5px;">{{ approval.approval_message }}</p>
+        </section>
+
+        {% if execution.failure_summary or execution.error_message %}
+        <section class="failure-box" aria-labelledby="failure-title">
+            <h3 id="failure-title"><i class="fas fa-circle-exclamation me-1"></i>What went wrong</h3>
+            <p>{{ execution.failure_summary|default:execution.error_message }}</p>
+            {% if execution.recovery_suggestion %}
+            <div style="border: none; background: none; padding: 0;">
+                <h3 style="margin: 0 0 4px;"><i class="fas fa-lightbulb me-1"></i>Suggested recovery</h3>
+                <p style="color: var(--ink);">{{ execution.recovery_suggestion }}</p>
+            </div>
             {% endif %}
-            {% if approval.sanitized_params %}
-            <details class="approval-params">
-                <summary><i class="fas fa-shield-halved me-1"></i>Review what this step will do</summary>
-                <pre>{{ approval.sanitized_params|pprint }}</pre>
-            </details>
-            {% endif %}
-            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-                <form method="post" action="{% url 'workflows:approve_execution' execution.id %}">
+        </section>
+        {% endif %}
+
+        <section class="app-card" aria-labelledby="result-title">
+            <div class="app-card-header">
+                <h2 class="app-card-title" id="result-title">Result</h2>
+            </div>
+            <div class="panel-body">
+                {% if execution.result_summary %}
+                <p style="margin: 0; font-size: 13.5px;">{{ execution.result_summary }}</p>
+                {% elif execution.result %}
+                <pre style="background: hsl(var(--muted)); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font-size: 12px; overflow-x: auto; margin: 0;">{{ execution.result|pprint }}</pre>
+                {% else %}
+                <span class="app-meta">No result recorded yet.</span>
+                {% endif %}
+                {% if execution.receipt_ids %}
+                <div class="kv">
+                    <span class="kv-label">Action receipts</span>
+                    <span class="kv-value app-mono">{{ execution.receipt_ids|join:", " }}</span>
+                </div>
+                {% endif %}
+            </div>
+        </section>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 16px;">
+        <section class="app-card" aria-labelledby="rerun-title">
+            <div class="app-card-header">
+                <div>
+                    <h2 class="app-card-title" id="rerun-title">Rerun</h2>
+                    <p class="app-card-subtitle">Start a fresh run, optionally from a step</p>
+                </div>
+            </div>
+            <div class="panel-body">
+                <form class="form-grid" method="post" action="{% url 'workflows:rerun_execution' execution.id %}">
                     {% csrf_token %}
-                    <input class="comment-input" type="text" name="comment" placeholder="Comment (optional)" maxlength="500" style="border: 1px solid hsl(var(--border)); border-radius: 8px; background: hsl(var(--background)); color: hsl(var(--foreground)); font-size: 13px; padding: 8px 10px; min-width: 220px; margin-right: 8px;">
-                    <button class="app-btn app-btn-primary" type="submit"><i class="fas fa-check"></i> Approve</button>
+                    <div class="field">
+                        <label for="fromStep">From step</label>
+                        <select id="fromStep" name="from_step">
+                            <option value="">Entire workflow (fresh run)</option>
+                            {% for option in step_options %}
+                            <option value="{{ option.id }}">{{ option.label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <label class="checkbox-row">
+                        <input type="checkbox" name="force">
+                        <span>Skip replay-safety check (records a forced receipt)</span>
+                    </label>
+                    <button class="app-btn app-btn-primary" type="submit">
+                        <i class="fas fa-rotate-right"></i> Start rerun
+                    </button>
                 </form>
-                <form method="post" action="{% url 'workflows:reject_execution' execution.id %}">
+            </div>
+        </section>
+
+        {% if execution.status == "waiting" or execution.status == "running" or execution.status == "pending" %}
+        <section class="app-card" aria-labelledby="cancel-title">
+            <div class="app-card-header">
+                <div>
+                    <h2 class="app-card-title" id="cancel-title">Cancel run</h2>
+                    <p class="app-card-subtitle">Stops at the next safe point</p>
+                </div>
+            </div>
+            <div class="panel-body">
+                <form class="form-grid" method="post" action="{% url 'workflows:cancel_execution' execution.id %}">
                     {% csrf_token %}
-                    <button class="app-btn app-btn-outline" type="submit" style="border-color: hsl(var(--destructive)); color: hsl(var(--destructive));">
-                        <i class="fas fa-xmark"></i> Reject
+                    <div class="field">
+                        <label for="cancelReason">Reason (optional)</label>
+                        <input type="text" id="cancelReason" name="reason" maxlength="300" placeholder="Why are you stopping this run?">
+                    </div>
+                    <button class="app-btn app-btn-danger" type="submit">
+                        <i class="fas fa-ban"></i> Request cancel
                     </button>
                 </form>
             </div>
         </section>
         {% endif %}
 
-        <div class="detail-grid">
-            <div style="display: flex; flex-direction: column; gap: 16px;">
-                <section class="app-card" aria-labelledby="progress-title">
-                    <div class="app-card-header">
-                        <div>
-                            <h2 class="app-card-title" id="progress-title">Progress</h2>
-                            <p class="app-card-subtitle">Where the agent is in this run</p>
-                        </div>
-                    </div>
-                    <div class="panel-body">
-                        <div class="kv">
-                            <span class="kv-label">Current step</span>
-                            <span class="kv-value">{{ execution.current_step|default:"-" }}</span>
-                        </div>
-                        <div class="kv">
-                            <span class="kv-label">Last completed</span>
-                            <span class="kv-value">{{ execution.last_completed_step|default:"-" }}</span>
-                        </div>
-                        <div class="kv">
-                            <span class="kv-label">Waiting on</span>
-                            <span class="kv-value">{{ execution.waiting_on|default:"-" }}</span>
-                        </div>
-                        {% if execution.attempts %}
-                        <table class="attempts-table">
-                            <thead>
-                                <tr><th>Step</th><th>Attempts</th></tr>
-                            </thead>
-                            <tbody>
-                                {% for step_id, count in execution.attempts.items %}
-                                <tr><td class="app-mono">{{ step_id }}</td><td>{{ count }}</td></tr>
-                                {% endfor %}
-                            </tbody>
-                        </table>
-                        {% endif %}
-                    </div>
-                </section>
-
-                {% if execution.failure_summary or execution.error_message %}
-                <section class="failure-box" aria-labelledby="failure-title">
-                    <h3 id="failure-title"><i class="fas fa-circle-exclamation me-1"></i>What went wrong</h3>
-                    <p>{{ execution.failure_summary|default:execution.error_message }}</p>
-                    {% if execution.recovery_suggestion %}
-                    <div class="recovery-box" style="border: none; background: none; padding: 0;">
-                        <h3 style="margin: 0 0 4px;"><i class="fas fa-lightbulb me-1"></i>Suggested recovery</h3>
-                        <p style="color: hsl(var(--foreground));">{{ execution.recovery_suggestion }}</p>
-                    </div>
-                    {% endif %}
-                </section>
-                {% endif %}
-
-                <section class="app-card" aria-labelledby="result-title">
-                    <div class="app-card-header">
-                        <h2 class="app-card-title" id="result-title">Result</h2>
-                    </div>
-                    <div class="panel-body">
-                        {% if execution.result_summary %}
-                        <p style="margin: 0; font-size: 13.5px;">{{ execution.result_summary }}</p>
-                        {% elif execution.result %}
-                        <pre style="background: hsl(var(--muted)); border: 1px solid hsl(var(--border)); border-radius: 8px; padding: 10px 12px; font-size: 12px; overflow-x: auto; margin: 0;">{{ execution.result|pprint }}</pre>
-                        {% else %}
-                        <span class="app-meta">No result recorded yet.</span>
-                        {% endif %}
-                        {% if execution.receipt_ids %}
-                        <div class="kv">
-                            <span class="kv-label">Action receipts</span>
-                            <span class="kv-value app-mono">{{ execution.receipt_ids|join:", " }}</span>
-                        </div>
-                        {% endif %}
-                    </div>
-                </section>
+        <section class="app-card" aria-labelledby="meta-title">
+            <div class="app-card-header">
+                <h2 class="app-card-title" id="meta-title">Details</h2>
             </div>
-
-            <div style="display: flex; flex-direction: column; gap: 16px;">
-                <section class="app-card" aria-labelledby="rerun-title">
-                    <div class="app-card-header">
-                        <div>
-                            <h2 class="app-card-title" id="rerun-title">Rerun</h2>
-                            <p class="app-card-subtitle">Start a fresh run, optionally from a step</p>
-                        </div>
-                    </div>
-                    <div class="panel-body">
-                        <form class="form-grid" method="post" action="{% url 'workflows:rerun_execution' execution.id %}">
-                            {% csrf_token %}
-                            <div class="field">
-                                <label for="fromStep">From step</label>
-                                <select id="fromStep" name="from_step">
-                                    <option value="">Entire workflow (fresh run)</option>
-                                    {% for option in step_options %}
-                                    <option value="{{ option.id }}">{{ option.label }}</option>
-                                    {% endfor %}
-                                </select>
-                            </div>
-                            <label class="checkbox-row">
-                                <input type="checkbox" name="force">
-                                <span>Skip replay-safety check (records a forced receipt)</span>
-                            </label>
-                            <button class="app-btn app-btn-primary" type="submit">
-                                <i class="fas fa-rotate-right"></i> Start rerun
-                            </button>
-                        </form>
-                    </div>
-                </section>
-
-                {% if execution.status == "waiting" or execution.status == "running" or execution.status == "pending" %}
-                <section class="app-card" aria-labelledby="cancel-title">
-                    <div class="app-card-header">
-                        <div>
-                            <h2 class="app-card-title" id="cancel-title">Cancel run</h2>
-                            <p class="app-card-subtitle">Stops at the next safe point</p>
-                        </div>
-                    </div>
-                    <div class="panel-body">
-                        <form class="form-grid" method="post" action="{% url 'workflows:cancel_execution' execution.id %}">
-                            {% csrf_token %}
-                            <div class="field">
-                                <label for="cancelReason">Reason (optional)</label>
-                                <input type="text" id="cancelReason" name="reason" maxlength="300" placeholder="Why are you stopping this run?">
-                            </div>
-                            <button class="app-btn app-btn-danger" type="submit">
-                                <i class="fas fa-ban"></i> Request cancel
-                            </button>
-                        </form>
-                    </div>
-                </section>
-                {% endif %}
-
-                <section class="app-card" aria-labelledby="meta-title">
-                    <div class="app-card-header">
-                        <h2 class="app-card-title" id="meta-title">Details</h2>
-                    </div>
-                    <div class="panel-body">
-                        <div class="kv">
-                            <span class="kv-label">Workflow</span>
-                            <span class="kv-value">{{ workflow.name }}</span>
-                        </div>
-                        <div class="kv">
-                            <span class="kv-label">Trigger</span>
-                            <span class="kv-value">{{ execution.trigger_type }}</span>
-                        </div>
-                        <div class="kv">
-                            <span class="kv-label">Temporal ID</span>
-                            <span class="kv-value app-mono">{{ execution.temporal_workflow_id|default:"-" }}</span>
-                        </div>
-                        <div class="kv">
-                            <span class="kv-label">Run ID</span>
-                            <span class="kv-value app-mono">{{ execution.temporal_run_id|default:"-" }}</span>
-                        </div>
-                    </div>
-                </section>
+            <div class="panel-body">
+                <div class="kv">
+                    <span class="kv-label">Workflow</span>
+                    <span class="kv-value">{{ workflow.name }}</span>
+                </div>
+                <div class="kv">
+                    <span class="kv-label">Trigger</span>
+                    <span class="kv-value">{{ execution.trigger_type }}</span>
+                </div>
+                <div class="kv">
+                    <span class="kv-label">Temporal ID</span>
+                    <span class="kv-value app-mono">{{ execution.temporal_workflow_id|default:"-" }}</span>
+                </div>
+                <div class="kv">
+                    <span class="kv-label">Run ID</span>
+                    <span class="kv-value app-mono">{{ execution.temporal_run_id|default:"-" }}</span>
+                </div>
             </div>
-        </div>
-    </main>
-
-    {% if messages %}
-    <div class="toast-stack">
-        {% for message in messages %}
-        <div class="app-toast show" role="status" data-auto-dismiss>{{ message }}</div>
-        {% endfor %}
+        </section>
     </div>
-    {% endif %}
+</div>
 
-    <script src="{% static 'js/main.js' %}"></script>
-    <script>
-        (function () {
-            document.querySelectorAll('[data-auto-dismiss]').forEach((el) => {
-                setTimeout(() => {
-                    el.style.opacity = '0';
-                    el.style.transform = 'translateY(8px)';
-                    setTimeout(() => el.remove(), 300);
-                }, 3600);
-            });
+{% if messages %}
+<div class="toast-stack">
+    {% for message in messages %}
+    <div class="app-toast show" role="status" data-auto-dismiss>{{ message }}</div>
+    {% endfor %}
+</div>
+{% endif %}
+{% endblock %}
 
-            document.querySelectorAll('[data-expires]').forEach((el) => {
-                const label = el.querySelector('[data-expiry-label]');
-                if (!label) return;
-                const expiresAt = new Date(el.dataset.expires).getTime();
-                const tick = () => {
-                    const left = expiresAt - Date.now();
-                    if (left <= 0) {
-                        label.textContent = 'Expired';
-                        return;
-                    }
-                    const minutes = Math.floor(left / 60000);
-                    label.textContent = minutes <= 0 ? 'Expiring in under a minute' : `Expires in ${minutes} min`;
-                };
-                tick();
-                setInterval(tick, 30000);
-            });
-
-            const themeToggle = document.getElementById('themeToggle');
-            if (themeToggle) {
-                themeToggle.addEventListener('click', () => {
-                    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-                    const next = isDark ? 'light' : 'dark';
-                    document.documentElement.setAttribute('data-theme', next);
-                    document.body.setAttribute('data-theme', next);
-                    document.body.classList.toggle('dark-mode', next === 'dark');
-                    try { localStorage.setItem('theme', next); } catch (e) { /* storage unavailable */ }
-                    const icon = themeToggle.querySelector('i');
-                    if (icon) icon.className = next === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
-                });
-                if (localStorage.getItem('theme') === 'dark') {
-                    themeToggle.querySelector('i').className = 'fas fa-sun';
-                }
-            }
-        })();
-    </script>
-</body>
-
-</html>
+{% block scripts %}
+<script src="{% static 'js/page-workflows.js' %}"></script>
+{% endblock %}

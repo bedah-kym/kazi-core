@@ -24,13 +24,15 @@
     --ink-soft: #6e6a5e;
     --line: #e5e0d5;
 
-    --success: #2f855a;
-    --success-bg: rgba(72, 150, 101, 0.14);
-    --error: #c05621;
-    --danger: #c85c3f;
+    --success-hex: #2f855a;
+    --success-soft: rgba(72, 150, 101, 0.14);
+    --warning-hex: #b57a1f;
+    --warning-soft: rgba(217, 150, 60, 0.14);
+    --danger-hex: #c85c3f;
+    --danger-soft: rgba(200, 92, 63, 0.14);
 
-    /* shadcn-style HSL tokens (warm) — consumed by app.css /
-       context-panel.css components via hsl(var(--x)) */
+    /* shadcn-style HSL tokens (warm) — consumed by component
+       classes via hsl(var(--x)) */
     --background: 40 25% 97%;
     --foreground: 45 20% 20%;
     --card: 40 33% 99%;
@@ -50,6 +52,9 @@
     --border: 40 18% 88%;
     --input: 40 18% 88%;
     --ring: 14 56% 60%;
+    --success: 142 44% 46%;
+    --warning: 38 72% 47%;
+    --info: 210 60% 48%;
 
     --radius: 0.625rem;
     --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
@@ -93,6 +98,15 @@ body.dark-mode {
     --border: 40 6% 24%;
     --input: 40 6% 24%;
     --ring: 14 56% 60%;
+    --success: 142 44% 52%;
+    --warning: 38 80% 55%;
+    --info: 210 60% 62%;
+    --success-hex: #63b581;
+    --success-soft: rgba(72, 150, 101, 0.22);
+    --warning-hex: #d9a63c;
+    --warning-soft: rgba(217, 150, 60, 0.20);
+    --danger-hex: #e08a68;
+    --danger-soft: rgba(200, 92, 63, 0.22);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1740,6 +1754,347 @@ body.dark-mode .context-section-content::-webkit-scrollbar-thumb {
 }
 
 /* ============================================================
+   APP COMPONENTS (buttons, cards, pills, tabs, empty, toast)
+   Warm-styled equivalents of the old shadcn app.css components.
+   ============================================================ */
+
+.app-header {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+}
+
+.app-eyebrow {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: hsl(var(--muted-foreground));
+    margin-bottom: 6px;
+}
+
+.app-title {
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    margin: 0;
+    color: var(--ink);
+}
+
+.app-subtitle {
+    color: hsl(var(--muted-foreground));
+    font-size: 13.5px;
+    margin: 6px 0 0;
+}
+
+.app-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.app-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 38px;
+    padding: 0 16px;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    font-family: var(--font-sans);
+    font-size: 13.5px;
+    font-weight: 600;
+    cursor: pointer;
+    text-decoration: none;
+    transition: background 140ms ease, border-color 140ms ease,
+        color 140ms ease, transform 140ms ease;
+}
+
+.app-btn:active {
+    transform: translateY(1px);
+}
+
+.app-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.app-btn-primary {
+    background: var(--clay);
+    color: #fff;
+}
+
+.app-btn-primary:hover {
+    background: var(--clay-strong);
+    color: #fff;
+}
+
+.app-btn-outline {
+    background: transparent;
+    border-color: var(--line);
+    color: var(--ink);
+}
+
+.app-btn-outline:hover {
+    background: var(--clay-tint);
+    border-color: var(--clay);
+    color: var(--ink);
+}
+
+.app-btn-ghost {
+    background: transparent;
+    color: var(--ink-soft);
+}
+
+.app-btn-ghost:hover {
+    background: var(--clay-tint);
+    color: var(--ink);
+}
+
+.app-btn-sm {
+    min-height: 30px;
+    padding: 0 12px;
+    font-size: 12.5px;
+}
+
+.app-btn-danger {
+    background: var(--danger-hex);
+    color: #fff;
+}
+
+.app-btn-danger:hover {
+    background: var(--clay-strong);
+}
+
+.app-card {
+    background: var(--raised);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+}
+
+.app-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--line);
+}
+
+.app-card-title {
+    font-size: 14px;
+    font-weight: 600;
+    margin: 0;
+}
+
+.app-card-subtitle {
+    font-size: 12px;
+    color: var(--ink-soft);
+    margin: 2px 0 0;
+}
+
+.app-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.app-pill-info {
+    background: color-mix(in srgb, hsl(var(--info)) 14%, transparent);
+    color: hsl(var(--info));
+}
+
+.app-pill-success {
+    background: var(--success-soft);
+    color: var(--success-hex);
+}
+
+.app-pill-warning {
+    background: var(--warning-soft);
+    color: var(--warning-hex);
+}
+
+.app-pill-destructive {
+    background: var(--danger-soft);
+    color: var(--danger-hex);
+}
+
+.app-pill-muted {
+    background: hsl(var(--muted));
+    color: hsl(var(--muted-foreground));
+}
+
+.app-tabs {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 18px;
+    overflow-x: auto;
+}
+
+.app-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 10px 14px;
+    font-size: 13.5px;
+    font-weight: 500;
+    color: hsl(var(--muted-foreground));
+    text-decoration: none;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    white-space: nowrap;
+    transition: color 140ms ease, border-color 140ms ease;
+}
+
+.app-tab:hover {
+    color: var(--ink);
+}
+
+.app-tab.active {
+    color: var(--ink);
+    border-bottom-color: var(--clay);
+}
+
+.app-tab-count {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: hsl(var(--muted));
+    color: hsl(var(--muted-foreground));
+}
+
+.app-tab.active .app-tab-count {
+    background: var(--clay);
+    color: #fff;
+}
+
+.app-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 64px 24px;
+    gap: 8px;
+}
+
+.app-empty-icon {
+    width: 52px;
+    height: 52px;
+    border-radius: 14px;
+    background: hsl(var(--muted));
+    color: hsl(var(--muted-foreground));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    margin-bottom: 8px;
+}
+
+.app-empty-title {
+    font-size: 15px;
+    font-weight: 600;
+    margin: 0;
+}
+
+.app-empty-text {
+    font-size: 13px;
+    color: hsl(var(--muted-foreground));
+    max-width: 380px;
+    margin: 0;
+}
+
+.app-meta {
+    font-size: 12.5px;
+    color: hsl(var(--muted-foreground));
+}
+
+.app-mono {
+    font-family: var(--font-mono);
+    font-size: 0.92em;
+}
+
+.app-divider {
+    border: 0;
+    border-top: 1px solid var(--line);
+    margin: 0;
+}
+
+.app-toast {
+    position: fixed;
+    bottom: 22px;
+    left: 50%;
+    transform: translateX(-50%) translateY(16px);
+    background: var(--ink);
+    color: var(--paper);
+    padding: 10px 18px;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 500;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 180ms ease, transform 180ms ease;
+    z-index: 200;
+}
+
+.app-toast.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}
+
+/* Bootstrap button harmonization (clay) — applies across the app */
+.btn-primary {
+    background: var(--clay);
+    border-color: var(--clay);
+    color: #fff;
+}
+
+.btn-primary:hover,
+.btn-primary:focus,
+.btn-primary:active {
+    background: var(--clay-strong);
+    border-color: var(--clay-strong);
+    color: #fff;
+}
+
+.btn-outline-primary {
+    color: var(--clay);
+    border-color: var(--clay);
+}
+
+.btn-outline-primary:hover {
+    background: var(--clay);
+    border-color: var(--clay);
+    color: #fff;
+}
+
+.btn-outline-secondary {
+    border-color: var(--line);
+    color: var(--ink);
+}
+
+.btn-outline-secondary:hover {
+    background: var(--clay-tint);
+    border-color: var(--clay);
+    color: var(--ink);
+}
+
+/* ============================================================
    DASHBOARD WIDGETS
    ============================================================ */
 
@@ -1846,13 +2201,13 @@ a.dash-stat:hover {
 }
 
 .dash-stat-icon.success {
-    background: var(--success-bg);
-    color: var(--success);
+    background: var(--success-soft);
+    color: var(--success-hex);
 }
 
 .dash-stat-icon.warning {
-    background: rgba(217, 150, 60, 0.14);
-    color: #b57a1f;
+    background: var(--warning-soft);
+    color: var(--warning-hex);
 }
 
 .dash-stat-value {
@@ -1966,23 +2321,23 @@ a.dash-stat:hover {
 }
 
 .dash-status-success {
-    background: var(--success-bg);
-    color: var(--success);
+    background: var(--success-soft);
+    color: var(--success-hex);
 }
 
 .dash-status-warning {
-    background: rgba(217, 150, 60, 0.14);
-    color: #b57a1f;
+    background: var(--warning-soft);
+    color: var(--warning-hex);
 }
 
 .dash-status-error {
-    background: rgba(200, 92, 63, 0.14);
-    color: var(--danger);
+    background: var(--danger-soft);
+    color: var(--danger-hex);
 }
 
 .dash-status-muted {
-    background: var(--muted);
-    color: var(--muted-foreground);
+    background: hsl(var(--muted));
+    color: hsl(var(--muted-foreground));
 }
 
 .dash-status-active {
@@ -2022,7 +2377,7 @@ a.dash-stat:hover {
 .dash-quota-bar {
     height: 7px;
     border-radius: 999px;
-    background: var(--muted);
+    background: hsl(var(--muted));
     overflow: hidden;
 }
 
@@ -2034,19 +2389,19 @@ a.dash-stat:hover {
 }
 
 .dash-quota-fill.good {
-    background: var(--success);
+    background: var(--success-hex);
 }
 
 .dash-quota-fill.warning {
-    background: #d9963c;
+    background: var(--warning-hex);
 }
 
 .dash-quota-fill.critical {
-    background: #d97757;
+    background: var(--clay);
 }
 
 .dash-quota-fill.exhausted {
-    background: var(--danger);
+    background: var(--danger-hex);
 }
 
 /* Quick launch tiles */
@@ -2139,7 +2494,7 @@ a.dash-stat:hover {
     width: 7px;
     height: 7px;
     border-radius: 50%;
-    background: var(--success);
+    background: var(--success-hex);
     animation: dash-pulse 1.6s ease-in-out infinite;
 }
 

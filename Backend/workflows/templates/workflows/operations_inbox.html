@@ -1,503 +1,231 @@
+{% extends "users/base_app.html" %}
 {% load static %}
 {% load humanize %}
-<!DOCTYPE html>
-<html lang="en">
 
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Operations inbox - approvals and runs that need your attention.">
-    <title>Operations Inbox - Mathia</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-    <link href="{% static 'css/app.css' %}" rel="stylesheet">
-    <link rel="icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
-    <style>
-        .inbox-stack {
-            display: flex;
-            flex-direction: column;
-            gap: 22px;
-        }
+{% block title %}Operations Inbox - Mathia{% endblock %}
 
-        .inbox-section-header {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            margin-bottom: 12px;
-        }
+{% block meta_description %}Operations inbox - approvals and runs that need your attention.{% endblock %}
 
-        .inbox-section-title {
-            font-size: 14px;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
-            color: hsl(var(--muted-foreground));
-            margin: 0;
-        }
+{% block breadcrumb %}
+<a href="{% url 'users:dashboard' %}">Dashboard</a><span class="crumb-sep">&#8250;</span><a href="{% url 'workflows:workflows_list' %}">Automations</a><span class="crumb-sep">&#8250;</span><span class="crumb-current">Inbox</span>
+{% endblock %}
 
-        .count-badge {
-            font-size: 11px;
-            font-weight: 600;
-            background: hsl(var(--foreground));
-            color: hsl(var(--background));
-            border-radius: 999px;
-            padding: 2px 9px;
-        }
+{% block head %}
+<link href="{% static 'css/page-workflows.css' %}" rel="stylesheet">
+{% endblock %}
 
-        .approval-card {
-            padding: 18px;
-            border-left: 3px solid hsl(var(--warning));
-        }
-
-        .approval-head {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 12px;
-            flex-wrap: wrap;
-        }
-
-        .approval-step {
-            font-family: var(--font-mono);
-            font-size: 13px;
-            font-weight: 600;
-        }
-
-        .approval-message {
-            font-size: 13.5px;
-            color: hsl(var(--muted-foreground));
-            margin: 8px 0 0;
-        }
-
-        .approval-expiry {
-            font-size: 12px;
-            color: hsl(var(--muted-foreground));
-        }
-
-        .approval-expiry.soon {
-            color: hsl(var(--warning));
-            font-weight: 600;
-        }
-
-        .approval-expiry.expired {
-            color: hsl(var(--destructive));
-            font-weight: 600;
-        }
-
-        .approval-params {
-            margin-top: 10px;
-        }
-
-        .approval-params summary {
-            font-size: 12.5px;
-            color: hsl(var(--muted-foreground));
-            cursor: pointer;
-            user-select: none;
-        }
-
-        .approval-params pre {
-            background: hsl(var(--muted));
-            border: 1px solid hsl(var(--border));
-            border-radius: 8px;
-            padding: 10px 12px;
-            font-size: 12px;
-            overflow-x: auto;
-            margin: 8px 0 0;
-        }
-
-        .approval-actions {
-            display: flex;
-            gap: 8px;
-            margin-top: 14px;
-            flex-wrap: wrap;
-            align-items: stretch;
-        }
-
-        .approval-actions form {
-            display: flex;
-            gap: 8px;
-            align-items: center;
-        }
-
-        .comment-input {
-            border: 1px solid hsl(var(--border));
-            border-radius: 8px;
-            background: hsl(var(--background));
-            color: hsl(var(--foreground));
-            font-size: 13px;
-            padding: 8px 10px;
-            min-width: 220px;
-        }
-
-        .exec-row {
-            display: flex;
-            align-items: center;
-            gap: 14px;
-            padding: 14px 18px;
-            border-bottom: 1px solid hsl(var(--border));
-            flex-wrap: wrap;
-        }
-
-        .exec-row:last-child {
-            border-bottom: none;
-        }
-
-        .exec-main {
-            flex: 1;
-            min-width: 200px;
-        }
-
-        .exec-title {
-            font-size: 14px;
-            font-weight: 600;
-        }
-
-        .exec-failure {
-            font-size: 13px;
-            color: hsl(var(--muted-foreground));
-            margin-top: 3px;
-        }
-
-        .exec-recovery {
-            font-size: 12.5px;
-            color: hsl(var(--info));
-            margin-top: 3px;
-        }
-
-        .exec-actions {
-            display: flex;
-            gap: 6px;
-            flex-shrink: 0;
-        }
-
-        .empty-row {
-            padding: 22px 18px;
-            font-size: 13px;
-            color: hsl(var(--muted-foreground));
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .toast-stack {
-            position: fixed;
-            bottom: 22px;
-            left: 50%;
-            transform: translateX(-50%);
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            z-index: 200;
-            pointer-events: none;
-        }
-
-        .toast-stack .app-toast {
-            position: static;
-            transform: none;
-            opacity: 1;
-            pointer-events: auto;
-        }
-    </style>
-</head>
-
-<body class="app-page">
-    <header class="app-topbar">
-        <div class="app-topbar-inner">
-            <a href="{% url 'users:dashboard' %}" class="app-brand">
-                <span class="app-brand-mark"><i class="fas fa-robot"></i></span>
-                Mathia
-            </a>
-            <nav class="app-nav" aria-label="Primary">
-                <a class="app-nav-link" href="{% url 'users:dashboard' %}">
-                    <i class="fas fa-home"></i><span class="nav-label">Dashboard</span>
-                </a>
-                <a class="app-nav-link" href="{% url 'payments:wallet_dashboard' %}">
-                    <i class="fas fa-wallet"></i><span class="nav-label">Wallet</span>
-                </a>
-                <a class="app-nav-link" href="{% url 'users:settings' %}">
-                    <i class="fas fa-plug"></i><span class="nav-label">Settings</span>
-                </a>
-                <a class="app-nav-link active" href="{% url 'workflows:operations_inbox' %}" aria-current="page">
-                    <i class="fas fa-inbox"></i><span class="nav-label">Inbox</span>
-                </a>
-            </nav>
-            <div class="app-topbar-actions">
-                <button class="app-icon-btn" id="themeToggle" aria-label="Toggle dark mode">
-                    <i class="fas fa-moon"></i>
-                </button>
-                <a class="app-icon-btn" href="{% url 'users:logout' %}" title="Sign out" aria-label="Sign out">
-                    <i class="fas fa-sign-out-alt"></i>
-                </a>
-            </div>
-        </div>
-    </header>
-
-    <main class="app-container">
-        <div class="app-header">
-            <div>
-                <div class="app-eyebrow">Operations</div>
-                <h1 class="app-title">Inbox</h1>
-                <p class="app-subtitle">Decisions and failures that need a human. Approvals pause a run until you decide.</p>
-            </div>
-            <div class="app-header-actions">
-                <a class="app-btn app-btn-outline" href="{% url 'workflows:workflows_list' %}">
-                    <i class="fas fa-diagram-project"></i> Automations
-                </a>
-            </div>
-        </div>
-
-        {% if not needs_attention %}
-        <section class="app-card">
-            <div class="app-empty">
-                <div class="app-empty-icon"><i class="fas fa-inbox"></i></div>
-                <h2 class="app-empty-title">All quiet</h2>
-                <p class="app-empty-text">
-                    Nothing is waiting on you. New approvals, failed runs and deferred
-                    work will appear here automatically.
-                </p>
-                <a class="app-btn app-btn-outline app-btn-sm" href="{% url 'workflows:workflows_list' %}">
-                    View automations
-                </a>
-            </div>
-        </section>
-        {% endif %}
-
-        <div class="inbox-stack">
-            {% if approvals %}
-            <section aria-labelledby="approvals-title">
-                <div class="inbox-section-header">
-                    <h2 class="inbox-section-title" id="approvals-title">
-                        <i class="fas fa-user-check me-1"></i> Pending approvals
-                    </h2>
-                    <span class="count-badge">{{ approvals|length }}</span>
-                </div>
-                <div class="app-card">
-                    {% for approval in approvals %}
-                    <article class="approval-card" style="{% if not forloop.last %}border-bottom: 1px solid hsl(var(--border));{% endif %}">
-                        <div class="approval-head">
-                            <div>
-                                <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
-                                    <a href="{% url 'workflows:execution_detail' approval.execution_id %}" class="app-meta" style="text-decoration: none;">
-                                        Run #{{ approval.execution_id }}
-                                    </a>
-                                    <span class="app-pill app-pill-muted">{{ approval.workflow.name }}</span>
-                                </div>
-                                <div class="approval-step">{{ approval.service }}{% if approval.service and approval.action %}.{% endif %}{{ approval.action }}</div>
-                            </div>
-                            {% if approval.expires_at %}
-                            <span class="approval-expiry" data-expires="{{ approval.expires_at|date:'c' }}">
-                                <i class="far fa-hourglass me-1"></i><span data-expiry-label>Expires {{ approval.expires_at|naturaltime }}</span>
-                            </span>
-                            {% endif %}
-                        </div>
-                        {% if approval.approval_message %}
-                        <p class="approval-message">{{ approval.approval_message }}</p>
-                        {% endif %}
-                        {% if approval.sanitized_params %}
-                        <details class="approval-params">
-                            <summary><i class="fas fa-shield-halved me-1"></i>Review what this step will do</summary>
-                            <pre>{{ approval.sanitized_params|pprint }}</pre>
-                        </details>
-                        {% endif %}
-                        <div class="approval-actions">
-                            <form method="post" action="{% url 'workflows:approve_execution' approval.execution_id %}">
-                                {% csrf_token %}
-                                <input class="comment-input" type="text" name="comment" placeholder="Comment (optional)" maxlength="500">
-                                <button class="app-btn app-btn-primary app-btn-sm" type="submit">
-                                    <i class="fas fa-check"></i> Approve
-                                </button>
-                            </form>
-                            <form method="post" action="{% url 'workflows:reject_execution' approval.execution_id %}">
-                                {% csrf_token %}
-                                <input class="comment-input" type="text" name="comment" placeholder="Comment (optional)" maxlength="500">
-                                <button class="app-btn app-btn-outline app-btn-sm" type="submit" style="border-color: hsl(var(--destructive)); color: hsl(var(--destructive));">
-                                    <i class="fas fa-xmark"></i> Reject
-                                </button>
-                            </form>
-                        </div>
-                    </article>
-                    {% endfor %}
-                </div>
-            </section>
-            {% endif %}
-
-            {% if attention_executions %}
-            <section aria-labelledby="attention-title">
-                <div class="inbox-section-header">
-                    <h2 class="inbox-section-title" id="attention-title">
-                        <i class="fas fa-triangle-exclamation me-1"></i> Runs needing attention
-                    </h2>
-                    <span class="count-badge">{{ attention_executions|length }}</span>
-                </div>
-                <div class="app-card">
-                    {% for execution in attention_executions %}
-                    <div class="exec-row">
-                        <div class="exec-main">
-                            <a href="{% url 'workflows:execution_detail' execution.id %}" class="exec-title" style="text-decoration: none;">
-                                Run #{{ execution.id }} - {{ execution.workflow.name }}
-                            </a>
-                            <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px; flex-wrap: wrap;">
-                                {% if execution.status == "waiting" %}
-                                <span class="app-pill app-pill-warning">Waiting</span>
-                                {% elif execution.status == "failed" %}
-                                <span class="app-pill app-pill-destructive">Failed</span>
-                                {% else %}
-                                <span class="app-pill app-pill-muted">Cancelled</span>
-                                {% endif %}
-                                {% if execution.current_step %}
-                                <span class="app-meta">Step: <span class="app-mono">{{ execution.current_step }}</span></span>
-                                {% endif %}
-                                {% if execution.waiting_on %}
-                                <span class="app-meta">Waiting on: {{ execution.waiting_on }}</span>
-                                {% endif %}
-                                <span class="app-meta">{{ execution.started_at|naturaltime }}</span>
-                            </div>
-                            {% if execution.failure_summary %}
-                            <div class="exec-failure"><i class="fas fa-circle-info me-1"></i>{{ execution.failure_summary|truncatechars:180 }}</div>
-                            {% endif %}
-                            {% if execution.recovery_suggestion %}
-                            <div class="exec-recovery"><i class="fas fa-lightbulb me-1"></i>{{ execution.recovery_suggestion|truncatechars:180 }}</div>
-                            {% endif %}
-                        </div>
-                        <div class="exec-actions">
-                            <a class="app-btn app-btn-outline app-btn-sm" href="{% url 'workflows:execution_detail' execution.id %}">
-                                <i class="fas fa-eye"></i> Inspect
-                            </a>
-                        </div>
-                    </div>
-                    {% endfor %}
-                </div>
-            </section>
-            {% endif %}
-
-            {% if deferred_runs %}
-            <section aria-labelledby="deferred-title">
-                <div class="inbox-section-header">
-                    <h2 class="inbox-section-title" id="deferred-title">
-                        <i class="fas fa-hourglass-half me-1"></i> Deferred runs
-                    </h2>
-                    <span class="count-badge">{{ deferred_runs|length }}</span>
-                </div>
-                <div class="app-card">
-                    {% for deferred in deferred_runs %}
-                    <div class="exec-row">
-                        <div class="exec-main">
-                            <div class="exec-title">{{ deferred.workflow.name }}</div>
-                            <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px; flex-wrap: wrap;">
-                                <span class="app-pill app-pill-muted">{{ deferred.get_status_display }}</span>
-                                <span class="app-meta">{{ deferred.attempts }} attempt{{ deferred.attempts|pluralize }}</span>
-                                {% if deferred.next_attempt_at %}
-                                <span class="app-meta">Next attempt {{ deferred.next_attempt_at|naturaltime }}</span>
-                                {% endif %}
-                            </div>
-                            {% if deferred.last_error %}
-                            <div class="exec-failure">{{ deferred.last_error|truncatechars:180 }}</div>
-                            {% endif %}
-                            {% if deferred.recovery_hint %}
-                            <div class="exec-recovery"><i class="fas fa-lightbulb me-1"></i>{{ deferred.recovery_hint|truncatechars:180 }}</div>
-                            {% endif %}
-                        </div>
-                    </div>
-                    {% endfor %}
-                </div>
-            </section>
-            {% endif %}
-
-            {% if suggestions %}
-            <section aria-labelledby="suggestions-title">
-                <div class="inbox-section-header">
-                    <h2 class="inbox-section-title" id="suggestions-title">
-                        <i class="fas fa-wand-magic-sparkles me-1"></i> Suggestions
-                    </h2>
-                    <span class="count-badge">{{ suggestions|length }}</span>
-                </div>
-                <div class="app-card">
-                    {% for suggestion in suggestions %}
-                    <div class="exec-row">
-                        <div class="exec-main">
-                            <div class="exec-title">{{ suggestion.title }}</div>
-                            <div class="exec-failure">{{ suggestion.summary|truncatechars:220 }}</div>
-                            {% if suggestion.proposed_changes %}
-                            <details class="approval-params">
-                                <summary>Proposed changes</summary>
-                                <pre>{{ suggestion.proposed_changes|pprint }}</pre>
-                            </details>
-                            {% endif %}
-                        </div>
-                        <div class="exec-actions">
-                            <a class="app-btn app-btn-outline app-btn-sm" href="{% url 'workflows:workflow_executions' suggestion.workflow_id %}">
-                                <i class="fas fa-arrow-right"></i> View workflow
-                            </a>
-                        </div>
-                    </div>
-                    {% endfor %}
-                </div>
-            </section>
-            {% endif %}
-        </div>
-    </main>
-
-    {% if messages %}
-    <div class="toast-stack">
-        {% for message in messages %}
-        <div class="app-toast show" role="status" data-auto-dismiss>{{ message }}</div>
-        {% endfor %}
+{% block content %}
+<div class="app-header">
+    <div>
+        <div class="app-eyebrow">Operations</div>
+        <h1 class="app-title">Inbox</h1>
+        <p class="app-subtitle">Decisions and failures that need a human. Approvals pause a run until you decide.</p>
     </div>
+    <div class="app-header-actions">
+        <a class="app-btn app-btn-outline" href="{% url 'workflows:workflows_list' %}">
+            <i class="fas fa-diagram-project"></i> Automations
+        </a>
+    </div>
+</div>
+
+{% if not needs_attention %}
+<section class="app-card">
+    <div class="app-empty">
+        <div class="app-empty-icon"><i class="fas fa-inbox"></i></div>
+        <h2 class="app-empty-title">All quiet</h2>
+        <p class="app-empty-text">
+            Nothing is waiting on you. New approvals, failed runs and deferred
+            work will appear here automatically.
+        </p>
+        <a class="app-btn app-btn-outline app-btn-sm" href="{% url 'workflows:workflows_list' %}">
+            View automations
+        </a>
+    </div>
+</section>
+{% endif %}
+
+<div class="inbox-stack">
+    {% if approvals %}
+    <section aria-labelledby="approvals-title">
+        <div class="inbox-section-header">
+            <h2 class="inbox-section-title" id="approvals-title">
+                <i class="fas fa-user-check me-1"></i> Pending approvals
+            </h2>
+            <span class="count-badge">{{ approvals|length }}</span>
+        </div>
+        <div class="app-card">
+            {% for approval in approvals %}
+            <article class="approval-card" style="{% if not forloop.last %}border-bottom: 1px solid var(--line);{% endif %}">
+                <div class="approval-head">
+                    <div>
+                        <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                            <a href="{% url 'workflows:execution_detail' approval.execution_id %}" class="app-meta" style="text-decoration: none;">
+                                Run #{{ approval.execution_id }}
+                            </a>
+                            <span class="app-pill app-pill-muted">{{ approval.workflow.name }}</span>
+                        </div>
+                        <div class="approval-step">{{ approval.service }}{% if approval.service and approval.action %}.{% endif %}{{ approval.action }}</div>
+                    </div>
+                    {% if approval.expires_at %}
+                    <span class="approval-expiry" data-expires="{{ approval.expires_at|date:'c' }}">
+                        <i class="far fa-hourglass me-1"></i><span data-expiry-label>Expires {{ approval.expires_at|naturaltime }}</span>
+                    </span>
+                    {% endif %}
+                </div>
+                {% if approval.approval_message %}
+                <p class="approval-message">{{ approval.approval_message }}</p>
+                {% endif %}
+                {% if approval.sanitized_params %}
+                <details class="approval-params">
+                    <summary><i class="fas fa-shield-halved me-1"></i>Review what this step will do</summary>
+                    <pre>{{ approval.sanitized_params|pprint }}</pre>
+                </details>
+                {% endif %}
+                <div class="approval-actions">
+                    <form method="post" action="{% url 'workflows:approve_execution' approval.execution_id %}">
+                        {% csrf_token %}
+                        <input class="comment-input" type="text" name="comment" placeholder="Comment (optional)" maxlength="500">
+                        <button class="app-btn app-btn-primary app-btn-sm" type="submit">
+                            <i class="fas fa-check"></i> Approve
+                        </button>
+                    </form>
+                    <form method="post" action="{% url 'workflows:reject_execution' approval.execution_id %}">
+                        {% csrf_token %}
+                        <button class="app-btn app-btn-outline app-btn-sm" type="submit" style="border-color: var(--danger-hex); color: var(--danger-hex);">
+                            <i class="fas fa-xmark"></i> Reject
+                        </button>
+                    </form>
+                </div>
+            </article>
+            {% endfor %}
+        </div>
+    </section>
     {% endif %}
 
-    <script src="{% static 'js/main.js' %}"></script>
-    <script>
-        (function () {
-            document.querySelectorAll('[data-auto-dismiss]').forEach((el) => {
-                setTimeout(() => {
-                    el.style.opacity = '0';
-                    el.style.transform = 'translateY(8px)';
-                    setTimeout(() => el.remove(), 300);
-                }, 3600);
-            });
+    {% if attention_executions %}
+    <section aria-labelledby="attention-title">
+        <div class="inbox-section-header">
+            <h2 class="inbox-section-title" id="attention-title">
+                <i class="fas fa-triangle-exclamation me-1"></i> Runs needing attention
+            </h2>
+            <span class="count-badge">{{ attention_executions|length }}</span>
+        </div>
+        <div class="app-card">
+            {% for execution in attention_executions %}
+            <div class="exec-row">
+                <div class="exec-main">
+                    <a href="{% url 'workflows:execution_detail' execution.id %}" class="exec-title" style="text-decoration: none;">
+                        Run #{{ execution.id }} - {{ execution.workflow.name }}
+                    </a>
+                    <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px; flex-wrap: wrap;">
+                        {% if execution.status == "waiting" %}
+                        <span class="app-pill app-pill-warning">Waiting</span>
+                        {% elif execution.status == "failed" %}
+                        <span class="app-pill app-pill-destructive">Failed</span>
+                        {% else %}
+                        <span class="app-pill app-pill-muted">Cancelled</span>
+                        {% endif %}
+                        {% if execution.current_step %}
+                        <span class="app-meta">Step: <span class="app-mono">{{ execution.current_step }}</span></span>
+                        {% endif %}
+                        {% if execution.waiting_on %}
+                        <span class="app-meta">Waiting on: {{ execution.waiting_on }}</span>
+                        {% endif %}
+                        <span class="app-meta">{{ execution.started_at|naturaltime }}</span>
+                    </div>
+                    {% if execution.failure_summary %}
+                    <div class="exec-failure"><i class="fas fa-circle-info me-1"></i>{{ execution.failure_summary|truncatechars:180 }}</div>
+                    {% endif %}
+                    {% if execution.recovery_suggestion %}
+                    <div class="exec-recovery"><i class="fas fa-lightbulb me-1"></i>{{ execution.recovery_suggestion|truncatechars:180 }}</div>
+                    {% endif %}
+                </div>
+                <div class="exec-actions">
+                    <a class="app-btn app-btn-outline app-btn-sm" href="{% url 'workflows:execution_detail' execution.id %}">
+                        <i class="fas fa-eye"></i> Inspect
+                    </a>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
 
-            document.querySelectorAll('[data-expires]').forEach((el) => {
-                const label = el.querySelector('[data-expiry-label]');
-                if (!label) return;
-                const expiresAt = new Date(el.dataset.expires).getTime();
-                const tick = () => {
-                    const left = expiresAt - Date.now();
-                    if (left <= 0) {
-                        el.classList.remove('soon');
-                        el.classList.add('expired');
-                        label.textContent = 'Expired';
-                        return;
-                    }
-                    const minutes = Math.floor(left / 60000);
-                    if (minutes < 15) {
-                        el.classList.add('soon');
-                        label.textContent = minutes <= 0 ? 'Expiring in under a minute' : `Expires in ${minutes} min`;
-                    }
-                };
-                tick();
-                setInterval(tick, 30000);
-            });
+    {% if deferred_runs %}
+    <section aria-labelledby="deferred-title">
+        <div class="inbox-section-header">
+            <h2 class="inbox-section-title" id="deferred-title">
+                <i class="fas fa-hourglass-half me-1"></i> Deferred runs
+            </h2>
+            <span class="count-badge">{{ deferred_runs|length }}</span>
+        </div>
+        <div class="app-card">
+            {% for deferred in deferred_runs %}
+            <div class="exec-row">
+                <div class="exec-main">
+                    <div class="exec-title">{{ deferred.workflow.name }}</div>
+                    <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px; flex-wrap: wrap;">
+                        <span class="app-pill app-pill-muted">{{ deferred.get_status_display }}</span>
+                        <span class="app-meta">{{ deferred.attempts }} attempt{{ deferred.attempts|pluralize }}</span>
+                        {% if deferred.next_attempt_at %}
+                        <span class="app-meta">Next attempt {{ deferred.next_attempt_at|naturaltime }}</span>
+                        {% endif %}
+                    </div>
+                    {% if deferred.last_error %}
+                    <div class="exec-failure">{{ deferred.last_error|truncatechars:180 }}</div>
+                    {% endif %}
+                    {% if deferred.recovery_hint %}
+                    <div class="exec-recovery"><i class="fas fa-lightbulb me-1"></i>{{ deferred.recovery_hint|truncatechars:180 }}</div>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
 
-            const themeToggle = document.getElementById('themeToggle');
-            if (themeToggle) {
-                themeToggle.addEventListener('click', () => {
-                    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-                    const next = isDark ? 'light' : 'dark';
-                    document.documentElement.setAttribute('data-theme', next);
-                    document.body.setAttribute('data-theme', next);
-                    document.body.classList.toggle('dark-mode', next === 'dark');
-                    try { localStorage.setItem('theme', next); } catch (e) { /* storage unavailable */ }
-                    const icon = themeToggle.querySelector('i');
-                    if (icon) icon.className = next === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
-                });
-                if (localStorage.getItem('theme') === 'dark') {
-                    themeToggle.querySelector('i').className = 'fas fa-sun';
-                }
-            }
-        })();
-    </script>
-</body>
+    {% if suggestions %}
+    <section aria-labelledby="suggestions-title">
+        <div class="inbox-section-header">
+            <h2 class="inbox-section-title" id="suggestions-title">
+                <i class="fas fa-wand-magic-sparkles me-1"></i> Suggestions
+            </h2>
+            <span class="count-badge">{{ suggestions|length }}</span>
+        </div>
+        <div class="app-card">
+            {% for suggestion in suggestions %}
+            <div class="exec-row">
+                <div class="exec-main">
+                    <div class="exec-title">{{ suggestion.title }}</div>
+                    <div class="exec-failure">{{ suggestion.summary|truncatechars:220 }}</div>
+                    {% if suggestion.proposed_changes %}
+                    <details class="approval-params">
+                        <summary>Proposed changes</summary>
+                        <pre>{{ suggestion.proposed_changes|pprint }}</pre>
+                    </details>
+                    {% endif %}
+                </div>
+                <div class="exec-actions">
+                    <a class="app-btn app-btn-outline app-btn-sm" href="{% url 'workflows:workflow_executions' suggestion.workflow_id %}">
+                        <i class="fas fa-arrow-right"></i> View workflow
+                    </a>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+</div>
 
-</html>
+{% if messages %}
+<div class="toast-stack">
+    {% for message in messages %}
+    <div class="app-toast show" role="status" data-auto-dismiss>{{ message }}</div>
+    {% endfor %}
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'js/page-workflows.js' %}"></script>
+{% endblock %}

@@ -605,10 +605,7 @@ class MathiaAssistant {
                 <div class="time-label">${new Date().toLocaleTimeString()}</div>
             </div>
             <div class="message other-message mathia-message">
-                <div class="mathia-badge">
-                    <i class="fas fa-robot"></i>
-                    <span>Mathia AI</span>
-                </div>
+                ${window.mathiaBadgeHtml ? window.mathiaBadgeHtml() : '<div class="mathia-badge"><i class="fas fa-robot"></i><span>Mathia AI</span></div>'}
                 <div class="mathia-content stream-content"></div>
             </div>
         `;
@@ -669,10 +666,7 @@ class MathiaAssistant {
                 <div class="time-label">${formattedTime}</div>
             </div>
             <div class="message other-message mathia-message">
-                <div class="mathia-badge">
-                    <i class="fas fa-robot"></i>
-                    <span>Mathia AI</span>
-                </div>
+                ${window.mathiaBadgeHtml ? window.mathiaBadgeHtml() : '<div class="mathia-badge"><i class="fas fa-robot"></i><span>Mathia AI</span></div>'}
                 <div class="mathia-content">${messageData.content}</div>
             </div>
         `;

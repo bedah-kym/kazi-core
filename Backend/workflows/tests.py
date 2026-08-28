@@ -24,7 +24,7 @@ from workflows.models import (
     UserWorkflow,
 )
 from workflows.tasks import replay_deferred_workflows, sweep_stuck_approvals
-from workflows.utils import safe_eval_condition
+from workflows.utils import resolve_parameters, resolve_template, safe_eval_condition
 
 from datetime import timedelta
 
@@ -928,6 +928,40 @@ class SafeConditionEvaluatorTests(TestCase):
     def test_malformed_expressions_return_false(self):
         self.assertFalse(safe_eval_condition("amount >", {"amount": 1}))
         self.assertFalse(safe_eval_condition("1 +* 2", {}))
+
+
+class TemplateResolutionTests(SimpleTestCase):
+    """`{{ context.path }}` params must resolve against the workflow context —
+    whitespace around the expression must never break substitution."""
+
+    def test_single_template_resolves_string(self):
+        self.assertEqual(
+            resolve_template("{{ trigger.city }}", {"trigger": {"city": "Nairobi"}}),
+            "Nairobi",
+        )
+
+    def test_single_template_returns_raw_non_string_value(self):
+        self.assertEqual(resolve_template("{{ amount }}", {"amount": 5000}), 5000)
+
+    def test_template_without_spaces_resolves(self):
+        self.assertEqual(resolve_template("{{trigger.city}}", {"trigger": {"city": "Mombasa"}}), "Mombasa")
+
+    def test_nested_parameters_resolve(self):
+        params = {"city": "{{ trigger.city }}", "amount": "{{ trigger.amount }}"}
+        result = resolve_parameters(params, {"trigger": {"city": "Nairobi", "amount": 100}})
+        self.assertEqual(result, {"city": "Nairobi", "amount": 100})
+
+    def test_embedded_template_interpolates(self):
+        self.assertEqual(
+            resolve_template("Invoice for {{ trigger.project }} (${{ trigger.amount }})", {"trigger": {"project": "QA", "amount": 500}}),
+            "Invoice for QA ($500)",
+        )
+
+    def test_missing_context_resolves_to_empty_in_interpolation(self):
+        self.assertEqual(resolve_template("Hi {{ trigger.name }}!", {"trigger": {}}), "Hi !")
+
+    def test_non_string_value_passes_through(self):
+        self.assertEqual(resolve_template(42, {}), 42)
 
 
 class TemporalUpdateApprovalTests(TestCase):

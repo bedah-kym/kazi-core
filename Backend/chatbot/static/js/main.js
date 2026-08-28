@@ -479,10 +479,11 @@ function createMessage(data, roomId, prepend = false) {
 
     if (isMathia) {
         msgTextTag.classList.add('mathia-message');
-        // Add Badge to the bubble
+        // Add Badge to the bubble — reflects the selected model's own avatar
         const badge = document.createElement('div');
         badge.className = 'mathia-badge';
-        badge.innerHTML = '<i class="fas fa-robot"></i> <span>Mathia AI</span>';
+        badge.innerHTML = (window.mathiaBadgeHtml && window.mathiaBadgeHtml())
+            || '<i class="fas fa-robot"></i> <span>Mathia AI</span>';
         msgTextTag.insertBefore(badge, msgTextTag.firstChild);
     }
 
@@ -904,7 +905,15 @@ function getCookie(name) {
 let typingTimer;
 const chatInput = document.querySelector('#chat-message-input');
 if (chatInput) {
+    // Auto-grow the composer so long messages wrap instead of scrolling
+    // horizontally off the right edge. Backend send is unchanged.
+    const autoGrowInput = () => {
+        chatInput.style.height = 'auto';
+        chatInput.style.height = Math.min(chatInput.scrollHeight, 180) + 'px';
+    };
+
     chatInput.addEventListener('input', function () {
+        autoGrowInput();
         const socket = getCurrentSocket();
         if (socket && socket.readyState === WebSocket.OPEN) {
             socket.send(JSON.stringify({
@@ -915,8 +924,10 @@ if (chatInput) {
         }
     });
 
-    chatInput.addEventListener('keyup', function (e) {
-        if (e.keyCode === 13) {
+    // Enter sends; Shift+Enter inserts a newline.
+    chatInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
             document.querySelector('#chat-message-submit')?.click();
         }
     });
@@ -993,7 +1004,10 @@ if (chatSubmit) {
                     "chatid": window.currentRoomId,
                     "reply_to": window.replyToMessageId || null
                 }));
-                if (messageInputDom) messageInputDom.value = '';
+                if (messageInputDom) {
+                    messageInputDom.value = '';
+                    messageInputDom.style.height = 'auto';
+                }
                 window.replyToMessageId = null;
             } else {
                 console.error('Socket not ready for room:', window.currentRoomId);

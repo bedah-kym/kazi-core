@@ -59,7 +59,7 @@ body.chat-page {
 
 .people-list {
     background: #fff;
-    background-image: url('https://www.transparenttextures.com/patterns/brick-wall.png');
+    background-image: url('../img/brick-wall.svg');
     border-right: 1px solid #eee;
     height: 100%;
     position: relative;
@@ -71,7 +71,7 @@ body.chat-page {
 [data-theme="dark"] .people-list {
     background: var(--bg-light);
     border: hidden;
-    background-image: url('https://www.transparenttextures.com/patterns/brick-wall.png');
+    background-image: url('../img/brick-wall.svg');
     background-attachment: fixed;
     background-position: top left;
 }
@@ -331,7 +331,7 @@ body.chat-page {
 
 .chat-header {
     background: var(--chat-bg);
-    background-image: url('https://www.transparenttextures.com/patterns/brick-wall.png');
+    background-image: url('../img/brick-wall.svg');
     border-bottom: 1px solid #eee;
     padding: 15px;
     transition: background 0.3s;
@@ -361,7 +361,7 @@ body.chat-page {
     overflow-x: hidden;
     padding: 24px;
     background: linear-gradient(180deg, #e8ecf1 0%, #f5f7fa 50%, #e8ecf1 100%);
-    background-image: url('https://www.transparenttextures.com/patterns/brick-wall.png');
+    background-image: url('../img/brick-wall.svg');
     position: relative;
     transition: background 0.3s;
     z-index: 1;
@@ -380,7 +380,7 @@ body.chat-page {
     transition: background 0.3s;
     z-index: 1;
     background: var(--bg-light);
-    background-image: url('https://www.transparenttextures.com/patterns/brick-wall.png');
+    background-image: url('../img/brick-wall.svg');
     background-attachment: fixed;
     background-position: top left;
 }
@@ -576,7 +576,7 @@ body.chat-page {
 .chat-message {
     padding: 15px;
     background: var(--chat-bg);
-    background-image: url('https://www.transparenttextures.com/patterns/brick-wall.png');
+    background-image: url('../img/brick-wall.svg');
     border-top: 1px solid #eee;
     transition: background 0.3s;
 }
@@ -584,7 +584,7 @@ body.chat-page {
 [data-theme="dark"] .chat-message {
     border: hidden;
     background-color: var(--bg-light);
-    background-image: url('https://www.transparenttextures.com/patterns/brick-wall.png');
+    background-image: url('../img/brick-wall.svg');
 }
 
 #chat-message-input {
@@ -1424,7 +1424,7 @@ em-emoji-picker {
         top: 0;
         bottom: 0;
         background: #fff;
-        background-image: url('https://www.transparenttextures.com/patterns/brick-wall.png');
+        background-image: url('../img/brick-wall.svg');
         left: 0;
         right: 0;
         z-index: 1500;
@@ -1436,7 +1436,7 @@ em-emoji-picker {
 
     [data-theme="dark"] .people-list {
         background: var(--bg-light);
-        background-image: url('https://www.transparenttextures.com/patterns/brick-wall.png');
+        background-image: url('../img/brick-wall.svg');
     }
 
     /* Show people list when menu is open */
@@ -2374,4 +2374,12 @@ body[data-message-density="compact"] .message {
 
 [data-theme="dark"] .mathia-progress-status {
     color: #94a3b8;
+}
+
+/* Dark-mode wall: use the light-stroked brick so it's visible over charcoal */
+[data-theme="dark"] .people-list,
+[data-theme="dark"] .chat-header,
+[data-theme="dark"] .chat-history,
+[data-theme="dark"] .chat-message {
+    background-image: url('../img/brick-wall-dark.svg') !important;
 }

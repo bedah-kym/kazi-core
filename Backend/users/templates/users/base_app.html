@@ -1,0 +1,129 @@
+{% load static %}
+{% load notification_tags %}
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="{% block meta_description %}Mathia — your AI operating system for workflows, finance and more.{% endblock %}">
+    <title>{% block title %}Mathia{% endblock %}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="{% static 'css/claude-theme.css' %}" rel="stylesheet">
+    <link rel="icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
+    {% block head %}{% endblock %}
+</head>
+
+<body class="app-page">
+    {% unread_rooms_count as unread_rooms %}
+    {% pending_reminders_count as pending_reminders %}
+    <div class="app-shell">
+        <aside class="app-sidebar" id="appSidebar">
+            <a href="{% url 'users:dashboard' %}" class="app-sidebar-brand text-decoration-none">
+                <span class="app-sidebar-brand-mark"><i class="fas fa-robot"></i></span>
+                <span>
+                    <span class="app-sidebar-brand-name d-block">Mathia</span>
+                    <span class="app-sidebar-brand-sub d-block">{{ workspace.name|default:"Workspace" }}</span>
+                </span>
+            </a>
+
+            <nav class="app-nav" aria-label="Primary">
+                <div class="app-nav-section">Workspace</div>
+                <a class="app-nav-item{% if active_nav == 'dashboard' %} active{% endif %}" href="{% url 'users:dashboard' %}" {% if active_nav == 'dashboard' %}aria-current="page"{% endif %}>
+                    <i class="fas fa-home"></i><span>Dashboard</span>
+                </a>
+                <a class="app-nav-item{% if active_nav == 'chats' %} active{% endif %}" href="{% url 'chatbot:redirect_to_home' %}" {% if active_nav == 'chats' %}aria-current="page"{% endif %}>
+                    <i class="fas fa-comment-dots"></i><span>Chats</span>
+                    {% if unread_rooms %}<span class="app-nav-badge" id="navUnreadRooms">{{ unread_rooms }}</span>{% endif %}
+                </a>
+
+                <div class="app-nav-section">Tools</div>
+                <a class="app-nav-item{% if active_nav == 'workflows' %} active{% endif %}" href="{% url 'workflows:workflows_list' %}" {% if active_nav == 'workflows' %}aria-current="page"{% endif %}>
+                    <i class="fas fa-diagram-project"></i><span>Automations</span>
+                </a>
+                <a class="app-nav-item{% if active_nav == 'wallet' %} active{% endif %}" href="{% url 'payments:wallet_dashboard' %}" {% if active_nav == 'wallet' %}aria-current="page"{% endif %}>
+                    <i class="fas fa-wallet"></i><span>Wallet</span>
+                </a>
+                <a class="app-nav-item{% if active_nav == 'reminders' %} active{% endif %}" href="{% url 'users:reminders' %}" {% if active_nav == 'reminders' %}aria-current="page"{% endif %}>
+                    <i class="fas fa-clock"></i><span>Reminders</span>
+                    {% if pending_reminders %}<span class="app-nav-badge" id="navPendingReminders">{{ pending_reminders }}</span>{% endif %}
+                </a>
+                <a class="app-nav-item{% if active_nav == 'notifications' %} active{% endif %}" href="{% url 'notifications:notification-center' %}" {% if active_nav == 'notifications' %}aria-current="page"{% endif %}>
+                    <i class="fas fa-bell"></i><span>Notifications</span>
+                    <span class="app-nav-badge d-none" id="navUnreadNotifications">0</span>
+                </a>
+                <a class="app-nav-item{% if active_nav == 'travel' %} active{% endif %}" href="{% url 'travel:plan_trip' %}" {% if active_nav == 'travel' %}aria-current="page"{% endif %}>
+                    <i class="fas fa-plane"></i><span>Travel</span>
+                </a>
+
+                <div class="app-nav-section">System</div>
+                <a class="app-nav-item{% if active_nav == 'settings' %} active{% endif %}" href="{% url 'users:settings' %}" {% if active_nav == 'settings' %}aria-current="page"{% endif %}>
+                    <i class="fas fa-gear"></i><span>Settings</span>
+                </a>
+            </nav>
+
+            <div class="app-sidebar-footer">
+                <a href="{% url 'users:settings' %}" class="app-user text-decoration-none" title="Profile & settings">
+                    {% if user.profile.avatar %}
+                    <img class="app-user-avatar" src="{{ user.profile.get_avatar_url }}" alt="{{ user.get_full_name|default:user.username }}">
+                    {% else %}
+                    <span class="app-user-avatar">{{ user.get_full_name|default:user.username|slice:":1"|upper }}</span>
+                    {% endif %}
+                    <span class="app-user-meta">
+                        <span class="app-user-name d-block">{{ user.get_full_name|default:user.username }}</span>
+                        <span class="app-user-plan d-block">{{ workspace.get_plan_display|default:workspace.plan|title }}</span>
+                    </span>
+                </a>
+                <button class="app-icon-btn" id="darkModeToggle" aria-label="Toggle dark mode" title="Theme">
+                    <i class="fas fa-moon"></i>
+                </button>
+                <a class="app-icon-btn" href="{% url 'users:logout' %}" title="Sign out" aria-label="Sign out">
+                    <i class="fas fa-sign-out-alt"></i>
+                </a>
+            </div>
+        </aside>
+
+        <div class="app-backdrop" id="appBackdrop"></div>
+
+        <div class="app-body">
+            <header class="app-topbar">
+                <button class="app-burger" id="appBurger" aria-label="Toggle navigation">
+                    <i class="fas fa-bars"></i>
+                </button>
+                <nav class="app-breadcrumb" aria-label="Breadcrumb">
+                    {% block breadcrumb %}
+                    <a href="{% url 'users:dashboard' %}">Dashboard</a>
+                    {% endblock %}
+                </nav>
+                <div class="app-topbar-actions">
+                    <a class="app-icon-btn" href="{% url 'notifications:notification-center' %}" title="Notifications" aria-label="Notifications">
+                        <i class="fas fa-bell"></i>
+                        <span class="app-nav-badge position-absolute top-0 end-0 d-none" id="topbarUnreadBadge">0</span>
+                    </a>
+                    {% block topbar_actions %}{% endblock %}
+                </div>
+            </header>
+
+            <main class="app-main">
+                {% if messages %}
+                <div class="mb-3">
+                    {% for message in messages %}
+                    <div class="alert alert-{{ message.tags|default:'info' }} alert-dismissible fade show py-2 small" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+                {% block content %}{% endblock %}
+            </main>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{% static 'js/app-shell.js' %}"></script>
+    {% block scripts %}{% endblock %}
+</body>
+
+</html>

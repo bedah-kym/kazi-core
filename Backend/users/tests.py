@@ -1,14 +1,16 @@
-"""Settings-page and agent-caps toggle tests."""
+"""Settings-page, dashboard and agent-caps tests."""
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 
+from chatbot.models import Chatroom, Member, Message, Reminder
 from orchestration.user_preferences import enforce_agent_caps
 
-from .models import Workspace
+from .models import Wallet, Workspace
 
 User = get_user_model()
 
@@ -74,3 +76,68 @@ class AgentCapsToggleTests(TestCase):
 
     def test_helper_none_user_defaults_on(self):
         self.assertTrue(enforce_agent_caps(None))
+
+
+class DashboardViewTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="dash-user", email="dash@example.com", password="secret")  # nosec B106 — test fixture — fake credential
+        self.workspace = Workspace.objects.create(user=self.user, onboarding_completed=True)
+        self.client.force_login(self.user)
+
+    def test_dashboard_page_renders_shell(self):
+        response = self.client.get(reverse("users:dashboard"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Command center")
+        self.assertContains(response, 'id="statTotalMessages"')
+        self.assertContains(response, 'id="activityFeed"')
+        self.assertContains(response, reverse("workflows:workflows_list"))
+        self.assertContains(response, reverse("notifications:notification-center"))
+
+
+class DashboardApiTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="dash-api", email="dash-api@example.com", password="secret")  # nosec B106 — test fixture — fake credential
+        self.workspace = Workspace.objects.create(user=self.user, onboarding_completed=True)
+        self.member = Member.objects.create(User=self.user)
+        self.client.force_login(self.user)
+
+    def test_unauthenticated_is_forbidden(self):
+        self.client.logout()
+        response = self.client.get(reverse("botApi:dashboard_overview"))
+        self.assertEqual(response.status_code, 403)
+
+    def test_overview_returns_expected_shape(self):
+        response = self.client.get(reverse("botApi:dashboard_overview"))
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIn("stats", payload)
+        self.assertIn("wallet", payload)
+        self.assertIn("quota", payload)
+        self.assertIn("workflows", payload)
+        self.assertIn("activity", payload)
+        for key in (
+            "total_messages", "active_rooms", "unread_rooms",
+            "pending_reminders", "unread_notifications",
+        ):
+            self.assertIn(key, payload["stats"])
+
+    def test_overview_reflects_user_data(self):
+        room = Chatroom.objects.create()
+        room.participants.add(self.member)
+        Message.objects.create(member=self.member, content="hello", timestamp=timezone.now())
+        Reminder.objects.create(
+            user=self.user, content="call John", scheduled_time=timezone.now(), status="pending"
+        )
+        Wallet.objects.create(workspace=self.workspace, balance="1200.00")
+
+        response = self.client.get(reverse("botApi:dashboard_overview"))
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertGreaterEqual(payload["stats"]["active_rooms"], 1)
+        self.assertEqual(payload["stats"]["pending_reminders"], 1)
+        self.assertEqual(payload["wallet"]["balance"], "1200.00")
+        self.assertEqual(payload["workflows"]["total"], 0)
+        self.assertTrue(any(item["kind"] == "reminder" for item in payload["activity"]))

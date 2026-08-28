@@ -1,7 +1,7 @@
 # Core Django & API
 Django>=5.1,<6
 djangorestframework>=3.15.0
-django-cors-headers>=4.3.1
+django-cors-headers>=4.9.0
 
 # Async & WebSockets
 channels>=4.1.0

@@ -17,7 +17,7 @@ import json
 import logging
 import threading
 from typing import Dict, Optional, Any
-from datetime import datetime, timedelta
+from datetime import datetime
 from django.core.cache import cache
 from django_redis import get_redis_connection
 from asgiref.sync import sync_to_async
@@ -817,8 +817,6 @@ class ReminderConnector(BaseConnector):
         """Create a reminder"""
         from chatbot.models import Reminder, Chatroom
         from django.contrib.auth import get_user_model
-        from django.utils import timezone
-        import dateutil.parser
         from asgiref.sync import sync_to_async
 
         User = get_user_model()
@@ -833,25 +831,17 @@ class ReminderConnector(BaseConnector):
             return {"status": "error", "message": "When should I remind you?"}
 
         try:
-            # 1. Try ISO parsing (LLM should prefer this)
-            try:
-                scheduled_time = dateutil.parser.parse(time_str)
-            except Exception:
-                # 2. Fallback: simple check if it's a number (minutes)
-                # In robust prod, use dateparser
-                if "min" in time_str or time_str.isdigit():
-                    minutes = int(''.join(filter(str.isdigit, time_str)))
-                    scheduled_time = timezone.now() + timedelta(minutes=minutes)
-                else:
-                    return {"status": "error", "message": f"I couldn't understand the time '{time_str}'. Please use format like '10 minutes' or '5pm'."}
+            from chatbot.reminder_service import parse_reminder_time
 
-            # Ensure timezone aware
-            if timezone.is_naive(scheduled_time):
-                scheduled_time = timezone.make_aware(scheduled_time)
-
-            if scheduled_time < timezone.now():
-                # Assume tomorrow if time has passed today (simple heuristic)
-                scheduled_time += timedelta(days=1)
+            scheduled_time = parse_reminder_time(time_str)
+            if scheduled_time is None:
+                return {
+                    "status": "error",
+                    "message": (
+                        f"I couldn't understand the time '{time_str}'. "
+                        "Please use a format like 'in 10 minutes', '5pm', or 'tomorrow at 9am'."
+                    ),
+                }
 
             # Create Reminder
             user = await sync_to_async(User.objects.get)(pk=user_id)

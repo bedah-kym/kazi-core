@@ -9,11 +9,13 @@ The TransactionTestCase class locks the handoff boundary: a routed `@mathia`
 message must delegate to the coordinator and persist the returned response.
 """
 import json
+from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
 from django.test import SimpleTestCase, TransactionTestCase, override_settings
+from django.utils import timezone
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from orchestration.coordinator import OrchestrationResult
@@ -420,3 +422,88 @@ class RoomModelApiTests(TransactionTestCase):
         resp = self._get(user=outsider)
 
         self.assertEqual(resp.status_code, 403)
+
+
+class ReminderTimeParserTests(SimpleTestCase):
+    """Reminder time parser must handle ISO, relative, clock, and relative-day forms."""
+
+    def test_iso_datetime(self):
+        from chatbot.reminder_service import parse_reminder_time
+        dt = parse_reminder_time("2026-12-25T10:30:00")
+        self.assertIsNotNone(dt)
+        self.assertEqual(dt.hour, 10)
+        self.assertEqual(dt.minute, 30)
+
+    def test_clock_time_am_pm(self):
+        from chatbot.reminder_service import parse_reminder_time
+        dt = parse_reminder_time("5pm")
+        self.assertIsNotNone(dt)
+        self.assertEqual(dt.hour, 17)
+        self.assertEqual(dt.minute, 0)
+
+    def test_clock_time_with_minutes(self):
+        from chatbot.reminder_service import parse_reminder_time
+        dt = parse_reminder_time("9:30am")
+        self.assertIsNotNone(dt)
+        self.assertEqual(dt.hour, 9)
+        self.assertEqual(dt.minute, 30)
+
+    def test_tomorrow_at_time(self):
+        from chatbot.reminder_service import parse_reminder_time
+        from datetime import timedelta
+        dt = parse_reminder_time("tomorrow at 9am")
+        self.assertIsNotNone(dt)
+        self.assertEqual(dt.hour, 9)
+        self.assertEqual(dt.minute, 0)
+        self.assertEqual(dt.date(), (timezone.now() + timedelta(days=1)).date())
+
+    def test_tomorrow_without_time(self):
+        from chatbot.reminder_service import parse_reminder_time
+        from datetime import timedelta
+        dt = parse_reminder_time("tomorrow")
+        self.assertIsNotNone(dt)
+        self.assertEqual(dt.hour, 9)
+        self.assertEqual(dt.minute, 0)
+        self.assertEqual(dt.date(), (timezone.now() + timedelta(days=1)).date())
+
+    def test_today_at_time(self):
+        from chatbot.reminder_service import parse_reminder_time
+        dt = parse_reminder_time("today at 5pm")
+        self.assertIsNotNone(dt)
+        self.assertEqual(dt.hour, 17)
+
+    def test_relative_minutes(self):
+        from chatbot.reminder_service import parse_reminder_time
+        from django.utils import timezone
+        dt = parse_reminder_time("in 10 minutes")
+        self.assertIsNotNone(dt)
+        self.assertGreaterEqual(dt, timezone.now() + timedelta(minutes=9))
+        self.assertLessEqual(dt, timezone.now() + timedelta(minutes=11))
+
+    def test_relative_hours(self):
+        from chatbot.reminder_service import parse_reminder_time
+        from django.utils import timezone
+        dt = parse_reminder_time("in 3 hours")
+        self.assertIsNotNone(dt)
+        self.assertGreaterEqual(dt, timezone.now() + timedelta(hours=2, minutes=55))
+        self.assertLessEqual(dt, timezone.now() + timedelta(hours=3, minutes=5))
+
+    def test_relative_days(self):
+        from chatbot.reminder_service import parse_reminder_time
+        from django.utils import timezone
+        dt = parse_reminder_time("in 3 days")
+        self.assertIsNotNone(dt)
+        self.assertEqual(dt.date(), (timezone.now() + timedelta(days=3)).date())
+
+    def test_plain_minutes(self):
+        from chatbot.reminder_service import parse_reminder_time
+        from django.utils import timezone
+        dt = parse_reminder_time("10")
+        self.assertIsNotNone(dt)
+        self.assertGreaterEqual(dt, timezone.now() + timedelta(minutes=9))
+        self.assertLessEqual(dt, timezone.now() + timedelta(minutes=11))
+
+    def test_missing_context_returns_none(self):
+        from chatbot.reminder_service import parse_reminder_time
+        self.assertIsNone(parse_reminder_time(""))
+        self.assertIsNone(parse_reminder_time(None))

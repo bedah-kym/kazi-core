@@ -1,5 +1,6 @@
 
 import logging
+import re
 from datetime import timedelta
 from django.utils import timezone
 from .models import Reminder, Chatroom
@@ -7,6 +8,94 @@ from django.contrib.auth import get_user_model
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
+
+
+_RELATIVE_RE = re.compile(r"\bin\s+(\d+)\s*(minutes?|mins?|hours?|hrs?|days?|weeks?)\b", re.IGNORECASE)
+_CLOCK_RE = re.compile(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", re.IGNORECASE)
+
+_MINUTE_UNITS = {"minute", "minutes", "min", "mins"}
+_HOUR_UNITS = {"hour", "hours", "hr", "hrs"}
+_DAY_UNITS = {"day", "days"}
+_WEEK_UNITS = {"week", "weeks"}
+
+
+def _parse_clock(text: str):
+    """Extract an (hour, minute) 24h pair from a clock expression, or None."""
+    match = _CLOCK_RE.search(text or "")
+    if not match:
+        return None
+    hour = int(match.group(1))
+    minute = int(match.group(2) or 0)
+    meridian = (match.group(3) or "").lower()
+    if meridian == "pm" and hour < 12:
+        hour += 12
+    elif meridian == "am" and hour == 12:
+        hour = 0
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+    return hour, minute
+
+
+def parse_reminder_time(time_str):
+    """Parse a reminder time expression into an aware datetime, or None.
+
+    Supports ISO datetimes, relative durations ("in 30 minutes", "in 3 days"),
+    "tomorrow"/"today" with an optional clock ("tomorrow at 9am"), bare clock
+    times ("5pm", "9:30am"), and plain integers interpreted as minutes.
+    """
+    if not time_str:
+        return None
+    text = str(time_str).strip()
+    lower = text.lower()
+    now = timezone.now()
+
+    relative = _RELATIVE_RE.search(lower)
+    if relative:
+        quantity = int(relative.group(1))
+        unit = relative.group(2).lower()
+        if unit in _MINUTE_UNITS:
+            return now + timedelta(minutes=quantity)
+        if unit in _HOUR_UNITS:
+            return now + timedelta(hours=quantity)
+        if unit in _DAY_UNITS:
+            return now + timedelta(days=quantity)
+        if unit in _WEEK_UNITS:
+            return now + timedelta(weeks=quantity)
+
+    if text.isdigit():
+        return now + timedelta(minutes=int(text))
+
+    if "tomorrow" in lower or "today" in lower:
+        base = now + (timedelta(days=1) if "tomorrow" in lower else timedelta(0))
+        clock = _parse_clock(text)
+        if clock:
+            target = base.replace(hour=clock[0], minute=clock[1], second=0, microsecond=0)
+        else:
+            target = base.replace(hour=9, minute=0, second=0, microsecond=0)
+        if target <= now:
+            target += timedelta(days=1)
+        return target
+
+    try:
+        from dateutil import parser as dateutil_parser
+
+        parsed = dateutil_parser.parse(text)
+        if timezone.is_naive(parsed):
+            parsed = timezone.make_aware(parsed)
+        if parsed <= now:
+            parsed += timedelta(days=1)
+        return parsed
+    except Exception:
+        pass
+
+    clock = _parse_clock(text)
+    if clock:
+        target = now.replace(hour=clock[0], minute=clock[1], second=0, microsecond=0)
+        if target <= now:
+            target += timedelta(days=1)
+        return target
+
+    return None
 
 
 class ReminderService:

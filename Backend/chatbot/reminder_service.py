@@ -22,13 +22,11 @@ _WEEK_UNITS = {"week", "weeks"}
 
 def get_user_timezone(user_timezone: str = None):
     """Get a pytz timezone object from a timezone string, defaulting to UTC."""
-    if PYTZ_AVAILABLE and user_timezone and user_timezone in pytz.all_timezones:
-        return pytz.timezone(user_timezone)
-    try:
-        import pytz
+    if PYTZ_AVAILABLE:
+        if user_timezone and user_timezone in pytz.all_timezones:
+            return pytz.timezone(user_timezone)
         return pytz.UTC
-    except ImportError:
-        return timezone.utc
+    return timezone.utc
 
 
 def _parse_clock(text: str):

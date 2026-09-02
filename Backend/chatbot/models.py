@@ -158,6 +158,7 @@ class Reminder(models.Model):
     room = models.ForeignKey(Chatroom, on_delete=models.SET_NULL, null=True, blank=True)
     content = models.TextField()  # "Remind me to call John"
     scheduled_time = models.DateTimeField()
+    timezone = models.CharField(max_length=50, default='UTC', help_text="IANA timezone identifier (e.g., 'Africa/Nairobi', 'America/New_York')")
     priority = models.CharField(max_length=10, choices=PRIORITY_CHOICES, default='medium')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
 
@@ -171,6 +172,30 @@ class Reminder(models.Model):
 
     class Meta:
         ordering = ['scheduled_time']
+
+    def clean(self):
+        """Validate reminder scheduled_time."""
+        from django.core.exceptions import ValidationError
+        from django.utils import timezone
+        
+        if self.scheduled_time:
+            now = timezone.now()
+            # Prevent past dates
+            if self.scheduled_time < timezone.now():
+                raise ValidationError("Cannot schedule a reminder for a past time.")
+            
+            # Prevent unreasonably far future (e.g., more than 1 year)
+            max_future = timezone.now() + timedelta(days=365)
+            if self.scheduled_time > max_future:
+                raise ValidationError("Cannot schedule a reminder more than 1 year in the future.")
+            
+            # Warn if scheduled very soon (less than 1 minute)
+            if self.scheduled_time < timezone.now() + timedelta(minutes=1):
+                raise ValidationError("Cannot schedule a reminder for less than 1 minute from now.")
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"Reminder for {self.user.username}: {self.content[:30]}..."

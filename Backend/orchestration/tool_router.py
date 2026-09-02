@@ -833,7 +833,10 @@ class ReminderConnector(BaseConnector):
         try:
             from chatbot.reminder_service import parse_reminder_time
 
-            scheduled_time = parse_reminder_time(time_str)
+            user = await sync_to_async(User.objects.get)(pk=user_id)
+            user_tz = user.profile.timezone if hasattr(user, 'profile') else 'UTC'
+            
+            scheduled_time = parse_reminder_time(time_str, user_timezone=user_tz)
             if scheduled_time is None:
                 return {
                     "status": "error",
@@ -844,16 +847,15 @@ class ReminderConnector(BaseConnector):
                 }
 
             # Create Reminder
-            user = await sync_to_async(User.objects.get)(pk=user_id)
             room = await sync_to_async(Chatroom.objects.get)(pk=room_id) if room_id else None
-
             reminder = await sync_to_async(Reminder.objects.create)(
                 user=user,
                 room=room,
                 content=content,
                 scheduled_time=scheduled_time,
                 priority=priority,
-                status='pending'
+                status='pending',
+                timezone=user_tz
             )
             try:
                 from chatbot.tasks import schedule_reminder_delivery

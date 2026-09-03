@@ -3,6 +3,9 @@ import logging
 import re
 from datetime import timedelta
 from django.utils import timezone
+from .models import Reminder, Chatroom
+
+logger = logging.getLogger(__name__)
 
 try:
     import pytz

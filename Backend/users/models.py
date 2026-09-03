@@ -171,7 +171,7 @@ class UserProfile(models.Model):
         ('auto', 'Auto')
     ], default='auto')
 
-# Timezone - validated against IANA timezone database
+    # Timezone - validated against IANA timezone database
     timezone = models.CharField(max_length=50, default='UTC',
                                 validators=[validate_timezone],
                                 help_text="IANA timezone identifier (e.g., 'Africa/Nairobi', 'America/New_York')")

@@ -428,6 +428,7 @@ class ReminderTimeParserTests(SimpleTestCase):
     """Reminder time parser must handle ISO, relative, clock, and relative-day forms."""
 
     def test_iso_datetime(self):
+        """Test parsing of ISO 8601 datetime strings."""
         from chatbot.reminder_service import parse_reminder_time
         dt = parse_reminder_time("2026-12-25T10:30:00")
         self.assertIsNotNone(dt)
@@ -435,6 +436,7 @@ class ReminderTimeParserTests(SimpleTestCase):
         self.assertEqual(dt.minute, 30)
 
     def test_clock_time_am_pm(self):
+        """Test parsing of clock times with AM/PM meridian (e.g., '5pm')."""
         from chatbot.reminder_service import parse_reminder_time
         dt = parse_reminder_time("5pm")
         self.assertIsNotNone(dt)
@@ -442,6 +444,7 @@ class ReminderTimeParserTests(SimpleTestCase):
         self.assertEqual(dt.minute, 0)
 
     def test_clock_time_with_minutes(self):
+        """Test parsing of clock times with minutes and meridian (e.g., '9:30am')."""
         from chatbot.reminder_service import parse_reminder_time
         dt = parse_reminder_time("9:30am")
         self.assertIsNotNone(dt)
@@ -449,6 +452,7 @@ class ReminderTimeParserTests(SimpleTestCase):
         self.assertEqual(dt.minute, 30)
 
     def test_tomorrow_at_time(self):
+        """Test parsing of 'tomorrow' with a specific clock time (e.g., 'tomorrow at 9am')."""
         from chatbot.reminder_service import parse_reminder_time
         from datetime import timedelta
         dt = parse_reminder_time("tomorrow at 9am")
@@ -458,6 +462,7 @@ class ReminderTimeParserTests(SimpleTestCase):
         self.assertEqual(dt.date(), (timezone.now() + timedelta(days=1)).date())
 
     def test_tomorrow_without_time(self):
+        """Test parsing of 'tomorrow' without a specific time (defaults to 9am)."""
         from chatbot.reminder_service import parse_reminder_time
         from datetime import timedelta
         dt = parse_reminder_time("tomorrow")
@@ -467,12 +472,14 @@ class ReminderTimeParserTests(SimpleTestCase):
         self.assertEqual(dt.date(), (timezone.now() + timedelta(days=1)).date())
 
     def test_today_at_time(self):
+        """Test parsing of 'today' with a specific clock time (e.g., 'today at 5pm')."""
         from chatbot.reminder_service import parse_reminder_time
         dt = parse_reminder_time("today at 5pm")
         self.assertIsNotNone(dt)
         self.assertEqual(dt.hour, 17)
 
     def test_relative_minutes(self):
+        """Test parsing of relative time expressions in minutes (e.g., 'in 10 minutes')."""
         from chatbot.reminder_service import parse_reminder_time
         from django.utils import timezone
         dt = parse_reminder_time("in 10 minutes")
@@ -481,6 +488,7 @@ class ReminderTimeParserTests(SimpleTestCase):
         self.assertLessEqual(dt, timezone.now() + timedelta(minutes=11))
 
     def test_relative_hours(self):
+        """Test parsing of relative time expressions in hours (e.g., 'in 3 hours')."""
         from chatbot.reminder_service import parse_reminder_time
         from django.utils import timezone
         dt = parse_reminder_time("in 3 hours")
@@ -489,6 +497,7 @@ class ReminderTimeParserTests(SimpleTestCase):
         self.assertLessEqual(dt, timezone.now() + timedelta(hours=3, minutes=5))
 
     def test_relative_days(self):
+        """Test parsing of relative time expressions in days (e.g., 'in 3 days')."""
         from chatbot.reminder_service import parse_reminder_time
         from django.utils import timezone
         dt = parse_reminder_time("in 3 days")
@@ -496,6 +505,7 @@ class ReminderTimeParserTests(SimpleTestCase):
         self.assertEqual(dt.date(), (timezone.now() + timedelta(days=3)).date())
 
     def test_plain_minutes(self):
+        """Test parsing of plain integer strings as minutes (e.g., '10' means 10 minutes)."""
         from chatbot.reminder_service import parse_reminder_time
         from django.utils import timezone
         dt = parse_reminder_time("10")
@@ -504,6 +514,7 @@ class ReminderTimeParserTests(SimpleTestCase):
         self.assertLessEqual(dt, timezone.now() + timedelta(minutes=11))
 
     def test_missing_context_returns_none(self):
+        """Test that empty or None input returns None."""
         from chatbot.reminder_service import parse_reminder_time
         self.assertIsNone(parse_reminder_time(""))
         self.assertIsNone(parse_reminder_time(None))

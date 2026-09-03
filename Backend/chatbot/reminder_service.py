@@ -24,7 +24,15 @@ _WEEK_UNITS = {"week", "weeks"}
 
 
 def get_user_timezone(user_timezone: str = None):
-    """Get a pytz timezone object from a timezone string, defaulting to UTC."""
+    """Get a pytz timezone object from a timezone string, defaulting to UTC.
+
+    Args:
+        user_timezone: Optional IANA timezone string (e.g., 'Africa/Nairobi', 'America/New_York').
+
+    Returns:
+        A pytz timezone object if pytz is available, otherwise django.utils.timezone.utc.
+        Falls back to UTC if the provided timezone string is invalid or None.
+    """
     if PYTZ_AVAILABLE:
         if user_timezone and user_timezone in pytz.all_timezones:
             return pytz.timezone(user_timezone)
@@ -33,7 +41,17 @@ def get_user_timezone(user_timezone: str = None):
 
 
 def _parse_clock(text: str):
-    """Extract an (hour, minute) 24h pair from a clock expression, or None."""
+    """Extract an (hour, minute) 24h pair from a clock expression, or None.
+
+    Parses clock times like "5pm", "9:30am", "14:00" and converts to 24-hour format.
+
+    Args:
+        text: String containing a clock time expression.
+
+    Returns:
+        A tuple of (hour, minute) in 24-hour format, or None if no valid time is found.
+        Example: "5pm" returns (17, 0), "9:30am" returns (9, 30).
+    """
     match = _CLOCK_RE.search(text or "")
     if not match:
         return None

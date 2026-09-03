@@ -175,7 +175,14 @@ class Reminder(models.Model):
         ordering = ['scheduled_time']
 
     def clean(self):
-        """Validate reminder scheduled_time."""
+        """Validate reminder scheduled_time.
+
+        Ensures the scheduled time is not in the past, not too far in the future
+        (max 1 year), and not too soon (min 1 minute from now).
+
+        Raises:
+            ValidationError: If scheduled_time violates any validation rules.
+        """
         from django.core.exceptions import ValidationError
         from django.utils import timezone
 
@@ -194,6 +201,14 @@ class Reminder(models.Model):
                 raise ValidationError("Cannot schedule a reminder for less than 1 minute from now.")
 
     def save(self, *args, **kwargs):
+        """Save the reminder after running full validation.
+
+        Ensures all model validators (including clean()) are run before saving.
+
+        Args:
+            *args: Positional arguments passed to parent save method.
+            **kwargs: Keyword arguments passed to parent save method.
+        """
         self.full_clean()
         super().save(*args, **kwargs)
 

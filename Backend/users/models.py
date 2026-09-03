@@ -30,6 +30,7 @@ def validate_timezone(value):
                 f"Use format like 'Africa/Nairobi', 'America/New_York', etc."
             )
 
+
 User = get_user_model()
 
 

@@ -835,7 +835,7 @@ class ReminderConnector(BaseConnector):
 
             user = await sync_to_async(User.objects.get)(pk=user_id)
             user_tz = user.profile.timezone if hasattr(user, 'profile') else 'UTC'
-            
+
             scheduled_time = parse_reminder_time(time_str, user_timezone=user_tz)
             if scheduled_time is None:
                 return {

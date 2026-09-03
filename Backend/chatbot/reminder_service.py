@@ -59,7 +59,7 @@ def parse_reminder_time(time_str, user_timezone: str = None):
     Args:
         time_str: The time expression to parse
         user_timezone: Optional IANA timezone string (e.g., "Africa/Nairobi", "America/New_York")
-        
+
     Returns:
         An aware datetime in the user's timezone, or None if parsing fails.
     """
@@ -135,8 +135,6 @@ class ReminderService:
         scheduled_time = None
 
         # 1. Look for explicit time patterns (very basic regex/keyword fallback)
-        now = timezone.now()
-        user_tz = get_user_timezone(user.profile.timezone if hasattr(user, 'profile') else None)
         now = timezone.now().astimezone(get_user_timezone(user.profile.timezone if hasattr(user, 'profile') else None))
 
         try:

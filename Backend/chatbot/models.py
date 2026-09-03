@@ -178,18 +178,17 @@ class Reminder(models.Model):
         """Validate reminder scheduled_time."""
         from django.core.exceptions import ValidationError
         from django.utils import timezone
-        
+
         if self.scheduled_time:
-            now = timezone.now()
             # Prevent past dates
             if self.scheduled_time < timezone.now():
                 raise ValidationError("Cannot schedule a reminder for a past time.")
-            
+
             # Prevent unreasonably far future (e.g., more than 1 year)
             max_future = timezone.now() + timedelta(days=365)
             if self.scheduled_time > max_future:
                 raise ValidationError("Cannot schedule a reminder more than 1 year in the future.")
-            
+
             # Warn if scheduled very soon (less than 1 minute)
             if self.scheduled_time < timezone.now() + timedelta(minutes=1):
                 raise ValidationError("Cannot schedule a reminder for less than 1 minute from now.")

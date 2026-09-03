@@ -1,7 +1,35 @@
 from django.db import models
 from django.contrib.auth import get_user_model
 from django.utils import timezone
+from django.core.exceptions import ValidationError
 from .encryption import TokenEncryption
+
+try:
+    import pytz
+    PYTZ_AVAILABLE = True
+except ImportError:
+    PYTZ_AVAILABLE = False
+
+
+def validate_timezone(value):
+    """Validate that the timezone string is a valid IANA timezone identifier."""
+    if not value:
+        return
+    if PYTZ_AVAILABLE:
+        if value not in pytz.all_timezones:
+            raise ValidationError(
+                f"'{value}' is not a valid IANA timezone. "
+                f"Use a valid IANA timezone like 'Africa/Nairobi', 'America/New_York', 'Europe/London', etc."
+            )
+    else:
+        # Fallback validation without pytz - basic format check
+        import re
+        if not re.match(r'^[A-Za-z_]+/[A-Za-z_]+$', value):
+            raise ValidationError(
+                f"'{value}' does not appear to be a valid IANA timezone format. "
+                f"Use format like 'Africa/Nairobi', 'America/New_York', etc."
+            )
+
 
 User = get_user_model()
 
@@ -144,9 +172,10 @@ class UserProfile(models.Model):
         ('auto', 'Auto')
     ], default='auto')
 
-    # Existing preferences
-    timezone = models.CharField(max_length=50, default='UTC')
-    language = models.CharField(max_length=10, default='en')
+    # Timezone - validated against IANA timezone database
+    timezone = models.CharField(max_length=50, default='UTC',
+                                validators=[validate_timezone],
+                                help_text="IANA timezone identifier (e.g., 'Africa/Nairobi', 'America/New_York')")
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

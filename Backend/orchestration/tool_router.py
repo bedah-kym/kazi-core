@@ -17,7 +17,7 @@ import json
 import logging
 import threading
 from typing import Dict, Optional, Any
-from datetime import datetime, timedelta
+from datetime import datetime
 from django.core.cache import cache
 from django_redis import get_redis_connection
 from asgiref.sync import sync_to_async
@@ -814,11 +814,25 @@ class ReminderConnector(BaseConnector):
     """
 
     async def execute(self, parameters: Dict, context: Dict) -> Dict:
-        """Create a reminder"""
+        """Create a reminder with timezone-aware scheduling.
+
+        Parses natural language time expressions, applies the user's timezone,
+        and schedules a reminder for delivery.
+
+        Args:
+            parameters: Dict containing:
+                - content (str): The reminder message content.
+                - time (str): Time expression (e.g., 'in 10 minutes', '5pm', 'tomorrow at 9am').
+                - priority (str, optional): Priority level ('low', 'medium', 'high'). Defaults to 'medium'.
+            context: Dict containing:
+                - user_id (int): ID of the user creating the reminder.
+                - room_id (int, optional): ID of the chatroom context.
+
+        Returns:
+            Dict with status, message, and reminder details on success, or error message on failure.
+        """
         from chatbot.models import Reminder, Chatroom
         from django.contrib.auth import get_user_model
-        from django.utils import timezone
-        import dateutil.parser
         from asgiref.sync import sync_to_async
 
         User = get_user_model()
@@ -833,37 +847,31 @@ class ReminderConnector(BaseConnector):
             return {"status": "error", "message": "When should I remind you?"}
 
         try:
-            # 1. Try ISO parsing (LLM should prefer this)
-            try:
-                scheduled_time = dateutil.parser.parse(time_str)
-            except Exception:
-                # 2. Fallback: simple check if it's a number (minutes)
-                # In robust prod, use dateparser
-                if "min" in time_str or time_str.isdigit():
-                    minutes = int(''.join(filter(str.isdigit, time_str)))
-                    scheduled_time = timezone.now() + timedelta(minutes=minutes)
-                else:
-                    return {"status": "error", "message": f"I couldn't understand the time '{time_str}'. Please use format like '10 minutes' or '5pm'."}
+            from chatbot.reminder_service import parse_reminder_time
 
-            # Ensure timezone aware
-            if timezone.is_naive(scheduled_time):
-                scheduled_time = timezone.make_aware(scheduled_time)
+            user = await sync_to_async(User.objects.get)(pk=user_id)
+            user_tz = user.profile.timezone if hasattr(user, 'profile') else 'UTC'
 
-            if scheduled_time < timezone.now():
-                # Assume tomorrow if time has passed today (simple heuristic)
-                scheduled_time += timedelta(days=1)
+            scheduled_time = parse_reminder_time(time_str, user_timezone=user_tz)
+            if scheduled_time is None:
+                return {
+                    "status": "error",
+                    "message": (
+                        f"I couldn't understand the time '{time_str}'. "
+                        "Please use a format like 'in 10 minutes', '5pm', or 'tomorrow at 9am'."
+                    ),
+                }
 
             # Create Reminder
-            user = await sync_to_async(User.objects.get)(pk=user_id)
             room = await sync_to_async(Chatroom.objects.get)(pk=room_id) if room_id else None
-
             reminder = await sync_to_async(Reminder.objects.create)(
                 user=user,
                 room=room,
                 content=content,
                 scheduled_time=scheduled_time,
                 priority=priority,
-                status='pending'
+                status='pending',
+                timezone=user_tz
             )
             try:
                 from chatbot.tasks import schedule_reminder_delivery

@@ -1,12 +1,142 @@
 
 import logging
+import re
 from datetime import timedelta
 from django.utils import timezone
 from .models import Reminder, Chatroom
-from django.contrib.auth import get_user_model
 
 logger = logging.getLogger(__name__)
-User = get_user_model()
+
+try:
+    import pytz
+    PYTZ_AVAILABLE = True
+except ImportError:
+    PYTZ_AVAILABLE = False
+
+
+_RELATIVE_RE = re.compile(r"\bin\s+(\d+)\s*(minutes?|mins?|hours?|hrs?|days?|weeks?)\b", re.IGNORECASE)
+_CLOCK_RE = re.compile(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", re.IGNORECASE)
+
+_MINUTE_UNITS = {"minute", "minutes", "min", "mins"}
+_HOUR_UNITS = {"hour", "hours", "hr", "hrs"}
+_DAY_UNITS = {"day", "days"}
+_WEEK_UNITS = {"week", "weeks"}
+
+
+def get_user_timezone(user_timezone: str = None):
+    """Get a pytz timezone object from a timezone string, defaulting to UTC.
+
+    Args:
+        user_timezone: Optional IANA timezone string (e.g., 'Africa/Nairobi', 'America/New_York').
+
+    Returns:
+        A pytz timezone object if pytz is available, otherwise django.utils.timezone.utc.
+        Falls back to UTC if the provided timezone string is invalid or None.
+    """
+    if PYTZ_AVAILABLE:
+        if user_timezone and user_timezone in pytz.all_timezones:
+            return pytz.timezone(user_timezone)
+        return pytz.UTC
+    return timezone.utc
+
+
+def _parse_clock(text: str):
+    """Extract an (hour, minute) 24h pair from a clock expression, or None.
+
+    Parses clock times like "5pm", "9:30am", "14:00" and converts to 24-hour format.
+
+    Args:
+        text: String containing a clock time expression.
+
+    Returns:
+        A tuple of (hour, minute) in 24-hour format, or None if no valid time is found.
+        Example: "5pm" returns (17, 0), "9:30am" returns (9, 30).
+    """
+    match = _CLOCK_RE.search(text or "")
+    if not match:
+        return None
+    hour = int(match.group(1))
+    minute = int(match.group(2) or 0)
+    meridian = (match.group(3) or "").lower()
+    if meridian == "pm" and hour < 12:
+        hour += 12
+    elif meridian == "am" and hour == 12:
+        hour = 0
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+    return hour, minute
+
+
+def parse_reminder_time(time_str, user_timezone: str = None):
+    """Parse a reminder time expression into an aware datetime, or None.
+
+    Supports ISO datetimes, relative durations ("in 30 minutes", "in 3 days"),
+    "tomorrow"/"today" with an optional clock ("tomorrow at 9am"), bare clock
+    times ("5pm", "9:30am"), and plain integers interpreted as minutes.
+
+    Args:
+        time_str: The time expression to parse
+        user_timezone: Optional IANA timezone string (e.g., "Africa/Nairobi", "America/New_York")
+
+    Returns:
+        An aware datetime in the user's timezone, or None if parsing fails.
+    """
+    if not time_str:
+        return None
+    text = str(time_str).strip()
+    lower = text.lower()
+
+    # Get user's timezone
+    user_tz = get_user_timezone(user_timezone)
+    now = timezone.now().astimezone(user_tz) if PYTZ_AVAILABLE else timezone.now()
+
+    relative = _RELATIVE_RE.search(lower)
+    if relative:
+        quantity = int(relative.group(1))
+        unit = relative.group(2).lower()
+        if unit in _MINUTE_UNITS:
+            return now + timedelta(minutes=quantity)
+        if unit in _HOUR_UNITS:
+            return now + timedelta(hours=quantity)
+        if unit in _DAY_UNITS:
+            return now + timedelta(days=quantity)
+        if unit in _WEEK_UNITS:
+            return now + timedelta(weeks=quantity)
+
+    if text.isdigit():
+        return now + timedelta(minutes=int(text))
+
+    if "tomorrow" in lower or "today" in lower:
+        base = now + (timedelta(days=1) if "tomorrow" in lower else timedelta(0))
+        clock = _parse_clock(text)
+        if clock:
+            target = base.replace(hour=clock[0], minute=clock[1], second=0, microsecond=0)
+        else:
+            target = base.replace(hour=9, minute=0, second=0, microsecond=0)
+        if target <= now:
+            target += timedelta(days=1)
+        return target
+
+    try:
+        from dateutil import parser as dateutil_parser
+
+        parsed = dateutil_parser.parse(text)
+        if timezone.is_naive(parsed):
+            parsed = user_tz.localize(parsed) if PYTZ_AVAILABLE else timezone.make_aware(parsed)
+        if parsed <= now:
+            parsed += timedelta(days=1)
+        return parsed
+    except Exception:
+        pass
+
+    clock = _parse_clock(text)
+    if clock:
+        target = now.replace(hour=clock[0], minute=clock[1], second=0, microsecond=0)
+        if target <= now:
+            target += timedelta(days=1)
+        return target
+
+    return None
 
 
 class ReminderService:
@@ -17,13 +147,13 @@ class ReminderService:
         Example: "Remind me to call John in 10 minutes"
         """
         # Simple keyword parsing for prototype
-        # In production, use an LLM or dateparer library with NLP
+        # In production, use an LLM or dateparser library with NLP
 
         content = text
         scheduled_time = None
 
         # 1. Look for explicit time patterns (very basic regex/keyword fallback)
-        now = timezone.now()
+        now = timezone.now().astimezone(get_user_timezone(user.profile.timezone if hasattr(user, 'profile') else None))
 
         try:
             lower_text = text.lower()
@@ -59,7 +189,8 @@ class ReminderService:
                 room=room,
                 content=content,
                 scheduled_time=scheduled_time,
-                status='pending'
+                status='pending',
+                timezone=user.profile.timezone if hasattr(user, 'profile') else 'UTC'
             )
 
             try:

@@ -1,4 +1,5 @@
 """Settings-page, dashboard and agent-caps tests."""
+from datetime import timedelta
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -128,7 +129,7 @@ class DashboardApiTests(TestCase):
         room.participants.add(self.member)
         Message.objects.create(member=self.member, content="hello", timestamp=timezone.now())
         Reminder.objects.create(
-            user=self.user, content="call John", scheduled_time=timezone.now(), status="pending"
+            user=self.user, content="call John", scheduled_time=timezone.now() + timedelta(hours=1), status="pending"
         )
         Wallet.objects.create(workspace=self.workspace, balance="1200.00")
 

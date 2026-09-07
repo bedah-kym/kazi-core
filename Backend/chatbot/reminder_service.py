@@ -16,7 +16,7 @@ except ImportError:
 
 
 _RELATIVE_RE = re.compile(r"\bin\s+(\d+)\s*(minutes?|mins?|hours?|hrs?|days?|weeks?)\b", re.IGNORECASE)
-_CLOCK_RE = re.compile(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", re.IGNORECASE)
+_CLOCK_RE = re.compile(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", re.IGNORECASE)
 
 _MINUTE_UNITS = {"minute", "minutes", "min", "mins"}
 _HOUR_UNITS = {"hour", "hours", "hr", "hrs"}
@@ -53,7 +53,12 @@ async def parse_reminder_time(text: str, user_timezone: str = "UTC"):
     Returns:
         ISO format datetime string if successful, None if parsing failed
     """
-    parser = LLMTimeParser()
+    try:
+        from orchestration.llm_client import get_llm_client
+        llm_client = get_llm_client()
+    except Exception:
+        llm_client = None
+    parser = LLMTimeParser(llm_client=llm_client)
     result = await parser.parse(text, user_timezone=user_timezone)
     return result.get("datetime")
 
@@ -76,6 +81,16 @@ def _parse_clock(text: str):
     hour = int(match.group(1))
     minute = int(match.group(2) or 0)
     meridian = (match.group(3) or "").lower()
+
+    # Require explicit am/pm or colon for non-standalone digits.
+    # "5pm" → ok, "5:30" → ok, "5" alone → ok (minutes)
+    # "5 things" → NOT a clock (no am/pm, no colon, not standalone)
+    has_meridian = bool(meridian)
+    has_colon = match.group(2) is not None
+    is_standalone = text.strip() == match.group(0).strip()
+    if not has_meridian and not has_colon and not is_standalone:
+        return None
+
     if meridian == "pm" and hour < 12:
         hour += 12
     elif meridian == "am" and hour == 12:
@@ -169,14 +184,14 @@ class LLMTimeParser:
         prompt = f"User timezone: {user_timezone}\nCurrent time: {timezone.now().isoformat()}\n\nParse: \"{text}\""
 
         try:
-            response = await self.llm_client.generate(
+            response = await self.llm_client.generate_json(
                 system_prompt=self.SYSTEM_PROMPT,
                 user_prompt=prompt,
                 temperature=0.1,
                 max_tokens=500,
-                response_format={"type": "json_object"}
+                required_fields=["datetime", "needs_clarification"],
             )
-            result = json.loads(response)
+            result = response
 
             # Validate response
             if "datetime" in result and result["datetime"]:
@@ -379,7 +394,7 @@ class ReminderService:
         # If no pattern matches, check if text already looks like a time expression
         time_indicators = [
             "in ", "at ", "tomorrow", "today", "yesterday",
-            "am", "pm", ":", "minutes", "mins", "hours", "hrs", "days", "weeks"
+            "am", "pm", ":", "minutes", "mins", "hours", "hrs", "days", "weeks", "week"
         ]
         if any(indicator in text_lower for indicator in time_indicators):
             return text
@@ -404,7 +419,12 @@ class ReminderService:
         time_expression = ReminderService._extract_time_expression(text)
 
         # Use LLM-based parser with clarification support
-        parser = LLMTimeParser()
+        try:
+            from orchestration.llm_client import get_llm_client
+            llm_client = get_llm_client()
+        except Exception:
+            llm_client = None
+        parser = LLMTimeParser(llm_client=llm_client)
         parse_result = await parser.parse(time_expression, user_timezone=user_tz)
 
         try:

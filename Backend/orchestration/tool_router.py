@@ -852,7 +852,12 @@ class ReminderConnector(BaseConnector):
             user_tz = user.profile.timezone if hasattr(user, 'profile') else 'UTC'
 
             # Use LLM-based parser with clarification support
-            parser = LLMTimeParser()
+            try:
+                from orchestration.llm_client import get_llm_client
+                llm_client = get_llm_client()
+            except Exception:
+                llm_client = None
+            parser = LLMTimeParser(llm_client=llm_client)
             parse_result = await parser.parse(time_str, user_timezone=user_tz)
 
             if parse_result.get("needs_clarification"):
@@ -873,6 +878,20 @@ class ReminderConnector(BaseConnector):
 
             # Parse the datetime string
             scheduled_time = datetime.fromisoformat(scheduled_time_str.replace("Z", "+00:00"))
+
+            # Ensure timezone awareness
+            from django.utils import timezone as dj_tz
+            if dj_tz.is_naive(scheduled_time):
+                scheduled_time = dj_tz.make_aware(scheduled_time)
+
+            # Validation
+            now = dj_tz.now()
+            if scheduled_time <= now:
+                return {"status": "error", "message": "Cannot schedule a reminder for a past time."}
+            if scheduled_time > now + timedelta(days=365):
+                return {"status": "error", "message": "Cannot schedule more than 1 year in advance."}
+            if scheduled_time < now + timedelta(minutes=1):
+                return {"status": "error", "message": "Cannot schedule for less than 1 minute from now."}
 
             # Create Reminder
             room = await sync_to_async(Chatroom.objects.get)(pk=room_id) if room_id else None

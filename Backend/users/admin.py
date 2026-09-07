@@ -52,7 +52,7 @@ class UserProfileAdmin(admin.ModelAdmin):
         ('Professional', {'fields': ('user_type', 'industry', 'company_name', 'company_size', 'role')}),
         ('Invite Chain', {'fields': ('invited_by', 'invite_depth')}),
         ('Social Links', {'fields': ('social_links', 'twitter_handle', 'linkedin_url', 'github_url')}),
-        ('Preferences', {'fields': ('timezone', 'language', 'theme_preference', 'notification_preferences')}),
+        ('Preferences', {'fields': ('timezone', 'theme_preference', 'notification_preferences')}),
         ('Onboarding', {'fields': ('onboarding_completed', 'onboarding_step')}),
         ('Timestamps', {'fields': ('created_at', 'updated_at'), 'classes': ('collapse',)}),
     )

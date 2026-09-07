@@ -814,7 +814,23 @@ class ReminderConnector(BaseConnector):
     """
 
     async def execute(self, parameters: Dict, context: Dict) -> Dict:
-        """Create a reminder"""
+        """Create a reminder with timezone-aware scheduling.
+
+        Parses natural language time expressions, applies the user's timezone,
+        and schedules a reminder for delivery.
+
+        Args:
+            parameters: Dict containing:
+                - content (str): The reminder message content.
+                - time (str): Time expression (e.g., 'in 10 minutes', '5pm', 'tomorrow at 9am').
+                - priority (str, optional): Priority level ('low', 'medium', 'high'). Defaults to 'medium'.
+            context: Dict containing:
+                - user_id (int): ID of the user creating the reminder.
+                - room_id (int, optional): ID of the chatroom context.
+
+        Returns:
+            Dict with status, message, and reminder details on success, or error message on failure.
+        """
         from chatbot.models import Reminder, Chatroom
         from django.contrib.auth import get_user_model
         from asgiref.sync import sync_to_async
@@ -834,7 +850,7 @@ class ReminderConnector(BaseConnector):
         try:
             user = await sync_to_async(User.objects.get)(pk=user_id)
             user_tz = user.profile.timezone if hasattr(user, 'profile') else 'UTC'
-            
+
             # Use LLM-based parser with clarification support
             parser = LLMTimeParser()
             parse_result = await parser.parse(time_str, user_tz)

@@ -6,6 +6,9 @@ import asyncio
 from datetime import timedelta, datetime
 from django.utils import timezone
 from django.conf import settings
+from .models import Reminder, Chatroom
+
+logger = logging.getLogger(__name__)
 
 try:
     import pytz
@@ -24,7 +27,15 @@ _WEEK_UNITS = {"week", "weeks"}
 
 
 def get_user_timezone(user_timezone: str = None):
-    """Get a pytz timezone object from a timezone string, defaulting to UTC."""
+    """Get a pytz timezone object from a timezone string, defaulting to UTC.
+
+    Args:
+        user_timezone: Optional IANA timezone string (e.g., 'Africa/Nairobi', 'America/New_York').
+
+    Returns:
+        A pytz timezone object if pytz is available, otherwise django.utils.timezone.utc.
+        Falls back to UTC if the provided timezone string is invalid or None.
+    """
     if PYTZ_AVAILABLE:
         if user_timezone and user_timezone in pytz.all_timezones:
             return pytz.timezone(user_timezone)
@@ -50,7 +61,17 @@ async def parse_reminder_time(text: str, user_timezone: str = "UTC"):
 
 
 def _parse_clock(text: str):
-    """Extract an (hour, minute) 24h pair from a clock expression, or None."""
+    """Extract an (hour, minute) 24h pair from a clock expression, or None.
+
+    Parses clock times like "5pm", "9:30am", "14:00" and converts to 24-hour format.
+
+    Args:
+        text: String containing a clock time expression.
+
+    Returns:
+        A tuple of (hour, minute) in 24-hour format, or None if no valid time is found.
+        Example: "5pm" returns (17, 0), "9:30am" returns (9, 30).
+    """
     match = _CLOCK_RE.search(text or "")
     if not match:
         return None
@@ -182,7 +203,7 @@ class TimeParseResult:
 
 class LLMTimeParser:
     """LLM-based time parser with clarification support."""
-    
+
     SYSTEM_PROMPT = """You are a precise time parser for a reminder system. Parse natural language time expressions into ISO 8601 datetime strings.
 
 SUPPORTED FORMATS:
@@ -230,15 +251,15 @@ If failed to parse, return:
 
     def __init__(self, llm_client=None):
         self.llm_client = llm_client
-    
+
     async def parse(self, text: str, user_timezone: str = "UTC", context: dict = None) -> dict:
         """Parse time expression with LLM, returning structured result."""
         if not self.llm_client:
             # Fallback to deterministic parser
             return self._fallback_parse(text, user_timezone)
-        
+
         prompt = f"User timezone: {user_timezone}\nCurrent time: {timezone.now().isoformat()}\n\nParse: \"{text}\""
-        
+
         try:
             response = await self.llm_client.generate(
                 system_prompt=self.SYSTEM_PROMPT,
@@ -248,7 +269,7 @@ If failed to parse, return:
                 response_format={"type": "json_object"}
             )
             result = json.loads(response)
-            
+
             # Validate response
             if "datetime" in result and result["datetime"]:
                 # Verify it's valid ISO format
@@ -276,13 +297,13 @@ If failed to parse, return:
         except Exception as e:
             logging.error(f"LLM time parse error: {e}")
             return self._fallback_parse(text, user_timezone)
-    
+
     def _fallback_parse(self, text: str, user_timezone: str = "UTC") -> dict:
         """Deterministic fallback parser (existing logic)."""
         from django.utils import timezone
         from datetime import timedelta
         import re
-        
+
         if not text:
             return {
                 "datetime": None,
@@ -291,13 +312,14 @@ If failed to parse, return:
                 "confidence": 0.0,
                 "interpretation": "Failed to parse"
             }
-        
+
         text = str(text).strip()
         lower = text.lower()
-        
+
         # Get user's timezone
         user_tz = get_user_timezone(user_timezone)
         now = timezone.now().astimezone(user_tz) if PYTZ_AVAILABLE else timezone.now()
+
 
         # Check for relative time patterns
         relative = _RELATIVE_RE.search(lower)
@@ -423,7 +445,7 @@ class ReminderService:
 
         # Use LLM-based parser with clarification support
         parser = LLMTimeParser()
-        parse_result = await parser.parse(text, user_tz=user.profile.timezone if hasattr(user, 'profile') else "UTC")
+        parse_result = await parser.parse(text, user_timezone=user_tz)
 
         try:
             if parse_result.get("needs_clarification"):

@@ -1,3 +1,4 @@
+from datetime import timedelta
 from django.db import models
 from django.contrib.auth import get_user_model
 from base64 import b64encode
@@ -174,26 +175,40 @@ class Reminder(models.Model):
         ordering = ['scheduled_time']
 
     def clean(self):
-        """Validate reminder scheduled_time."""
+        """Validate reminder scheduled_time.
+
+        Ensures the scheduled time is not in the past, not too far in the future
+        (max 1 year), and not too soon (min 1 minute from now).
+
+        Raises:
+            ValidationError: If scheduled_time violates any validation rules.
+        """
         from django.core.exceptions import ValidationError
         from django.utils import timezone
-        
+
         if self.scheduled_time:
-            now = timezone.now()
             # Prevent past dates
             if self.scheduled_time < timezone.now():
                 raise ValidationError("Cannot schedule a reminder for a past time.")
-            
+
             # Prevent unreasonably far future (e.g., more than 1 year)
             max_future = timezone.now() + timedelta(days=365)
             if self.scheduled_time > max_future:
                 raise ValidationError("Cannot schedule a reminder more than 1 year in the future.")
-            
+
             # Warn if scheduled very soon (less than 1 minute)
             if self.scheduled_time < timezone.now() + timedelta(minutes=1):
                 raise ValidationError("Cannot schedule a reminder for less than 1 minute from now.")
 
     def save(self, *args, **kwargs):
+        """Save the reminder after running full validation.
+
+        Ensures all model validators (including clean()) are run before saving.
+
+        Args:
+            *args: Positional arguments passed to parent save method.
+            **kwargs: Keyword arguments passed to parent save method.
+        """
         self.full_clean()
         super().save(*args, **kwargs)
 

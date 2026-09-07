@@ -4,7 +4,7 @@ import operator
 import re
 from typing import Any, Dict
 
-_TEMPLATE_RE = re.compile(r"{{\s*([^}]+)\s*}}")
+_TEMPLATE_RE = re.compile(r"{{\s*([^{}]+?)\s*}}")
 
 
 class DotDict(dict):
@@ -40,18 +40,19 @@ def resolve_template(value: Any, context: Dict[str, Any]) -> Any:
     if not isinstance(value, str):
         return value
 
-    matches = _TEMPLATE_RE.findall(value)
-    if not matches:
-        return value
+    # A whole-string single template returns the raw context value (so a
+    # number/dict/list flows through un-stringified); anything else is a
+    # string interpolation of one or more templates.
+    stripped = value.strip()
+    whole = _TEMPLATE_RE.fullmatch(stripped)
+    if whole is not None:
+        return get_context_value(whole.group(1).strip(), context)
 
-    if len(matches) == 1 and value.strip() == f"{{{{{matches[0]}}}}}":
-        return get_context_value(matches[0].strip(), context)
+    def _replace(match: re.Match) -> str:
+        resolved = get_context_value(match.group(1).strip(), context)
+        return "" if resolved is None else str(resolved)
 
-    resolved = value
-    for expr in matches:
-        replacement = get_context_value(expr.strip(), context)
-        resolved = resolved.replace(f"{{{{{expr}}}}}", str(replacement))
-    return resolved
+    return _TEMPLATE_RE.sub(_replace, value)
 
 
 def resolve_parameters(params: Any, context: Dict[str, Any]) -> Any:

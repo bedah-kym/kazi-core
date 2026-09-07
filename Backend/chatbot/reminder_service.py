@@ -45,7 +45,7 @@ async def parse_reminder_time(text: str, user_timezone: str = "UTC"):
         ISO format datetime string if successful, None if parsing failed
     """
     parser = LLMTimeParser()
-    result = await parser.parse(text, user_tz=user_timezone)
+    result = await parser.parse(text, user_timezone=user_timezone)
     return result.get("datetime")
 
 
@@ -255,8 +255,9 @@ If failed to parse, return:
                 from dateutil import parser as dateutil_parser
                 parsed_dt = datetime.fromisoformat(result["datetime"].replace("Z", "+00:00"))
                 if parsed_dt <= timezone.now():
-                    # If in past, assume next occurrence
-                    pass
+                    # If in past, assume next occurrence (add 1 day)
+                    parsed_dt = parsed_dt + timedelta(days=1)
+                    result["datetime"] = parsed_dt.isoformat()
                 return {
                     "datetime": result["datetime"],
                     "needs_clarification": result.get("needs_clarification", False),
@@ -278,22 +279,120 @@ If failed to parse, return:
     
     def _fallback_parse(self, text: str, user_timezone: str = "UTC") -> dict:
         """Deterministic fallback parser (existing logic)."""
-        from chatbot.reminder_service import parse_reminder_time
         from django.utils import timezone
         from datetime import timedelta
+        import re
         
-        try:
-            parsed = parse_reminder_time(text, user_timezone=user_timezone)
-            if parsed:
+        if not text:
+            return {
+                "datetime": None,
+                "needs_clarification": True,
+                "clarification_question": "Could you clarify the time? (e.g., 'tomorrow at 9am' or 'in 2 hours')",
+                "confidence": 0.0,
+                "interpretation": "Failed to parse"
+            }
+        
+        text = str(text).strip()
+        lower = text.lower()
+        
+        # Get user's timezone
+        user_tz = get_user_timezone(user_timezone)
+        now = timezone.now().astimezone(user_tz) if PYTZ_AVAILABLE else timezone.now()
+
+        # Check for relative time patterns
+        relative = _RELATIVE_RE.search(lower)
+        if relative:
+            quantity = int(relative.group(1))
+            unit = relative.group(2).lower()
+            if unit in _MINUTE_UNITS:
                 return {
-                    "datetime": parsed.isoformat(),
+                    "datetime": (now + timedelta(minutes=quantity)).isoformat(),
                     "needs_clarification": False,
                     "clarification_question": None,
                     "confidence": 0.9,
                     "interpretation": "Parsed via fallback"
                 }
+            if unit in _HOUR_UNITS:
+                return {
+                    "datetime": (now + timedelta(hours=quantity)).isoformat(),
+                    "needs_clarification": False,
+                    "clarification_question": None,
+                    "confidence": 0.9,
+                    "interpretation": "Parsed via fallback"
+                }
+            if unit in _DAY_UNITS:
+                return {
+                    "datetime": (now + timedelta(days=quantity)).isoformat(),
+                    "needs_clarification": False,
+                    "clarification_question": None,
+                    "confidence": 0.9,
+                    "interpretation": "Parsed via fallback"
+                }
+            if unit in _WEEK_UNITS:
+                return {
+                    "datetime": (now + timedelta(weeks=quantity)).isoformat(),
+                    "needs_clarification": False,
+                    "clarification_question": None,
+                    "confidence": 0.9,
+                    "interpretation": "Parsed via fallback"
+                }
+
+        if text.isdigit():
+            return {
+                "datetime": (now + timedelta(minutes=int(text))).isoformat(),
+                "needs_clarification": False,
+                "clarification_question": None,
+                "confidence": 0.9,
+                "interpretation": "Parsed via fallback"
+            }
+
+        if "tomorrow" in lower or "today" in lower:
+            base = now + (timedelta(days=1) if "tomorrow" in lower else timedelta(0))
+            clock = _parse_clock(text)
+            if clock:
+                target = base.replace(hour=clock[0], minute=clock[1], second=0, microsecond=0)
+            else:
+                target = base.replace(hour=9, minute=0, second=0, microsecond=0)
+            if target <= now:
+                target += timedelta(days=1)
+            return {
+                "datetime": target.isoformat(),
+                "needs_clarification": False,
+                "clarification_question": None,
+                "confidence": 0.9,
+                "interpretation": "Parsed via fallback"
+            }
+
+        try:
+            from dateutil import parser as dateutil_parser
+            parsed = dateutil_parser.parse(text)
+            if timezone.is_naive(parsed):
+                parsed = user_tz.localize(parsed) if PYTZ_AVAILABLE else timezone.make_aware(parsed)
+            if parsed <= now:
+                parsed += timedelta(days=1)
+            return {
+                "datetime": parsed.isoformat(),
+                "needs_clarification": False,
+                "clarification_question": None,
+                "confidence": 0.9,
+                "interpretation": "Parsed via fallback"
+            }
         except Exception:
             pass
+
+        clock = _parse_clock(text)
+        if clock:
+            target = now.replace(hour=clock[0], minute=clock[1], second=0, microsecond=0)
+            if target <= now:
+                target += timedelta(days=1)
+            return {
+                "datetime": target.isoformat(),
+                "needs_clarification": False,
+                "clarification_question": None,
+                "confidence": 0.9,
+                "interpretation": "Parsed via fallback"
+            }
+
         return {
             "datetime": None,
             "needs_clarification": True,
@@ -324,7 +423,7 @@ class ReminderService:
 
         # Use LLM-based parser with clarification support
         parser = LLMTimeParser()
-        parse_result = await LLMTimeParser().parse(text, user_tz=user.profile.timezone if hasattr(user, 'profile') else "UTC")
+        parse_result = await parser.parse(text, user_tz=user.profile.timezone if hasattr(user, 'profile') else "UTC")
 
         try:
             if parse_result.get("needs_clarification"):
@@ -336,7 +435,7 @@ class ReminderService:
                     "partial_datetime": parse_result.get("datetime"),
                 }
 
-                scheduled_time_str = parse_result.get("datetime")
+            scheduled_time_str = parse_result.get("datetime")
             if not scheduled_time_str:
                 return {"error": "Failed to parse time", "message": "Could not parse time expression"}
 
@@ -357,9 +456,6 @@ class ReminderService:
             if scheduled_time < timezone.now() + timedelta(minutes=1):
                 return {"error": "Cannot schedule for less than 1 minute from now"}
 
-            # Save reminder
-            content = text
-            scheduled_time = datetime.fromisoformat(scheduled_time_str.replace("Z", "+00:00"))
         
             room = None
             if room_id:

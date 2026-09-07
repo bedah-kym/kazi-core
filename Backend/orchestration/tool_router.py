@@ -834,7 +834,7 @@ class ReminderConnector(BaseConnector):
         from chatbot.models import Reminder, Chatroom
         from django.contrib.auth import get_user_model
         from asgiref.sync import sync_to_async
-        from chatbot.reminder_service import parse_reminder_time, LLMTimeParser
+        from chatbot.reminder_service import LLMTimeParser
 
         User = get_user_model()
         user_id = context.get("user_id")
@@ -872,9 +872,8 @@ class ReminderConnector(BaseConnector):
                 }
 
             # Parse the datetime string
-            from dateutil import parser as dateutil_parser
             scheduled_time = datetime.fromisoformat(scheduled_time_str.replace("Z", "+00:00"))
-            
+
             # Create Reminder
             room = await sync_to_async(Chatroom.objects.get)(pk=room_id) if room_id else None
             reminder = await sync_to_async(Reminder.objects.create)(

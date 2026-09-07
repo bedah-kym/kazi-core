@@ -11,7 +11,6 @@ message must delegate to the coordinator and persist the returned response.
 import json
 from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
-import asyncio
 
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model

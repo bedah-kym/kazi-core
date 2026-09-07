@@ -90,17 +90,89 @@ def _parse_clock(text: str):
 class TimeParseResult:
     """Result of time parsing with optional clarification needed."""
     def __init__(self, datetime_value=None, needs_clarification=False, clarification_question=None, original_text=None):
+        """Initialize a time parse result.
+
+        Args:
+            datetime_value: Parsed datetime object, or None if parsing failed.
+            needs_clarification: Whether the user input requires clarification.
+            clarification_question: Question to ask the user for clarification, if needed.
+            original_text: The original text that was parsed.
+        """
         self.datetime = datetime_value
         self.needs_clarification = needs_clarification
         self.clarification_question = clarification_question
         self.original_text = original_text
         self.parsed_at = timezone.now()
-    
+
     @property
     def is_resolved(self):
+        """Check if the time parse result is fully resolved.
+
+        Returns:
+            True if datetime is set and no clarification is needed, False otherwise.
+        """
         return self.datetime is not None and not self.needs_clarification
-    
+
     def to_dict(self):
+        """Convert the parse result to a dictionary representation.
+
+        Returns:
+            Dict containing datetime (as ISO string), needs_clarification flag,
+            clarification_question, and original_text.
+        """
+        return {
+            "datetime": self.datetime.isoformat() if self.datetime else None,
+            "needs_clarification": self.needs_clarification,
+            "clarification_question": self.clarification_question,
+            "original_text": self.original_text,
+        }
+
+    @classmethod
+    def resolved(cls, dt, original_text):
+        """Create a successfully resolved parse result.
+
+        Args:
+            dt: The parsed datetime object.
+            original_text: The original text that was parsed.
+
+        Returns:
+            TimeParseResult instance with datetime set and no clarification needed.
+        """
+        return cls(datetime_value=dt, original_text=original_text)
+
+    @classmethod
+    def needs_clarification(cls, question, original_text):
+        """Create a parse result that requires user clarification.
+
+        Args:
+            question: The clarification question to ask the user.
+            original_text: The original text that was ambiguous.
+
+        Returns:
+            TimeParseResult instance marked as needing clarification.
+        """
+        return cls(needs_clarification=True, clarification_question=question, original_text=original_text)
+
+    @classmethod
+    def failed(cls, original_text, error=None):
+        """Create a failed parse result.
+
+        Args:
+            original_text: The original text that could not be parsed.
+            error: Optional error information (unused).
+
+        Returns:
+            TimeParseResult instance with no datetime and no clarification.
+        """
+        return cls(original_text=original_text, datetime_value=None)
+
+    def to_dict(self):
+        """Convert the parse result to a dictionary representation.
+
+        Returns:
+            Dict containing datetime (as ISO string), needs_clarification flag,
+            clarification_question, and original_text.
+        """
         return {
             "datetime": self.datetime.isoformat() if self.datetime else None,
             "needs_clarification": self.needs_clarification,
@@ -110,17 +182,50 @@ class TimeParseResult:
     
     @classmethod
     def resolved(cls, dt, original_text):
+        """Create a successfully resolved parse result.
+
+        Args:
+            dt: The parsed datetime object.
+            original_text: The original text that was parsed.
+
+        Returns:
+            TimeParseResult instance with datetime set and no clarification needed.
+        """
         return cls(datetime_value=dt, original_text=original_text)
     
     @classmethod
     def needs_clarification(cls, question, original_text):
+        """Create a parse result that requires user clarification.
+
+        Args:
+            question: The clarification question to ask the user.
+            original_text: The original text that was ambiguous.
+
+        Returns:
+            TimeParseResult instance marked as needing clarification.
+        """
         return cls(needs_clarification=True, clarification_question=question, original_text=original_text)
     
     @classmethod
     def failed(cls, original_text, error=None):
+        """Create a failed parse result.
+
+        Args:
+            original_text: The original text that could not be parsed.
+            error: Optional error information (unused).
+
+        Returns:
+            TimeParseResult instance with no datetime and no clarification.
+        """
         return cls(original_text=original_text, datetime_value=None)
     
     def to_dict(self):
+        """Convert the parse result to a dictionary representation.
+
+        Returns:
+            Dict containing datetime (as ISO string), needs_clarification flag,
+            clarification_question, and original_text.
+        """
         return {
             "datetime": self.datetime.isoformat() if self.datetime else None,
             "needs_clarification": self.needs_clarification,
@@ -130,17 +235,50 @@ class TimeParseResult:
     
     @classmethod
     def resolved(cls, dt, original_text):
+        """Create a successfully resolved parse result.
+
+        Args:
+            dt: The parsed datetime object.
+            original_text: The original text that was parsed.
+
+        Returns:
+            TimeParseResult instance with datetime set and no clarification needed.
+        """
         return cls(datetime_value=dt, original_text=original_text)
     
     @classmethod
     def needs_clarification(cls, question, original_text):
+        """Create a parse result that requires user clarification.
+
+        Args:
+            question: The clarification question to ask the user.
+            original_text: The original text that was ambiguous.
+
+        Returns:
+            TimeParseResult instance marked as needing clarification.
+        """
         return cls(needs_clarification=True, clarification_question=question, original_text=original_text)
     
     @classmethod
     def failed(cls, original_text, error=None):
+        """Create a failed parse result.
+
+        Args:
+            original_text: The original text that could not be parsed.
+            error: Optional error information (unused).
+
+        Returns:
+            TimeParseResult instance with no datetime and no clarification.
+        """
         return cls(original_text=original_text, datetime_value=None)
     
     def to_dict(self):
+        """Convert the parse result to a dictionary representation.
+
+        Returns:
+            Dict containing datetime (as ISO string), needs_clarification flag,
+            clarification_question, and original_text.
+        """
         return {
             "datetime": self.datetime.isoformat() if self.datetime else None,
             "needs_clarification": self.needs_clarification,
@@ -150,17 +288,50 @@ class TimeParseResult:
     
     @classmethod
     def resolved(cls, dt, original_text):
+        """Create a successfully resolved parse result.
+
+        Args:
+            dt: The parsed datetime object.
+            original_text: The original text that was parsed.
+
+        Returns:
+            TimeParseResult instance with datetime set and no clarification needed.
+        """
         return cls(datetime_value=dt, original_text=original_text)
     
     @classmethod
     def needs_clarification(cls, question, original_text):
+        """Create a parse result that requires user clarification.
+
+        Args:
+            question: The clarification question to ask the user.
+            original_text: The original text that was ambiguous.
+
+        Returns:
+            TimeParseResult instance marked as needing clarification.
+        """
         return cls(needs_clarification=True, clarification_question=question, original_text=original_text)
     
     @classmethod
     def failed(cls, original_text, error=None):
+        """Create a failed parse result.
+
+        Args:
+            original_text: The original text that could not be parsed.
+            error: Optional error information (unused).
+
+        Returns:
+            TimeParseResult instance with no datetime and no clarification.
+        """
         return cls(original_text=original_text, datetime_value=None)
     
     def to_dict(self):
+        """Convert the parse result to a dictionary representation.
+
+        Returns:
+            Dict containing datetime (as ISO string), needs_clarification flag,
+            clarification_question, and original_text.
+        """
         return {
             "datetime": self.datetime.isoformat() if self.datetime else None,
             "needs_clarification": self.needs_clarification,
@@ -170,39 +341,51 @@ class TimeParseResult:
     
     @classmethod
     def resolved(cls, dt, original_text):
+        """Create a successfully resolved parse result.
+
+        Args:
+            dt: The parsed datetime object.
+            original_text: The original text that was parsed.
+
+        Returns:
+            TimeParseResult instance with datetime set and no clarification needed.
+        """
         return cls(datetime_value=dt, original_text=original_text)
     
     @classmethod
     def needs_clarification(cls, question, original_text):
+        """Create a parse result that requires user clarification.
+
+        Args:
+            question: The clarification question to ask the user.
+            original_text: The original text that was ambiguous.
+
+        Returns:
+            TimeParseResult instance marked as needing clarification.
+        """
         return cls(needs_clarification=True, clarification_question=question, original_text=original_text)
     
     @classmethod
     def failed(cls, original_text, error=None):
-        return cls(original_text=original_text, datetime_value=None)
-    
-    def to_dict(self):
-        return {
-            "datetime": self.datetime.isoformat() if self.datetime else None,
-            "needs_clarification": self.needs_clarification,
-            "clarification_question": self.clarification_question,
-            "original_text": self.original_text,
-        }
-    
-    @classmethod
-    def resolved(cls, dt, original_text):
-        return cls(datetime_value=dt, original_text=original_text)
-    
-    @classmethod
-    def needs_clarification(cls, question, original_text):
-        return cls(needs_clarification=True, clarification_question=question, original_text=original_text)
-    
-    @classmethod
-    def failed(cls, original_text, error=None):
+        """Create a failed parse result.
+
+        Args:
+            original_text: The original text that could not be parsed.
+            error: Optional error information (unused).
+
+        Returns:
+            TimeParseResult instance with no datetime and no clarification.
+        """
         return cls(original_text=original_text, datetime_value=None)
 
 
 class LLMTimeParser:
-    """LLM-based time parser with clarification support."""
+    """LLM-based time parser with clarification support.
+
+    Parses natural language time expressions using an LLM, with a deterministic
+    fallback parser for when the LLM is unavailable. Supports clarification requests
+    for ambiguous time expressions.
+    """
 
     SYSTEM_PROMPT = """You are a precise time parser for a reminder system. Parse natural language time expressions into ISO 8601 datetime strings.
 
@@ -250,10 +433,29 @@ If failed to parse, return:
 }"""
 
     def __init__(self, llm_client=None):
+        """Initialize the LLM time parser.
+
+        Args:
+            llm_client: Optional LLM client for parsing. If None, uses fallback parser.
+        """
         self.llm_client = llm_client
 
     async def parse(self, text: str, user_timezone: str = "UTC", context: dict = None) -> dict:
-        """Parse time expression with LLM, returning structured result."""
+        """Parse time expression with LLM, returning structured result.
+
+        Attempts to parse the time expression using an LLM if available, otherwise
+        falls back to a deterministic parser. Returns a dict with datetime, clarification
+        status, and interpretation.
+
+        Args:
+            text: Natural language time expression to parse.
+            user_timezone: IANA timezone string for the user (default: "UTC").
+            context: Optional additional context for parsing (unused).
+
+        Returns:
+            Dict with keys: datetime (ISO string or None), needs_clarification (bool),
+            clarification_question (str or None), confidence (float), interpretation (str).
+        """
         if not self.llm_client:
             # Fallback to deterministic parser
             return self._fallback_parse(text, user_timezone)
@@ -299,7 +501,20 @@ If failed to parse, return:
             return self._fallback_parse(text, user_timezone)
 
     def _fallback_parse(self, text: str, user_timezone: str = "UTC") -> dict:
-        """Deterministic fallback parser (existing logic)."""
+        """Deterministic fallback parser for when LLM is unavailable.
+
+        Parses common time patterns using regex and dateutil: relative times
+        (e.g., "in 10 minutes"), clock times (e.g., "5pm"), relative days
+        (e.g., "tomorrow"), and ISO datetime strings.
+
+        Args:
+            text: Natural language time expression to parse.
+            user_timezone: IANA timezone string for the user (default: "UTC").
+
+        Returns:
+            Dict with keys: datetime (ISO string or None), needs_clarification (bool),
+            clarification_question (str or None), confidence (float), interpretation (str).
+        """
         from django.utils import timezone
         from datetime import timedelta
         import re

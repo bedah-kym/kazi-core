@@ -424,6 +424,52 @@ If failed to parse, return:
 
 class ReminderService:
     @staticmethod
+    def _extract_time_expression(text: str) -> str:
+        """
+        Extract time expression from reminder text.
+        Examples:
+            "Remind me to call John in 10 minutes" -> "in 10 minutes"
+            "Remind me to take a break at 5pm" -> "at 5pm"
+            "Set a reminder for tomorrow at 9am to water plants" -> "tomorrow at 9am"
+            "in 5 minutes" -> "in 5 minutes" (already just time)
+        """
+        import re
+        
+        # Common reminder prefixes to strip
+        reminder_patterns = [
+            r"^remind me to\s+.*?(in\s+\d+\s+(?:minutes?|mins?|hours?|hrs?|days?|weeks?)).*$",
+            r"^remind me to\s+.*?(at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?).*$",
+            r"^remind me to\s+.*?(tomorrow\s+(?:at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?)).*$",
+            r"^remind me to\s+.*?(today\s+(?:at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?)).*$",
+            r"^set (?:a )?reminder (?:for\s+)?(.*?)(?:\s+to\s+|\s*$)",
+            r"^remind me\s+(?:to\s+)?(?:.*?)\s+(in\s+\d+\s+(?:minutes?|mins?|hours?|hrs?|days?|weeks?)).*$",
+            r"^remind me\s+(?:to\s+)?(?:.*?)\s+(at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?).*$",
+        ]
+        
+        text_lower = text.lower().strip()
+        
+        # Try to match and extract time expression
+        for pattern in reminder_patterns:
+            match = re.search(pattern, text_lower, re.IGNORECASE)
+            if match:
+                # Return the captured group (time expression)
+                if match.groups():
+                    return match.group(1).strip()
+                else:
+                    return match.group(0).strip()
+        
+        # If no pattern matches, check if text already looks like a time expression
+        time_indicators = [
+            "in ", "at ", "tomorrow", "today", "yesterday",
+            "am", "pm", ":", "minutes", "mins", "hours", "hrs", "days", "weeks"
+        ]
+        if any(indicator in text_lower for indicator in time_indicators):
+            return text
+        
+        # Fallback: return original text
+        return text
+    
+    @staticmethod
     async def parse_and_schedule(user, text, room_id=None):
         """
         Parse natural language reminder text and schedule it with LLM-based time parsing.
@@ -439,9 +485,12 @@ class ReminderService:
         else:
             user_tz = "UTC"
 
+        # Extract time expression from reminder text (e.g., "in 10 minutes" from "Remind me to call John in 10 minutes")
+        time_expression = ReminderService._extract_time_expression(text)
+        
         # Use LLM-based parser with clarification support
         parser = LLMTimeParser()
-        parse_result = await parser.parse(text, user_timezone=user_tz)
+        parse_result = await parser.parse(time_expression, user_timezone=user_tz)
 
         try:
             if parse_result.get("needs_clarification"):

@@ -853,7 +853,7 @@ class ReminderConnector(BaseConnector):
 
             # Use LLM-based parser with clarification support
             parser = LLMTimeParser()
-            parse_result = await parser.parse(time_str, user_tz)
+            parse_result = await parser.parse(time_str, user_timezone=user_tz)
 
             if parse_result.get("needs_clarification"):
                 # Return clarification needed response

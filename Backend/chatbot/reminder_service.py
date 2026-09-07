@@ -85,86 +85,6 @@ def _parse_clock(text: str):
     return hour, minute
 
 
-class TimeParseResult:
-    """Result of time parsing with optional clarification needed."""
-    def __init__(self, datetime_value=None, needs_clarification=False, clarification_question=None, original_text=None):
-        """Initialize a time parse result.
-
-        Args:
-            datetime_value: Parsed datetime object, or None if parsing failed.
-            needs_clarification: Whether the user input requires clarification.
-            clarification_question: Question to ask the user for clarification, if needed.
-            original_text: The original text that was parsed.
-        """
-        self.datetime = datetime_value
-        self.needs_clarification = needs_clarification
-        self.clarification_question = clarification_question
-        self.original_text = original_text
-        self.parsed_at = timezone.now()
-
-    @property
-    def is_resolved(self):
-        """Check if the time parse result is fully resolved.
-
-        Returns:
-            True if datetime is set and no clarification is needed, False otherwise.
-        """
-        return self.datetime is not None and not self.needs_clarification
-
-    def to_dict(self):
-        """Convert the parse result to a dictionary representation.
-
-        Returns:
-            Dict containing datetime (as ISO string), needs_clarification flag,
-            clarification_question, and original_text.
-        """
-        return {
-            "datetime": self.datetime.isoformat() if self.datetime else None,
-            "needs_clarification": self.needs_clarification,
-            "clarification_question": self.clarification_question,
-            "original_text": self.original_text,
-        }
-
-    @classmethod
-    def resolved(cls, dt, original_text):
-        """Create a successfully resolved parse result.
-
-        Args:
-            dt: The parsed datetime object.
-            original_text: The original text that was parsed.
-
-        Returns:
-            TimeParseResult instance with datetime set and no clarification needed.
-        """
-        return cls(datetime_value=dt, original_text=original_text)
-
-    @classmethod
-    def needs_clarification(cls, question, original_text):
-        """Create a parse result that requires user clarification.
-
-        Args:
-            question: The clarification question to ask the user.
-            original_text: The original text that was ambiguous.
-
-        Returns:
-            TimeParseResult instance marked as needing clarification.
-        """
-        return cls(needs_clarification=True, clarification_question=question, original_text=original_text)
-
-    @classmethod
-    def failed(cls, original_text, error=None):
-        """Create a failed parse result.
-
-        Args:
-            original_text: The original text that could not be parsed.
-            error: Optional error information (unused).
-
-        Returns:
-            TimeParseResult instance with no datetime and no clarification.
-        """
-        return cls(original_text=original_text, datetime_value=None)
-
-
 class LLMTimeParser:
     """LLM-based time parser with clarification support.
 
@@ -173,50 +93,50 @@ class LLMTimeParser:
     for ambiguous time expressions.
     """
 
-    SYSTEM_PROMPT = """You are a precise time parser for a reminder system. Parse natural language time expressions into ISO 8601 datetime strings.
-
-SUPPORTED FORMATS:
-- ISO 8601: "2024-12-25T10:30:00", "2024-12-25T10:30:00+03:00"
-- Relative: "in 10 minutes", "in 3 hours", "in 3 days", "in 2 weeks"
-- Relative days: "tomorrow", "tomorrow at 9am", "today at 5pm", "today", "yesterday"
-- Clock times: "5pm", "5:30pm", "9:30am", "14:30"
-- Plain numbers: "10" (minutes from now)
-- Relative: "in 30 minutes", "in 3 hours", "in 3 days", "in 2 weeks"
-
-RULES:
-1. If the time is ambiguous (e.g., "Monday", "next week", "Friday"), ask for clarification
-2. "Monday" without "this/next" is ambiguous - ask "this Monday" or "next Monday"?
-3. "Monday at 9am" without "this/next" - ambiguous
-4. "Tomorrow at 9am" is unambiguous (tomorrow is always tomorrow)
-5. "In 3 days" is unambiguous
-8. Return ISO 8601 in UTC for the parsed time
-
-RESPONSE FORMAT (JSON):
-{
-  "datetime": "2024-12-25T10:30:00+00:00",  // ISO 8601 UTC, or null if needs clarification
-  "needs_clarification": false,
-  "clarification_question": null,
-  "confidence": 0.95,
-  "interpretation": "User wants reminder for December 25th, 2024 at 10:30 AM UTC"
-}
-
-If ambiguous, return:
-{
-  "datetime": null,
-  "needs_clarification": true,
-  "clarification_question": "Did you mean this Monday (Dec 25) or next Monday (Jan 1)?",
-  "confidence": 0.3,
-  "interpretation": "User said 'Monday' but didn't specify which Monday"
-}
-
-If failed to parse, return:
-{
-  "datetime": null,
-  "needs_clarification": true,
-  "clarification_question": "Could you clarify the time? (e.g., 'tomorrow at 9am' or 'in 2 hours')",
-  "confidence": 0.0,
-  "interpretation": "Failed to parse"
-}"""
+    SYSTEM_PROMPT = (
+        "You are a precise time parser for a reminder system. "
+        "Parse natural language time expressions into ISO 8601 datetime strings.\n\n"
+        "SUPPORTED FORMATS:\n"
+        '- ISO 8601: "2024-12-25T10:30:00", "2024-12-25T10:30:00+03:00"\n'
+        '- Relative: "in 10 minutes", "in 3 hours", "in 3 days", "in 2 weeks"\n'
+        '- Relative days: "tomorrow", "tomorrow at 9am", "today at 5pm", "today", "yesterday"\n'
+        '- Clock times: "5pm", "5:30pm", "9:30am", "14:30"\n'
+        '- Plain numbers: "10" (minutes from now)\n\n'
+        "RULES:\n"
+        "1. If the time is ambiguous (e.g., \"Monday\", \"next week\", \"Friday\"), "
+        "ask for clarification\n"
+        "2. \"Monday\" without \"this/next\" is ambiguous - ask \"this Monday\" or "
+        "\"next Monday\"?\n"
+        "3. \"Monday at 9am\" without \"this/next\" - ambiguous\n"
+        "4. \"Tomorrow at 9am\" is unambiguous (tomorrow is always tomorrow)\n"
+        "5. \"In 3 days\" is unambiguous\n"
+        "8. Return ISO 8601 in UTC for the parsed time\n\n"
+        "RESPONSE FORMAT (JSON):\n"
+        "{\n"
+        '  "datetime": "2024-12-25T10:30:00+00:00",\n'
+        '  "needs_clarification": false,\n'
+        '  "clarification_question": null,\n'
+        '  "confidence": 0.95,\n'
+        '  "interpretation": "User wants reminder for December 25th, 2024 at 10:30 AM UTC"\n'
+        "}\n\n"
+        "If ambiguous, return:\n"
+        "{\n"
+        '  "datetime": null,\n'
+        '  "needs_clarification": true,\n'
+        '  "clarification_question": "Did you mean this Monday (Dec 25) or next Monday (Jan 1)?",\n'
+        '  "confidence": 0.3,\n'
+        '  "interpretation": "User said \'Monday\' but didn\'t specify which Monday"\n'
+        "}\n\n"
+        "If failed to parse, return:\n"
+        "{\n"
+        '  "datetime": null,\n'
+        '  "needs_clarification": true,\n'
+        '  "clarification_question": "Could you clarify the time? '
+        "(e.g., 'tomorrow at 9am' or 'in 2 hours')\",\n"
+        '  "confidence": 0.0,\n'
+        '  "interpretation": "Failed to parse"\n'
+        "}"
+    )
 
     def __init__(self, llm_client=None):
         """Initialize the LLM time parser.
@@ -397,8 +317,8 @@ If failed to parse, return:
                 "confidence": 0.9,
                 "interpretation": "Parsed via fallback"
             }
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("dateutil parse failed for %r: %s", text, e)
 
         clock = _parse_clock(text)
         if clock:
@@ -433,8 +353,6 @@ class ReminderService:
             "Set a reminder for tomorrow at 9am to water plants" -> "tomorrow at 9am"
             "in 5 minutes" -> "in 5 minutes" (already just time)
         """
-        import re
-        
         # Common reminder prefixes to strip
         reminder_patterns = [
             r"^remind me to\s+.*?(in\s+\d+\s+(?:minutes?|mins?|hours?|hrs?|days?|weeks?)).*$",
@@ -445,9 +363,9 @@ class ReminderService:
             r"^remind me\s+(?:to\s+)?(?:.*?)\s+(in\s+\d+\s+(?:minutes?|mins?|hours?|hrs?|days?|weeks?)).*$",
             r"^remind me\s+(?:to\s+)?(?:.*?)\s+(at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?).*$",
         ]
-        
+
         text_lower = text.lower().strip()
-        
+
         # Try to match and extract time expression
         for pattern in reminder_patterns:
             match = re.search(pattern, text_lower, re.IGNORECASE)
@@ -457,7 +375,7 @@ class ReminderService:
                     return match.group(1).strip()
                 else:
                     return match.group(0).strip()
-        
+
         # If no pattern matches, check if text already looks like a time expression
         time_indicators = [
             "in ", "at ", "tomorrow", "today", "yesterday",
@@ -465,19 +383,16 @@ class ReminderService:
         ]
         if any(indicator in text_lower for indicator in time_indicators):
             return text
-        
+
         # Fallback: return original text
         return text
-    
+
     @staticmethod
     async def parse_and_schedule(user, text, room_id=None):
         """
         Parse natural language reminder text and schedule it with LLM-based time parsing.
         Example: "Remind me to call John in 10 minutes"
         """
-        # Use LLM-based time parser with clarification support
-        from chatbot.reminder_service import LLMTimeParser
-
         content = text
         user_tz = "UTC"
         if hasattr(user, 'profile') and user.profile:
@@ -487,7 +402,7 @@ class ReminderService:
 
         # Extract time expression from reminder text (e.g., "in 10 minutes" from "Remind me to call John in 10 minutes")
         time_expression = ReminderService._extract_time_expression(text)
-        
+
         # Use LLM-based parser with clarification support
         parser = LLMTimeParser()
         parse_result = await parser.parse(time_expression, user_timezone=user_tz)
@@ -539,8 +454,9 @@ class ReminderService:
             )
 
             try:
+                from asgiref.sync import sync_to_async as _sync_to_async
                 from chatbot.tasks import schedule_reminder_delivery
-                await schedule_reminder_delivery(reminder.id, scheduled_time)
+                await _sync_to_async(schedule_reminder_delivery)(reminder.id, scheduled_time)
             except Exception as e:
                 logger.warning(f"Reminder scheduling skipped: {e}")
             return {

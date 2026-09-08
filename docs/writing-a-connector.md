@@ -192,4 +192,5 @@ The connector auto-discovers on startup.
 - Use `required: True` only for params the action truly cannot work without
 - Return helpful error messages — they become part of the conversation
 - Test your connector with the echo pattern first, then add real API calls
-- Check `example_connector.py` for the simplest possible starting point
+- Check `examples/connectors/echo/echo_connector.py` for the simplest possible
+  starting point

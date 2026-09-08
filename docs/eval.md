@@ -150,7 +150,7 @@ unintended planner regression would show up as a failure. Flip
   surface, with an advisory CI job.
 - **v0.4 M4-2** — the same scenarios will feed the `kazi trace` CLI
   so an operator can replay any failed scenario from the trace alone.
-- **v0.5+** — mock LLM provider for credential-free eval coverage in
+- **Future** — mock LLM provider for credential-free eval coverage in
   CI; per-PR delta reporting (`scenarios_added` / `scenarios_now_failing`).
 
 ## See also

@@ -7,34 +7,131 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-- **OrchestrationCoordinator** (`orchestration/coordinator.py`): a single chat-routing
-  facade that owns everything after `@mathia` routing — directives, pending
-  confirmations, the agent loop, planner, intent dispatch, and general chat.
-  `chatbot/consumers.py` delegates to it, shrinking the WebSocket consumer by ~900 lines.
-- **Durable agent-loop approvals**: high-risk tools paused inside the agent loop now
-  write a durable `WorkflowApprovalRecord` (kind=`agent_loop`, room-scoped), so a
-  pending confirmation survives Redis eviction and is auditable in the ops inbox.
-- **Retry backoff + per-service circuit breaker** (`agent_loop.py`): failed tool calls
-  retry with exponential backoff (capped at 300s) and a service trips a circuit breaker
-  after repeated failures (60s cooldown), so flapping integrations degrade instead of
-  being hammered.
-- **Cycle detection in workflow dependencies**: a shared Kahn's-algorithm check
-  (`workflows/capabilities.find_dependency_cycle`) rejects `A→B→A` step cycles in both
-  the manager verifier and `validate_workflow_definition`.
-- **History compaction on by default**: `HISTORY_COMPACTION_ENABLED` now defaults to
-  enabled (opt-out), trimming the oldest turns to fit the context budget.
+## [0.5.0] - 2026-09-08
 
-### Fixed
-- **Concurrency race on pending approvals**: two rapid messages for the same
-  (room, user) could overwrite a paused confirmation. Added a per-(room, user)
-  asyncio lock plus a partial unique constraint on pending agent-loop approvals.
-- **Intent-path summary caching**: the intent route now caches conversation summaries
-  (a `nonlocal` scoping bug previously skipped the cache on that path).
+The **operator + resilience release**. v0.4 built the human-gated runtime as a JSON
+API + Django admin; v0.5 puts a real browser surface in front of it, gives users
+control over the model that answers them, and hardens the runtime's reliability and
+security posture end to end. The connector freeze held — the model catalog and
+per-room model selector landed without adding a single vertical connector.
+
+### Added
+
+**Operator web UI** — the human-gated runtime now has a first-class browser surface:
+- `workflows/ui_views.py` (mounted at `/workflows/`) — automations list, an operations
+  **inbox** (pending approvals, failed/deferred runs, improvement suggestions), run
+  history, and a per-run execution detail page with approve / reject / cancel / rerun
+  forms and trigger pause/resume. It reuses the same runtime helpers as the JSON API,
+  so approval, replay-safety, and cancellation semantics are identical across surfaces.
+- A **notification center** at `/notifications/` — a server-rendered inbox for the
+  unified notification pipeline, with All/Unread tabs, event-type filters, pagination,
+  deep links into rooms and invoices, and mark-read / mark-all-read / dismiss actions.
+
+**Model control**:
+- **Model catalog** (`orchestration/model_catalog.py`) — a single frozen source of truth
+  for the models the chatroom picker offers (DeepSeek, Claude, Llama) with tiers
+  (`fast` / `high` / `vision`).
+- **Explicit provider routing** — `LLMClient.create_message` / `stream_message` accept an
+  explicit `provider` + `model`, bypassing the auto-fallback heuristic.
+- **Per-room model selector** — a dropdown in the chatroom header plus
+  `GET/POST /api/rooms/<id>/model/`, persisted as a per-room preference the agent loop
+  reads every turn (`Auto` = smart routing).
+
+**OrchestrationCoordinator** (`orchestration/coordinator.py`) — the routing facade that
+owns everything after `@mathia` routing: directives, pending confirmations, the agent
+loop, planner, intent dispatch, and general chat. `chatbot/consumers.py` delegates to
+it, shrinking the WebSocket consumer by ~900 lines.
+
+**Durable agent-loop approvals** — high-risk tool calls paused inside the ReAct loop now
+write a room-scoped `WorkflowApprovalRecord` (`kind=agent_loop`) so a pending
+confirmation survives Redis eviction and is auditable in the ops inbox.
+
+**Retry backoff + per-service circuit breaker** (`agent_loop.py`) — failed tool calls
+retry with exponential backoff (capped at 300s); a service that fails 3 times in a row
+trips a 60s circuit breaker so a flapping integration degrades instead of being hammered.
+
+**Workflow runtime**:
+- **Temporal Update API approvals** behind `WORKFLOW_APPROVALS_UPDATE_API` (default off,
+  reversible) — typed approval delivery that fails loudly on an approval-id mismatch
+  instead of a fire-and-forget signal.
+- **`DatabaseScheduler`** + `sync_beat_schedule` — the Celery beat schedule is
+  materialized into the DB idempotently, so runtime edits survive deploys.
+- **Stuck-approval sweeper** — a beat job dead-letters approvals that outlive their
+  max pending age (`WORKFLOW_APPROVAL_SWEEP_SECONDS`, batch + age tunables).
+- **Adhoc workflow dedupe** — a DB-enforced idempotency key so a duplicate request can't
+  start two runs.
+
+**Reminders** — an **LLM-based time parser** with clarification support
+(`chatbot/reminder_service.LLMTimeParser`) plus timezone-aware scheduling: the LLM
+returns naive local times and the code deterministically attaches the user's timezone.
+Ambiguous or already-passed times ask for clarification instead of guessing.
+
+**Self-host DX**:
+- **`.env.example`** plus a clean-clone onboarding path that works from `git clone`.
+- **`ENCRYPTION_KEY`** — required in production, auto-generated and persisted in dev;
+  rooms encrypted with a changed or lost key fail closed (WebSocket `403`).
+- Stable dev `DJANGO_SECRET_KEY` persistence, a fail-fast entrypoint, and
+  `CELERY_RESULT_BACKEND` honored from the environment.
+
+**Dependency cycle detection** — a shared Kahn's-algorithm check
+(`workflows/capabilities.find_dependency_cycle`) rejects `A→B→A` step cycles in both
+the manager verifier and `validate_workflow_definition`.
+
+**History compaction on by default** — `HISTORY_COMPACTION_ENABLED` now defaults to
+enabled (opt-out), trimming the oldest turns to fit the context budget.
+
+**Infra / CI**:
+- Compiled, OS-independent `requirements.lock` (flat pin list) gating CI.
+- Hermetic no-services test lane; coverage floor raised to 43%; bandit medium+low and a
+  PEP8 blocking subset flipped on.
+- MkDocs site + Read the Docs publishing (`mkdocs.yml`, `docs/` nav).
 
 ### Changed
-- `chatbot/consumers.py` slimmed down; post-`@mathia` routing moved to `OrchestrationCoordinator`.
+- `mcp_router.py` renamed to `tool_router.py` (the old name is a one-cycle shim).
 - `HISTORY_COMPACTION_ENABLED` default changed from `False` to `True`.
+- Workflow step execution unified through the connector registry (workflow handoff
+  routes through `execute_adhoc_workflow`).
+- `chatbot/consumers.py` slimmed down; post-`@mathia` routing moved to
+  `OrchestrationCoordinator`.
+- Minor dependency minimums bumped to match the compiled lock.
+
+### Fixed
+- **Concurrency race on pending approvals** — two rapid messages for the same
+  (room, user) could overwrite a paused confirmation. Added a per-(room, user) asyncio
+  lock plus a partial unique constraint on pending agent-loop approvals.
+- **Anthropic model names leaking to the DeepSeek fallback** — the fallback now passes
+  `model=None` so each provider resolves its own model instead of forwarding Claude names.
+- **Mid-stream LLM fallback duplicating partial answers** — streaming now fails through
+  once any chunk has been emitted rather than restarting on another provider.
+- **Tool results poisoning user entity memory** — extracted tool output no longer bleeds
+  into the entity memory the agent recalls.
+- **Idle WebSocket flapping on redis-py 8.0.0** — fixed the socket-timeout handling.
+- **Intent-path summary caching** — the intent route now caches conversation summaries
+  (a `nonlocal` scoping bug previously skipped the cache on that path).
+- **Workflow template param resolution** — `{{ previous_step.field }}` references resolve
+  in workflow steps.
+- **Reminder time parsing** — robust timezone handling and a hardened deterministic
+  fallback parser.
+
+### Security
+- **Prompt-injection golden corpus** (`orchestration/eval/golden_scenarios.json`) with
+  eval-runner enforcement, so injection regressions fail CI.
+- **Agent budget caps** — install-level "Enforce agent budget caps" toggle (settings UI,
+  default on) plus tighter sub-agent token/tool-call budgets with stop-reason reporting,
+  and a hard backstop when caps are disabled.
+- **Fail-closed capability lookups** — a capability-preference lookup error now blocks
+  rather than silently allowing.
+- **Append-only action receipts** — undo state cannot be resurrected after a receipt is
+  written (MR-1).
+- **Entry-point shadowing refused** — pip-installed connectors cannot shadow built-in
+  action names; contract violations are recorded and surfaced (CR-3).
+- **Stack-trace exposure closed** — exception details no longer leak in API responses,
+  flash messages, or connector output.
+- **Room-access cache fails closed** — membership changes invalidate the cache and
+  unauthorized access dies on lookup.
+- **Payments integrity** — explicit cent quantization, balanced-journal guards,
+  per-tracking-id `DepositIntent`, and deposit callbacks rejected without an
+  invoice/tracking id.
 
 ## [0.4.2] - 2026-08-16
 
@@ -400,7 +497,9 @@ The full orchestration core was opened.
 - Project rebranded from Mathia.OS to **Kazi** (Swahili for "work").
   Agent identity is configurable via `KAZI_AGENT_NAME` (default `Kazi`).
 
-[Unreleased]: https://github.com/bedah-kym/kazi-core/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/bedah-kym/kazi-core/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/bedah-kym/kazi-core/compare/v0.4.2...v0.5.0
+[0.4.2]: https://github.com/bedah-kym/kazi-core/releases/tag/v0.4.2
 [0.4.1]: https://github.com/bedah-kym/kazi-core/releases/tag/v0.4.1
 [0.4.0]: https://github.com/bedah-kym/kazi-core/releases/tag/v0.4.0
 [0.3.0]: https://github.com/bedah-kym/kazi-core/releases/tag/v0.3.0

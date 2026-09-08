@@ -15,15 +15,14 @@ Treat each contract as a small API. If you change one, you bump its
 
 | Contract | What it shapes | Version | Status |
 |---|---|---|---|
-| [Connector execution](connector-execution.md) | What a connector's `execute()` must return | 1.0 | stable |
+| [Connector execution](connector-execution.md) | What a connector's `execute()` must return | 1.1 | stable |
 | [Tool schema](tool-schema.md) | What a connector's `get_action_catalog_entries()` must return | 1.0 | stable |
 | [Approval](approval.md) | What `WorkflowExecution.pending_approval` looks like and how operators answer it | 1.0 | stable |
 | [Execution detail](execution-detail.md) | What `GET /api/workflows/executions/<id>/` returns | 1.0 | stable |
 | [Replay safety](replay-safety.md) | Per-step `replay_safe` declaration + computed `replay_hints` | 1.0 | stable |
 
-Two more contracts are queued for v0.5 (telemetry events, memory
-updates). They are deliberately out of scope for v0.4 because the
-underlying code is still settling.
+Two more contracts (telemetry events, memory updates) remain queued for a
+future release because the underlying code is still settling.
 
 ## Versioning policy
 

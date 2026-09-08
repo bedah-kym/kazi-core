@@ -118,11 +118,10 @@ backfill, then enforce in a follow-up release).
   whole web tier.
 - **Operate your own LLM.** The default
   [`llm_client`](https://github.com/bedah-kym/kazi-core/blob/main/Backend/orchestration/llm_client.py) talks to
-  Anthropic; you bring the key. HuggingFace is the fallback.
-- **Stand up a UI.** Operator surfaces ship as JSON APIs + Django
-  admin. A community web UI may follow under
-  [`examples/`](https://github.com/bedah-kym/kazi-core/tree/main/examples/) — until then, your existing internal
-  tools or a `curl`-driven runbook is enough.
+  Anthropic (with DeepSeek and Hugging Face as fallbacks); you bring the key.
+- **Stand up a UI.** Operator surfaces ship out of the box: the workflow
+  operations console at `/workflows/` and the notification center at
+  `/notifications/`, plus the JSON APIs and Django admin underneath them.
 
 ## Next
 

@@ -117,9 +117,8 @@ approval before it executes — no extra code needed on your side.
 Three paths, in order of how "official" they are:
 
 1. **Built into core** — open a PR adding a file under
-   `Backend/orchestration/connectors/`. It's auto-discovered. *(The v0.4
-   release cycle is under a connector freeze — check `AGENTS.md` §5 before
-   submitting.)*
+   `Backend/orchestration/connectors/`. It's auto-discovered. *(Check
+   `AGENTS.md` §5 for the current connector policy before submitting.)*
 2. **Example** — `examples/connectors/<name>/` ships a copy-paste starter;
    only loaded in `KAZI_DEMO_MODE=true`.
 3. **Community pip package** — the standard path for third-party connectors:

@@ -64,6 +64,19 @@ Workflow step dependencies are checked for cycles (Kahn's algorithm), so an
 `A→B→A` plan is rejected with a clear error instead of silently reordering
 wrong.
 
+### 🎛️ Pick the model per room
+
+A model catalog (`orchestration/model_catalog.py`) lists the models the
+chatroom picker offers, grouped by provider with fast / high / vision tiers.
+Each room can pin its own model from the chatroom header — or leave it on
+*Auto* for smart routing across Anthropic, DeepSeek, and Hugging Face.
+
+### 🕓 Reminders that know your timezone
+
+Reminders parse naturally ("remind me to call John tomorrow at 9am") through an
+LLM-driven time parser that asks for clarification when the time is ambiguous,
+then schedules in the user's timezone — never guessing past or vague times.
+
 ### 🛡️ Security in the bones
 
 - Prompt-injection detection before anything reaches the LLM
@@ -111,6 +124,10 @@ auto-discovers it on restart.
 | Retry backoff + circuit breaker | Exponential backoff and per-service degrade for flapping integrations |
 | Dependency cycle detection | Kahn's-algorithm check that rejects circular workflow plans |
 | History compaction | Trims oldest turns to the context budget — on by default |
+| Operator web UI | Workflow operations inbox, run history, and approval forms at `/workflows/` |
+| Notification center | Full inbox at `/notifications/` with unread/event filters and deep links |
+| Model selector | Per-room model picker backed by the frozen model catalog |
+| Timezone-aware reminders | LLM time parser with clarification support, scheduled in your timezone |
 
 ## Turning features on
 

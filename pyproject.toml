@@ -1,6 +1,6 @@
 [project]
 name = "kazi-core"
-version = "0.4.2"
+version = "0.5.0"
 description = "Self-hostable Django + Channels agentic engine — ReAct agent loop, workflow planning, pluggable connector registry."
 readme = "README.md"
 requires-python = ">=3.11,<3.13"

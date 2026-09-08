@@ -98,11 +98,22 @@ Three tiers:
 
 ### LLM Client (`orchestration/llm_client.py`)
 
-Provider-agnostic LLM interface. Currently supports:
-- Anthropic Claude (primary)
-- HuggingFace Inference API (fallback)
+Provider-agnostic LLM interface with three providers:
+- Anthropic Claude (primary; native Messages API with tool-calling)
+- DeepSeek (OpenAI-compatible, full tool-calling via an Anthropic↔OpenAI adapter)
+- Hugging Face Inference API (text-only fallback)
 
-Features: token budgeting, response caching, automatic fallback between providers.
+Features: token budgeting, response caching, and automatic fallback between
+providers. `create_message` / `stream_message` accept an explicit `provider` +
+`model`; when no provider is given, the client falls back Anthropic → DeepSeek →
+Hugging Face, resolving each provider's own model name on the way down.
+
+### Model Catalog & Selection (`orchestration/model_catalog.py`)
+
+A frozen catalog of the models the chatroom picker offers, keyed `provider/model`
+with a `fast` / `high` / `vision` tier. The agent loop applies a per-room override
+(see the model selector dropdown) when one is set; otherwise it picks a default
+Claude model by message shape, with `Auto` routing through the provider fallback.
 
 ## Supporting Systems
 

@@ -2,6 +2,8 @@
 Message Actions API Views
 Endpoints for pinning messages, replying, retrying,and document uploads
 """
+import logging
+
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -14,6 +16,8 @@ from django.core.files.base import ContentFile
 from chatbot.models import Chatroom, Message, RoomContext, RoomNote, DocumentUpload
 from orchestration.models import ActionReceipt
 from orchestration.action_receipts import format_receipt_summary
+
+logger = logging.getLogger(__name__)
 
 
 @api_view(['GET'])
@@ -59,9 +63,10 @@ def get_action_receipts(request, room_id):
 
         return Response({"receipts": payload}, status=status.HTTP_200_OK)
 
-    except Exception as e:
+    except Exception:
+        logger.exception("Request failed")
         return Response(
-            {"error": str(e)},
+            {"error": "An unexpected error occurred. Please try again."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -126,9 +131,10 @@ def pin_message_to_notes(request, room_id, message_id):
             "message": "Message pinned to notes successfully"
         }, status=status.HTTP_201_CREATED)
 
-    except Exception as e:
+    except Exception:
+        logger.exception("Request failed")
         return Response(
-            {"error": str(e)},
+            {"error": "An unexpected error occurred. Please try again."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -167,9 +173,10 @@ def reply_to_message(request, room_id, message_id):
             "reply_prefix": f"Replying to {member_name}: \"{message_content[:50]}...\"\n\n"
         }, status=status.HTTP_200_OK)
 
-    except Exception as e:
+    except Exception:
+        logger.exception("Request failed")
         return Response(
-            {"error": str(e)},
+            {"error": "An unexpected error occurred. Please try again."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -203,9 +210,10 @@ def retry_ai_message(request, room_id, message_id):
             "message_id": message_id
         }, status=status.HTTP_200_OK)
 
-    except Exception as e:
+    except Exception:
+        logger.exception("Request failed")
         return Response(
-            {"error": str(e)},
+            {"error": "An unexpected error occurred. Please try again."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -330,9 +338,10 @@ def upload_document_to_ai(request, room_id):
             "remaining_uploads": quota_limit - (recent_uploads + 1)
         }, status=status.HTTP_201_CREATED)
 
-    except Exception as e:
+    except Exception:
+        logger.exception("Request failed")
         return Response(
-            {"error": str(e)},
+            {"error": "An unexpected error occurred. Please try again."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -386,8 +395,9 @@ def get_upload_quota(request, room_id):
             "resets_at": resets_at
         }, status=status.HTTP_200_OK)
 
-    except Exception as e:
+    except Exception:
+        logger.exception("Request failed")
         return Response(
-            {"error": str(e)},
+            {"error": "An unexpected error occurred. Please try again."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )

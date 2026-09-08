@@ -67,7 +67,7 @@ async def search_travel(request):
     except Exception as e:
         logger.error(f"Search error: {e}")
         return Response(
-            {'error': str(e)},
+            {'error': 'An unexpected error occurred. Please try again.'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -167,7 +167,7 @@ def search_events(request):
     except Exception as e:
         logger.error(f"Event search error: {e}")
         return Response(
-            {'error': str(e)},
+            {'error': 'An unexpected error occurred. Please try again.'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 

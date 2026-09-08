@@ -71,7 +71,7 @@ def upload_voice_note(request, room_id):
 
     except Exception as e:
         logger.error(f"Error uploading voice note: {e}")
-        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({"error": "An unexpected error occurred. Please try again."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['GET'])

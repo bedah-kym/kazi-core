@@ -182,7 +182,7 @@ def initiate_deposit(request):
 
     except Exception as e:
         logger.error(f"Deposit initiation error: {e}")
-        return JsonResponse({'error': str(e)}, status=500)
+        return JsonResponse({'error': 'An unexpected error occurred. Please try again.'}, status=500)
 
 
 @csrf_exempt
@@ -309,7 +309,7 @@ def payment_callback(request):
 
     except Exception as e:
         logger.error(f"Callback processing error: {e}")
-        return JsonResponse({'error': str(e)}, status=500)
+        return JsonResponse({'error': 'An unexpected error occurred. Please try again.'}, status=500)
 
 
 @login_required

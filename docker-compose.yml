@@ -27,9 +27,8 @@ services:
       - CELERY_BROKER_URL=${REDIS_URL:-redis://redis:6379/0}
       - CELERY_RESULT_BACKEND=${REDIS_URL:-redis://redis:6379/0}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
-      - DATABASE_URL=postgres://mathia_user:mathia_password@db:5432/mathia_db
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -h db -p 5432 -U mathia_user -d mathia_db" ]
+      test: [ "CMD-SHELL", "pg_isready -h db -p 5432 -U ${POSTGRES_USER:-mathia_user} -d ${POSTGRES_DB:-mathia_db}" ]
       interval: 5s
       timeout: 5s
       retries: 30
@@ -37,7 +36,7 @@ services:
   web:
     build: .
     image: mathia-web:latest
-    command: sh -c "python /app/wait_for_db.py && gunicorn Backend.asgi:application -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --workers 4"
+    command: sh -c "gunicorn Backend.asgi:application -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --workers 4"
     volumes:
       - .:/app
     ports:
@@ -50,7 +49,6 @@ services:
       - CELERY_BROKER_URL=${REDIS_URL:-redis://redis:6379/0}
       - CELERY_RESULT_BACKEND=${REDIS_URL:-redis://redis:6379/0}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
-      - DATABASE_URL=postgres://mathia_user:mathia_password@db:5432/mathia_db
       # NOTE: API keys are loaded via env_file: .env above. Listing them
       # here with ${VAR} interpolation would OVERRIDE the env_file value
       # with whatever the host shell has (usually empty), silently losing
@@ -73,7 +71,6 @@ services:
       - CELERY_BROKER_URL=${REDIS_URL:-redis://redis:6379/0}
       - CELERY_RESULT_BACKEND=${REDIS_URL:-redis://redis:6379/0}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
-      - DATABASE_URL=postgres://mathia_user:mathia_password@db:5432/mathia_db
     depends_on:
       db:
         condition: service_healthy
@@ -92,7 +89,6 @@ services:
       - CELERY_BROKER_URL=${REDIS_URL:-redis://redis:6379/0}
       - CELERY_RESULT_BACKEND=${REDIS_URL:-redis://redis:6379/0}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
-      - DATABASE_URL=postgres://mathia_user:mathia_password@db:5432/mathia_db
     depends_on:
       db:
         condition: service_healthy
@@ -111,7 +107,6 @@ services:
       - CELERY_BROKER_URL=${REDIS_URL:-redis://redis:6379/0}
       - CELERY_RESULT_BACKEND=${REDIS_URL:-redis://redis:6379/0}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
-      - DATABASE_URL=postgres://mathia_user:mathia_password@db:5432/mathia_db
     depends_on:
       db:
         condition: service_healthy

@@ -17,7 +17,7 @@ import json
 import logging
 import threading
 from typing import Dict, Optional, Any
-from datetime import datetime
+from datetime import datetime, timedelta, timezone as dt_tz
 from django.core.cache import cache
 from django_redis import get_redis_connection
 from asgiref.sync import sync_to_async
@@ -605,7 +605,6 @@ class SearchConnector(BaseConnector):
     async def execute(self, parameters: Dict, context: Dict) -> Dict:
         """Perform web search with strict rate limiting"""
         from django.core.cache import cache
-        from datetime import datetime
 
         user_id = context.get("user_id")
         query = parameters.get("query")
@@ -834,6 +833,7 @@ class ReminderConnector(BaseConnector):
         from chatbot.models import Reminder, Chatroom
         from django.contrib.auth import get_user_model
         from asgiref.sync import sync_to_async
+        from chatbot.reminder_service import LLMTimeParser
 
         User = get_user_model()
         user_id = context.get("user_id")
@@ -847,20 +847,50 @@ class ReminderConnector(BaseConnector):
             return {"status": "error", "message": "When should I remind you?"}
 
         try:
-            from chatbot.reminder_service import parse_reminder_time
-
             user = await sync_to_async(User.objects.get)(pk=user_id)
             user_tz = user.profile.timezone if hasattr(user, 'profile') else 'UTC'
 
-            scheduled_time = parse_reminder_time(time_str, user_timezone=user_tz)
-            if scheduled_time is None:
+            # Use LLM-based parser with clarification support
+            try:
+                from orchestration.llm_client import get_llm_client
+                llm_client = get_llm_client()
+            except Exception:
+                llm_client = None
+            parser = LLMTimeParser(llm_client=llm_client)
+            parse_result = await parser.parse(time_str, user_timezone=user_tz)
+
+            if parse_result.get("needs_clarification"):
+                # Return clarification needed response
+                return {
+                    "status": "needs_clarification",
+                    "clarification_question": parse_result.get("clarification_question", "Could you clarify the time?"),
+                    "partial_interpretation": parse_result.get("interpretation", ""),
+                    "partial_datetime": parse_result.get("datetime"),
+                }
+
+            scheduled_time_str = parse_result.get("datetime")
+            if not scheduled_time_str:
                 return {
                     "status": "error",
-                    "message": (
-                        f"I couldn't understand the time '{time_str}'. "
-                        "Please use a format like 'in 10 minutes', '5pm', or 'tomorrow at 9am'."
-                    ),
+                    "message": "Could not parse time expression"
                 }
+
+            # Parse the datetime string
+            scheduled_time = datetime.fromisoformat(scheduled_time_str.replace("Z", "+00:00"))
+
+            # Ensure timezone awareness
+            from django.utils import timezone as dj_tz
+            if dj_tz.is_naive(scheduled_time):
+                scheduled_time = dj_tz.make_aware(scheduled_time, dt_tz.utc)
+
+            # Validation
+            now = dj_tz.now()
+            if scheduled_time <= now:
+                return {"status": "error", "message": "Cannot schedule a reminder for a past time."}
+            if scheduled_time > now + timedelta(days=365):
+                return {"status": "error", "message": "Cannot schedule more than 1 year in advance."}
+            if scheduled_time < now + timedelta(minutes=1):
+                return {"status": "error", "message": "Cannot schedule for less than 1 minute from now."}
 
             # Create Reminder
             room = await sync_to_async(Chatroom.objects.get)(pk=room_id) if room_id else None

@@ -86,6 +86,40 @@ class DevSecretKeyFallbackTests(TestCase):
             self.assertNotIn(key, buffer.getvalue())
 
 
+class EncryptionKeyFallbackTests(TestCase):
+    """The room-encryption key must be stable across restarts (a fresh key per
+    process made existing rooms undecryptable — WebSocket 403). Mirrors the
+    DJANGO_SECRET_KEY dev fallback."""
+
+    def _call(self, key_file):
+        from users.encryption import TokenEncryption
+        return TokenEncryption._load_or_create_dev_key(key_file)
+
+    def test_generates_persists_and_reuses_stable_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            key_file = Path(tmp) / ".encryption.key"
+            key1 = self._call(key_file)
+            self.assertTrue(key1)
+            self.assertTrue(key_file.exists())
+            self.assertEqual(key_file.read_text().strip(), key1.decode("utf-8"))
+            key2 = self._call(key_file)
+            self.assertEqual(key1, key2)
+
+    def test_invalid_persisted_key_is_regenerated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            key_file = Path(tmp) / ".encryption.key"
+            key_file.write_text("not-a-valid-key")
+            key = self._call(key_file)
+            self.assertTrue(key)
+            self.assertEqual(key_file.read_text().strip(), key.decode("utf-8"))
+
+    def test_unwritable_path_yields_key_without_crashing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            missing_dir = Path(tmp) / "nope" / ".encryption.key"
+            key = self._call(missing_dir)
+            self.assertTrue(key)
+
+
 class ChannelLayerSocketTimeoutTests(TestCase):
     """redis-py 8.0.0 defaults socket_timeout to 5s, which collides with
     channels_redis's 5s bzpopmin poll and drops idle WebSockets in a

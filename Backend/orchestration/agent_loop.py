@@ -12,18 +12,23 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, AsyncGenerator, Callable, Dict, List, Optional, Tuple
+from datetime import timedelta
+from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
+from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.core.cache import cache
+from django.utils import timezone
 
 from orchestration.agent_prompts import build_confirmation_prompt, build_system_prompt
 from orchestration.llm_client import get_llm_client
 from orchestration.memory_state import update_memory_state, save_memory_summary
+from orchestration.model_catalog import find_model, model_pref_key, parse_model_id, provider_configured
 from orchestration.security_policy import redact_sensitive_text
 from orchestration.telemetry import record_event
 from orchestration.tool_executor import execute_tool, get_tool_risk_info
 from orchestration.tool_schemas import get_tool_definitions
+from orchestration.user_preferences import enforce_agent_caps
 
 logger = logging.getLogger(__name__)
 
@@ -33,11 +38,19 @@ logger = logging.getLogger(__name__)
 
 MAX_ITERATIONS = 10
 MAX_TOOL_CALLS = 15
+# Backstop when the install-level caps toggle is OFF (Settings > Capabilities):
+# "unlimited" means 10k, never infinite — a runaway loop must always terminate.
+HARD_CAP_ITERATIONS = 10000
+HARD_CAP_TOOL_CALLS = 10000
 MAX_RETRIES_PER_TOOL = 2
 TOOL_TIMEOUT_SECONDS = 30
 LOOP_TIMEOUT_SECONDS = 120
+RETRY_BACKOFF_CAP_SECONDS = 300
+CIRCUIT_BREAKER_FAILURE_THRESHOLD = 3
+CIRCUIT_BREAKER_COOLDOWN_SECONDS = 60
 CONFIRMATION_STATE_TTL = 600  # 10 minutes
 AGENT_STATE_KEY = "orchestration:agent_state:{room_id}:{user_id}"
+AGENT_LOOP_APPROVAL_KIND = "agent_loop"
 
 # Web search rate limits
 DAILY_SEARCH_LIMIT = 10
@@ -129,6 +142,117 @@ def load_loop_state(room_id: int, user_id: int) -> Optional[LoopState]:
 
 def clear_loop_state(room_id: int, user_id: int) -> None:
     cache.delete(_state_key(room_id, user_id))
+
+
+# --------------------------------------------------------------------------- #
+#  Durable approval records (WorkflowApprovalRecord)                          #
+# --------------------------------------------------------------------------- #
+
+def _pending_approval_record(room_id: int, user_id: int):
+    """Return the pending, unexpired agent-loop approval row, or None.
+
+    Sync-only helper — callers wrap it in ``sync_to_async``. Only
+    ``agent_loop``-kind rows scoped to (room, user) are considered, so one
+    user can never see or act on another user's pending approval.
+    """
+    from workflows.models import WorkflowApprovalRecord
+
+    now = timezone.now()
+    candidates = WorkflowApprovalRecord.objects.filter(
+        kind=AGENT_LOOP_APPROVAL_KIND,
+        room_id=room_id,
+        requested_by_id=user_id,
+        status="pending",
+    )
+    for record in candidates:
+        if record.expires_at is None or record.expires_at > now:
+            return record
+    return None
+
+
+async def save_pending_confirmation(
+    room_id: int,
+    user_id: int,
+    tool: Dict[str, Any],
+    confirmation_text: str,
+) -> Optional[int]:
+    """Durably persist a pending high-risk tool confirmation (DB)."""
+
+    def _create():
+        from workflows.models import WorkflowApprovalRecord
+
+        now = timezone.now()
+        expires_at = now + timedelta(seconds=CONFIRMATION_STATE_TTL)
+        defaults = {
+            "workflow_id": None,
+            "execution_id": None,
+            "step_id": f"agent_loop:{room_id}:{user_id}",
+            "service": "",
+            "action": tool.get("name", ""),
+            "approval_message": confirmation_text,
+            "sanitized_params": tool.get("input", {}),
+            "expires_at": expires_at,
+            "metadata": {"tool_id": tool.get("id", "")},
+        }
+        record, created = WorkflowApprovalRecord.objects.get_or_create(
+            kind=AGENT_LOOP_APPROVAL_KIND,
+            room_id=room_id,
+            requested_by_id=user_id,
+            status="pending",
+            defaults=defaults,
+        )
+        if not created and (record.expires_at is None or record.expires_at <= now):
+            # Refresh a stale-but-unswept row so the new pause is durable.
+            for attr_name, value in defaults.items():
+                setattr(record, attr_name, value)
+            record.save(update_fields=list(defaults.keys()))
+        return record.id
+
+    return await sync_to_async(_create)()
+
+
+async def _resolve_pending_approval(
+    room_id: int,
+    user_id: int,
+    status: str,
+    reviewed_by_id: Optional[int] = None,
+    comment: str = "",
+) -> None:
+    """Move a pending agent-loop approval to a terminal status (durable)."""
+
+    def _update():
+        record = _pending_approval_record(room_id, user_id)
+        if record is None:
+            return
+        record.status = status
+        record.reviewed_by_id = reviewed_by_id or record.reviewed_by_id
+        record.reviewed_at = timezone.now()
+        if comment:
+            record.review_comment = comment
+        record.save(update_fields=["status", "reviewed_by", "reviewed_at", "review_comment"])
+
+    await sync_to_async(_update)()
+
+
+def _consume_pending_approval_sync(room_id: int, user_id: int, reviewer_id: int) -> bool:
+    """Atomically flip the pending agent-loop approval to ``approved``.
+
+    Returns True only for the caller that performed the transition, so a
+    double-confirm can never execute the tool twice.
+    """
+    from workflows.models import WorkflowApprovalRecord
+
+    updated = WorkflowApprovalRecord.objects.filter(
+        kind=AGENT_LOOP_APPROVAL_KIND,
+        room_id=room_id,
+        requested_by_id=user_id,
+        status="pending",
+    ).update(
+        status="approved",
+        reviewed_by_id=reviewer_id,
+        reviewed_at=timezone.now(),
+    )
+    return updated == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -334,6 +458,26 @@ def _select_model(user_message: str, iteration: int) -> str:
     return MODEL_HAIKU
 
 
+def _resolve_model_override(room_id: Optional[int]) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Read the per-room model preference (``model_pref:{room_id}``) and return a
+    (provider, model) pair. Returns (None, None) for Auto — no override, an
+    unset/empty key, or a preference that is no longer in the catalog/configured.
+    """
+    if not room_id:
+        return None, None
+    raw = cache.get(model_pref_key(room_id))
+    if not raw:
+        return None, None
+    parsed = parse_model_id(str(raw))
+    if not parsed:
+        return None, None
+    provider, model = parsed
+    if find_model(provider, model) is None or not provider_configured(provider):
+        return None, None
+    return provider, model
+
+
 async def _execute_with_timeout(
     tool_name: str,
     tool_input: Dict[str, Any],
@@ -352,6 +496,64 @@ async def _execute_with_timeout(
             "message": f"Tool {tool_name} timed out after {timeout}s. "
                        f"The operation may still be processing.",
         }
+
+
+# --------------------------------------------------------------------------- #
+#  Tool retry backoff & circuit breaker                                       #
+# --------------------------------------------------------------------------- #
+
+# Per-service degrade state: service -> {"failures": int, "opened_at": float|None}.
+# Repeated failures open the circuit and block further calls for a cooldown
+# window, so a flapping integration degrades instead of being hammered.
+_circuit_state: Dict[str, Dict[str, Any]] = {}
+
+
+def _service_for_tool(tool_name: str) -> str:
+    from orchestration.action_catalog import get_action_definition
+
+    return (get_action_definition(tool_name) or {}).get("service") or tool_name
+
+
+def _retry_backoff_seconds(retry_count: int) -> float:
+    """Exponential backoff for a tool retry: 2^n seconds, capped at 300."""
+    return float(min(RETRY_BACKOFF_CAP_SECONDS, 2 ** max(0, retry_count)))
+
+
+def _circuit_breaker_open(service: str) -> bool:
+    """True when the service's circuit is tripped and still cooling down."""
+    state = _circuit_state.get(service)
+    if not state:
+        return False
+    opened_at = state.get("opened_at")
+    if not opened_at:
+        return False
+    if time.monotonic() - opened_at >= CIRCUIT_BREAKER_COOLDOWN_SECONDS:
+        _circuit_state.pop(service, None)  # half-open: allow a trial request
+        return False
+    return True
+
+
+def _record_tool_failure(service: str) -> None:
+    state = _circuit_state.setdefault(service, {"failures": 0, "opened_at": None})
+    state["failures"] = state.get("failures", 0) + 1
+    if state["failures"] >= CIRCUIT_BREAKER_FAILURE_THRESHOLD:
+        state["opened_at"] = time.monotonic()
+
+
+def _record_tool_success(service: str) -> None:
+    _circuit_state.pop(service, None)
+
+
+def reset_circuit_breakers() -> None:
+    """Clear all circuit-breaker state (used by tests)."""
+    _circuit_state.clear()
+
+
+def _circuit_open_message(service: str) -> str:
+    return (
+        f"{service.replace('_', ' ')} is temporarily unavailable after "
+        f"repeated failures. Please try again in a few seconds."
+    )
 
 
 async def _record_receipt(
@@ -481,6 +683,7 @@ META_TOOL_DEFINITIONS = [
 # Sub-agent limits (tighter than parent)
 SUB_AGENT_MAX_ITERATIONS = 5
 SUB_AGENT_MAX_TOOL_CALLS = 8
+SUB_AGENT_TOKEN_BUDGET = 20000
 
 
 async def _execute_meta_tool(
@@ -544,6 +747,58 @@ def _load_skill(tool_input: Dict[str, Any], context: Dict[str, Any]) -> Dict[str
         return {"status": "error", "message": f"Could not load skill: {exc}"}
 
 
+async def _execute_scoped_tool_calls(
+    tool_calls: List[Dict[str, Any]],
+    context: Dict[str, Any],
+    preferences: Optional[Dict[str, Any]],
+    sub_tool_log: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], bool]:
+    """Execute one response's tool_use batch under the sub-agent cap.
+
+    The cap is enforced mid-batch — a single response can carry many
+    tool_use blocks, and only checking between iterations let one batch
+    blow far past the limit. Returns (result_blocks, capped).
+    """
+    result_blocks = []
+    caps_enforced = context.get("caps_enforced", True)
+    effective_cap = SUB_AGENT_MAX_TOOL_CALLS if caps_enforced else HARD_CAP_TOOL_CALLS
+    for tc in tool_calls:
+        if len(sub_tool_log) >= effective_cap:
+            return result_blocks, True
+
+        # Sub-agents cannot pause for confirmation; block high-risk actions.
+        risk = get_tool_risk_info(tc["name"], preferences)
+        if risk.get("requires_confirmation"):
+            result = {
+                "status": "error",
+                "message": (
+                    f"{tc['name']} requires explicit user confirmation. "
+                    "Please ask in the main conversation before executing it."
+                ),
+            }
+        else:
+            result = await _execute_with_timeout(tc["name"], tc["input"], context)
+        sub_tool_log.append({
+            "name": tc["name"],
+            "input": tc["input"],
+            "status": result.get("status"),
+        })
+        # Memory update
+        try:
+            await update_memory_state(
+                context, action=tc["name"],
+                params=tc["input"], result=result,
+            )
+        except Exception:
+            pass
+        result_blocks.append({
+            "type": "tool_result",
+            "tool_use_id": tc["id"],
+            "content": _sanitize_tool_result(json.dumps(result, default=str)),
+        })
+    return result_blocks, False
+
+
 async def _run_sub_agent(
     tool_input: Dict[str, Any],
     context: Dict[str, Any],
@@ -573,11 +828,24 @@ async def _run_sub_agent(
     collected_text: List[str] = []
     sub_tool_log: List[Dict[str, Any]] = []
     iteration = 0
+    tokens_used = 0
+    stopped_reason: Optional[str] = None
+    completed = False
 
-    while iteration < SUB_AGENT_MAX_ITERATIONS:
-        iteration += 1
-        if len(sub_tool_log) >= SUB_AGENT_MAX_TOOL_CALLS:
+    caps_enforced = context.get("caps_enforced", True)
+    max_iterations = SUB_AGENT_MAX_ITERATIONS if caps_enforced else HARD_CAP_ITERATIONS
+    tool_call_cap = SUB_AGENT_MAX_TOOL_CALLS if caps_enforced else HARD_CAP_TOOL_CALLS
+
+    while iteration < max_iterations:
+        if len(sub_tool_log) >= tool_call_cap:
+            stopped_reason = "max_tool_calls"
             break
+
+        if caps_enforced and tokens_used >= SUB_AGENT_TOKEN_BUDGET:
+            stopped_reason = "token_budget"
+            break
+
+        iteration += 1
 
         try:
             response = await llm.create_message(
@@ -595,55 +863,51 @@ async def _run_sub_agent(
         content_blocks = response.get("content", [])
         stop_reason = response.get("stop_reason", "end_turn")
         sub_messages.append({"role": "assistant", "content": content_blocks})
+        tokens_used += _get_response_tokens(response)
 
         text = _extract_text(content_blocks)
         if text:
             collected_text.append(text)
 
         if stop_reason == "end_turn":
+            completed = True
             break
 
         if stop_reason == "tool_use":
             tool_calls = _extract_tool_calls(content_blocks)
-            result_blocks = []
-            for tc in tool_calls:
-                # Sub-agents cannot pause for confirmation; block high-risk actions.
-                risk = get_tool_risk_info(tc["name"], preferences)
-                if risk.get("requires_confirmation"):
-                    result = {
-                        "status": "error",
-                        "message": (
-                            f"{tc['name']} requires explicit user confirmation. "
-                            "Please ask in the main conversation before executing it."
-                        ),
-                    }
-                else:
-                    result = await _execute_with_timeout(tc["name"], tc["input"], context)
-                sub_tool_log.append({
-                    "name": tc["name"],
-                    "input": tc["input"],
-                    "status": result.get("status"),
-                })
-                # Memory update
-                try:
-                    await update_memory_state(
-                        context, action=tc["name"],
-                        params=tc["input"], result=result,
-                    )
-                except Exception:
-                    pass
-                result_blocks.append({
-                    "type": "tool_result",
-                    "tool_use_id": tc["id"],
-                    "content": _sanitize_tool_result(json.dumps(result, default=str)),
-                })
+            result_blocks, capped = await _execute_scoped_tool_calls(
+                tool_calls, context, preferences, sub_tool_log,
+            )
             sub_messages.append({"role": "user", "content": result_blocks})
+            if capped:
+                stopped_reason = "max_tool_calls"
+                break
+
+    if stopped_reason is None and not completed:
+        stopped_reason = "max_iterations"
+
+    if stopped_reason:
+        record_event("sub_agent_budget_exhausted", {
+            "reason": stopped_reason,
+            "iterations": iteration,
+            "tool_calls": len(sub_tool_log),
+            "tokens_used": tokens_used,
+            "user_id": context.get("user_id"),
+            "room_id": context.get("room_id"),
+        })
+
+    summary = "\n".join(collected_text)
+    if not summary and stopped_reason == "token_budget":
+        summary = "Sub-task stopped early: token budget exhausted."
 
     return {
         "status": "success",
-        "summary": "\n".join(collected_text) or "Sub-task completed.",
+        "summary": summary or "Sub-task completed.",
         "tools_used": [e["name"] for e in sub_tool_log],
         "iterations": iteration,
+        "tokens_used": tokens_used,
+        "tool_calls": len(sub_tool_log),
+        "stopped_reason": stopped_reason,
     }
 
 
@@ -667,39 +931,54 @@ async def _create_workflow_handoff(
     try:
         from workflows.models import UserWorkflow
         from asgiref.sync import sync_to_async
+        from orchestration.workflow_planner import execute_adhoc_workflow
 
-        workflow_def = {
-            "description": description,
+        # Build the same definition shape the planner/validator consumes
+        # (workflow_name / workflow_description / triggers / steps) instead of
+        # the old {description, steps} shape that bypassed validation and a
+        # separate raw execution path.
+        definition = {
+            "workflow_name": description[:100] or "Agent handoff",
+            "workflow_description": description.strip()[:300],
+            "triggers": [{"trigger_type": trigger_type or "manual"}],
             "steps": steps,
+            "metadata": {"source": "agent_handoff"},
         }
+
+        if trigger_type == "manual":
+            result = await execute_adhoc_workflow(
+                definition,
+                user_id=context.get("user_id"),
+                room_id=context.get("room_id"),
+                trigger_data={"source": "agent_handoff"},
+            )
+            workflow = result.get("workflow")
+            workflow_id = getattr(workflow, "id", None)
+            if result.get("status") == "error":
+                return {
+                    "status": "error",
+                    "message": result.get("message") or "Workflow handoff failed.",
+                }
+            return {
+                "status": "success",
+                "message": result.get("message") or f"Workflow '{description}' started.",
+                "workflow_id": workflow_id,
+            }
+
         workflow = await sync_to_async(UserWorkflow.objects.create)(
             user_id=context.get("user_id"),
             name=description[:100],
-            definition=workflow_def,
+            definition=definition,
             status="active",
         )
-
-        if trigger_type == "manual":
-            from workflows.temporal_integration import start_workflow_execution
-            execution = await start_workflow_execution(
-                workflow,
-                trigger_data={"source": "agent_handoff"},
-                trigger_type="manual",
-            )
-            return {
-                "status": "success",
-                "message": f"Workflow '{description}' started (ID: {workflow.id}).",
-                "workflow_id": workflow.id,
-            }
-        else:
-            return {
-                "status": "success",
-                "message": (
-                    f"Workflow '{description}' created (ID: {workflow.id}). "
-                    f"Trigger type: {trigger_type}."
-                ),
-                "workflow_id": workflow.id,
-            }
+        return {
+            "status": "success",
+            "message": (
+                f"Workflow '{description}' created (ID: {workflow.id}). "
+                f"Trigger type: {trigger_type}."
+            ),
+            "workflow_id": workflow.id,
+        }
 
     except Exception as exc:
         logger.error("Workflow handoff failed: %s", exc, exc_info=True)
@@ -744,6 +1023,17 @@ async def run_agent_loop(
     user_id = context.get("user_id")
     room_id = context.get("room_id")
     user_caps = preferences or {}
+
+    # Install-level kill switch (Settings > Capabilities). Sub-agents inherit
+    # it via context so delegate_task never re-reads the flag.
+    caps_enforced = context.get(
+        "caps_enforced",
+        await sync_to_async(enforce_agent_caps)(user_id),
+    )
+    context["caps_enforced"] = caps_enforced
+    max_iterations = MAX_ITERATIONS if caps_enforced else HARD_CAP_ITERATIONS
+    tool_call_cap = MAX_TOOL_CALLS if caps_enforced else HARD_CAP_TOOL_CALLS
+    timeout_cap = LOOP_TIMEOUT_SECONDS if caps_enforced else None
 
     # Build tool definitions (filtered by user capabilities)
     tools = get_tool_definitions(
@@ -826,7 +1116,7 @@ async def run_agent_loop(
         # Fresh loop
         messages: List[Dict[str, Any]] = []
         if history:
-            if getattr(settings, "HISTORY_COMPACTION_ENABLED", False):
+            if getattr(settings, "HISTORY_COMPACTION_ENABLED", True):
                 history, compacted = _fit_history_to_budget(
                     history,
                     max_chars=int(getattr(settings, "HISTORY_MAX_CHARS", 60000)),
@@ -859,10 +1149,10 @@ async def run_agent_loop(
     # ------------------------------------------------------------------ #
     #  Main ReAct loop                                                    #
     # ------------------------------------------------------------------ #
-    while state.iteration < MAX_ITERATIONS:
-        # Timeout check
+    while state.iteration < max_iterations:
+        # Timeout check (hard backstop only when caps are enforced)
         elapsed = time.monotonic() - state.start_time
-        if elapsed > LOOP_TIMEOUT_SECONDS:
+        if timeout_cap is not None and elapsed > timeout_cap:
             yield AgentEvent("error", {
                 "message": "I ran out of time on this request. "
                            "Here's what I managed so far.",
@@ -870,7 +1160,7 @@ async def run_agent_loop(
             break
 
         # Tool call budget check
-        if state.tool_call_count >= MAX_TOOL_CALLS:
+        if state.tool_call_count >= tool_call_cap:
             yield AgentEvent("error", {
                 "message": "I've reached the maximum number of tool calls "
                            "for this request.",
@@ -883,7 +1173,7 @@ async def run_agent_loop(
         yield AgentEvent("thinking", {"text": ""})
 
         # Token budget check
-        if state.tokens_used >= LOOP_TOKEN_BUDGET:
+        if caps_enforced and state.tokens_used >= LOOP_TOKEN_BUDGET:
             yield AgentEvent("error", {
                 "message": "I've used up my thinking budget for this request. "
                            "Here's what I managed so far.",
@@ -892,6 +1182,7 @@ async def run_agent_loop(
 
         # ---- Call LLM ------------------------------------------------ #
         selected_model = _select_model(user_message, state.iteration)
+        override_provider, override_model = _resolve_model_override(room_id)
         try:
             response = await llm.create_message(
                 messages=state.messages,
@@ -900,7 +1191,8 @@ async def run_agent_loop(
                 temperature=0.3,
                 max_tokens=4096,
                 user_id=user_id,
-                model=selected_model,
+                model=override_model if override_model else selected_model,
+                provider=override_provider,
                 use_prompt_cache=True,
             )
         except Exception as exc:
@@ -916,7 +1208,8 @@ async def run_agent_loop(
         state.tokens_used += iter_tokens
 
         if (
-            not state.budget_warning_sent
+            caps_enforced
+            and not state.budget_warning_sent
             and state.tokens_used >= LOOP_TOKEN_BUDGET * LOOP_TOKEN_WARNING_RATIO
         ):
             state.budget_warning_sent = True
@@ -979,35 +1272,57 @@ async def run_agent_loop(
                 async def _run_safe(tc: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
                     dedup = _dedup_key(tc["name"], tc["input"])
                     if dedup in seen_calls:
-                        # Return cached result from a previous identical call
+                        # Return a cached result from a previous identical
+                        # SUCCESSFUL call. Failed calls stay retryable.
                         cached = next(
                             (e["output"] for e in state.tool_call_log
                              if e["name"] == tc["name"]
+                             and isinstance(e["output"], dict)
+                             and e["output"].get("status") == "success"
                              and _dedup_key(e["name"], e["input"]) == dedup),
                             None,
                         )
                         if cached is not None:
                             return tc, cached
-                        # If no cached result found, check retry budget
+
+                    service = _service_for_tool(tc["name"])
+                    if _circuit_breaker_open(service):
+                        return tc, {
+                            "status": "error",
+                            "message": _circuit_open_message(service),
+                        }
+
+                    if dedup in seen_calls:
+                        # Retrying a previously-failed identical call.
                         retries = state.retry_counts.get(tc["name"], 0)
                         if retries >= MAX_RETRIES_PER_TOOL:
                             return tc, {
                                 "status": "error",
                                 "message": f"Max retries ({MAX_RETRIES_PER_TOOL}) reached for {tc['name']}.",
                             }
-                        state.retry_counts[tc["name"]] = retries + 1
+                        await asyncio.sleep(_retry_backoff_seconds(retries))
                     seen_calls.add(dedup)
-                    # Meta-tools use their own executor
-                    if tc["name"] in _META_TOOL_NAMES:
-                        result = await _execute_meta_tool(
-                            tc["name"], tc["input"], context,
-                            preferences, system, tools,
-                        )
-                    else:
-                        result = await _execute_with_timeout(tc["name"], tc["input"], context)
-                    # Track retries on error
+
+                    try:
+                        # Meta-tools use their own executor
+                        if tc["name"] in _META_TOOL_NAMES:
+                            result = await _execute_meta_tool(
+                                tc["name"], tc["input"], context,
+                                preferences, system, tools,
+                            )
+                        else:
+                            result = await _execute_with_timeout(tc["name"], tc["input"], context)
+                    except Exception as exc:
+                        logger.error("Tool %s raised unexpectedly: %s", tc["name"], exc)
+                        result = {"status": "error", "message": str(exc)}
+
+                    # Track retries + circuit breaker state
                     if result.get("status") == "error":
                         state.retry_counts[tc["name"]] = state.retry_counts.get(tc["name"], 0) + 1
+                        _record_tool_failure(service)
+                    else:
+                        state.retry_counts[tc["name"]] = 0
+                        _record_tool_success(service)
                     return tc, result
 
                 # Run in parallel
@@ -1073,13 +1388,16 @@ async def run_agent_loop(
                 state.pending_tool = tc
                 state.paused_for_confirmation = True
 
-                # Save state to Redis for resume
-                if room_id and user_id:
-                    save_loop_state(room_id, user_id, state)
-
                 confirmation_text = build_confirmation_prompt(
                     tc["name"], tc["input"],
                 )
+
+                # Persist loop state (Redis) + durable approval record (DB)
+                if room_id and user_id:
+                    save_loop_state(room_id, user_id, state)
+                    await save_pending_confirmation(
+                        room_id, user_id, tc, confirmation_text,
+                    )
                 yield AgentEvent("confirmation", {
                     "message": confirmation_text,
                     "tool_name": tc["name"],
@@ -1143,9 +1461,10 @@ async def run_agent_loop(
 #  Public helpers for the consumer                                            #
 # --------------------------------------------------------------------------- #
 
-def has_pending_agent_state(room_id: int, user_id: int) -> bool:
-    """Check if there's a paused agent loop waiting for confirmation."""
-    return load_loop_state(room_id, user_id) is not None
+async def has_pending_agent_state(room_id: int, user_id: int) -> bool:
+    """Check (durably) whether a high-risk action is paused for confirmation."""
+    record = await sync_to_async(_pending_approval_record)(room_id, user_id)
+    return record is not None
 
 
 async def resume_after_confirmation(
@@ -1157,14 +1476,42 @@ async def resume_after_confirmation(
 ) -> AsyncGenerator[AgentEvent, None]:
     """
     Resume a paused agent loop after the user confirms a high-risk action.
+
+    Approval is resolved durably before the pending tool executes, and the
+    loop state is reloaded from Redis. If the durable record exists but the
+    loop state was evicted, the action is NOT executed and the record is
+    rejected so it cannot be replayed.
     """
     room_id = context.get("room_id")
     user_id = context.get("user_id")
 
-    state = load_loop_state(room_id, user_id)
-    if not state or not state.pending_tool:
+    record = await sync_to_async(_pending_approval_record)(room_id, user_id)
+    if record is None:
         yield AgentEvent("error", {
             "message": "No pending action found to confirm.",
+        })
+        return
+
+    state = load_loop_state(room_id, user_id)
+    if not state or not state.pending_tool:
+        await _resolve_pending_approval(
+            room_id, user_id, "rejected",
+            comment="Loop state lost before confirmation.",
+        )
+        yield AgentEvent("error", {
+            "message": "The pending action is no longer available to confirm.",
+        })
+        return
+
+    # Durable approval BEFORE execution. The conditional update makes the
+    # transition single-consumer: a second concurrent confirm finds no
+    # pending row and is refused instead of executing the tool again.
+    consumed = await sync_to_async(_consume_pending_approval_sync)(
+        room_id, user_id, user_id,
+    )
+    if not consumed:
+        yield AgentEvent("error", {
+            "message": "That action was already confirmed or cancelled.",
         })
         return
 
@@ -1185,10 +1532,20 @@ async def resume_after_confirmation(
 async def cancel_pending_action(
     room_id: int, user_id: int,
 ) -> Optional[str]:
-    """Cancel a pending confirmation and clean up state."""
-    state = load_loop_state(room_id, user_id)
-    if not state or not state.pending_tool:
+    """Cancel a pending confirmation and clean up state (durable)."""
+    record = await sync_to_async(_pending_approval_record)(room_id, user_id)
+    if record is None:
+        clear_loop_state(room_id, user_id)
         return None
-    tool_name = state.pending_tool.get("name", "action")
+    tool_name = record.action or "action"
+    await _resolve_pending_approval(
+        room_id, user_id, "cancelled", reviewed_by_id=user_id,
+    )
     clear_loop_state(room_id, user_id)
     return f"Cancelled the pending {tool_name.replace('_', ' ')}."
+
+
+async def dismiss_pending_confirmation(room_id: int, user_id: int) -> None:
+    """Silently clear a pending confirmation the user did not act on."""
+    await _resolve_pending_approval(room_id, user_id, "cancelled")
+    clear_loop_state(room_id, user_id)

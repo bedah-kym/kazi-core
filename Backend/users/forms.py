@@ -116,7 +116,7 @@ class CustomAuthenticationForm(AuthenticationForm):
     def clean(self):
         try:
             return super().clean()
-        except ValidationError as e:
+        except ValidationError:
             # Add custom error handling here
             if 'username' in self.cleaned_data and not self.cleaned_data.get('password'):
                 self.add_error('password', self.error_messages['required'])

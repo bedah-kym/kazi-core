@@ -183,7 +183,6 @@ def load_user_correction_patterns(user_id: int, max_patterns: int = 5) -> Dict[s
     """
     try:
         from users.models import CorrectionSignal
-        from django.db.models import Count
 
         # Find corrections for this user
         corrections = CorrectionSignal.objects.filter(user_id=user_id).order_by("-created_at")[:100]

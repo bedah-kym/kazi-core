@@ -1,0 +1,258 @@
+{% extends "users/base_app.html" %}
+{% load static %}
+{% load humanize %}
+
+{% block title %}Run #{{ execution.id }} - {{ workflow.name }} - Mathia{% endblock %}
+
+{% block meta_description %}Run #{{ execution.id }} of {{ workflow.name }}.{% endblock %}
+
+{% block breadcrumb %}
+<a href="{% url 'users:dashboard' %}">Dashboard</a><span class="crumb-sep">&#8250;</span><a href="{% url 'workflows:workflows_list' %}">Automations</a><span class="crumb-sep">&#8250;</span><a href="{% url 'workflows:workflow_executions' workflow.id %}">{{ workflow.name }}</a><span class="crumb-sep">&#8250;</span><span class="crumb-current">Run #{{ execution.id }}</span>
+{% endblock %}
+
+{% block head %}
+<link href="{% static 'css/page-workflows.css' %}" rel="stylesheet">
+{% endblock %}
+
+{% block content %}
+<div class="app-header">
+    <div>
+        <div class="app-eyebrow">
+            <a href="{% url 'workflows:workflows_list' %}" style="color: inherit; text-decoration: none;">Automations</a>
+            &nbsp;/&nbsp;
+            <a href="{% url 'workflows:workflow_executions' workflow.id %}" style="color: inherit; text-decoration: none;">{{ workflow.name }}</a>
+            &nbsp;/&nbsp; Run #{{ execution.id }}
+        </div>
+        <h1 class="app-title">
+            Run #{{ execution.id }}
+            {% if execution.status == "completed" %}
+            <span class="app-pill app-pill-success">Completed</span>
+            {% elif execution.status == "running" %}
+            <span class="app-pill app-pill-info">Running</span>
+            {% elif execution.status == "waiting" %}
+            <span class="app-pill app-pill-warning">Waiting</span>
+            {% elif execution.status == "failed" %}
+            <span class="app-pill app-pill-destructive">Failed</span>
+            {% else %}
+            <span class="app-pill app-pill-muted">{{ execution.get_status_display }}</span>
+            {% endif %}
+        </h1>
+        <p class="app-subtitle">
+            {{ execution.trigger_type|title }} trigger &middot; started {{ execution.started_at|naturaltime }}
+            {% if execution.completed_at %}&middot; finished {{ execution.completed_at|naturaltime }}{% endif %}
+        </p>
+    </div>
+    <div class="app-header-actions">
+        <a class="app-btn app-btn-outline" href="{% url 'workflows:operations_inbox' %}">
+            <i class="fas fa-inbox"></i> Inbox
+        </a>
+    </div>
+</div>
+
+{% if not runtime_state %}
+<div class="runtime-note" style="margin-bottom: 16px;">
+    <i class="fas fa-cloud-slash"></i>
+    Live runtime state is unavailable (Temporal unreachable) - showing the last saved snapshot.
+</div>
+{% endif %}
+
+{% if approval %}
+<section class="approval-banner" style="margin-bottom: 16px;" aria-label="Pending approval">
+    <h3><i class="fas fa-user-check"></i> This run is paused and waiting for your approval</h3>
+    <div>
+        <span class="app-pill app-pill-warning">Step: {{ approval.service }}{% if approval.service and approval.action %}.{% endif %}{{ approval.action }}</span>
+        {% if approval.expires_at %}
+        <span class="app-meta ms-2" data-expires="{{ approval.expires_at|date:'c' }}">
+            <i class="far fa-hourglass me-1"></i><span data-expiry-label>Expires {{ approval.expires_at|naturaltime }}</span>
+        </span>
+        {% endif %}
+    </div>
+    {% if approval.approval_message %}
+    <p style="margin: 0; font-size: 13.5px;">{{ approval.approval_message }}</p>
+    {% endif %}
+    {% if approval.sanitized_params %}
+    <details class="approval-params">
+        <summary><i class="fas fa-shield-halved me-1"></i>Review what this step will do</summary>
+        <pre>{{ approval.sanitized_params|pprint }}</pre>
+    </details>
+    {% endif %}
+    <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+        <form method="post" action="{% url 'workflows:approve_execution' execution.id %}">
+            {% csrf_token %}
+            <input class="comment-input" type="text" name="comment" placeholder="Comment (optional)" maxlength="500" style="margin-right: 8px;">
+            <button class="app-btn app-btn-primary" type="submit"><i class="fas fa-check"></i> Approve</button>
+        </form>
+        <form method="post" action="{% url 'workflows:reject_execution' execution.id %}">
+            {% csrf_token %}
+            <button class="app-btn app-btn-outline" type="submit" style="border-color: var(--danger-hex); color: var(--danger-hex);">
+                <i class="fas fa-xmark"></i> Reject
+            </button>
+        </form>
+    </div>
+</section>
+{% endif %}
+
+<div class="detail-grid">
+    <div style="display: flex; flex-direction: column; gap: 16px;">
+        <section class="app-card" aria-labelledby="progress-title">
+            <div class="app-card-header">
+                <div>
+                    <h2 class="app-card-title" id="progress-title">Progress</h2>
+                    <p class="app-card-subtitle">Where the agent is in this run</p>
+                </div>
+            </div>
+            <div class="panel-body">
+                <div class="kv">
+                    <span class="kv-label">Current step</span>
+                    <span class="kv-value">{{ execution.current_step|default:"-" }}</span>
+                </div>
+                <div class="kv">
+                    <span class="kv-label">Last completed</span>
+                    <span class="kv-value">{{ execution.last_completed_step|default:"-" }}</span>
+                </div>
+                <div class="kv">
+                    <span class="kv-label">Waiting on</span>
+                    <span class="kv-value">{{ execution.waiting_on|default:"-" }}</span>
+                </div>
+                {% if execution.attempts %}
+                <table class="attempts-table">
+                    <thead>
+                        <tr><th>Step</th><th>Attempts</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for step_id, count in execution.attempts.items %}
+                        <tr><td class="app-mono">{{ step_id }}</td><td>{{ count }}</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% endif %}
+            </div>
+        </section>
+
+        {% if execution.failure_summary or execution.error_message %}
+        <section class="failure-box" aria-labelledby="failure-title">
+            <h3 id="failure-title"><i class="fas fa-circle-exclamation me-1"></i>What went wrong</h3>
+            <p>{{ execution.failure_summary|default:execution.error_message }}</p>
+            {% if execution.recovery_suggestion %}
+            <div style="border: none; background: none; padding: 0;">
+                <h3 style="margin: 0 0 4px;"><i class="fas fa-lightbulb me-1"></i>Suggested recovery</h3>
+                <p style="color: var(--ink);">{{ execution.recovery_suggestion }}</p>
+            </div>
+            {% endif %}
+        </section>
+        {% endif %}
+
+        <section class="app-card" aria-labelledby="result-title">
+            <div class="app-card-header">
+                <h2 class="app-card-title" id="result-title">Result</h2>
+            </div>
+            <div class="panel-body">
+                {% if execution.result_summary %}
+                <p style="margin: 0; font-size: 13.5px;">{{ execution.result_summary }}</p>
+                {% elif execution.result %}
+                <pre style="background: hsl(var(--muted)); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font-size: 12px; overflow-x: auto; margin: 0;">{{ execution.result|pprint }}</pre>
+                {% else %}
+                <span class="app-meta">No result recorded yet.</span>
+                {% endif %}
+                {% if execution.receipt_ids %}
+                <div class="kv">
+                    <span class="kv-label">Action receipts</span>
+                    <span class="kv-value app-mono">{{ execution.receipt_ids|join:", " }}</span>
+                </div>
+                {% endif %}
+            </div>
+        </section>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 16px;">
+        <section class="app-card" aria-labelledby="rerun-title">
+            <div class="app-card-header">
+                <div>
+                    <h2 class="app-card-title" id="rerun-title">Rerun</h2>
+                    <p class="app-card-subtitle">Start a fresh run, optionally from a step</p>
+                </div>
+            </div>
+            <div class="panel-body">
+                <form class="form-grid" method="post" action="{% url 'workflows:rerun_execution' execution.id %}">
+                    {% csrf_token %}
+                    <div class="field">
+                        <label for="fromStep">From step</label>
+                        <select id="fromStep" name="from_step">
+                            <option value="">Entire workflow (fresh run)</option>
+                            {% for option in step_options %}
+                            <option value="{{ option.id }}">{{ option.label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <label class="checkbox-row">
+                        <input type="checkbox" name="force">
+                        <span>Skip replay-safety check (records a forced receipt)</span>
+                    </label>
+                    <button class="app-btn app-btn-primary" type="submit">
+                        <i class="fas fa-rotate-right"></i> Start rerun
+                    </button>
+                </form>
+            </div>
+        </section>
+
+        {% if execution.status == "waiting" or execution.status == "running" or execution.status == "pending" %}
+        <section class="app-card" aria-labelledby="cancel-title">
+            <div class="app-card-header">
+                <div>
+                    <h2 class="app-card-title" id="cancel-title">Cancel run</h2>
+                    <p class="app-card-subtitle">Stops at the next safe point</p>
+                </div>
+            </div>
+            <div class="panel-body">
+                <form class="form-grid" method="post" action="{% url 'workflows:cancel_execution' execution.id %}">
+                    {% csrf_token %}
+                    <div class="field">
+                        <label for="cancelReason">Reason (optional)</label>
+                        <input type="text" id="cancelReason" name="reason" maxlength="300" placeholder="Why are you stopping this run?">
+                    </div>
+                    <button class="app-btn app-btn-danger" type="submit">
+                        <i class="fas fa-ban"></i> Request cancel
+                    </button>
+                </form>
+            </div>
+        </section>
+        {% endif %}
+
+        <section class="app-card" aria-labelledby="meta-title">
+            <div class="app-card-header">
+                <h2 class="app-card-title" id="meta-title">Details</h2>
+            </div>
+            <div class="panel-body">
+                <div class="kv">
+                    <span class="kv-label">Workflow</span>
+                    <span class="kv-value">{{ workflow.name }}</span>
+                </div>
+                <div class="kv">
+                    <span class="kv-label">Trigger</span>
+                    <span class="kv-value">{{ execution.trigger_type }}</span>
+                </div>
+                <div class="kv">
+                    <span class="kv-label">Temporal ID</span>
+                    <span class="kv-value app-mono">{{ execution.temporal_workflow_id|default:"-" }}</span>
+                </div>
+                <div class="kv">
+                    <span class="kv-label">Run ID</span>
+                    <span class="kv-value app-mono">{{ execution.temporal_run_id|default:"-" }}</span>
+                </div>
+            </div>
+        </section>
+    </div>
+</div>
+
+{% if messages %}
+<div class="toast-stack">
+    {% for message in messages %}
+    <div class="app-toast show" role="status" data-auto-dismiss>{{ message }}</div>
+    {% endfor %}
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'js/page-workflows.js' %}"></script>
+{% endblock %}

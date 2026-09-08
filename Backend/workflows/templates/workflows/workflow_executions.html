@@ -1,0 +1,114 @@
+{% extends "users/base_app.html" %}
+{% load static %}
+{% load humanize %}
+
+{% block title %}Runs - {{ workflow.name }} - Mathia{% endblock %}
+
+{% block meta_description %}Run history for {{ workflow.name }}.{% endblock %}
+
+{% block breadcrumb %}
+<a href="{% url 'users:dashboard' %}">Dashboard</a><span class="crumb-sep">&#8250;</span><a href="{% url 'workflows:workflows_list' %}">Automations</a><span class="crumb-sep">&#8250;</span><span class="crumb-current">{{ workflow.name }}</span>
+{% endblock %}
+
+{% block head %}
+<link href="{% static 'css/page-workflows.css' %}" rel="stylesheet">
+{% endblock %}
+
+{% block content %}
+<div class="app-header">
+    <div>
+        <div class="app-eyebrow">
+            <a href="{% url 'workflows:workflows_list' %}" style="color: inherit; text-decoration: none;">Automations</a>
+            &nbsp;/&nbsp; {{ workflow.name }}
+        </div>
+        <h1 class="app-title">Run history</h1>
+        <p class="app-subtitle">{{ workflow.execution_count }} run{{ workflow.execution_count|pluralize }} recorded.</p>
+    </div>
+    <div class="app-header-actions">
+        {% if workflow.status == "active" %}
+        <form method="post" action="{% url 'workflows:run_workflow' workflow.id %}">
+            {% csrf_token %}
+            <button class="app-btn app-btn-primary" type="submit">
+                <i class="fas fa-play"></i> Run now
+            </button>
+        </form>
+        {% endif %}
+    </div>
+</div>
+
+<div class="app-tabs">
+    <a class="app-tab{% if not status_filter %} active{% endif %}" href="{% url 'workflows:workflow_executions' workflow.id %}">All</a>
+    {% for value, label in status_choices %}
+    <a class="app-tab{% if status_filter == value %} active{% endif %}" href="?status={{ value }}">{{ label }}</a>
+    {% endfor %}
+</div>
+
+{% if executions %}
+<div class="exec-grid">
+    {% for execution in executions %}
+    <a class="exec-card" href="{% url 'workflows:execution_detail' execution.id %}">
+        <span class="exec-id">#{{ execution.id }}</span>
+        <div class="exec-cells">
+            <div class="cell">
+                <span class="cell-label">Status</span>
+                <span>
+                    {% if execution.status == "completed" %}
+                    <span class="app-pill app-pill-success">Completed</span>
+                    {% elif execution.status == "running" %}
+                    <span class="app-pill app-pill-info">Running</span>
+                    {% elif execution.status == "waiting" %}
+                    <span class="app-pill app-pill-warning">Waiting</span>
+                    {% elif execution.status == "failed" %}
+                    <span class="app-pill app-pill-destructive">Failed</span>
+                    {% else %}
+                    <span class="app-pill app-pill-muted">{{ execution.get_status_display }}</span>
+                    {% endif %}
+                </span>
+            </div>
+            <div class="cell">
+                <span class="cell-label">Current step</span>
+                <span class="cell-value{% if not execution.current_step %} app-meta{% endif %}">{{ execution.current_step|default:"-" }}</span>
+            </div>
+            <div class="cell">
+                <span class="cell-label">Trigger</span>
+                <span class="cell-value">{{ execution.trigger_type }}</span>
+            </div>
+            <div class="cell">
+                <span class="cell-label">Started</span>
+                <span class="cell-value">{{ execution.started_at|naturaltime }}</span>
+            </div>
+            <div class="cell">
+                <span class="cell-label">Finished</span>
+                <span class="cell-value">{{ execution.completed_at|naturaltime|default:"-" }}</span>
+            </div>
+        </div>
+        <i class="fas fa-chevron-right app-meta"></i>
+    </a>
+    {% endfor %}
+</div>
+{% else %}
+<section class="app-card">
+    <div class="app-empty">
+        <div class="app-empty-icon"><i class="fas fa-list"></i></div>
+        <h2 class="app-empty-title">
+            {% if status_filter %}No {{ status_filter }} runs{% else %}No runs yet{% endif %}
+        </h2>
+        <p class="app-empty-text">
+            {% if status_filter %}
+            There are no runs with this status. Try another filter.
+            {% else %}
+            Run this workflow to see its execution history here.
+            {% endif %}
+        </p>
+    </div>
+</section>
+{% endif %}
+
+{% if messages %}
+<div class="toast-stack">
+    {% for message in messages %}
+    <div class="app-toast show" role="status" data-auto-dismiss>{{ message }}</div>
+    {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

@@ -4,7 +4,7 @@ Searches for bus tickets using Buupass website scraper
 """
 import logging
 import aiohttp
-from typing import Dict, Any, List
+from typing import Dict, List
 from bs4 import BeautifulSoup
 from django.conf import settings
 from orchestration.connectors.base_travel_connector import BaseTravelConnector
@@ -137,16 +137,16 @@ class TravelBusesConnector(BaseTravelConnector):
                     seats_available = self._parse_number(seats, 5)
 
                     results.append({
-                        'id': f'bus_{i+1:03d}',
+                        'id': f'bus_{i + 1:03d}',
                         'provider': 'Buupass',
-                        'company': company or f'Operator {i+1}',
+                        'company': company or f'Operator {i + 1}',
                         'departure_time': departure_time or '08:00',
                         'arrival_time': arrival_time or '16:00',
                         'duration_hours': 8,
                         'price_ksh': price_ksh,
                         'seats_available': seats_available,
                         'amenities': self._guess_amenities(company),
-                        'booking_url': booking_link or f'https://buupass.com/booking/{i+1}',
+                        'booking_url': booking_link or f'https://buupass.com/booking/{i + 1}',
                         'rating': 4.0 + (i % 5) * 0.1,
                         'reviews': 50 + (i * 10)
                     })
@@ -235,7 +235,7 @@ class TravelBusesConnector(BaseTravelConnector):
         results = []
         for i, bus in enumerate(buses):
             results.append({
-                'id': f'bus_{i+1:03d}',
+                'id': f'bus_{i + 1:03d}',
                 'provider': 'Buupass',
                 'company': bus['company'],
                 'departure_time': bus['departure'],
@@ -244,7 +244,7 @@ class TravelBusesConnector(BaseTravelConnector):
                 'price_ksh': bus['price'],
                 'seats_available': bus['seats'],
                 'amenities': self._guess_amenities(bus['company']),
-                'booking_url': f'https://buupass.com/booking/{i+1}',
+                'booking_url': f'https://buupass.com/booking/{i + 1}',
                 'rating': 4.0 + (i * 0.2),
                 'reviews': 50 + (i * 20)
             })

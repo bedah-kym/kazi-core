@@ -7,7 +7,6 @@ executed as internal tools (no external connector needed).
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import Any, Dict, List
 
 from asgiref.sync import sync_to_async

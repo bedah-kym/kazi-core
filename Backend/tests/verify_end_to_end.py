@@ -1,18 +1,15 @@
 import os
 import django
 import asyncio
-import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # Setup Django
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'Backend.settings')
 django.setup()
 
 from django.contrib.auth import get_user_model
-from django.test import RequestFactory
 from rest_framework.test import APIClient
-from travel.models import Itinerary, ItineraryItem
 from users.quota_service import QuotaService
 
 # Config
@@ -26,7 +23,7 @@ def run_verification():
 
     # 1. Setup User
     username = f"verify_user_{int(datetime.now().timestamp())}"
-    user = User.objects.create_user(username=username, password="testpassword123")
+    user = User.objects.create_user(username=username, password="testpassword123")  # nosec B106 — test fixture — fake credential
     logger.info(f"✅ Created Test User: {user.username}")
 
     # 2. Verify Quota Service (Initial State)
@@ -93,8 +90,8 @@ async def async_search_proxy(payload, user):
     Actually, we can't easily call async view from sync script without test client async support.
     We will just skip the router execution and trust unit tests, focusing on DB integration here.
     """
-    from orchestration.mcp_router import MCPRouter
-    router = MCPRouter()
+    from orchestration.tool_router import MCPRouter
+    MCPRouter()
     # verify router instantiates
     return {}
 

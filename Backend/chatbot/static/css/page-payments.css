@@ -1,0 +1,104 @@
+/* Payments pages: cards, status badges and tables (warm). */
+
+.text-xs {
+    font-size: 0.75rem;
+}
+
+.tracking-tight {
+    letter-spacing: -0.025em;
+}
+
+.ls-1 {
+    letter-spacing: 0.1em;
+}
+
+.card {
+    background-color: var(--raised);
+    color: var(--ink);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: 0 1px 2px 0 rgba(61, 57, 41, 0.06);
+    margin-bottom: 1.5rem;
+}
+
+.card-header {
+    padding: 1.5rem 1.5rem 0 1.5rem;
+    background: transparent;
+    border-bottom: none;
+}
+
+.card-title {
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin: 0;
+}
+
+.card-description {
+    font-size: 0.875rem;
+    color: var(--ink-soft);
+    margin-top: 0.35rem;
+}
+
+.card-content {
+    padding: 1.5rem;
+}
+
+.badge-status {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    padding: 0.25rem 0.75rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    line-height: 1;
+}
+
+.status-SUCCESS,
+.status-PAID,
+.status-COMPLETED {
+    background-color: var(--success-soft);
+    color: var(--success-hex);
+}
+
+.status-PENDING {
+    background-color: var(--warning-soft);
+    color: var(--warning-hex);
+}
+
+.status-WARNING {
+    background-color: var(--warning-soft);
+    color: var(--warning-hex);
+}
+
+.status-ERROR,
+.status-EXPIRED,
+.status-FAILED,
+.status-CANCELLED,
+.status-DISPUTED {
+    background-color: var(--danger-soft);
+    color: var(--danger-hex);
+}
+
+.table th {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--ink-soft);
+    font-weight: 600;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--line);
+}
+
+.table td {
+    font-size: 0.875rem;
+    padding: 1rem 0;
+    border-bottom: 1px solid var(--line);
+    color: var(--ink);
+}
+
+.dropdown-menu {
+    border: 1px solid var(--line);
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    border-radius: 12px;
+    font-size: 0.875rem;
+}

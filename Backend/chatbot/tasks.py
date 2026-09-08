@@ -85,7 +85,7 @@ def moderate_message_batch(self, batch_id):
 
         # Initialize HF client
         hf_token = os.environ.get('HF_API_TOKEN', '')
-        client = InferenceClient(token=hf_token if hf_token else None)
+        InferenceClient(token=hf_token if hf_token else None)
 
         flagged_messages = []
 
@@ -103,7 +103,7 @@ def moderate_message_batch(self, batch_id):
 
             try:
                 # Get message content (need to decrypt)
-                content_data = json.loads(msg.content)
+                json.loads(msg.content)
 
                 # For now, we'll moderate based on message metadata
                 # In production, you'd decrypt in a secure context
@@ -297,8 +297,8 @@ def generate_ai_response(self, room_id, user_id, user_message):
                     "Encourage respectful collaboration, and flag or refuse to generate content that includes harassment, spam, or scams. "
                     "You can summarize conversations, clarify task details, and offer neutral guidanceâ€”never make legal, financial, or medical claims."
                     f"\n\n{ContextManager.get_context_prompt(room_id)}"
-                    ),
-                }
+                ),
+            }
         ]
 
         # Add conversation history

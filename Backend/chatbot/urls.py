@@ -5,6 +5,7 @@ from . import context_api
 from . import contact_api
 from . import linked_rooms_api
 from . import message_actions
+from . import model_api
 from . import voice_views
 
 app_name = "chatbot"
@@ -20,6 +21,9 @@ urlpatterns = [
     # Context API
     path('api/rooms/<int:room_id>/context/', context_api.get_room_context, name='room-context'),
     path('api/rooms/<int:room_id>/notes/', context_api.add_note, name='add-note'),
+
+    # Model Selector API
+    path('api/rooms/<int:room_id>/model/', model_api.room_model, name='room-model'),
 
     # Linked Rooms API
     path('api/rooms/<int:room_id>/linked/', linked_rooms_api.list_or_link_rooms, name='linked-rooms'),

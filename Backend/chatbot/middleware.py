@@ -29,7 +29,7 @@ class EnsureMemberMiddleware:
                     member, created = Member.objects.get_or_create(User=request.user)
                 except Member.MultipleObjectsReturned:
                     # Duplicates exist - just use the first one
-                    member = Member.objects.filter(User=request.user).first()
+                    Member.objects.filter(User=request.user).first()
 
                 # Mark in session to skip this check for future requests
                 request.session['_member_created'] = True

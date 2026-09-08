@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/4.1/ref/settings/
 """
 from decimal import Decimal
 import os
+import sys
 from pathlib import Path
 import dj_database_url
 from celery.schedules import crontab
@@ -39,18 +40,37 @@ except Exception:
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.1/howto/deployment/checklist/
 
+def _load_or_create_dev_secret_key(key_file):
+    # Stable per-checkout dev key stored in a gitignored file so sessions
+    # survive across gunicorn workers and restarts. Returns (key, persisted).
+    # Silent by design: callers must never log the key itself.
+    try:
+        key = key_file.read_text().strip()
+    except OSError:
+        key = ''
+    if key:
+        return key, True
+    import secrets
+    key = secrets.token_urlsafe(50)
+    try:
+        key_file.write_text(key)
+        return key, True
+    except OSError:
+        return key, False
+
+
 # SECURITY WARNING: keep the secret key used in production secret!
-# CRITICAL: SECRET_KEY must be set via environment variable in production
-# CRITICAL: SECRET_KEY must be set via environment variable in production
 # CRITICAL: SECRET_KEY must be set via environment variable in production
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
 if not SECRET_KEY:
     if os.environ.get('DJANGO_DEBUG', 'False').lower() in ('1', 'true', 'yes'):
-        # Development fallback - still unique per deployment
-        import secrets
-        SECRET_KEY = secrets.token_urlsafe(50)
-        print(f"⚠️  WARNING: Using auto-generated SECRET_KEY. Set DJANGO_SECRET_KEY in .env for consistency.")
-        print(f"Generated key: {SECRET_KEY}")
+        SECRET_KEY, _key_persisted = _load_or_create_dev_secret_key(
+            Path(os.environ.get('DJANGO_DEV_SECRET_KEY_FILE') or (BASE_DIR.parent / '.dev_secret_key'))
+        )
+        if _key_persisted:
+            print("⚠️  DEV ONLY: SECRET_KEY served from the gitignored .dev_secret_key fallback. Set DJANGO_SECRET_KEY in .env.")
+        else:
+            print("⚠️  DEV ONLY: auto-generated SECRET_KEY could not be persisted; sessions reset between processes. Set DJANGO_SECRET_KEY in .env.")
     else:
         raise ValueError(
             "CRITICAL SECURITY ERROR: DJANGO_SECRET_KEY environment variable must be set in production. "
@@ -169,6 +189,7 @@ TEMPLATES = [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
+                'users.context_processors.shell_context',
             ],
         },
     },
@@ -212,6 +233,9 @@ TEMPORAL_HOST = os.environ.get('TEMPORAL_HOST', 'localhost:7233')
 TEMPORAL_NAMESPACE = os.environ.get('TEMPORAL_NAMESPACE', 'default')
 TEMPORAL_TASK_QUEUE = os.environ.get('TEMPORAL_TASK_QUEUE', 'user-workflows')
 TEMPORAL_DISABLED = os.environ.get('TEMPORAL_DISABLED', 'False').lower() in ('1', 'true', 'yes')
+# Approval decisions go through the Workflow Update API (typed request/response
+# per approval id) instead of fire-and-forget signals. Default off — reversible.
+WORKFLOW_APPROVALS_UPDATE_API = os.environ.get('WORKFLOW_APPROVALS_UPDATE_API', 'False').lower() in ('1', 'true', 'yes')
 
 # Workflow safety limits
 WORKFLOW_WITHDRAW_MAX = Decimal(os.environ.get('WORKFLOW_WITHDRAW_MAX', '10000'))
@@ -219,8 +243,9 @@ WORKFLOW_WITHDRAW_MAX = Decimal(os.environ.get('WORKFLOW_WITHDRAW_MAX', '10000')
 # Travel connectors: allow mock fallbacks in dev only
 TRAVEL_ALLOW_FALLBACK = os.environ.get('TRAVEL_ALLOW_FALLBACK', str(DEBUG)).lower() in ('1', 'true', 'yes')
 
-# Celery Results
-CELERY_RESULT_BACKEND = 'django-db'  # Using Django DB for results
+# Celery Results — env-overridable so deployments can switch backends
+# (e.g. redis://) without code changes; django-db remains the default.
+CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', 'django-db')
 CELERY_CACHE_BACKEND = 'django-cache'
 CELERY_TASK_IGNORE_RESULT = os.environ.get('CELERY_TASK_IGNORE_RESULT', 'True').lower() in ('1', 'true', 'yes')
 
@@ -241,27 +266,44 @@ CELERY_WORKER_MAX_MEMORY_PER_CHILD = int(os.environ.get('CELERY_WORKER_MAX_MEMOR
 CELERY_RESULT_EXPIRES = int(os.environ.get('CELERY_RESULT_EXPIRES', 3600))  # 1 hour
 
 # Django Cache with local Redis
+# IGNORE_EXCEPTIONS: when Redis is down, HTTP views must still serve —
+# cache reads return the default and writes are skipped (logged) instead of 500ing.
+REDIS_CACHE_IGNORE_EXCEPTIONS = os.environ.get('REDIS_CACHE_IGNORE_EXCEPTIONS', '1').lower() in ('1', 'true', 'yes')
 CACHES = {
     "default": {
         "BACKEND": "django_redis.cache.RedisCache",
         "LOCATION": REDIS_URL,
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            "IGNORE_EXCEPTIONS": REDIS_CACHE_IGNORE_EXCEPTIONS,
         }
     }
 }
+DJANGO_REDIS_LOG_IGNORED_EXCEPTIONS = True
 
 # Channels Layer with local Redis
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            "hosts": [REDIS_URL],
+            "hosts": [
+                {
+                    "address": REDIS_URL,
+                    # redis-py 8.0.0 defaults socket_timeout to 5s, which
+                    # collides with channels_redis's 5s bzpopmin poll and
+                    # tears down otherwise-idle WebSockets. None restores the
+                    # pre-8.0 behaviour; bzpopmin still returns on its own
+                    # 5s poll without raising.
+                    "socket_timeout": None,
+                }
+            ],
         },
     },
 }
 
-# Celery Beat Schedule
+# Celery Beat Schedule — single source of truth. A second definition later in
+# this file silently replaced this dict once already (dropping the reminder
+# sweep and the deferred-workflow replay watchdog); never redefine it below.
 MODERATION_ENABLED = os.environ.get('MODERATION_ENABLED')
 if MODERATION_ENABLED is None:
     MODERATION_ENABLED = bool(os.environ.get('HF_API_TOKEN', ''))
@@ -271,15 +313,20 @@ else:
 MODERATION_FLUSH_SECONDS = int(os.environ.get('MODERATION_FLUSH_SECONDS', 600))
 REMINDER_SWEEP_SECONDS = int(os.environ.get('REMINDER_SWEEP_SECONDS', 3600))
 WORKFLOW_REPLAY_SCHEDULE_SECONDS = int(os.environ.get('WORKFLOW_REPLAY_SCHEDULE_SECONDS', 300))
+WORKFLOW_APPROVAL_SWEEP_SECONDS = int(os.environ.get('WORKFLOW_APPROVAL_SWEEP_SECONDS', 300))
 
 CELERY_BEAT_SCHEDULE = {
-    'reconcile-ledger': {
+    'nightly_ledger_reconciliation': {
         'task': 'payments.tasks.reconcile_ledger',
-        'schedule': 7200.0,  # Every 2 hours
+        'schedule': crontab(hour=2, minute=0),
     },
-    'process-recurring-invoices': {
+    'daily_recurring_invoices': {
         'task': 'payments.tasks.process_recurring_invoices',
-        'schedule': 86400.0,  # Daily
+        'schedule': crontab(hour=1, minute=0),
+    },
+    'sweep-memory-notes': {
+        'task': 'chatbot.tasks.sweep_memory_notes',
+        'schedule': 21600.0,  # Every 6 hours
     },
     'check-due-reminders': {
         'task': 'chatbot.tasks.check_due_reminders',
@@ -288,6 +335,10 @@ CELERY_BEAT_SCHEDULE = {
     'send-trial-summary': {
         'task': 'users.tasks.send_trial_summary_task',
         'schedule': crontab(hour=7, minute=0),  # every day at 07:00
+    },
+    'sweep-stuck-approvals': {
+        'task': 'workflows.tasks.sweep_stuck_approvals',
+        'schedule': float(WORKFLOW_APPROVAL_SWEEP_SECONDS),
     },
 }
 
@@ -310,6 +361,12 @@ if not TEMPORAL_DISABLED:
             'schedule': float(WORKFLOW_REPLAY_SCHEDULE_SECONDS),  # Batch replays
         },
     })
+
+# Beat runs off the DB scheduler so runtime edits survive deploys and the
+# settings-dict clobber class of bug (#73) is structurally dead. The dict above
+# stays the source of truth: `manage.py sync_beat_schedule` mirrors it into the
+# database (and disables entries that are no longer declared here).
+CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 
 # AI Moderation Settings
 MODERATION_BATCH_SIZE = 10
@@ -354,13 +411,18 @@ CONTEXT_PROMPT_MAX_CHARS = int(os.environ.get('CONTEXT_PROMPT_MAX_CHARS', 8000))
 SKILL_MAX_CHARS = int(os.environ.get('SKILL_MAX_CHARS', 8000))  # cap a loaded skill's instruction body
 HISTORY_MAX_CHARS = int(os.environ.get('HISTORY_MAX_CHARS', 60000))  # conversation history budget before auto-compaction
 HISTORY_MAX_MESSAGES = int(os.environ.get('HISTORY_MAX_MESSAGES', 50))  # max history turns kept in an agent loop
-HISTORY_COMPACTION_ENABLED = os.environ.get('HISTORY_COMPACTION_ENABLED', 'False').lower() in ('1', 'true', 'yes')  # opt-in: trim oldest turns when history exceeds the budget
+HISTORY_COMPACTION_ENABLED = os.environ.get('HISTORY_COMPACTION_ENABLED', 'True').lower() in ('1', 'true', 'yes')  # trim oldest turns when history exceeds the budget
 LLM_CACHE_ENABLED = os.environ.get('LLM_CACHE_ENABLED', 'True').lower() in ('1', 'true', 'yes')
 LLM_CACHE_TTL_SECONDS = int(os.environ.get('LLM_CACHE_TTL_SECONDS', 600))
 LLM_CACHE_MIN_TEMP = float(os.environ.get('LLM_CACHE_MIN_TEMP', 0.3))
 
 # Manager agent LLM fallback
 MANAGER_LLM_ENABLED = os.environ.get('MANAGER_LLM_ENABLED', 'True').lower() in ('1', 'true', 'yes')
+
+# Orchestration startup integrity checks (connector <-> action catalog).
+# Previously only checked via getattr(settings, ..., True) which could never be
+# disabled. Wired to env so CI/dev can skip the eager MCPRouter construction.
+ORCHESTRATION_STRICT_STARTUP_CHECKS = os.environ.get('ORCHESTRATION_STRICT_STARTUP_CHECKS', 'True').lower() in ('1', 'true', 'yes')
 
 # Password validation
 # https://docs.djangoproject.com/en/4.1/ref/settings/#auth-password-validators
@@ -622,20 +684,13 @@ JAZZMIN_UI_TWEAKS = {
     "window_box_shadow_class": "card-shadow",
 }
 
-# Celery Beat Schedule
-from celery.schedules import crontab
+TEST_RUNNER = 'tests.runner.KaziDiscoverRunner'
 
-CELERY_BEAT_SCHEDULE = {
-    'nightly_ledger_reconciliation': {
-        'task': 'payments.tasks.reconcile_ledger',
-        'schedule': crontab(hour=2, minute=0),
-    },
-    'daily_recurring_invoices': {
-        'task': 'payments.tasks.process_recurring_invoices',
-        'schedule': crontab(hour=1, minute=0),
-    },
-    'sweep-memory-notes': {
-        'task': 'chatbot.tasks.sweep_memory_notes',
-        'schedule': 21600.0,  # Every 6 hours
-    },
-}
+if 'test' in sys.argv:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "kazi-tests",
+        }
+    }
+    SILENCED_SYSTEM_CHECKS = ['django_ratelimit.E003']

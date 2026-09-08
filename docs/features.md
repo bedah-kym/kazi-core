@@ -39,9 +39,30 @@ Review what the agent did and undo what it shouldn't have.
 
 Workflows pause durably for approval instead of relying on ephemeral chat
 state. A run can wait on Temporal, notify an operator over in-app, email, or
-WhatsApp, and resume only after an explicit decision.
+WhatsApp, and resume only after an explicit decision. High-risk tools paused
+inside the agent loop get the same durable treatment — a room-scoped approval
+record that survives Redis eviction and shows up in the ops inbox.
 
 *Driving a run:* [Operate a Workflow](operate-a-workflow.md).
+
+### 🧭 One routing brain
+
+`OrchestrationCoordinator` owns everything after `@mathia` routing — directives,
+pending confirmations, the agent loop, planner, intent dispatch, and general
+chat. The WebSocket consumer is thin: it validates, encrypts, persists, and
+hands off.
+
+### 🔁 Retries that back off, services that trip
+
+Failed tool calls retry with exponential backoff (capped at 300s), and a
+service that fails repeatedly trips a per-service circuit breaker (60s
+cooldown) so a flapping integration degrades instead of being hammered.
+
+### 🧮 Plans can't loop
+
+Workflow step dependencies are checked for cycles (Kahn's algorithm), so an
+`A→B→A` plan is rejected with a clear error instead of silently reordering
+wrong.
 
 ### 🛡️ Security in the bones
 
@@ -86,6 +107,10 @@ auto-discovers it on restart.
 | Telemetry | JSONL event log for every loop, tool call, and memory update |
 | Payments | Wallet, invoices, and transactions with M-Pesa and card support via IntaSend |
 | Travel | Flight, hotel, bus, transfer, and event search via Amadeus |
+| Orchestration coordinator | One routing facade that owns post-`@mathia` decisions |
+| Retry backoff + circuit breaker | Exponential backoff and per-service degrade for flapping integrations |
+| Dependency cycle detection | Kahn's-algorithm check that rejects circular workflow plans |
+| History compaction | Trims oldest turns to the context budget — on by default |
 
 ## Turning features on
 

@@ -95,7 +95,7 @@ class TelegramBotConnectorTests(SimpleTestCase):
     def test_health_check_success(self):
         from orchestration.connectors.telegram_bot_connector import TelegramBotConnector
         c = TelegramBotConnector()
-        with override_settings(TELEGRAM_BOT_TOKEN="tok"):
+        with override_settings(TELEGRAM_BOT_TOKEN="tok"):  # nosec B106 — test fixture — fake credential
             with patch.object(c, "_tg_post", new=AsyncMock(return_value={"ok": True, "result": {"username": "kazi_bot", "first_name": "Kazi"}})):
                 result = _run(c._health_check())
         self.assertEqual(result["status"], "success")

@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 class GmailConnector(BaseConnector):
-    TOKEN_URL = "https://oauth2.googleapis.com/token"
+    TOKEN_URL = "https://oauth2.googleapis.com/token"  # nosec B105 — token URL, not a credential
     SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
 
     def __init__(self):

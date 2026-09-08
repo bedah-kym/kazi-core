@@ -4,8 +4,7 @@ Converts structured data from connectors into natural language responses
 """
 import json
 import logging
-from typing import Dict, Any
-import httpx
+from typing import Dict
 
 logger = logging.getLogger(__name__)
 

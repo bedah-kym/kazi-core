@@ -22,7 +22,7 @@ These caps stop the context window from silently overflowing:
 | `CONTEXT_PROMPT_MAX_CHARS` | `8000` | Room context injected into the system prompt |
 | `HISTORY_MAX_CHARS` | `60000` | Conversation history budget |
 | `HISTORY_MAX_MESSAGES` | `50` | History turns kept per loop |
-| `HISTORY_COMPACTION_ENABLED` | `False` | Opt-in: trim oldest turns when over budget |
+| `HISTORY_COMPACTION_ENABLED` | `True` | Trim oldest turns when over budget (opt-out) |
 
 When truncation happens, Kazi emits a `context_truncated` (or
 `context_compacted`) telemetry event — you can see exactly when and why.
@@ -31,7 +31,7 @@ When truncation happens, Kazi emits a `context_truncated` (or
 
 - Bumping `CONTEXT_PROMPT_MAX_CHARS` gives the agent more room context but costs
   tokens. Start at the default, raise it only when you see it truncating.
-- Turn on `HISTORY_COMPACTION_ENABLED` for long-running rooms so the agent
-  keeps recent turns and drops the oldest instead of failing.
+- `HISTORY_COMPACTION_ENABLED` is on by default; set it to `false` only if you
+  want raw, untrimmed history handed to the LLM.
 
 See [Configuration](configuration.md) for the full list.

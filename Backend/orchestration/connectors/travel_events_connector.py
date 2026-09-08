@@ -5,7 +5,7 @@ Searches for local events using Eventbrite API
 import logging
 import os
 import aiohttp
-from typing import Dict, Any, List
+from typing import Dict, List
 from datetime import datetime
 from django.conf import settings
 from orchestration.connectors.base_travel_connector import BaseTravelConnector
@@ -157,9 +157,9 @@ class TravelEventsConnector(BaseTravelConnector):
         # Accept either text or id for category
         category_id = event.get('category_id', 'other')
         return {
-            'id': f"event_{str(event.get('id', index+1))[:10]}",
+            'id': f"event_{str(event.get('id', index + 1))[:10]}",
             'provider': 'Eventbrite',
-            'title': event.get('name', {}).get('text', f'Event {index+1}'),
+            'title': event.get('name', {}).get('text', f'Event {index + 1}'),
             'category': category_id,
             'start_datetime': event.get('start', {}).get('utc', ''),
             'end_datetime': event.get('end', {}).get('utc', ''),
@@ -200,7 +200,7 @@ class TravelEventsConnector(BaseTravelConnector):
         for i, event in enumerate(events):
             if category == 'all' or category == event['cat']:
                 results.append({
-                    'id': f"event_{i+1:03d}",
+                    'id': f"event_{i + 1:03d}",
                     'provider': 'Eventbrite',
                     'title': event['title'],
                     'category': event['cat'],
@@ -209,7 +209,7 @@ class TravelEventsConnector(BaseTravelConnector):
                     'location': location,
                     'venue': event['venue'],
                     'price_ksh': event['price'],
-                    'ticket_url': f"https://eventbrite.com/e/{i+1}",
+                    'ticket_url': f"https://eventbrite.com/e/{i + 1}",
                     'image_url': '',
                     'rating': 4.5 + (i % 3) * 0.1,
                     'attendees': event['attendees']

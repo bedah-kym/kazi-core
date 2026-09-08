@@ -1,234 +1,82 @@
+{% extends "users/base_app.html" %}
 {% load static %}
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>My Trips | Mathia</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-    <style>
-        :root {
-            --notion-bg: #ffffff;
-            --notion-text: #37352f;
-            --notion-gray: #f7f7f5;
-            --notion-border: #e9e9e7;
-            --notion-muted: rgba(55, 53, 47, 0.65);
-            --accent: #000000;
-            --radius: 12px;
-            --max: 1080px;
-            --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-        }
-        * { box-sizing: border-box; }
-        body {
-            margin: 0;
-            font-family: var(--font-sans);
-            background: var(--notion-bg);
-            color: var(--notion-text);
-            line-height: 1.6;
-        }
-        nav {
-            position: sticky;
-            top: 0;
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(8px);
-            border-bottom: 1px solid var(--notion-border);
-            padding: 14px 18px;
-            z-index: 10;
-        }
-        nav .row {
-            max-width: var(--max);
-            margin: 0 auto;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 12px;
-        }
-        .logo {
-            text-decoration: none;
-            color: var(--notion-text);
-            font-weight: 700;
-            display: flex;
-            gap: 8px;
-            align-items: center;
-        }
-        .btn {
-            padding: 10px 16px;
-            border-radius: 10px;
-            border: 1px solid transparent;
-            text-decoration: none;
-            font-weight: 600;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
-            min-height: 44px;
-        }
-        .btn-primary { background: var(--accent); color: #ffffff; }
-        .btn-ghost { border: 1px solid var(--notion-border); color: var(--notion-text); }
-        .container {
-            max-width: var(--max);
-            margin: 0 auto;
-            padding: 40px 22px 80px;
-        }
-        h1 { font-size: clamp(28px, 4vw, 40px); margin: 8px 0; }
-        .muted { color: var(--notion-muted); }
-        .metrics {
-            display: grid;
-            gap: 14px;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            margin: 22px 0 28px;
-        }
-        .metric-card {
-            background: #ffffff;
-            border: 1px solid var(--notion-border);
-            border-radius: var(--radius);
-            padding: 16px;
-            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.05);
-        }
-        .metric-label {
-            font-size: 12px;
-            text-transform: uppercase;
-            letter-spacing: 0.08em;
-            color: var(--notion-muted);
-            font-weight: 600;
-        }
-        .metric-value {
-            font-size: 24px;
-            font-weight: 700;
-        }
-        .trip-card {
-            border: 1px solid var(--notion-border);
-            border-radius: var(--radius);
-            padding: 20px;
-            background: #ffffff;
-            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.04);
-            margin-bottom: 16px;
-        }
-        .trip-header {
-            display: flex;
-            justify-content: space-between;
-            gap: 16px;
-            flex-wrap: wrap;
-        }
-        .trip-title {
-            font-size: 20px;
-            font-weight: 600;
-            margin: 0;
-        }
-        .trip-sub {
-            color: var(--notion-muted);
-            font-size: 14px;
-        }
-        .badge {
-            display: inline-flex;
-            align-items: center;
-            padding: 4px 10px;
-            border-radius: 999px;
-            border: 1px solid var(--notion-border);
-            font-size: 12px;
-            font-weight: 600;
-            background: var(--notion-gray);
-        }
-        .trip-meta {
-            display: grid;
-            gap: 12px;
-            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-            border-top: 1px solid var(--notion-border);
-            border-bottom: 1px solid var(--notion-border);
-            padding: 14px 0;
-            margin: 16px 0;
-            font-size: 14px;
-        }
-        .trip-actions {
-            display: flex;
-            gap: 10px;
-            align-items: center;
-            flex-wrap: wrap;
-        }
-        .empty {
-            text-align: center;
-            border: 1px dashed var(--notion-border);
-            border-radius: var(--radius);
-            padding: 40px 20px;
-            background: var(--notion-gray);
-        }
-        form.inline { display: inline; }
-        @media (max-width: 640px) {
-            .trip-header { flex-direction: column; }
-        }
-    </style>
-</head>
-<body>
-    <nav>
-        <div class="row">
-            <a class="logo" href="/"><i class="fas fa-robot"></i> Mathia.OS</a>
-            <a class="btn btn-primary" href="{% url 'travel:plan_trip' %}"><i class="fas fa-plus"></i> Plan trip</a>
-        </div>
-    </nav>
 
-    <div class="container">
-        <h1>My Trips</h1>
-        <p class="muted">Keep your itineraries organized and ready to share.</p>
+{% block title %}My Trips | Mathia{% endblock %}
 
-        <div class="metrics">
-            <div class="metric-card">
-                <div class="metric-label">Total trips</div>
-                <div class="metric-value">{{ itineraries.count }}</div>
-            </div>
-            <div class="metric-card">
-                <div class="metric-label">Upcoming</div>
-                <div class="metric-value">{{ upcoming_count }}</div>
-            </div>
-            <div class="metric-card">
-                <div class="metric-label">Completed</div>
-                <div class="metric-value">{{ completed_count }}</div>
-            </div>
-        </div>
+{% block breadcrumb %}
+<a href="{% url 'users:dashboard' %}">Dashboard</a><span class="crumb-sep">&#8250;</span><span class="crumb-current">My Trips</span>
+{% endblock %}
 
-        {% for itinerary in itineraries %}
-        {% if itinerary.status != 'archived' %}
-        <div class="trip-card">
-            <div class="trip-header">
-                <div>
-                    <h2 class="trip-title"><a href="{% url 'travel:view_itinerary' itinerary.id %}" style="text-decoration:none; color:inherit;">{{ itinerary.title }}</a></h2>
-                    <div class="trip-sub"><i class="fas fa-map-marker-alt"></i> {{ itinerary.metadata.destination|default:itinerary.region|title }}</div>
-                </div>
-                <span class="badge">{{ itinerary.status|title }}</span>
-            </div>
+{% block head %}
+<link href="{% static 'css/page-travel.css' %}" rel="stylesheet">
+{% endblock %}
 
-            <div class="trip-meta">
-                <div><strong>Dates:</strong> {% if itinerary.start_date %}{{ itinerary.start_date|date:"M d, Y" }} - {{ itinerary.end_date|date:"M d, Y" }}{% else %}Not set{% endif %}</div>
-                <div><strong>Duration:</strong> {{ itinerary.duration_days }} days</div>
-                <div><strong>Budget:</strong> {% if itinerary.budget_ksh %}{{ itinerary.budget_currency }} {{ itinerary.budget_ksh|floatformat:0 }}{% else %}Not set{% endif %}</div>
-                <div><strong>Items:</strong> {{ itinerary.items.count }} planned</div>
-            </div>
-
-            <div class="trip-actions">
-                <a class="btn btn-ghost" href="{% url 'travel:view_itinerary' itinerary.id %}">View details</a>
-                <form class="inline" method="post" action="{% url 'travel:archive_itinerary' itinerary.id %}" onsubmit="return confirm('Archive this trip?');">
-                    {% csrf_token %}
-                    <button type="submit" class="btn btn-ghost"><i class="fas fa-archive"></i> Archive</button>
-                </form>
-                <form class="inline" method="post" action="{% url 'travel:delete_itinerary' itinerary.id %}" onsubmit="return confirm('Delete this trip?');">
-                    {% csrf_token %}
-                    <button type="submit" class="btn btn-ghost"><i class="fas fa-trash-alt"></i> Delete</button>
-                </form>
-            </div>
-        </div>
-        {% endif %}
-        {% empty %}
-        <div class="empty">
-            <h3>No trips yet</h3>
-            <p class="muted">Start by planning your first itinerary.</p>
-            <div style="margin-top:16px; display:flex; gap:10px; justify-content:center; flex-wrap:wrap;">
-                <a class="btn btn-primary" href="{% url 'travel:plan_trip' %}">Plan a trip</a>
-                <a class="btn btn-ghost" href="{% url 'chatbot:redirect_to_home' %}">Go to Chat</a>
-            </div>
-        </div>
-        {% endfor %}
+{% block content %}
+<div class="app-header">
+    <div>
+        <div class="app-eyebrow">Travel</div>
+        <h1 class="app-title">My Trips</h1>
+        <p class="app-subtitle">Keep your itineraries organized and ready to share.</p>
     </div>
-</body>
-</html>
+    <div class="app-header-actions">
+        <a class="app-btn app-btn-primary" href="{% url 'travel:plan_trip' %}"><i class="fas fa-plus me-1"></i> Plan trip</a>
+    </div>
+</div>
+
+<div class="travel-metrics">
+    <div class="metric-card">
+        <div class="metric-label">Total trips</div>
+        <div class="metric-value">{{ itineraries.count }}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Upcoming</div>
+        <div class="metric-value">{{ upcoming_count }}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Completed</div>
+        <div class="metric-value">{{ completed_count }}</div>
+    </div>
+</div>
+
+{% for itinerary in itineraries %}
+{% if itinerary.status != 'archived' %}
+<div class="trip-card">
+    <div class="trip-header">
+        <div>
+            <h2 class="trip-title"><a href="{% url 'travel:view_itinerary' itinerary.id %}" style="text-decoration:none; color:inherit;">{{ itinerary.title }}</a></h2>
+            <div class="trip-sub"><i class="fas fa-map-marker-alt"></i> {{ itinerary.metadata.destination|default:itinerary.region|title }}</div>
+        </div>
+        <span class="travel-badge">{{ itinerary.status|title }}</span>
+    </div>
+
+    <div class="trip-meta">
+        <div><strong>Dates:</strong> {% if itinerary.start_date %}{{ itinerary.start_date|date:"M d, Y" }} - {{ itinerary.end_date|date:"M d, Y" }}{% else %}Not set{% endif %}</div>
+        <div><strong>Duration:</strong> {{ itinerary.duration_days }} days</div>
+        <div><strong>Budget:</strong> {% if itinerary.budget_ksh %}{{ itinerary.budget_currency }} {{ itinerary.budget_ksh|floatformat:0 }}{% else %}Not set{% endif %}</div>
+        <div><strong>Items:</strong> {{ itinerary.items.count }} planned</div>
+    </div>
+
+    <div class="trip-actions">
+        <a class="travel-btn travel-btn-ghost" href="{% url 'travel:view_itinerary' itinerary.id %}">View details</a>
+        <form class="inline" method="post" action="{% url 'travel:archive_itinerary' itinerary.id %}" onsubmit="return confirm('Archive this trip?');">
+            {% csrf_token %}
+            <button type="submit" class="travel-btn travel-btn-ghost"><i class="fas fa-archive"></i> Archive</button>
+        </form>
+        <form class="inline" method="post" action="{% url 'travel:delete_itinerary' itinerary.id %}" onsubmit="return confirm('Delete this trip?');">
+            {% csrf_token %}
+            <button type="submit" class="travel-btn travel-btn-ghost"><i class="fas fa-trash-alt"></i> Delete</button>
+        </form>
+    </div>
+</div>
+{% endif %}
+{% empty %}
+<div class="travel-empty">
+    <h3>No trips yet</h3>
+    <p class="travel-muted">Start by planning your first itinerary.</p>
+    <div style="margin-top:16px; display:flex; gap:10px; justify-content:center; flex-wrap:wrap;">
+        <a class="travel-btn travel-btn-primary" href="{% url 'travel:plan_trip' %}">Plan a trip</a>
+        <a class="travel-btn travel-btn-ghost" href="{% url 'chatbot:redirect_to_home' %}">Go to Chat</a>
+    </div>
+</div>
+{% endfor %}
+{% endblock %}

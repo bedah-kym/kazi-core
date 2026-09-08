@@ -1,5 +1,6 @@
 from django.db import migrations
 
+
 def consolidate_social_links(apps, schema_editor):
     UserProfile = apps.get_model('users', 'UserProfile')
     for profile in UserProfile.objects.all():
@@ -21,6 +22,7 @@ def consolidate_social_links(apps, schema_editor):
         if updated:
             profile.social_links = social_links
             profile.save()
+
 
 class Migration(migrations.Migration):
 

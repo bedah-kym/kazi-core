@@ -2,11 +2,11 @@
 Enterprise Payment Services
 Implements ACID-compliant ledger operations and payment workflows
 """
-from django.db import transaction, models
+from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
 from django.contrib.auth import get_user_model
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 from datetime import timedelta
 import uuid
 import logging
@@ -19,6 +19,23 @@ from .models import (
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
+
+CENT = Decimal('0.01')
+
+
+def money(value) -> Decimal:
+    """
+    Coerce any inbound numeric (int, float, str, Decimal) to an exact
+    2-decimal amount with an explicit rounding mode — never hardware-
+    accidental rounding from binary floats.
+    """
+    try:
+        amount = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        raise ValueError(f"Invalid monetary amount: {value!r}")
+    if not amount.is_finite():
+        raise ValueError(f"Invalid monetary amount: {value!r}")
+    return amount.quantize(CENT, rounding=ROUND_HALF_UP)
 
 
 class LedgerService:
@@ -45,9 +62,11 @@ class LedgerService:
             ValueError: If debits != credits
         """
         # Validate entries balance
-        total_debits = sum(e['amount'] for e in entries if e['dr_cr'] == 'DEBIT')
-        total_credits = sum(e['amount'] for e in entries if e['dr_cr'] == 'CREDIT')
+        total_debits = sum((money(e['amount']) for e in entries if e['dr_cr'] == 'DEBIT'), Decimal('0.00'))
+        total_credits = sum((money(e['amount']) for e in entries if e['dr_cr'] == 'CREDIT'), Decimal('0.00'))
 
+        if not entries:
+            raise ValueError("Refusing to post a journal with no ledger lines")
         if total_debits != total_credits:
             raise ValueError(f"Unbalanced entry: Debits={total_debits}, Credits={total_credits}")
 
@@ -61,7 +80,7 @@ class LedgerService:
         # Create ledger entries and update account balances
         for entry in entries:
             account = LedgerAccount.objects.select_for_update().get(id=entry['account_id'])
-            amount = Decimal(str(entry['amount']))
+            amount = money(entry['amount'])
 
             # Create ledger entry
             LedgerEntry.objects.create(
@@ -132,12 +151,39 @@ class LedgerService:
         return accounts
 
     @staticmethod
+    def get_wallet_ledger_account(user: User) -> LedgerAccount:
+        """Per-user liability account mirroring the wallet balance in the ledger."""
+        account, _ = LedgerAccount.objects.get_or_create(
+            name=f"Wallet Liability: {user.username}",
+            defaults={
+                'account_type': 'LIABILITY',
+                'user': user,
+                'currency': 'KES',
+            }
+        )
+        return account
+
+    @staticmethod
+    def _build_entries(entry_specs) -> list:
+        built = []
+        for spec in entry_specs:
+            amount = money(spec[2])
+            if amount == Decimal('0.00'):
+                continue
+            if amount < CENT:
+                raise ValueError(
+                    f"Ledger line {spec[1]} of {amount} is below the smallest "
+                    f"minor unit; dropping it silently would unbalance the journal"
+                )
+            built.append({'account_id': spec[0], 'amount': amount, 'dr_cr': spec[1]})
+        return built
+
+    @staticmethod
     def reconcile_daily():
         """
         Nightly reconciliation job
         Compares internal ledger against IntaSend API
         """
-        from intasend import APIService
         import os
 
         system_accounts = LedgerService.get_system_accounts()
@@ -153,21 +199,15 @@ class LedgerService:
                 logger.error("IntaSend credentials not configured")
                 return
 
-            # Using APIService isn't strictly necessary if Wallets handles it, but good for setup
             from intasend import Wallets
             wallet_service = Wallets(token=api_key, publishable_key=publishable_key, test=is_test)
 
-            # Get wallet balance
-            # Note: SDK methods might change, using a safe placeholder or try/except block if method name differs
             try:
-                wallet_details = wallet_service.details()  # Common method name or similar
-                actual_balance = Decimal(str(wallet_details.get('available_balance', 0)))
+                wallet_details = wallet_service.details()
+                actual_balance = money(wallet_details.get('available_balance', 0))
             except AttributeError:
-                # Fallback/Placeholder if specific method unknown
                 logger.warning("Could not retrieve IntaSend balance: Method unknown")
                 return
-            # actual_balance = wallet_service.retrieve()['balance']
-            actual_balance = expected_balance  # Placeholder
 
             difference = abs(expected_balance - actual_balance)
 
@@ -239,11 +279,12 @@ class WalletService:
         except FeeSchedule.DoesNotExist:
             platform_fee = Decimal('50.00')
 
-        gross_amount = Decimal(str(gross_amount))
-        intasend_fee = Decimal(str(intasend_fee))
+        gross_amount = money(gross_amount)
+        intasend_fee = money(intasend_fee)
+        platform_fee = money(platform_fee)
 
         user_credit = gross_amount - intasend_fee - platform_fee
-        if user_credit < Decimal('0.00'):
+        if user_credit < CENT:
             raise ValueError('Deposit amount is too small after fees.')
 
         wallet = WalletService.get_or_create_user_wallet(user)
@@ -256,6 +297,19 @@ class WalletService:
 
         Wallet.objects.filter(pk=wallet.pk).update(balance=F('balance') + user_credit)
         wallet.refresh_from_db()
+
+        accounts = LedgerService.get_system_accounts()
+        wallet_account = LedgerService.get_wallet_ledger_account(user)
+        LedgerService.post_transaction(
+            'DEPOSIT',
+            f"Deposit by {user.username}",
+            LedgerService._build_entries([
+                (accounts['system_asset'].id, 'DEBIT', gross_amount - intasend_fee),
+                (accounts['fee_revenue'].id, 'CREDIT', platform_fee),
+                (wallet_account.id, 'CREDIT', user_credit),
+            ]),
+            provider_ref=reference,
+        )
 
         tx = WalletTransaction.objects.create(
             wallet=wallet,
@@ -295,7 +349,9 @@ class WalletService:
         """
         Process a withdrawal
         """
-        amount = Decimal(str(amount))
+        amount = money(amount)
+        if amount < CENT:
+            raise ValueError("Withdrawal amount must be at least 0.01")
         wallet = WalletService.get_or_create_user_wallet(user)
         wallet = Wallet.objects.select_for_update().get(pk=wallet.pk)
 
@@ -309,6 +365,18 @@ class WalletService:
 
         Wallet.objects.filter(pk=wallet.pk).update(balance=F('balance') - amount)
         wallet.refresh_from_db()
+
+        accounts = LedgerService.get_system_accounts()
+        wallet_account = LedgerService.get_wallet_ledger_account(user)
+        LedgerService.post_transaction(
+            'WITHDRAWAL',
+            f"Withdrawal by {user.username}",
+            [
+                {'account_id': wallet_account.id, 'amount': amount, 'dr_cr': 'DEBIT'},
+                {'account_id': accounts['system_asset'].id, 'amount': amount, 'dr_cr': 'CREDIT'},
+            ],
+            provider_ref=reference,
+        )
 
         tx = WalletTransaction.objects.create(
             wallet=wallet,
@@ -443,6 +511,18 @@ class InvoiceService:
             status='COMPLETED'
         )
 
+        accounts = LedgerService.get_system_accounts()
+        wallet_account = LedgerService.get_wallet_ledger_account(invoice.issuer)
+        journal = LedgerService.post_transaction(
+            'INVOICE_PAYMENT',
+            f"Invoice payment {invoice.reference_id}",
+            [
+                {'account_id': accounts['system_asset'].id, 'amount': invoice.amount, 'dr_cr': 'DEBIT'},
+                {'account_id': wallet_account.id, 'amount': invoice.amount, 'dr_cr': 'CREDIT'},
+            ],
+            provider_ref=reference,
+        )
+
         # Update invoice
         invoice.status = 'PAID'
         invoice.paid_at = timezone.now()
@@ -453,7 +533,7 @@ class InvoiceService:
                 invoice.next_billing_date = invoice.paid_at.date() + timedelta(days=90)
             elif invoice.recurrence_interval == 'YEARLY':
                 invoice.next_billing_date = invoice.paid_at.date() + timedelta(days=365)
-        invoice.journal_entry = None
+        invoice.journal_entry = journal
         invoice.save()
 
         # Notify issuer

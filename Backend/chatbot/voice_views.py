@@ -1,8 +1,6 @@
 import os
 import logging
 from django.conf import settings
-from django.http import JsonResponse
-from django.contrib.auth.decorators import login_required
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes

@@ -172,7 +172,7 @@ class VoiceAssistant {
                 const height = this.waveformCanvas.height;
                 this.waveformCtx.clearRect(0, 0, width, height);
                 this.waveformCtx.lineWidth = 2;
-                this.waveformCtx.strokeStyle = '#667eea';
+                this.waveformCtx.strokeStyle = '#d97757';
                 this.waveformCtx.beginPath();
                 const sliceWidth = width / bufferLength;
                 let x = 0;
@@ -242,26 +242,35 @@ class VoiceAssistant {
         const roomId = window.currentRoomId; // Assuming this is set globally in main.js
         if (!roomId) return;
 
-        const formData = new FormData();
-        formData.append('audio', blob);
-
-        try {
-            const response = await fetch(`/chatbot/api/rooms/${roomId}/voice/upload/`, {
-                method: 'POST',
-                headers: {
-                    'X-CSRFToken': this.getCookie('csrftoken')
-                },
-                body: formData
-            });
-
-            const data = await response.json();
-            if (data.success) {
-                console.log("Voice note uploaded:", data);
-                // Optionally show a placeholder in chat or wait for transcription
-            }
-        } catch (err) {
-            console.error("Error uploading voice note:", err);
+        const socket = (typeof getCurrentSocket === 'function') ? getCurrentSocket() : null;
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+            console.error('Socket not ready for voice upload');
+            return;
         }
+
+        const arrayBuffer = await blob.arrayBuffer();
+        const base64 = this.arrayBufferToBase64(arrayBuffer);
+
+        // Route through the WebSocket voice_message path (the working one):
+        // it validates, encrypts, persists and echoes the new voice message
+        // back so it appears in the chat instantly.
+        socket.send(JSON.stringify({
+            command: 'voice_message',
+            from: window.usernameGlobal,
+            chatid: roomId,
+            file_data: base64,
+            file_name: 'voice_' + Date.now() + '.webm'
+        }));
+    }
+
+    arrayBufferToBase64(buffer) {
+        const bytes = new Uint8Array(buffer);
+        let binary = '';
+        const chunk = 0x8000;
+        for (let i = 0; i < bytes.length; i += chunk) {
+            binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+        }
+        return btoa(binary);
     }
 
     getCookie(name) {

@@ -6,7 +6,8 @@
 
 <head>
     <meta charset="utf-8">
-    <title>Kwik Chat</title>
+    <meta name="description" content="Chat with Mathia - your AI operating system for workflows, finance and more.">
+    <title>Mathia Chat</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
@@ -20,6 +21,8 @@
     <link href="{% static 'css/context-panel.css'%}" rel="stylesheet">
     <!-- Message Actions Styles -->
     <link href="{% static 'css/message-actions.css'%}" rel="stylesheet">
+    <!-- Shared Claude-inspired theme (tokens + chatroom components) — loaded last -->
+    <link href="{% static 'css/claude-theme.css' %}" rel="stylesheet">
     <!--favicon-->
     <link rel="icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
     <!-- Highlight.js CSS -->
@@ -211,50 +214,57 @@
 </head>
 
 <body class="chat-page{% if is_ai_room %} ai-only-room{% endif %}">
-    <button class="dark-mode-toggle" id="darkModeToggle" aria-label="Toggle dark mode">
-        <i class="fas fa-moon"></i>
-    </button>
     <!-- Mobile people list toggle is implemented in the header (#menuToggle) to avoid duplicate toggles -->
     <div class="container-fluid p-0">
         <!-- Backdrop for mobile people list -->
         <div class="people-backdrop" id="peopleBackdrop"></div>
         <div class="row g-0">
             <div class="col-md-4 col-lg-3 people-list">
-                <div class="p-3 people-list-content">
-                    <div class="d-flex justify-content-between align-items-center mb-3">
-                        <div class="search-bar input-group flex-grow-1 me-2 mb-0">
-                            <span class="input-group-text p-3 bg-light border-0">
-                                <i class=""></i>
-                            </span>
-                            <input type="text" class="form-control border-0 bg-light" id="search"
-                                placeholder="Search People...">
-                            <span class="input-group-text bg-light border-0">
-                                <i class="fas fa-search text-muted"></i>
-                            </span>
+                <div class="sidebar-header">
+                    <div class="sidebar-brand">
+                        <span class="sidebar-brand-mark"><i class="fas fa-robot"></i></span>
+                        <div>
+                            <div class="sidebar-title">Chats</div>
+                            <div class="sidebar-subtitle">Mathia workspace</div>
                         </div>
-                        <button class="btn btn-primary rounded-circle" data-bs-toggle="modal"
-                            data-bs-target="#createRoomModal" title="Create New Room">
-                            <i class="fas fa-plus"></i>
-                        </button>
                     </div>
+                    <button class="btn sidebar-new-btn" data-bs-toggle="modal" data-bs-target="#createRoomModal"
+                        title="New chat" aria-label="New chat">
+                        <i class="fas fa-plus"></i>
+                    </button>
+                </div>
+                <div class="sidebar-search">
+                    <i class="fas fa-search"></i>
+                    <input type="text" id="search" placeholder="Search people..." autocomplete="off">
+                </div>
+                <div class="people-list-content">
                     <ul class="list-unstyled chat-list">
                         {% for chatroom in chatrooms %}
-                        <li class="clearfix {% if chatroom.id == room_name %}active{% endif %}"
+                        <li class="clearfix room-item {% if chatroom.id == room_name %}active{% endif %}"
                             id="room-li-{{ chatroom.id }}">
                             <a href="{% url 'chatbot:bot-home' chatroom.id %}" class="text-decoration-none"
-                                onclick="switchRoom(event, '{{ chatroom.id }}', '{{ chatroom.name|escapejs }}')">
-                                <div class="d-flex align-items-center">
-                                    <img src="{{ chatroom.avatar }}" class="avatar-img me-2" alt="avatar">
-                                    <div>
-                                        <div class="fw-bold">
-                                            {{ chatroom.name }}
-                                            <!-- Valid user for status dot might be tricky in groups, 
-                                                 using display name for now if it's a single user -->
-                                            <span class="status-dot sidebar-dot" data-user="{{ chatroom.name }}"></span>
-                                        </div>
+                                onclick="switchRoom(event, '{{ chatroom.id }}', '{{ chatroom.name|escapejs }}')"
+                                {% if chatroom.id == room_name %}aria-current="page"{% endif %}>
+                                <img src="{{ chatroom.avatar }}" class="avatar-img" alt="avatar">
+                                <div class="room-item-meta">
+                                    <div class="room-item-name">
+                                        <span class="fw-bold room-item-title">{{ chatroom.name }}</span>
+                                        {% if 'AI' in chatroom.name %}<span class="room-ai-badge"><i class="fas fa-robot"></i></span>{% endif %}
+                                    </div>
+                                    <div class="room-item-sub">
+                                        <span class="status-dot sidebar-dot" data-user="{{ chatroom.name }}"></span>
                                     </div>
                                 </div>
                             </a>
+                        </li>
+                        {% empty %}
+                        <li class="text-center text-muted py-4 px-3" style="list-style: none;">
+                            <i class="fas fa-comments fa-2x mb-2 opacity-50 d-block"></i>
+                            <div style="font-size: 0.85rem;">No chats yet</div>
+                            <button class="btn btn-sm btn-primary mt-2" data-bs-toggle="modal"
+                                data-bs-target="#createRoomModal" type="button">
+                                <i class="fas fa-plus me-1"></i>Start a chat
+                            </button>
                         </li>
                         {% endfor %}
                     </ul>
@@ -281,6 +291,9 @@
                         <button type="button" class="btn btn-link text-warning" title="Usage Quotas"
                             onclick="fetchQuotas()">
                             <i class="fas fa-chart-pie"></i>
+                        </button>
+                        <button id="darkModeToggle" class="btn btn-link" aria-label="Toggle dark mode" title="Theme">
+                            <i class="fas fa-moon"></i>
                         </button>
                     </div>
                 </div>
@@ -318,7 +331,8 @@
                         <div class="col-4 text-end d-flex align-items-center justify-content-end">
                             <!-- Single mobile menu — merges navigation + chat actions -->
                             <div class="dropdown d-lg-none me-2">
-                                <button class="btn btn-light" data-bs-toggle="dropdown" aria-label="Menu">
+                                <button class="btn btn-light" data-bs-toggle="dropdown" data-bs-auto-close="outside"
+                                    aria-label="Menu">
                                     <i class="fas fa-bars"></i>
                                 </button>
                                 <ul class="dropdown-menu dropdown-menu-end shadow-sm">
@@ -329,6 +343,10 @@
                                                 class="fas fa-home me-2"></i>Dashboard</a></li>
                                     <li><a class="dropdown-item" href="{% url 'payments:wallet_dashboard' %}"><i
                                                 class="fas fa-wallet me-2"></i>Wallet</a></li>
+                                    <li><a class="dropdown-item" href="/workflows/"><i
+                                                class="fas fa-diagram-project me-2"></i>Automations</a></li>
+                                    <li><a class="dropdown-item" href="/notifications/"><i
+                                                class="fas fa-bell me-2"></i>Notifications</a></li>
                                     <li class="dropdown-item d-flex align-items-center justify-content-between">
                                         <span><i class="fas fa-bell me-2"></i>Unread rooms</span>
                                         <span class="badge bg-primary" id="unreadRoomsBadgeMobile">{{ unread_rooms }}</span>
@@ -346,6 +364,19 @@
                                         <h6 class="dropdown-header">Chat Actions</h6>
                                     </li>
 
+                                    <li>
+                                        <div class="dropdown model-selector">
+                                            <button class="dropdown-item dropdown-toggle" type="button"
+                                                data-bs-toggle="dropdown" data-bs-display="static"
+                                                aria-expanded="false">
+                                                <span class="model-selector-avatar"></span>
+                                                <span class="model-selector-label">Auto</span>
+                                            </button>
+                                            <ul class="dropdown-menu shadow-sm model-selector-menu"
+                                                style="max-height: 320px; overflow-y: auto;"></ul>
+                                        </div>
+                                    </li>
+
                                     {% if can_invite %}
                                     <li><a class="dropdown-item invite-user-action" data-bs-toggle="modal"
                                             data-bs-target="#inviteUserModal"><i
@@ -361,24 +392,54 @@
                                                 class="fas fa-upload me-2"></i>Upload</button></li>
                                 </ul>
                             </div>
-                            <!-- Desktop: navigation links -->
-                            <div class="d-none d-lg-flex align-items-center me-3 border-end pe-3">
-                                <a href="{% url 'users:dashboard' %}" class="btn btn-link text-muted me-1"
-                                    title="Dashboard">
-                                    <i class="fas fa-home"></i>
-                                </a>
-                                <a href="{% url 'payments:wallet_dashboard' %}" class="btn btn-link text-muted me-1"
-                                    title="Wallet">
-                                    <i class="fas fa-wallet"></i>
-                                </a>
-                                <a href="{% url 'chatbot:export-chat' room_id %}" class="btn btn-link text-muted me-1"
-                                    title="Export chat">
-                                    <i class="fas fa-file-export"></i>
-                                </a>
-                                <div class="dropdown notification-dropdown me-1">
-                                    <button class="btn btn-link text-muted position-relative notification-btn"
+                            <!-- Desktop: chatroom toolbar -->
+                            <div class="d-none d-lg-flex align-items-center chat-toolbar">
+                                <!-- Primary chat actions: model selector + search -->
+                                <div class="ctool-actions">
+                                <div class="dropdown model-selector">
+                                    <button class="ctool-btn ctool-btn-primary dropdown-toggle" type="button"
+                                        data-bs-toggle="dropdown" aria-expanded="false" title="Select model">
+                                        <span class="model-selector-avatar"></span>
+                                        <span class="model-selector-label">Auto</span>
+                                    </button>
+                                    <ul class="dropdown-menu dropdown-menu-end shadow-sm model-selector-menu"
+                                        style="max-height: 340px; overflow-y: auto;"></ul>
+                                </div>
+                                    <button class="ctool-btn" id="searchToggle" type="button"
+                                        title="Search in chat" aria-label="Search">
+                                        <i class="fas fa-search"></i>
+                                    </button>
+                                </div>
+
+                                <div class="ctool-sep"></div>
+
+                                <!-- Secondary chat actions: invite / upload / export -->
+                                <div class="ctool-actions">
+                                    {% if can_invite %}
+                                    <button class="ctool-btn invite-user-action" type="button"
+                                        data-bs-toggle="modal" data-bs-target="#inviteUserModal"
+                                        title="Invite User" aria-label="Invite">
+                                        <i class="fas fa-user-plus"></i>
+                                    </button>
+                                    {% endif %}
+                                    <button class="ctool-btn" id="upload" type="button"
+                                        title="Upload file" aria-label="Upload">
+                                        <i class="fas fa-upload"></i>
+                                    </button>
+                                    <a class="ctool-btn" href="{% url 'chatbot:export-chat' room_id %}"
+                                        title="Export chat" aria-label="Export">
+                                        <i class="fas fa-file-export"></i>
+                                    </a>
+                                </div>
+
+                                <div class="ctool-sep"></div>
+
+                                <!-- Alerts -->
+                                <div class="dropdown notification-dropdown">
+                                    <button class="ctool-btn ctool-btn-alert position-relative" type="button"
                                         id="notificationMenuButton" data-bs-toggle="dropdown" aria-expanded="false"
-                                        data-unread="{{ unread_rooms }}" data-reminders="{{ pending_reminders }}">
+                                        data-unread="{{ unread_rooms }}" data-reminders="{{ pending_reminders }}"
+                                        title="Notifications" aria-label="Notifications">
                                         <i class="fas fa-bell"></i>
                                         <span class="notification-badge" id="notificationTotalBadge">{{ total_notifications }}</span>
                                     </button>
@@ -401,30 +462,34 @@
                                         <a class="dropdown-item text-center py-2" href="{% url 'users:reminders' %}">
                                             <i class="fas fa-clock me-2"></i>View Reminders
                                         </a>
+                                        <a class="dropdown-item text-center py-2" href="/notifications/">
+                                            <i class="fas fa-bell me-2"></i>View all notifications
+                                        </a>
                                     </div>
                                 </div>
-                                <a href="{% url 'users:settings' %}" class="btn btn-link text-muted" title="Settings">
-                                    <i class="fas fa-cog"></i>
-                                </a>
-                            </div>
-                            <!-- Desktop: chat action buttons -->
-                            <div class="d-none d-lg-flex align-items-center">
-                                {% if can_invite %}
-                                <button class="btn btn-light me-2 invite-user-action" data-bs-toggle="modal"
-                                    data-bs-target="#inviteUserModal" title="Invite User">
-                                    <i class="fas fa-user-plus"></i>
-                                </button>
-                                {% endif %}
-                                <button class="btn btn-light me-2" id="searchToggle" title="Search in chat">
-                                    <i class="fas fa-search"></i>
-                                </button>
-                                <a class="btn btn-light me-2" href="{% url 'chatbot:export-chat' room_id %}"
-                                    title="Export chat">
-                                    <i class="fas fa-file-export"></i>
-                                </a>
-                                <button class="btn btn-light me-2" id="upload">
-                                    <i class="fas fa-upload"></i>
-                                </button>
+
+                                <div class="ctool-sep"></div>
+
+                                <!-- Site navigation (secondary, collapsed) -->
+                                <div class="dropdown">
+                                    <button class="ctool-btn ctool-btn-more" type="button" data-bs-toggle="dropdown"
+                                        aria-expanded="false" title="More" aria-label="More">
+                                        <i class="fas fa-ellipsis-v"></i>
+                                    </button>
+                                    <ul class="dropdown-menu dropdown-menu-end shadow-sm">
+                                        <li>
+                                            <h6 class="dropdown-header">Menu</h6>
+                                        </li>
+                                        <li><a class="dropdown-item" href="{% url 'users:dashboard' %}"><i
+                                                    class="fas fa-home me-2"></i>Dashboard</a></li>
+                                        <li><a class="dropdown-item" href="{% url 'payments:wallet_dashboard' %}"><i
+                                                    class="fas fa-wallet me-2"></i>Wallet</a></li>
+                                        <li><a class="dropdown-item" href="/workflows/"><i
+                                                    class="fas fa-diagram-project me-2"></i>Automations</a></li>
+                                        <li><a class="dropdown-item" href="{% url 'users:settings' %}"><i
+                                                    class="fas fa-cog me-2"></i>Settings</a></li>
+                                    </ul>
+                                </div>
                             </div>
                             <input type="file" id="fileInput" class="d-none" accept="image/*, .pdf, .doc, .docx, .txt">
                         </div>
@@ -518,9 +583,10 @@
                             <i class="fas fa-microphone"></i>
                         </button>
 
-                        <input type="text" class="form-control" id="chat-message-input"
-                            placeholder="Type your message...">
-                        <button class="btn btn-primary" id="chat-message-submit">
+                        <textarea class="form-control" id="chat-message-input" rows="1"
+                            placeholder="Type your message..." spellcheck="true"></textarea>
+                        <button class="btn btn-primary" id="chat-message-submit" type="button"
+                            aria-label="Send message">
                             <i class="fas fa-paper-plane"></i>
                         </button>
                     </div>
@@ -798,6 +864,158 @@
                 msgEl.innerHTML = '<span class="text-danger">Network error. Please try again.</span>';
             });
         }
+    </script>
+
+    <script>
+        (function () {
+            var API_URL = "{% url 'chatbot:room-model' room_id %}";
+            var models = [];
+            var selected = null;
+
+            function esc(s) {
+                return String(s).replace(/[&<>"']/g, function (c) {
+                    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+                });
+            }
+
+            function providerColor(provider) {
+                var map = { deepseek: '#D97757', anthropic: '#C08A5E', huggingface: '#8FA471' };
+                return map[provider] || '#D97757';
+            }
+
+            function clayRobotHtml(provider) {
+                return '<span class="model-avatar" style="background:' + providerColor(provider) + '"><i class="fas fa-robot"></i></span>';
+            }
+
+            // Each LLM gets its own online character persona (RoboHash robot),
+            // falling back to the clay robot icon when the image can't load.
+            function modelAvatarHtml(m) {
+                if (!m) return '<i class="fas fa-wand-magic-sparkles"></i>';
+                var seed = encodeURIComponent(m.id);
+                var color = providerColor(m.provider);
+                return '<img class="model-avatar-img" src="https://robohash.org/' + seed + '.png?size=64x64&bgset=bg1" '
+                    + 'alt="' + esc(m.label) + '" data-color="' + color + '" '
+                    + 'onerror="window.__modelAvatarError(this)">';
+            }
+
+            window.__modelAvatarError = function (img) {
+                var span = document.createElement('span');
+                span.className = 'model-avatar';
+                span.style.background = img.getAttribute('data-color') || '#D97757';
+                span.innerHTML = '<i class="fas fa-robot"></i>';
+                if (img && img.parentNode) img.parentNode.replaceChild(span, img);
+            };
+
+            function currentModel() {
+                if (!selected) return null;
+                return models.find(function (m) { return m.id === selected; }) || null;
+            }
+
+            function tierBadge(tier) {
+                var map = {
+                    fast: '<span class="badge text-bg-info ms-1">Fast</span>',
+                    high: '<span class="badge text-bg-primary ms-1">High</span>',
+                    vision: '<span class="badge text-bg-warning ms-1">Vision</span>'
+                };
+                return map[tier] || '';
+            }
+
+            function providerName(provider) {
+                var map = {
+                    deepseek: 'DeepSeek',
+                    anthropic: 'Anthropic',
+                    huggingface: 'Hugging Face'
+                };
+                return map[provider] || provider;
+            }
+
+            // Expose helpers for the message renderers (per-selected-model avatar)
+            window.modelAvatarHtml = modelAvatarHtml;
+            window.getRoomModel = currentModel;
+            window.mathiaBadgeHtml = function () {
+                var m = currentModel();
+                return '<div class="mathia-badge">'
+                    + (m ? modelAvatarHtml(m) : '<i class="fas fa-robot"></i>')
+                    + '<span>' + (m ? esc(m.label) : 'Mathia AI') + '</span></div>';
+            };
+
+            function renderMenus() {
+                var groups = {};
+                models.forEach(function (m) {
+                    (groups[m.provider] = groups[m.provider] || []).push(m);
+                });
+
+                var html = '';
+                html += '<li><button class="dropdown-item model-option' + (selected ? '' : ' active') + '" data-model="">'
+                    + '<span class="model-avatar model-avatar-auto"><i class="fas fa-wand-magic-sparkles"></i></span>'
+                    + '<span class="model-option-label">Auto</span>'
+                    + '<span class="text-muted small ms-2">smart routing</span></button></li>';
+                html += '<li><hr class="dropdown-divider"></li>';
+                Object.keys(groups).forEach(function (provider) {
+                    html += '<li><h6 class="dropdown-header">' + esc(providerName(provider)) + '</h6></li>';
+                    groups[provider].forEach(function (m) {
+                        html += '<li><button class="dropdown-item model-option' + (selected === m.id ? ' active' : '') + '" data-model="' + esc(m.id) + '">'
+                            + modelAvatarHtml(m) + '<span class="model-option-label">' + esc(m.label) + '</span>' + tierBadge(m.tier) + '</button></li>';
+                    });
+                });
+
+                document.querySelectorAll('.model-selector-menu').forEach(function (menu) {
+                    menu.innerHTML = html;
+                });
+            }
+
+            function updateLabels() {
+                var m = currentModel();
+                var text = m ? m.label : 'Auto';
+                document.querySelectorAll('.model-selector-label').forEach(function (el) {
+                    el.textContent = text;
+                });
+                var avatarHtml = m ? modelAvatarHtml(m) : '<span class="model-avatar model-avatar-auto"><i class="fas fa-wand-magic-sparkles"></i></span>';
+                document.querySelectorAll('.model-selector-avatar').forEach(function (el) {
+                    el.innerHTML = avatarHtml;
+                });
+            }
+
+            function csrfToken() {
+                return document.querySelector('[name=csrfmiddlewaretoken]')?.value || '';
+            }
+
+            function select(modelId) {
+                selected = modelId || null;
+                updateLabels();
+                renderMenus();
+                fetch(API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken() },
+                    body: JSON.stringify({ model: modelId })
+                }).catch(function () {});
+            }
+
+            function init() {
+                document.querySelectorAll('.model-selector-menu').forEach(function (menu) {
+                    menu.addEventListener('click', function (e) {
+                        var btn = e.target.closest('.model-option');
+                        if (!btn) return;
+                        select(btn.getAttribute('data-model') || '');
+                    });
+                });
+
+                fetch(API_URL, { credentials: 'same-origin' })
+                    .then(function (r) { return r.json(); })
+                    .then(function (data) {
+                        models = data.models || [];
+                        selected = data.selected || null;
+                        updateLabels();
+                        renderMenus();
+                    })
+                    .catch(function () {
+                        updateLabels();
+                        renderMenus();
+                    });
+            }
+
+            document.addEventListener('DOMContentLoaded', init);
+        })();
     </script>
 
     <script src="{% static 'js/main.js'%}"></script>

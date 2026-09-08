@@ -115,7 +115,8 @@ ConnectorError(
 
 Connectors are discovered from three sources (in order):
 
-1. **Legacy connectors** — hardcoded in `mcp_router.py` (backward compat)
+1. **Legacy connectors** — hardcoded in `tool_router.py` (renamed from
+   `mcp_router.py` in v0.5; backward compat)
 2. **Directory scan** — `Backend/orchestration/connectors/*.py` files containing
    `BaseConnector` subclasses with non-empty `name` and `actions`
 3. **Entry points** — pip packages registering under `kazi.connectors`

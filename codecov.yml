@@ -1,0 +1,22 @@
+# Codecov configuration
+# https://docs.codecov.com/docs/codecovyml-reference
+
+coverage:
+  status:
+    project:
+      default:
+        # Total coverage must not regress relative to the base branch.
+        target: auto
+        threshold: 1%
+    patch:
+      default:
+        # New code must be ≥ 80% covered — no tolerance. This is a hard
+        # bar (not a soft target) because this is an open-source project
+        # and coverage signals testing intent to contributors.
+        target: 80%
+        threshold: 0%
+
+comment:
+  layout: "reach, diff, files"
+  behavior: default
+  require_changes: false

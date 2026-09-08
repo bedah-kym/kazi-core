@@ -1,7 +1,6 @@
 import logging
 from datetime import datetime, timedelta
 from django.core.cache import cache
-from django.conf import settings
 from django.utils import timezone
 from chatbot.models import DocumentUpload
 
@@ -49,9 +48,12 @@ class QuotaService:
         # Calculate Percentages & Status
         def get_status(used, limit):
             pct = (used / limit) * 100
-            if pct >= 100: return 'exhausted', 'red'
-            if pct >= 80: return 'critical', 'orange'
-            if pct >= 50: return 'warning', 'yellow'
+            if pct >= 100:
+                return 'exhausted', 'red'
+            if pct >= 80:
+                return 'critical', 'orange'
+            if pct >= 50:
+                return 'warning', 'yellow'
             return 'good', 'green'
 
         s_status, s_color = get_status(search_used, self.LIMITS['search'])

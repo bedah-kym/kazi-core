@@ -1,9 +1,10 @@
 # Approval Contract
 
-**Version:** 1.0 · **Status:** stable · **Tier:** documented only
+**Version:** 1.1 · **Status:** stable · **Tier:** documented only
 
-What `WorkflowExecution.pending_approval` looks like and how the
-operator answers it.
+What `WorkflowExecution.pending_approval` looks like, how the operator
+answers it, and how agent-loop confirmations share the same durable
+record table.
 
 ## When it appears
 
@@ -19,6 +20,24 @@ true:
 The runtime persists a `WorkflowApprovalRecord` and writes its id onto
 `WorkflowExecution.pending_approval_id`. The execution moves to
 `status = "waiting"` with `waiting_reason = "approval"`.
+
+## Agent-loop approvals (`kind = "agent_loop"`)
+
+The ReAct agent loop pauses high-risk tool calls for confirmation too.
+Those pauses are recorded on the same `WorkflowApprovalRecord` table with
+`kind = "agent_loop"`, `workflow = NULL`, `execution = NULL`, and
+`room_id` set to the chat room. The serialized loop state needed to resume
+lives in `metadata.loop_state`; the pending tool is captured in `action`
+and `sanitized_params`.
+
+- `requested_by` — the user whose loop paused.
+- `expires_at` — `CONFIRMATION_STATE_TTL` (10 minutes) after the pause.
+- Resolve via the chat surface: confirming resumes the loop (the record is
+  marked `approved` **before** the tool executes), cancel/dismiss marks it
+  `cancelled`. An approval whose loop state was lost is marked `rejected`
+  and is never executed.
+- Cross-user isolation: a pending record is only visible/actionable for
+  the `(room_id, requested_by)` it was created for.
 
 ## Pending approval shape
 
@@ -103,6 +122,7 @@ curl -X POST http://localhost:8000/api/workflows/executions/42/approve/ \
 
 | Version | Date | Change |
 |---|---|---|
+| 1.1 | v0.4.x | Added `kind` (`workflow`/`agent_loop`), nullable `workflow`/`execution`, and `room_id`. Agent-loop confirmations now write a durable record. |
 | 1.0 | v0.4 | First documented version. Lifts the shape from the v0.4 M3-1/M3-3 implementation. |
 
 ## Breaking changes

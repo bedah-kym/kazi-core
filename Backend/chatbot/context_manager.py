@@ -4,14 +4,13 @@ Handles storage, retrieval, and LLM-ready formatting of conversation context.
 Supports Cross-Room context sharing for high-priority notes.
 """
 import logging
-import json
 import math
 import re
 from datetime import datetime, date, timedelta
 from django.conf import settings
 from django.db.models import Q
 from django.utils import timezone
-from .models import RoomContext, RoomNote, AIConversation, DocumentUpload, Contact
+from .models import RoomContext, RoomNote, DocumentUpload, Contact
 
 logger = logging.getLogger(__name__)
 
@@ -628,9 +627,9 @@ class ContextManager:
 
                 # 4. COMPUTE FINAL SCORE
                 relevance_score = (
-                    recency_score * 0.3 +
-                    confidence_score * 0.5 +
-                    semantic_match * 0.2
+                    recency_score * 0.3
+                    + confidence_score * 0.5
+                    + semantic_match * 0.2
                 )
 
                 scored_facts.append({

@@ -1,11 +1,59 @@
-from django.test import SimpleTestCase, override_settings
+import json
+import os
+from io import StringIO
+
+from django.conf import settings
+from django.contrib.auth import get_user_model
+from django.core.cache import cache
+from django.core.management import call_command
+from django.test import SimpleTestCase, TestCase, override_settings
+
+from asgiref.sync import async_to_sync
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 from orchestration.action_catalog import (
     build_capabilities_catalog,
     get_action_definition,
     resolve_action_alias,
 )
-from orchestration.security_policy import sanitize_parameters, should_block_action
+from orchestration.security_policy import (
+    _INJECTION_PATTERNS,
+    is_prompt_injection,
+    sanitize_parameters,
+    should_block_action,
+    should_block_message,
+)
+
+
+class ConfirmationMatchingTests(SimpleTestCase):
+    """Only affirmative-led replies may confirm a pending gate.
+
+    Substring matching once let "yesterday's weather" confirm a pending
+    high-risk workflow ("yes" in "yesterday").
+    """
+
+    def test_affirmative_replies_match(self):
+        from orchestration.workflow_planner import looks_like_confirmation
+        for message in (
+            "yes", "Yes.", "YES",
+            "yeah, send it", "ok do it", "Okay, proceed",
+            "approve", "approved, go on", "confirm that", "confirmed",
+            "proceed with the booking", "go ahead", "Go ahead and email it",
+        ):
+            self.assertTrue(looks_like_confirmation(message), msg=message)
+
+    def test_non_affirmative_messages_do_not_match(self):
+        from orchestration.workflow_planner import looks_like_confirmation
+        for message in (
+            "yesterday's weather in Mombasa",
+            "can you confirm my email address?",
+            "did you approve the invoice?",
+            "cancel that",
+            "not yet",
+            "what's the weather?",
+            "",
+        ):
+            self.assertFalse(looks_like_confirmation(message), msg=message)
 
 
 class ActionCatalogTests(SimpleTestCase):
@@ -27,7 +75,7 @@ class ActionCatalogTests(SimpleTestCase):
 
     def test_router_integrity(self):
         try:
-            from orchestration.mcp_router import MCPRouter
+            from orchestration.tool_router import MCPRouter
         except Exception as exc:
             self.skipTest(f"Router import failed: {exc}")
             return
@@ -41,7 +89,7 @@ class ActionCatalogTests(SimpleTestCase):
         cleaned = sanitize_parameters({
             "to": "user@example.com",
             "metadata": {
-                "token": "secret-token",
+                "token": "secret-token",  # nosec B105 — test fixture — fake credential
                 "nested": {"api_key": "k", "ok": "yes"},
             },
             "items": [
@@ -112,6 +160,46 @@ class HistoryBudgetTests(SimpleTestCase):
         self.assertEqual(kept[-1], history[-1])
         self.assertEqual(kept, history[-len(kept):])
 
+    def test_agent_loop_compacts_history_by_default(self):
+        from orchestration.agent_loop import run_agent_loop
+
+        history = [{"role": "user", "content": "x" * 1000} for _ in range(100)]
+
+        async def collect():
+            events = []
+            async for event in run_agent_loop(
+                user_message="hello",
+                context={"user_id": 1, "room_id": 1, "username": "test"},
+                history=history,
+            ):
+                events.append(event)
+            return events
+
+        mock_llm = MagicMock()
+        mock_llm.create_message = AsyncMock(return_value={
+            "content": [{"type": "text", "text": "hi"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        })
+
+        with (
+            patch("orchestration.agent_loop.get_llm_client", return_value=mock_llm),
+            patch("orchestration.agent_loop.cache") as mock_cache,
+            patch("orchestration.agent_loop.record_event") as mock_record,
+        ):
+            mock_cache.get.return_value = None
+            mock_cache.set.return_value = None
+            mock_cache.delete.return_value = None
+            events = async_to_sync(collect)()
+
+        messages = mock_llm.create_message.await_args.kwargs["messages"]
+        self.assertLess(len(messages), 100)  # history was compacted, not passed through raw
+        self.assertTrue(any(e.kind == "done" for e in events))
+        self.assertTrue(any(
+            call.args and call.args[0] == "context_compacted"
+            for call in mock_record.call_args_list
+        ))
+
 
 class SkillRegistryTests(SimpleTestCase):
     def test_discover_and_load_example_skill(self):
@@ -142,3 +230,543 @@ class SkillRegistryTests(SimpleTestCase):
                 all_skills = {s["name"] for s in discover_skills(include_inactive=True)}
                 self.assertNotIn("draft-skill", active)
                 self.assertIn("draft-skill", all_skills)
+
+
+class InjectionCorpusTests(SimpleTestCase):
+    """The golden eval corpus must stay in lockstep with the prompt-injection
+    detector: every pattern family has a positive case, and benign messages
+    stay clean. Locks the detector against silent regressions in either
+    direction."""
+
+    def _scenarios(self):
+        path = os.path.join(settings.BASE_DIR, "orchestration", "eval", "golden_scenarios.json")
+        with open(path, "r", encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def test_corpus_matches_detector(self):
+        for scenario in self._scenarios():
+            if "expected_injection" not in scenario:
+                continue
+            actual = is_prompt_injection(scenario["message"])
+            self.assertEqual(
+                actual, scenario["expected_injection"], msg=scenario["id"],
+            )
+            if "expected_blocked" in scenario:
+                self.assertEqual(
+                    should_block_message(scenario["message"]),
+                    scenario["expected_blocked"],
+                    msg=scenario["id"],
+                )
+
+    def test_every_injection_pattern_has_a_positive_case(self):
+        scenarios = [
+            s for s in self._scenarios() if s.get("expected_injection") is True
+        ]
+        import re
+
+        for pattern in _INJECTION_PATTERNS:
+            regex = re.compile(pattern, re.IGNORECASE)
+            self.assertTrue(
+                any(regex.search(s["message"]) for s in scenarios),
+                msg=f"no corpus case exercises pattern: {pattern}",
+            )
+
+    def test_eval_runner_passes_whole_corpus(self):
+        out = StringIO()
+        call_command("run_golden_eval", stdout=out)
+        output = out.getvalue()
+        self.assertIn("Failed: 0", output)
+        self.assertIn("[PASS] inj_ignore_instructions_email", output)
+
+    def test_eval_runner_flags_injection_mismatch(self):
+        import tempfile
+
+        broken = [
+            {"id": "bad_case", "message": "What is the weather today?", "expected_injection": True},
+        ]
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
+            json.dump(broken, handle)
+            path = handle.name
+        try:
+            out = StringIO()
+            call_command("run_golden_eval", path=path, stdout=out)
+            self.assertIn("Failed: 1", out.getvalue())
+            self.assertIn("injection False != True", out.getvalue())
+        finally:
+            os.unlink(path)
+
+
+def _end_turn():
+    from orchestration.test_agentic_scenarios import _make_llm_response, _text_block
+
+    return _make_llm_response([_text_block("Done.")], stop_reason="end_turn")
+
+
+class AgentCapsToggleLoopTests(SimpleTestCase):
+    """The install-level caps switch must actually lift budget checks in the
+    agent loops (parent iteration/tool/token caps, sub-agent caps) when
+    disabled from Settings > Capabilities."""
+
+    def _run(self, coro):
+        import asyncio
+
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
+
+    def _tool_use_response(self, i):
+        from orchestration.test_agentic_scenarios import (
+            _make_llm_response,
+            _text_block,
+            _tool_use_block,
+        )
+
+        return _make_llm_response(
+            [_text_block("Step."), _tool_use_block(f"t{i}", "get_weather", {})],
+            stop_reason="tool_use",
+            usage={"input_tokens": 10, "output_tokens": 5},
+        )
+
+    def _collect_loop_events(self):
+        from orchestration.agent_loop import run_agent_loop
+
+        async def _collect():
+            return [event async for event in run_agent_loop(
+                user_message="do things",
+                context={"user_id": 1, "room_id": 1, "username": "test"},
+            )]
+
+        return [e.kind for e in self._run(_collect())]
+
+    @patch("orchestration.agent_loop.enforce_agent_caps")
+    @patch("orchestration.agent_loop.MAX_TOOL_CALLS", 1)
+    @patch("orchestration.agent_loop.get_llm_client")
+    @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)
+    @patch("orchestration.agent_loop.cache")
+    def test_parent_loop_skips_tool_cap_when_disabled(self, mock_cache, mock_exec, mock_llm_client, mock_caps):
+        mock_cache.get.return_value = None
+        mock_exec.return_value = {"status": "success"}
+        mock_caps.return_value = False
+        mock_llm = MagicMock()
+        mock_llm.create_message = AsyncMock(side_effect=[
+            self._tool_use_response(1),
+            self._tool_use_response(2),
+            _end_turn(),
+        ])
+        mock_llm_client.return_value = mock_llm
+
+        kinds = self._collect_loop_events()
+        self.assertEqual(kinds.count("tool_result"), 2)
+
+    @patch("orchestration.agent_loop.enforce_agent_caps")
+    @patch("orchestration.agent_loop.MAX_TOOL_CALLS", 1)
+    @patch("orchestration.agent_loop.get_llm_client")
+    @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)
+    @patch("orchestration.agent_loop.cache")
+    def test_parent_loop_keeps_tool_cap_when_enabled(self, mock_cache, mock_exec, mock_llm_client, mock_caps):
+        mock_cache.get.return_value = None
+        mock_exec.return_value = {"status": "success"}
+        mock_caps.return_value = True
+        mock_llm = MagicMock()
+        mock_llm.create_message = AsyncMock(side_effect=[
+            self._tool_use_response(1),
+            self._tool_use_response(2),
+            _end_turn(),
+        ])
+        mock_llm_client.return_value = mock_llm
+
+        kinds = self._collect_loop_events()
+        self.assertEqual(kinds.count("tool_result"), 1)
+
+    @patch("orchestration.agent_loop.HARD_CAP_ITERATIONS", 3)
+    @patch("orchestration.agent_loop.enforce_agent_caps")
+    @patch("orchestration.agent_loop.get_llm_client")
+    @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)
+    @patch("orchestration.agent_loop.cache")
+    def test_hard_cap_terminates_loop_even_when_caps_disabled(self, mock_cache, mock_exec, mock_llm_client, mock_caps):
+        # Regression: an infinite-LLM mock plus a cached disabled-caps value
+        # used to produce a truly unbounded loop (hermetic CI hang).
+        mock_cache.get.return_value = None
+        mock_exec.return_value = {"status": "success"}
+        mock_caps.return_value = False
+        mock_llm = MagicMock()
+        mock_llm.create_message = AsyncMock(return_value=self._tool_use_response(1))
+        mock_llm_client.return_value = mock_llm
+
+        kinds = self._collect_loop_events()
+        self.assertEqual(kinds.count("tool_result"), 3)
+
+    @patch("orchestration.agent_loop.SUB_AGENT_MAX_TOOL_CALLS", 1)
+    @patch("orchestration.agent_loop.get_llm_client")
+    @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)
+    @patch("orchestration.agent_loop.update_memory_state", new=AsyncMock())
+    def test_sub_agent_skips_cap_when_parent_caps_disabled(self, mock_exec, mock_llm_client):
+        from orchestration.agent_loop import _run_sub_agent
+
+        mock_exec.return_value = {"status": "success"}
+
+        def _run_sub(**context_extra):
+            mock_llm = MagicMock()
+            mock_llm.create_message = AsyncMock(side_effect=[
+                self._tool_use_response(1),
+                self._tool_use_response(2),
+                _end_turn(),
+            ])
+            mock_llm_client.return_value = mock_llm
+            context = {"user_id": 1, "room_id": 1}
+            context.update(context_extra)
+            return self._run(_run_sub_agent(
+                {"task": "Do the thing"},
+                context,
+                None,
+                "system prompt",
+                [{"name": "get_weather", "input_schema": {}}],
+            ))
+
+        result = _run_sub(caps_enforced=False)
+        self.assertEqual(len(result["tools_used"]), 2)
+
+        result = _run_sub()
+        self.assertEqual(len(result["tools_used"]), 1)
+
+
+class RouterCapsToggleTests(SimpleTestCase):
+    """Disabling the caps switch lifts the hourly request limit."""
+
+    def _run(self, coro):
+        import asyncio
+
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
+
+    def _router(self):
+        from orchestration.tool_router import MCPRouter
+
+        return object.__new__(MCPRouter)
+
+    def _counting_redis(self):
+        counter = {"n": 0}
+        conn = MagicMock()
+
+        def _incr(key):
+            counter["n"] += 1
+            return counter["n"]
+
+        conn.incr = Mock(side_effect=_incr)
+        conn.expire = Mock(return_value=True)
+        return conn
+
+    def _validate_n_times(self, router, n):
+        from orchestration.tool_router import MCPRouter
+
+        MCPRouter._local_rate_counters.clear()
+        conn = self._counting_redis()
+
+        async def _prefs(user_id):
+            return dict(MCPRouter.DEFAULT_CAPABILITY_PREFS)
+
+        with patch("orchestration.tool_router.get_redis_connection", return_value=conn), \
+                patch.object(type(router), "_get_user_prefs", new=AsyncMock(side_effect=_prefs)), \
+                patch("orchestration.tool_router.user_has_room_access", new=AsyncMock(return_value=True)):
+            return [
+                self._run(router._validate_request(
+                    {"action": "get_weather"}, {"user_id": 7, "room_id": 1},
+                ))
+                for _ in range(n)
+            ]
+
+    @patch("orchestration.tool_router.enforce_agent_caps", new=MagicMock(return_value=False))
+    def test_rate_limit_lifted_when_caps_disabled(self):
+        outcomes = self._validate_n_times(self._router(), 120)
+        self.assertTrue(all(o["valid"] for o in outcomes))
+
+    @patch("orchestration.tool_router.enforce_agent_caps", new=MagicMock(return_value=True))
+    def test_rate_limit_still_applies_when_caps_enabled(self):
+        outcomes = self._validate_n_times(self._router(), 105)
+        self.assertTrue(outcomes[0]["valid"])
+        self.assertFalse(outcomes[100]["valid"])
+
+
+class Te2FailClosedTests(SimpleTestCase):
+    """TE-2: a failed capability-preference lookup must never widen what a
+    user can do. Money/messaging gates fall back to denied; the rate-limit
+    counter must keep counting when Redis is unreachable."""
+
+    def _run(self, coro):
+        import asyncio
+
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
+
+    def test_conservative_prefs_force_sensitive_gates_off(self):
+        from orchestration.security_policy import conservative_capability_prefs
+
+        prefs = {
+            "allow_payments": True,
+            "allow_whatsapp": True,
+            "allow_email": True,
+            "allow_travel": True,
+            "allow_web_search": True,
+            "custom_key": "kept",
+        }
+        conservative = conservative_capability_prefs(prefs)
+
+        self.assertFalse(conservative["allow_payments"])
+        self.assertFalse(conservative["allow_whatsapp"])
+        self.assertFalse(conservative["allow_email"])
+        self.assertTrue(conservative["allow_travel"])
+        self.assertTrue(conservative["allow_web_search"])
+        self.assertEqual(conservative["custom_key"], "kept")
+        # Input untouched
+        self.assertTrue(prefs["allow_payments"])
+
+    @patch("django.contrib.auth.get_user_model")
+    def test_planner_prefs_fail_closed_on_lookup_error(self, mock_get_user_model):
+        from orchestration.workflow_planner import _get_user_capability_prefs
+
+        mock_get_user_model.return_value.objects.get.side_effect = RuntimeError("db down")
+
+        prefs = self._run(_get_user_capability_prefs(42))
+
+        self.assertFalse(prefs["allow_payments"])
+        self.assertFalse(prefs["allow_whatsapp"])
+        self.assertFalse(prefs["allow_email"])
+        self.assertTrue(prefs["allow_travel"])
+
+    @patch("django.contrib.auth.get_user_model")
+    def test_manager_llm_disabled_on_lookup_error(self, mock_get_user_model):
+        from orchestration.workflow_planner import _manager_llm_enabled_for_user
+
+        mock_get_user_model.return_value.objects.get.side_effect = RuntimeError("db down")
+
+        self.assertFalse(self._run(_manager_llm_enabled_for_user(42)))
+
+    def test_planner_blocks_payment_step_when_lookup_fails(self):
+        # Old attack still blocked: with the lookup failing, a withdraw step
+        # must be refused, not silently allowed.
+        from orchestration.workflow_planner import _steps_allowed_for_user
+
+        steps = [{"action": "withdraw", "params": {"amount": 100}}]
+
+        with patch(
+            "orchestration.workflow_planner._get_user_capability_prefs",
+            new=AsyncMock(return_value={
+                "allow_payments": False,
+                "allow_travel": True,
+                "allow_email": False,
+                "allow_whatsapp": False,
+                "allow_reminders": True,
+                "allow_web_search": True,
+                "allow_calendar": True,
+            }),
+        ):
+            denial = self._run(_steps_allowed_for_user(steps, 42))
+
+        self.assertIsNotNone(denial)
+        self.assertIn("disabled", denial)
+
+    def test_router_prefs_fail_closed_on_unexpected_error(self):
+        from orchestration.tool_router import MCPRouter
+
+        router = object.__new__(MCPRouter)
+        fake_user_model = MagicMock()
+        fake_user_model.DoesNotExist = type("DoesNotExist", (Exception,), {})
+        fake_user_model.objects.get.side_effect = RuntimeError("db down")
+
+        with patch("orchestration.tool_router.get_user_model", return_value=fake_user_model):
+            prefs = self._run(router._get_user_prefs(42))
+
+        self.assertFalse(prefs["allow_payments"])
+        self.assertFalse(prefs["allow_whatsapp"])
+        self.assertFalse(prefs["allow_email"])
+
+    def test_router_missing_user_still_gets_defaults(self):
+        # Guard against over-hardening: a genuinely absent user is not an
+        # error path and keeps the documented default capabilities.
+        from orchestration.tool_router import MCPRouter
+
+        router = object.__new__(MCPRouter)
+        fake_user_model = MagicMock()
+        fake_user_model.DoesNotExist = type("DoesNotExist", (Exception,), {})
+        fake_user_model.objects.get.side_effect = fake_user_model.DoesNotExist("gone")
+
+        with patch("orchestration.tool_router.get_user_model", return_value=fake_user_model):
+            prefs = self._run(router._get_user_prefs(999999))
+
+        self.assertTrue(prefs["allow_payments"])
+
+    def test_rate_counter_keeps_counting_without_redis(self):
+        from orchestration.tool_router import MCPRouter
+
+        router = object.__new__(MCPRouter)
+        MCPRouter._local_rate_counters.clear()
+        with patch(
+            "orchestration.tool_router.get_redis_connection",
+            side_effect=ConnectionError("redis down"),
+        ):
+            first = self._run(router._count_request("mcp_rate:7"))
+            second = self._run(router._count_request("mcp_rate:7"))
+            other = self._run(router._count_request("mcp_rate:8"))
+
+        self.assertEqual((first, second, other), (1, 2, 1))
+
+    def test_rate_limit_denies_at_threshold_with_live_redis(self):
+        # Old attack still blocked: once the counter passes the limit the
+        # request is refused.
+        from orchestration.tool_router import MCPRouter
+
+        router = object.__new__(MCPRouter)
+        counter = {"n": 0}
+        conn = MagicMock()
+
+        def _incr(key):
+            counter["n"] += 1
+            return counter["n"]
+
+        conn.incr = Mock(side_effect=_incr)
+        conn.expire = Mock(return_value=True)
+
+        async def _prefs(user_id):
+            return dict(MCPRouter.DEFAULT_CAPABILITY_PREFS)
+
+        with patch("orchestration.tool_router.get_redis_connection", return_value=conn), \
+                patch.object(MCPRouter, "RATE_LIMIT_PER_HOUR", 3), \
+                patch.object(MCPRouter, "_get_user_prefs", new=AsyncMock(side_effect=_prefs)), \
+                patch("orchestration.tool_router.user_has_room_access", new=AsyncMock(return_value=True)):
+            outcomes = [
+                self._run(router._validate_request({"action": "get_weather"}, {"user_id": 7, "room_id": 1}))
+                for _ in range(4)
+            ]
+
+        self.assertTrue(outcomes[0]["valid"])
+        self.assertTrue(outcomes[1]["valid"])
+        self.assertFalse(outcomes[2]["valid"])
+        self.assertIn("Rate limit", outcomes[2]["reason"])
+
+
+class MemoryStateEntityTests(SimpleTestCase):
+    """e7: tool RESULT payloads are vendor data � they must not overwrite the
+    user's own entities, persist into RoomContext.memory_facts, or masquerade
+    as confirmed knowledge in the memory summary."""
+
+    def setUp(self):
+        cache.clear()
+
+    def _update(self, *, params=None, result=None, user_id=701):
+        from orchestration.memory_state import update_memory_state
+
+        return async_to_sync(update_memory_state)(
+            {"user_id": user_id},
+            action="get_weather",
+            params=params,
+            result=result,
+        )
+
+    @patch("orchestration.memory_state._persist_entities_to_db", new_callable=AsyncMock)
+    def test_result_payloads_do_not_overwrite_user_entities(self, mock_persist):
+        state = self._update(params={"city": "Nairobi"})
+        self.assertEqual(state["entities"]["city"], "Nairobi")
+
+        state = self._update(
+            result={"city": "London", "email": "support@vendor.com"},
+        )
+        self.assertEqual(state["entities"]["city"], "Nairobi")
+        self.assertNotIn("email", state["entities"])
+
+    @patch("orchestration.memory_state._persist_entities_to_db", new_callable=AsyncMock)
+    def test_result_entities_are_provisional_only(self, mock_persist):
+        from orchestration.memory_state import build_memory_summary
+
+        state = self._update(
+            params={"origin": "NBO"},
+            result={"itinerary_id": "IT-99", "email": "booking@airline.example"},
+        )
+        self.assertEqual(state["result_entities"]["itinerary_id"], "IT-99")
+        self.assertNotIn("itinerary_id", state["entities"])
+        self.assertNotIn("email", state["entities"])
+
+        summary = build_memory_summary(state)
+        self.assertIn("Known entities: origin=NBO", summary)
+        self.assertIn("provisional", summary)
+        self.assertIn("itinerary_id=IT-99", summary)
+
+    @patch("orchestration.memory_state._persist_entities_to_db", new_callable=AsyncMock)
+    def test_persistence_receives_trusted_entities_only(self, mock_persist):
+        self._update(
+            params={"destination": "Mombasa"},
+            result={"email": "support@vendor.com", "amount": "999"},
+        )
+        mock_persist.assert_awaited_once()
+        persisted = mock_persist.await_args.args[1]
+        self.assertEqual(persisted.get("destination"), "Mombasa")
+        self.assertNotIn("email", persisted)
+        self.assertNotIn("amount", persisted)
+
+
+class RoomAccessCacheTests(TestCase):
+    """e6: the room-access cache must never outlive a membership change and
+    must fail closed when the request cannot be scoped to real ids."""
+
+    def setUp(self):
+        from chatbot.models import Chatroom, Member
+
+        cache.clear()
+        self.user = get_user_model().objects.create_user(
+            username="room-access-user", email="room-access@example.com", password="fake-token",  # nosec B106 — test fixture — fake credential
+        )
+        self.member = Member.objects.create(User=self.user)
+        self.room = Chatroom.objects.create()
+
+    def _has_access(self):
+        from orchestration.security_policy import user_has_room_access
+
+        return async_to_sync(user_has_room_access)(self.user.id, self.room.id)
+
+    def test_missing_ids_fail_closed(self):
+        from orchestration.security_policy import user_has_room_access
+
+        self.assertFalse(async_to_sync(user_has_room_access)(None, self.room.id))
+        self.assertFalse(async_to_sync(user_has_room_access)(self.user.id, None))
+
+    def test_member_gains_access(self):
+        self.room.participants.add(self.member)
+        self.assertTrue(self._has_access())
+
+    def test_epoch_bump_orphans_entries_cached_before_it(self):
+        from django.core.cache import cache
+
+        from orchestration.security_policy import _room_access_cache_key, bump_room_access_epoch
+
+        self.room.participants.add(self.member)
+        self.assertTrue(self._has_access())
+        old_key = _room_access_cache_key(self.user.id, self.room.id)
+        self.assertIsNotNone(cache.get(old_key))
+
+        bump_room_access_epoch()
+        self.assertIsNone(cache.get(_room_access_cache_key(self.user.id, self.room.id)))
+
+    def test_m2m_remove_signal_alone_invalidates_cached_entry(self):
+        self.room.participants.add(self.member)
+        self.assertTrue(self._has_access())
+        self.room.participants.remove(self.member)
+        self.assertFalse(self._has_access())
+
+    def test_negative_cache_flips_on_join(self):
+        self.assertFalse(self._has_access())
+        self.room.participants.add(self.member)
+        self.assertTrue(self._has_access())
+
+    def test_member_delete_cascades_past_the_cache(self):
+        self.room.participants.add(self.member)
+        self.assertTrue(self._has_access())
+
+        self.member.delete()
+        self.assertFalse(self._has_access())

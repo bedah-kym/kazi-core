@@ -5,10 +5,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
-from django.test import TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
+from django.utils import timezone
 from rest_framework.test import APIClient
 
-from orchestration.workflow_planner import execute_adhoc_workflow
+from orchestration.workflow_planner import (
+    IDEMPOTENCY_TTL_SECONDS,
+    _idempotency_key,
+    execute_adhoc_workflow,
+)
 from workflows.capabilities import validate_workflow_definition
 from workflows.models import (
     DeferredWorkflowExecution,
@@ -18,7 +23,10 @@ from workflows.models import (
     WorkflowTrigger,
     UserWorkflow,
 )
-from workflows.tasks import replay_deferred_workflows
+from workflows.tasks import replay_deferred_workflows, sweep_stuck_approvals
+from workflows.utils import resolve_parameters, resolve_template, safe_eval_condition
+
+from datetime import timedelta
 
 
 User = get_user_model()
@@ -80,23 +88,47 @@ class WorkflowDefinitionValidationTests(TestCase):
         self.assertFalse(valid)
         self.assertIn("on_timeout", error)
 
+    def test_rejects_dependency_cycle(self):
+        workflow_def = {
+            "workflow_name": "Cycle",
+            "workflow_description": "A depends on B which depends on A",
+            "triggers": [{"trigger_type": "manual"}],
+            "steps": [
+                {
+                    "id": "step_a",
+                    "service": "weather",
+                    "action": "get_weather",
+                    "params": {"city": "Nairobi"},
+                    "depends_on": ["step_b"],
+                },
+                {
+                    "id": "step_b",
+                    "service": "weather",
+                    "action": "get_weather",
+                    "params": {"city": "Mombasa"},
+                    "depends_on": ["step_a"],
+                },
+            ],
+        }
+
+        valid, error = validate_workflow_definition(workflow_def)
+        self.assertFalse(valid)
+        self.assertIn("cycle", error)
+
 
 class AdhocWorkflowFallbackTests(TestCase):
     @override_settings(TEMPORAL_DISABLED=True)
     @patch("orchestration.workflow_planner._create_adhoc_workflow", new_callable=AsyncMock)
     @patch("orchestration.workflow_planner._enqueue_deferred_execution", new_callable=AsyncMock)
     @patch("orchestration.workflow_planner._run_inline", new_callable=AsyncMock)
-    @patch("orchestration.workflow_planner.cache")
     def test_high_risk_workflow_is_queued_when_temporal_disabled(
         self,
-        mock_cache,
         mock_run_inline,
         mock_enqueue,
         mock_create_adhoc,
     ):
-        mock_cache.add.return_value = True
         mock_enqueue.return_value = 55
-        mock_create_adhoc.return_value = MagicMock(id=88)
+        mock_create_adhoc.return_value = (MagicMock(id=88), False)
         definition = {
             "workflow_name": "Withdraw money",
             "workflow_description": "High risk",
@@ -112,15 +144,12 @@ class AdhocWorkflowFallbackTests(TestCase):
     @override_settings(TEMPORAL_DISABLED=True)
     @patch("orchestration.workflow_planner._create_adhoc_workflow", new_callable=AsyncMock)
     @patch("orchestration.workflow_planner._run_inline", new_callable=AsyncMock)
-    @patch("orchestration.workflow_planner.cache")
     def test_low_risk_workflow_can_still_run_inline(
         self,
-        mock_cache,
         mock_run_inline,
         mock_create_adhoc,
     ):
-        mock_cache.add.return_value = True
-        mock_create_adhoc.return_value = MagicMock(id=89)
+        mock_create_adhoc.return_value = (MagicMock(id=89), False)
         mock_run_inline.return_value = {"weather": {"status": "success"}}
         definition = {
             "workflow_name": "Check weather",
@@ -135,10 +164,85 @@ class AdhocWorkflowFallbackTests(TestCase):
         mock_run_inline.assert_awaited_once()
 
 
+LOW_RISK_DEFINITION = {
+    "workflow_name": "Check weather",
+    "workflow_description": "Low risk",
+    "steps": [{"service": "weather", "action": "get_weather", "params": {"city": "Nairobi"}}],
+}
+
+
+@override_settings(TEMPORAL_DISABLED=True)
+@patch("orchestration.workflow_planner._run_inline", new_callable=AsyncMock)
+class AdhocIdempotencyTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(  # nosec B106 — test fixture — fake credential
+            username="idem-user", email="idem@example.com", password="fake-token",
+        )
+
+    def _execute(self, user_id=None):
+        return async_to_sync(execute_adhoc_workflow)(
+            LOW_RISK_DEFINITION,
+            user_id=user_id or self.user.id,
+            room_id=None,
+            trigger_data={"city": "Nairobi"},
+        )
+
+    def test_duplicate_request_within_window_is_rejected_without_second_run(self, mock_run_inline):
+        mock_run_inline.return_value = {"weather": {"status": "success"}}
+        first = self._execute()
+        second = self._execute()
+
+        self.assertEqual(first["status"], "completed")
+        self.assertEqual(second["status"], "duplicate")
+        self.assertIsNone(second["workflow"])
+        mock_run_inline.assert_awaited_once()
+        self.assertEqual(UserWorkflow.objects.count(), 1)
+
+    def test_same_key_for_different_user_is_not_a_duplicate(self, mock_run_inline):
+        mock_run_inline.return_value = {"weather": {"status": "success"}}
+        other_user = User.objects.create_user(  # nosec B106 — test fixture — fake credential
+            username="second-user", email="second@example.com", password="fake-token",
+        )
+
+        first = self._execute()
+        other = self._execute(user_id=other_user.id)
+
+        self.assertEqual(first["status"], "completed")
+        self.assertEqual(other["status"], "completed")
+        self.assertEqual(UserWorkflow.objects.count(), 2)
+
+    def test_stale_dedupe_row_releases_key_for_deliberate_retry(self, mock_run_inline):
+        mock_run_inline.return_value = {"weather": {"status": "success"}}
+        first = self._execute()
+        self.assertEqual(first["status"], "completed")
+
+        row = UserWorkflow.objects.get()
+        self.assertEqual(row.idempotency_key, _idempotency_key(LOW_RISK_DEFINITION, {"city": "Nairobi"}))
+
+        UserWorkflow.objects.update(created_at=timezone.now() - timedelta(seconds=IDEMPOTENCY_TTL_SECONDS + 5))
+        retry = self._execute()
+
+        self.assertEqual(retry["status"], "completed")
+        self.assertEqual(UserWorkflow.objects.count(), 2)
+        self.assertTrue(UserWorkflow.objects.filter(idempotency_key__isnull=True).exists())
+
+    def test_dedupe_survives_cache_flush(self, mock_run_inline):
+        from django.core.cache import cache
+
+        mock_run_inline.return_value = {"weather": {"status": "success"}}
+        first = self._execute()
+        cache.clear()
+        second = self._execute()
+
+        self.assertEqual(first["status"], "completed")
+        self.assertEqual(second["status"], "duplicate")
+        mock_run_inline.assert_awaited_once()
+
+
 class WorkflowApiTests(TestCase):
     def setUp(self):
         self.client = APIClient()
-        self.user = User.objects.create_user(username="qa-user", email="qa@example.com", password="secret")
+        self.user = User.objects.create_user(username="qa-user", email="qa@example.com", password="secret")  # nosec B106 — test fixture — fake credential
         self.client.force_authenticate(self.user)
         self.workflow = UserWorkflow.objects.create(
             user=self.user,
@@ -320,8 +424,8 @@ class WorkflowApiTests(TestCase):
 
 
 class DeferredReplayTaskTests(TestCase):
-    def test_replay_task_marks_dead_letter_and_recovery_hint(self):
-        user = User.objects.create_user(username="replay-user", password="secret")
+    def test_replay_task_marks_dead_letter_and_recovery_hint(self):  # nosec B106 — test fixture — fake credential
+        user = User.objects.create_user(username="replay-user", password="secret")  # nosec B106 — test fixture — fake credential
         workflow = UserWorkflow.objects.create(
             user=user,
             name="Replay me",
@@ -348,6 +452,203 @@ class DeferredReplayTaskTests(TestCase):
         self.assertTrue(deferred.recovery_hint)
 
 
+class SweepStuckApprovalsTaskTests(TestCase):
+    """F2.2: approvals orphaned by a dead agent loop / Temporal worker must be
+    swept to a terminal status instead of sitting pending forever."""
+
+    def setUp(self):  # nosec B106 — test fixture — fake credential
+        self.user = User.objects.create_user(username="sweep-user", email="sweep@example.com", password="secret")  # nosec B106 — test fixture — fake credential
+        self.workflow = UserWorkflow.objects.create(
+            user=self.user,
+            name="Sweep workflow",
+            description="Approval sweep",
+            definition={
+                "workflow_name": "Sweep workflow",
+                "workflow_description": "Approval sweep",
+                "triggers": [],
+                "steps": [],
+            },
+        )
+
+    def _make_execution(self, suffix, **overrides):
+        fields = dict(
+            workflow=self.workflow,
+            temporal_workflow_id=f"wf-sweep-{suffix}",
+            trigger_type="manual",
+            trigger_data={},
+            status="waiting",
+            waiting_on="approval",
+        )
+        fields.update(overrides)
+        return WorkflowExecution.objects.create(**fields)
+
+    def _make_approval(self, execution=None, expires_at=None, kind="workflow", room_id=None):
+        return WorkflowApprovalRecord.objects.create(
+            workflow=self.workflow if kind == "workflow" else None,
+            execution=execution if kind == "workflow" else None,
+            requested_by=self.user,
+            kind=kind,
+            room_id=(
+                room_id
+                if room_id is not None
+                else (WorkflowApprovalRecord.objects.count() + 100 if kind == "agent_loop" else None)
+            ),
+            step_id=f"step_{kind}_{expires_at and 'expired' or 'live'}",
+            service="gmail",
+            action="send_email",
+            status="pending",
+            expires_at=expires_at,
+        )
+
+    def test_expired_agent_loop_approval_is_timed_out(self):
+        stale = self._make_approval(expires_at=timezone.now() - timedelta(seconds=1), kind="agent_loop")
+        fresh = self._make_approval(expires_at=timezone.now() + timedelta(hours=1), kind="agent_loop")
+
+        result = sweep_stuck_approvals()
+
+        self.assertEqual(result["swept"], 1)
+        stale.refresh_from_db()
+        fresh.refresh_from_db()
+        self.assertEqual(stale.status, "timed_out")
+        self.assertIsNotNone(stale.reviewed_at)
+        self.assertTrue(stale.review_comment)
+        self.assertEqual(fresh.status, "pending")
+
+    def test_expired_workflow_approval_fails_stuck_execution(self):
+        execution = self._make_execution("exec-1")
+        approval = self._make_approval(execution=execution, expires_at=timezone.now() - timedelta(seconds=1))
+        execution.pending_approval = approval
+        execution.save(update_fields=["pending_approval"])
+
+        result = sweep_stuck_approvals()
+
+        self.assertEqual(result["swept"], 1)
+        self.assertEqual(result["failed_executions"], 1)
+        approval.refresh_from_db()
+        execution.refresh_from_db()
+        self.assertEqual(approval.status, "timed_out")
+        self.assertEqual(execution.status, "failed")
+        self.assertIsNone(execution.pending_approval)
+        self.assertFalse(execution.waiting_on)
+        self.assertTrue(execution.failure_summary)
+        self.assertIn("rerun", (execution.recovery_suggestion or "").lower())
+
+    def test_unexpired_and_recently_created_approvals_are_untouched(self):
+        live_dated = self._make_execution("exec-live")
+        live_approval = self._make_approval(
+            execution=live_dated, expires_at=timezone.now() + timedelta(minutes=30)
+        )
+        no_expiry_recent = self._make_approval(kind="agent_loop", expires_at=None)
+
+        result = sweep_stuck_approvals()
+
+        self.assertEqual(result["swept"], 0)
+        live_approval.refresh_from_db()
+        no_expiry_recent.refresh_from_db()
+        live_dated.refresh_from_db()
+        self.assertEqual(live_approval.status, "pending")
+        self.assertEqual(no_expiry_recent.status, "pending")
+        self.assertEqual(live_dated.status, "waiting")
+
+    def test_waiting_execution_without_swept_approval_is_not_failed(self):
+        execution = self._make_execution("exec-other")
+        approval = self._make_approval(execution=execution, expires_at=timezone.now() + timedelta(days=7))
+        execution.pending_approval = approval
+        execution.save(update_fields=["pending_approval"])
+
+        sweep_stuck_approvals()
+
+        execution.refresh_from_db()
+        self.assertEqual(execution.status, "waiting")
+
+
+class TemporalDeadHandleApiTests(TestCase):
+    """F2.1: REST confirm/cancel against a dead Temporal handle returns 409
+    instead of hanging or surfacing a generic 500."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="dead-handle-user", email="dh@example.com", password="secret")  # nosec B106 — test fixture — fake credential
+        self.client.force_authenticate(self.user)
+        self.workflow = UserWorkflow.objects.create(
+            user=self.user,
+            name="Dead handle workflow",
+            description="409 guard",
+            definition={
+                "workflow_name": "Dead handle workflow",
+                "workflow_description": "409 guard",
+                "triggers": [],
+                "steps": [],
+            },
+        )
+
+    def _waiting_execution_with_pending_approval(self, suffix):
+        execution = WorkflowExecution.objects.create(
+            workflow=self.workflow,
+            temporal_workflow_id=f"wf-dead-{suffix}",
+            temporal_run_id=f"run-{suffix}",
+            trigger_type="manual",
+            trigger_data={},
+            status="waiting",
+            waiting_on="approval",
+        )
+        approval = WorkflowApprovalRecord.objects.create(
+            workflow=self.workflow,
+            execution=execution,
+            requested_by=self.user,
+            step_id="email_step",
+            service="gmail",
+            action="send_email",
+            status="pending",
+        )
+        execution.pending_approval = approval
+        execution.save(update_fields=["pending_approval"])
+        return execution
+
+    def test_approve_returns_409_when_temporal_dead(self):
+        execution = self._waiting_execution_with_pending_approval("approve")
+
+        with patch(
+            "workflows.views.submit_execution_approval",
+            new=AsyncMock(side_effect=RuntimeError("workflow execution already completed")),
+        ):
+            response = self.client.post(f"/api/workflows/executions/{execution.id}/approve/", {}, format="json")
+
+        self.assertEqual(response.status_code, 409)
+        payload = response.json()
+        self.assertIn("Temporal", payload["error"])
+        self.assertEqual(payload["detail"], "workflow execution already completed")
+
+    def test_reject_returns_409_when_temporal_dead(self):
+        execution = self._waiting_execution_with_pending_approval("reject")
+
+        with patch(
+            "workflows.views.submit_execution_approval",
+            new=AsyncMock(side_effect=OSError("connection refused")),
+        ):
+            response = self.client.post(f"/api/workflows/executions/{execution.id}/reject/", {}, format="json")
+
+        self.assertEqual(response.status_code, 409)
+
+    def test_cancel_returns_409_when_temporal_dead(self):
+        execution = WorkflowExecution.objects.create(
+            workflow=self.workflow,
+            temporal_workflow_id="wf-dead-cancel",
+            temporal_run_id="run-cancel",
+            trigger_type="manual",
+            trigger_data={},
+            status="running",
+        )
+
+        with patch(
+            "workflows.views.request_execution_cancel",
+            new=AsyncMock(side_effect=RuntimeError("event loop closed")),
+        ):
+            response = self.client.post(f"/api/workflows/executions/{execution.id}/cancel/", {}, format="json")
+
+        self.assertEqual(response.status_code, 409)
+
+
 class SeedDemoWorkflowCommandTests(TestCase):
     """v0.4 M5-1: the seed_demo_workflow management command loads
     examples/workflows/follow_up_email/workflow.json and persists it as a
@@ -357,8 +658,7 @@ class SeedDemoWorkflowCommandTests(TestCase):
     def test_command_creates_user_workflow_from_example_json(self):
         from io import StringIO
         from django.core.management import call_command
-
-        user = User.objects.create_user(username="demo-seed", password="secret")
+        user = User.objects.create_user(username="demo-seed", password="secret")  # nosec B106 — test fixture — fake credential
         out = StringIO()
 
         call_command("seed_demo_workflow", "--user", "demo-seed", stdout=out)
@@ -378,8 +678,7 @@ class SeedDemoWorkflowCommandTests(TestCase):
     def test_command_is_idempotent(self):
         from io import StringIO
         from django.core.management import call_command
-
-        user = User.objects.create_user(username="demo-seed-2", password="secret")
+        user = User.objects.create_user(username="demo-seed-2", password="secret")  # nosec B106 — test fixture — fake credential
         call_command("seed_demo_workflow", "--user", "demo-seed-2", stdout=StringIO())
         call_command("seed_demo_workflow", "--user", "demo-seed-2", stdout=StringIO())
 
@@ -431,8 +730,8 @@ class ReplaySafetyRegressionTests(TestCase):
 class RerunEndpointReplaySafetyTests(TestCase):
     """v0.4.1 Bug #2B — rerun HTTP view honors documented from_step + force."""
 
-    def setUp(self):
-        self.user = User.objects.create_user(username="rerun-user", password="x")
+    def setUp(self):  # nosec B106 — test fixture — fake credential
+        self.user = User.objects.create_user(username="rerun-user", password="x")  # nosec B106 — test fixture — fake credential
         self.workflow = UserWorkflow.objects.create(
             user=self.user,
             name="Two-step",
@@ -584,3 +883,419 @@ class WorkflowExecutorRegistryFallbackTests(TestCase):
         # The echo connector echoes the input back in `data.input`
         data = result.get("data") if isinstance(result.get("data"), dict) else result
         self.assertIn("ping", str(data))
+
+
+class SafeConditionEvaluatorTests(TestCase):
+    """Conditions run through a whitelisted AST interpreter, not eval —
+    escape chains and object-attribute traversal must never execute."""
+
+    def test_comparison_conditions_evaluate(self):
+        context = {"amount": 150, "status": "ok", "approved": True}
+        self.assertTrue(safe_eval_condition("amount > 100", context))
+        self.assertTrue(safe_eval_condition("status == 'ok'", context))
+        self.assertTrue(safe_eval_condition("amount >= 50 and approved", context))
+        self.assertFalse(safe_eval_condition("amount < 100 or not approved", context))
+
+    def test_arithmetic_and_containment(self):
+        context = {"price": 40, "nights": 3, "city": "Nairobi"}
+        self.assertTrue(safe_eval_condition("price * nights < 500", context))
+        self.assertTrue(safe_eval_condition("city in ['Nairobi', 'Mombasa']", context))
+        self.assertFalse(safe_eval_condition("'Kisumu' in city", context))
+
+    def test_attribute_chains_resolve_through_context_dicts(self):
+        context = {"user": {"profile": {"plan": "pro"}}}
+        self.assertTrue(safe_eval_condition("user.profile.plan == 'pro'", context))
+        self.assertFalse(safe_eval_condition("user.profile.plan == 'free'", context))
+
+    def test_unknown_names_are_falsy_not_fatal(self):
+        self.assertFalse(safe_eval_condition("ghost_name == 'x'", {}))
+
+    def test_dunder_escape_chains_are_inert(self):
+        context = {"payload": "data"}
+        for attack in (
+            "payload.__class__",
+            "payload.__class__.__mro__",
+            "payload.__class__.__bases__[0]",
+            "().__class__.__bases__",
+        ):
+            result = safe_eval_condition(attack, context)
+            self.assertFalse(result, f"attack expression evaluated truthy: {attack}")
+
+    def test_non_whitelisted_calls_are_rejected(self):
+        self.assertFalse(safe_eval_condition("__import__('os')", {}))
+        self.assertFalse(safe_eval_condition("getattr(payload, 'x')", {"payload": "data"}))
+
+    def test_malformed_expressions_return_false(self):
+        self.assertFalse(safe_eval_condition("amount >", {"amount": 1}))
+        self.assertFalse(safe_eval_condition("1 +* 2", {}))
+
+
+class TemplateResolutionTests(SimpleTestCase):
+    """`{{ context.path }}` params must resolve against the workflow context —
+    whitespace around the expression must never break substitution."""
+
+    def test_single_template_resolves_string(self):
+        self.assertEqual(
+            resolve_template("{{ trigger.city }}", {"trigger": {"city": "Nairobi"}}),
+            "Nairobi",
+        )
+
+    def test_single_template_returns_raw_non_string_value(self):
+        self.assertEqual(resolve_template("{{ amount }}", {"amount": 5000}), 5000)
+
+    def test_template_without_spaces_resolves(self):
+        self.assertEqual(resolve_template("{{trigger.city}}", {"trigger": {"city": "Mombasa"}}), "Mombasa")
+
+    def test_nested_parameters_resolve(self):
+        params = {"city": "{{ trigger.city }}", "amount": "{{ trigger.amount }}"}
+        result = resolve_parameters(params, {"trigger": {"city": "Nairobi", "amount": 100}})
+        self.assertEqual(result, {"city": "Nairobi", "amount": 100})
+
+    def test_embedded_template_interpolates(self):
+        self.assertEqual(
+            resolve_template("Invoice for {{ trigger.project }} (${{ trigger.amount }})", {"trigger": {"project": "QA", "amount": 500}}),
+            "Invoice for QA ($500)",
+        )
+
+    def test_missing_context_resolves_to_empty_in_interpolation(self):
+        self.assertEqual(resolve_template("Hi {{ trigger.name }}!", {"trigger": {}}), "Hi !")
+
+    def test_non_string_value_passes_through(self):
+        self.assertEqual(resolve_template(42, {}), 42)
+
+
+class TemporalUpdateApprovalTests(TestCase):
+    """Phase 4 (d): with WORKFLOW_APPROVALS_UPDATE_API on, approval decisions
+    go through the Workflow Update API — typed, correlated per approval id —
+    instead of fire-and-forget signals."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username="update-approval-user", email="ua@example.com", password="fake-token",  # nosec B106 — test fixture — fake credential
+        )
+        self.client.force_authenticate(self.user)
+        self.workflow = UserWorkflow.objects.create(
+            user=self.user,
+            name="Update approval workflow",
+            description="Update API",
+            definition={"workflow_name": "w", "workflow_description": "d", "triggers": [], "steps": []},
+        )
+
+    def _waiting_execution_with_pending_approval(self, suffix):
+        execution = WorkflowExecution.objects.create(
+            workflow=self.workflow,
+            temporal_workflow_id=f"wf-upd-{suffix}",
+            temporal_run_id=f"run-upd-{suffix}",
+            trigger_type="manual",
+            trigger_data={},
+            status="waiting",
+            waiting_on="approval",
+        )
+        approval = WorkflowApprovalRecord.objects.create(
+            workflow=self.workflow,
+            execution=execution,
+            requested_by=self.user,
+            step_id="email_step",
+            service="gmail",
+            action="send_email",
+            status="pending",
+        )
+        execution.pending_approval = approval
+        execution.save(update_fields=["pending_approval"])
+        return execution
+
+    def _submission_env(self, *, update_side_effect=None):
+        from workflows import temporal_integration as ti
+
+        client = MagicMock()
+        handle = MagicMock()
+        handle.execute_update = AsyncMock(side_effect=update_side_effect)
+        handle.signal = AsyncMock()
+        client.get_workflow_handle = MagicMock(return_value=handle)
+        return ti, client, handle
+
+    @override_settings(WORKFLOW_APPROVALS_UPDATE_API=False)
+    def test_flag_off_uses_fire_and_forget_signal(self):
+
+        ti, client, handle = self._submission_env()
+        execution = MagicMock()
+        with patch.object(ti, "get_temporal_client", new=AsyncMock(return_value=client)):
+            async_to_sync(ti.submit_execution_approval)(
+                execution, approval_id=7, reviewer_id=1, decision="approved",
+            )
+        handle.signal.assert_awaited_once()
+        handle.execute_update.assert_not_awaited()
+
+    @override_settings(WORKFLOW_APPROVALS_UPDATE_API=True)
+    def test_flag_on_uses_update_api_with_typed_payload(self):
+
+        ti, client, handle = self._submission_env()
+        execution = MagicMock()
+        with patch.object(ti, "get_temporal_client", new=AsyncMock(return_value=client)):
+            async_to_sync(ti.submit_execution_approval)(
+                execution, approval_id=7, reviewer_id=1, decision="approved", comment="ok",
+            )
+        handle.signal.assert_not_awaited()
+        handle.execute_update.assert_awaited_once()
+        args = handle.execute_update.await_args.args
+        payload = args[1]
+        self.assertEqual(payload["approval_id"], 7)
+        self.assertEqual(payload["decision"], "approved")
+        self.assertEqual(payload["reviewed_by_id"], 1)
+
+    @override_settings(WORKFLOW_APPROVALS_UPDATE_API=True)
+    def test_flag_on_conflict_surfaces_error_instead_of_silent_drop(self):
+        from temporalio.client import WorkflowUpdateFailedError
+        from temporalio.exceptions import ApplicationError
+
+        failure = WorkflowUpdateFailedError(
+            cause=ApplicationError(
+                "approval id does not match the pending approval",
+                type="ApprovalMismatch",
+                non_retryable=True,
+            )
+        )
+        ti, client, handle = self._submission_env(update_side_effect=failure)
+        execution = MagicMock()
+        with patch.object(ti, "get_temporal_client", new=AsyncMock(return_value=client)):
+            with self.assertRaises(RuntimeError) as ctx:
+                async_to_sync(ti.submit_execution_approval)(
+                    execution, approval_id=7, reviewer_id=1, decision="approved",
+                )
+        self.assertIn("does not match", str(ctx.exception))
+        handle.signal.assert_not_awaited()
+
+    def test_approve_endpoint_returns_409_on_update_conflict(self):
+        execution = self._waiting_execution_with_pending_approval("update-conflict")
+        with override_settings(WORKFLOW_APPROVALS_UPDATE_API=True), patch(
+            "workflows.views.submit_execution_approval",
+            new=AsyncMock(side_effect=RuntimeError("approval id does not match the pending approval")),
+        ):
+            response = self.client.post(f"/api/workflows/executions/{execution.id}/approve/", {}, format="json")
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("approval id does not match", response.json()["detail"])
+
+
+class ApprovalUpdateHandlerTests(SimpleTestCase):
+    """The update validator itself: only the pending approval id is accepted."""
+
+    def test_update_records_decision_when_id_matches(self):
+        from workflows.temporal_integration import DynamicUserWorkflow
+
+        wf = DynamicUserWorkflow()
+        wf._state["pending_approval_id"] = 7
+        result = wf.record_approval_decision({"approval_id": 7, "decision": "approved"})
+        self.assertEqual(result["status"], "recorded")
+        self.assertEqual(wf._approval_response["decision"], "approved")
+
+    def test_update_rejects_mismatched_approval_id(self):
+        from temporalio.exceptions import ApplicationError
+
+        from workflows.temporal_integration import DynamicUserWorkflow
+
+        wf = DynamicUserWorkflow()
+        wf._state["pending_approval_id"] = 7
+        with self.assertRaises(ApplicationError):
+            wf.record_approval_decision({"approval_id": 8, "decision": "approved"})
+        self.assertIsNone(wf._approval_response)
+
+    def test_update_requires_approval_id(self):
+        from temporalio.exceptions import ApplicationError
+
+        from workflows.temporal_integration import DynamicUserWorkflow
+
+        wf = DynamicUserWorkflow()
+        wf._state["pending_approval_id"] = 7
+        with self.assertRaises(ApplicationError):
+            wf.record_approval_decision({"decision": "approved"})
+
+
+class WorkflowUiTests(TestCase):
+    """HTML operations surface: list, inbox, executions, and HITL actions."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="ui-user", email="ui@example.com", password="secret"  # nosec B106 - test fixture - fake credential
+        )
+        self.client.force_login(self.user)
+        self.workflow = UserWorkflow.objects.create(
+            user=self.user,
+            name="Ops workflow",
+            description="Review and send",
+            definition={
+                "workflow_name": "Ops workflow",
+                "workflow_description": "Review and send",
+                "triggers": [{"trigger_type": "manual"}],
+                "steps": [
+                    {
+                        "id": "email_step",
+                        "service": "gmail",
+                        "action": "send_email",
+                        "params": {"to": "ops@example.com", "subject": "Hi", "text": "Body"},
+                    }
+                ],
+            },
+        )
+
+    def _waiting_execution(self, workflow_id="wf-ui-1"):
+        execution = WorkflowExecution.objects.create(
+            workflow=self.workflow,
+            temporal_workflow_id=workflow_id,
+            trigger_type="manual",
+            trigger_data={},
+            status="waiting",
+            current_step="email_step",
+            waiting_on="approval",
+        )
+        approval = WorkflowApprovalRecord.objects.create(
+            workflow=self.workflow,
+            execution=execution,
+            requested_by=self.user,
+            step_id="email_step",
+            service="gmail",
+            action="send_email",
+            approval_message="Approve the email",
+            sanitized_params={"to": "ops@example.com"},
+        )
+        execution.pending_approval = approval
+        execution.save(update_fields=["pending_approval"])
+        return execution, approval
+
+    def test_workflows_list_renders_workflow_and_requires_login(self):
+        client = self.client_class()
+        response = client.get("/workflows/")
+        self.assertRedirects(
+            response, "/accounts/login/?next=/workflows/", fetch_redirect_response=False
+        )
+
+        response = self.client.get("/workflows/")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Ops workflow")
+        self.assertContains(response, "Run now")
+
+    def test_operations_inbox_renders_approval_and_attention_rows(self):
+        execution, _ = self._waiting_execution()
+        WorkflowExecution.objects.create(
+            workflow=self.workflow,
+            temporal_workflow_id="wf-ui-failed",
+            trigger_type="manual",
+            trigger_data={},
+            status="failed",
+            current_step="email_step",
+            failure_summary="SMTP timeout",
+            recovery_suggestion="Retry from email_step",
+        )
+        DeferredWorkflowExecution.objects.create(
+            workflow=self.workflow,
+            user=self.user,
+            status="queued",
+            last_error="Temporal unavailable",
+            recovery_hint="Replay will retry automatically",
+        )
+        WorkflowImprovementSuggestion.objects.create(
+            workflow=self.workflow,
+            execution=execution,
+            user=self.user,
+            suggestion_type="retry_policy",
+            title="Raise max_attempts",
+            summary="The email step retried 3 times and failed.",
+            proposed_changes={"max_attempts": 5},
+        )
+
+        response = self.client.get("/workflows/inbox/")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Approve the email")
+        self.assertContains(response, "SMTP timeout")
+        self.assertContains(response, "Retry from email_step")
+        self.assertContains(response, "Raise max_attempts")
+        self.assertContains(response, "ops@example.com")  # sanitized params disclosed
+
+    def test_inbox_empty_state(self):
+        response = self.client.get("/workflows/inbox/")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "All quiet")
+
+    def test_approve_ui_signals_temporal_and_redirects(self):
+        execution, _ = self._waiting_execution()
+        with patch("workflows.ui_views.submit_execution_approval", new=AsyncMock()) as mock_submit:
+            response = self.client.post(
+                f"/workflows/executions/{execution.id}/approve/",
+                {"comment": "Looks good"},
+            )
+        self.assertRedirects(response, "/workflows/inbox/")
+        mock_submit.assert_awaited_once()
+
+    def test_approve_ui_rejects_foreign_execution(self):
+        other_user = User.objects.create_user(
+            username="ui-other", email="other@example.com", password="secret"  # nosec B106 - test fixture - fake credential
+        )
+        other_workflow = UserWorkflow.objects.create(
+            user=other_user,
+            name="Other",
+            description="x",
+            definition={"steps": []},
+        )
+        foreign = WorkflowExecution.objects.create(
+            workflow=other_workflow,
+            temporal_workflow_id="wf-foreign",
+            status="waiting",
+        )
+        approval = WorkflowApprovalRecord.objects.create(
+            workflow=other_workflow,
+            execution=foreign,
+            requested_by=other_user,
+            step_id="x",
+            action="y",
+        )
+        foreign.pending_approval = approval
+        foreign.save(update_fields=["pending_approval"])
+
+        response = self.client.post(f"/workflows/executions/{foreign.id}/approve/")
+        self.assertRedirects(response, "/workflows/inbox/")
+
+    def test_run_ui_starts_execution_and_redirects(self):
+        with patch("workflows.ui_views.start_workflow_execution", new=AsyncMock()) as mock_start:
+            mock_start.return_value = WorkflowExecution(
+                id=123,
+                workflow=self.workflow,
+                temporal_workflow_id="wf-new",
+                trigger_type="manual",
+                status="pending",
+            )
+            response = self.client.post(f"/workflows/{self.workflow.id}/run/", {})
+        self.assertRedirects(response, "/workflows/executions/123/", fetch_redirect_response=False)
+        mock_start.assert_awaited_once()
+
+    def test_run_ui_rejects_invalid_trigger_data(self):
+        response = self.client.post(
+            f"/workflows/{self.workflow.id}/run/",
+            {"trigger_data": "{not json"},
+        )
+        self.assertRedirects(response, "/workflows/")
+
+    def test_executions_page_filters_by_status(self):
+        self._waiting_execution("wf-ui-2")
+        WorkflowExecution.objects.create(
+            workflow=self.workflow,
+            temporal_workflow_id="wf-ui-done",
+            trigger_type="manual",
+            trigger_data={},
+            status="completed",
+        )
+        response = self.client.get(f"/workflows/{self.workflow.id}/executions/?status=waiting")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["executions"].count(), 1)
+        self.assertContains(response, "Waiting")
+
+    def test_execution_detail_renders_state_and_degrades_without_temporal(self):
+        execution, _ = self._waiting_execution("wf-ui-3")
+        with patch(
+            "workflows.ui_views.fetch_execution_runtime_state",
+            new=AsyncMock(side_effect=ConnectionError("temporal down")),
+        ):
+            response = self.client.get(f"/workflows/executions/{execution.id}/")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Live runtime state is unavailable")
+        self.assertContains(response, "email_step")
+        self.assertContains(response, "Approve")

@@ -84,12 +84,12 @@ try:
         test_user = User.objects.first()
         service = QuotaService()
         quotas = service.get_user_quotas(test_user.id)
-        print(f"  ✅ QuotaService working")
+        print("  ✅ QuotaService working")
         print(f"      - Search: {quotas['search']['used']}/{quotas['search']['limit']}")
         print(f"      - Actions: {quotas['actions']['used']}/{quotas['actions']['limit']}")
         print(f"      - Messages: {quotas['messages']['used']}/{quotas['messages']['limit']}")
     else:
-        print(f"  ⚠️  No users to test")
+        print("  ⚠️  No users to test")
 except Exception as e:
     print(f"  ❌ QuotaService error: {e}")
 
@@ -100,7 +100,7 @@ try:
     response = requests.get('http://localhost:8000/travel/plan/', timeout=5)
     print(f"  {'✅' if response.status_code == 200 else '❌'} /travel/plan/ -> {response.status_code}")
 except requests.exceptions.ConnectionError:
-    print(f"  ❌ /travel/plan/ -> Connection refused")
+    print("  ❌ /travel/plan/ -> Connection refused")
 except Exception as e:
     print(f"  ❌ /travel/plan/ -> {e}")
 
@@ -111,7 +111,7 @@ if os.path.exists(staticfiles_dir):
     file_count = sum([len(files) for r, d, files in os.walk(staticfiles_dir)])
     print(f"  ✅ Staticfiles dir exists ({file_count} files)")
 else:
-    print(f"  ❌ Staticfiles dir missing")
+    print("  ❌ Staticfiles dir missing")
 
 print("\n" + "=" * 60)
 print("DIAGNOSIS COMPLETE")

@@ -243,6 +243,17 @@ def run_workflow(request, workflow_id):
     )
 
 
+def _temporal_unreachable_response(exc: Exception, action: str) -> Response:
+    detail = str(exc) or exc.__class__.__name__
+    return Response(
+        {
+            "error": f"The workflow run is no longer reachable in Temporal, so the {action} could not be delivered.",
+            "detail": detail,
+        },
+        status=409,
+    )
+
+
 def _approval_action(request, execution_id: int, decision: str):
     execution = (
         WorkflowExecution.objects.filter(
@@ -259,13 +270,16 @@ def _approval_action(request, execution_id: int, decision: str):
         return Response({"error": "This execution has no pending approval"}, status=400)
 
     comment = str(request.data.get("comment") or "").strip()
-    async_to_sync(submit_execution_approval)(
-        execution,
-        approval_id=execution.pending_approval_id,
-        reviewer_id=request.user.id,
-        decision=decision,
-        comment=comment,
-    )
+    try:
+        async_to_sync(submit_execution_approval)(
+            execution,
+            approval_id=execution.pending_approval_id,
+            reviewer_id=request.user.id,
+            decision=decision,
+            comment=comment,
+        )
+    except Exception as exc:
+        return _temporal_unreachable_response(exc, "decision")
     return Response(
         {
             "status": "signalled",
@@ -302,7 +316,10 @@ def cancel_execution(request, execution_id):
         return Response({"error": "Execution is already finished"}, status=400)
 
     reason = str(request.data.get("reason") or "").strip()
-    async_to_sync(request_execution_cancel)(execution, reason=reason)
+    try:
+        async_to_sync(request_execution_cancel)(execution, reason=reason)
+    except Exception as exc:
+        return _temporal_unreachable_response(exc, "cancel request")
     return Response({"status": "signalled", "execution_id": execution.id})
 
 

@@ -54,10 +54,18 @@ class UserWorkflow(models.Model):
     created_from_room = models.ForeignKey('chatbot.Chatroom', on_delete=models.SET_NULL, null=True, blank=True)
     created_from_draft = models.ForeignKey(WorkflowDraft, on_delete=models.SET_NULL, null=True, blank=True)
 
+    # Ad-hoc execution dedupe: sha256 digest of definition+trigger data. NULL
+    # for scheduled/manual workflows; unique per user so a cache flush or slow
+    # retry cannot admit a duplicate execution inside the dedupe window.
+    idempotency_key = models.CharField(max_length=64, null=True, blank=True)
+
     class Meta:
         ordering = ['-created_at']
         indexes = [
             models.Index(fields=['user', 'status']),
+        ]
+        constraints = [
+            models.UniqueConstraint(fields=['user', 'idempotency_key'], name='uniq_userworkflow_user_idemkey'),
         ]
 
     def __str__(self):
@@ -208,7 +216,15 @@ class DeferredWorkflowExecution(models.Model):
 
 
 class WorkflowApprovalRecord(models.Model):
-    """Immutable review record for a workflow step that needed human approval."""
+    """Immutable review record for a step that needed human approval.
+
+    Covers two kinds of approval:
+      - ``workflow``    — a step inside a durable workflow run (has workflow
+        + execution FKs, written by the Temporal integration).
+      - ``agent_loop``  — a high-risk tool paused inside the ReAct agent loop
+        (no workflow/execution; scoped by ``room_id`` and the requesting user,
+        with the serialized loop state held in ``metadata``).
+    """
 
     STATUS_CHOICES = [
         ('pending', 'Pending'),
@@ -218,8 +234,25 @@ class WorkflowApprovalRecord(models.Model):
         ('cancelled', 'Cancelled'),
     ]
 
-    workflow = models.ForeignKey(UserWorkflow, on_delete=models.CASCADE, related_name='approval_records')
-    execution = models.ForeignKey(WorkflowExecution, on_delete=models.CASCADE, related_name='approval_records')
+    KIND_CHOICES = [
+        ('workflow', 'Workflow'),
+        ('agent_loop', 'Agent Loop'),
+    ]
+
+    workflow = models.ForeignKey(
+        UserWorkflow,
+        on_delete=models.CASCADE,
+        related_name='approval_records',
+        null=True,
+        blank=True,
+    )
+    execution = models.ForeignKey(
+        WorkflowExecution,
+        on_delete=models.CASCADE,
+        related_name='approval_records',
+        null=True,
+        blank=True,
+    )
     requested_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='requested_workflow_approvals')
     reviewed_by = models.ForeignKey(
         User,
@@ -229,6 +262,8 @@ class WorkflowApprovalRecord(models.Model):
         related_name='reviewed_workflow_approvals',
     )
 
+    kind = models.CharField(max_length=20, choices=KIND_CHOICES, default='workflow')
+    room_id = models.IntegerField(null=True, blank=True)
     step_id = models.CharField(max_length=120)
     service = models.CharField(max_length=50, blank=True)
     action = models.CharField(max_length=100)
@@ -247,6 +282,14 @@ class WorkflowApprovalRecord(models.Model):
         indexes = [
             models.Index(fields=['status', 'expires_at']),
             models.Index(fields=['workflow', 'step_id']),
+            models.Index(fields=['kind', 'room_id', 'status']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['kind', 'room_id', 'requested_by'],
+                condition=models.Q(kind='agent_loop', status='pending'),
+                name='uniq_agent_loop_pending_room_user',
+            ),
         ]
 
     def __str__(self):

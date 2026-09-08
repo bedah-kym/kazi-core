@@ -1,0 +1,120 @@
+/* Notification center */
+.notif-item {
+    display: flex;
+    gap: 14px;
+    padding: 16px 18px;
+    border-bottom: 1px solid var(--line);
+    transition: background 140ms ease;
+}
+
+.notif-item:last-child {
+    border-bottom: none;
+}
+
+.notif-item:hover {
+    background: var(--clay-tint);
+}
+
+.notif-item.unread {
+    background: color-mix(in srgb, var(--clay) 6%, transparent);
+}
+
+.notif-item.unread:hover {
+    background: var(--clay-tint);
+}
+
+.notif-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    flex-shrink: 0;
+}
+
+.notif-icon.severity-info {
+    background: color-mix(in srgb, hsl(var(--info)) 14%, transparent);
+    color: hsl(var(--info));
+}
+
+.notif-icon.severity-success {
+    background: var(--success-soft);
+    color: var(--success-hex);
+}
+
+.notif-icon.severity-warning {
+    background: var(--warning-soft);
+    color: var(--warning-hex);
+}
+
+.notif-icon.severity-error {
+    background: var(--danger-soft);
+    color: var(--danger-hex);
+}
+
+.notif-body {
+    flex: 1;
+    min-width: 0;
+}
+
+.notif-title {
+    font-size: 14px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.unread-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--clay);
+    flex-shrink: 0;
+}
+
+.notif-text {
+    font-size: 13.5px;
+    color: var(--ink-soft);
+    margin-top: 3px;
+    overflow-wrap: break-word;
+}
+
+.notif-meta {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 6px;
+    flex-wrap: wrap;
+}
+
+.notif-actions {
+    display: flex;
+    align-items: flex-start;
+    gap: 4px;
+    flex-shrink: 0;
+    opacity: 0;
+    transition: opacity 140ms ease;
+}
+
+.notif-item:hover .notif-actions,
+.notif-item:focus-within .notif-actions {
+    opacity: 1;
+}
+
+@media (max-width: 640px) {
+    .notif-actions {
+        opacity: 1;
+        flex-direction: column;
+    }
+}
+
+.pager {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px;
+    border-top: 1px solid var(--line);
+}

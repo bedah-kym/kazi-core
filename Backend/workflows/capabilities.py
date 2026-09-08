@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from typing import Dict, Tuple
+from typing import Dict, List, Tuple
 
 from orchestration.action_catalog import build_capabilities_catalog
 
@@ -10,6 +10,51 @@ from .runtime import APPROVAL_TIMEOUT_POLICIES
 
 
 SYSTEM_CAPABILITIES = build_capabilities_catalog()
+
+
+def find_dependency_cycle(steps: List[Dict]) -> List[str]:
+    """Return step ids trapped in a dependency cycle, or [] if acyclic.
+
+    Kahn's algorithm: iteratively drop steps with no unmet dependencies.
+    Whatever remains participates in (or sits downstream of) a cycle, so a
+    non-empty return value means the step order can never be satisfied.
+    """
+    step_ids = []
+    for idx, step in enumerate(steps):
+        if not isinstance(step, dict):
+            step_ids.append(f"step_{idx + 1}")
+        else:
+            step_ids.append(step.get("id") or step.get("action") or f"step_{idx + 1}")
+
+    index_map = {sid: i for i, sid in enumerate(step_ids)}
+    adjacency = {sid: [] for sid in step_ids}
+    indegree = {sid: 0 for sid in step_ids}
+    for step, step_id in zip(steps, step_ids):
+        if not isinstance(step, dict):
+            continue
+        depends_on = step.get("depends_on")
+        if not isinstance(depends_on, list):
+            continue
+        for dep in depends_on:
+            if dep in index_map:
+                adjacency[dep].append(step_id)
+                indegree[step_id] += 1
+
+    queue = [sid for sid in step_ids if indegree[sid] == 0]
+    head = 0
+    visited = 0
+    while head < len(queue):
+        sid = queue[head]
+        head += 1
+        visited += 1
+        for nxt in adjacency[sid]:
+            indegree[nxt] -= 1
+            if indegree[nxt] == 0:
+                queue.append(nxt)
+
+    if visited == len(step_ids):
+        return []
+    return [sid for sid in step_ids if indegree[sid] > 0]
 
 
 def get_capabilities_prompt() -> str:
@@ -99,6 +144,10 @@ def validate_workflow_definition(workflow_def: Dict) -> Tuple[bool, str]:
         return False, "Step ids must be unique"
 
     index_map = {step_id: idx for idx, step_id in enumerate(step_ids)}
+
+    cycle_ids = find_dependency_cycle(steps)
+    if cycle_ids:
+        return False, f"Steps contain a dependency cycle: {', '.join(cycle_ids)}"
 
     for step in steps:
         service = step.get("service")

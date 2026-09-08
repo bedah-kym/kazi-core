@@ -28,7 +28,7 @@ async def search_travel(request):
     }
     """
     try:
-        from orchestration.mcp_router import get_mcp_router
+        from orchestration.tool_router import get_mcp_router
 
         search_type = request.data.get('search_type')
         parameters = request.data.get('parameters', {})

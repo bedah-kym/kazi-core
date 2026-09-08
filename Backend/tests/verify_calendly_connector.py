@@ -3,7 +3,6 @@ import django
 import asyncio
 import sys
 from unittest.mock import MagicMock, patch
-from datetime import datetime
 
 
 # Setup Django environment
@@ -15,7 +14,7 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'Backend.settings')
 django.setup()
 
 from django.contrib.auth import get_user_model
-from orchestration.mcp_router import CalendarConnector
+from orchestration.tool_router import CalendarConnector
 from users.models import CalendlyProfile
 
 
@@ -30,7 +29,7 @@ async def verify_calendly():
         user = await sync_to_async(User.objects.get)(username=username)
         print(f"Found existing user: {username}")
     except User.DoesNotExist:
-        user = await sync_to_async(User.objects.create_user)(username=username, password="password123")
+        user = await sync_to_async(User.objects.create_user)(username=username, password="password123")  # nosec B106 — test fixture — fake credential
         print(f"Created user: {username}")
 
     # Ensure profile exists

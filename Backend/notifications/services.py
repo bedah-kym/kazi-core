@@ -30,18 +30,18 @@ logger = logging.getLogger(__name__)
 # ------------------------------------------------------------------ #
 
 DEFAULT_NOTIFY_MATRIX: Dict[str, Dict[str, bool]] = {
-    "payment.deposit":    {"in_app": True, "email": True,  "whatsapp": False},
-    "payment.withdrawal": {"in_app": True, "email": True,  "whatsapp": False},
-    "payment.invoice":    {"in_app": True, "email": True,  "whatsapp": False},
-    "payment.error":      {"in_app": True, "email": True,  "whatsapp": True},
-    "reminder.due":       {"in_app": True, "email": True,  "whatsapp": False},
-    "message.unread":     {"in_app": True, "email": False, "whatsapp": False},
-    "message.mention":    {"in_app": True, "email": True,  "whatsapp": False},
-    "system.info":        {"in_app": True, "email": False, "whatsapp": False},
-    "system.warning":     {"in_app": True, "email": True,  "whatsapp": False},
-    "workflow.approval":  {"in_app": True, "email": True,  "whatsapp": True},
-    "workflow.failed":    {"in_app": True, "email": True,  "whatsapp": False},
-    "workflow.deferred":  {"in_app": True, "email": True,  "whatsapp": False},
+    "payment.deposit": {"in_app": True, "email": True, "whatsapp": False},
+    "payment.withdrawal": {"in_app": True, "email": True, "whatsapp": False},
+    "payment.invoice": {"in_app": True, "email": True, "whatsapp": False},
+    "payment.error": {"in_app": True, "email": True, "whatsapp": True},
+    "reminder.due": {"in_app": True, "email": True, "whatsapp": False},
+    "message.unread": {"in_app": True, "email": False, "whatsapp": False},
+    "message.mention": {"in_app": True, "email": True, "whatsapp": False},
+    "system.info": {"in_app": True, "email": False, "whatsapp": False},
+    "system.warning": {"in_app": True, "email": True, "whatsapp": False},
+    "workflow.approval": {"in_app": True, "email": True, "whatsapp": True},
+    "workflow.failed": {"in_app": True, "email": True, "whatsapp": False},
+    "workflow.deferred": {"in_app": True, "email": True, "whatsapp": False},
 }
 
 

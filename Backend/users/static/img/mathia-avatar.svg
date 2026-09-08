@@ -1,4 +1,20 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
-  <circle cx="64" cy="64" r="64" fill="#4f8cff"/>
-  <text x="64" y="84" text-anchor="middle" fill="#fff" font-family="system-ui,-apple-system,sans-serif" font-size="64" font-weight="700">M</text>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#e08a68"/>
+      <stop offset="1" stop-color="#c15f3c"/>
+    </linearGradient>
+  </defs>
+  <circle cx="64" cy="64" r="64" fill="url(#bg)"/>
+  <g fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="34" y="32" width="60" height="56" rx="14" fill="#fff" fill-opacity="0.16"/>
+    <line x1="44" y1="62" x2="48" y2="62"/>
+    <line x1="80" y1="62" x2="84" y2="62"/>
+    <line x1="56" y1="78" x2="72" y2="78"/>
+  </g>
+  <g fill="#fff">
+    <rect x="46" y="56" width="7" height="10" rx="3"/>
+    <rect x="75" y="56" width="7" height="10" rx="3"/>
+  </g>
+  <line x1="64" y1="20" x2="64" y2="32" stroke="#fff" stroke-width="5" stroke-linecap="round"/>
 </svg>

@@ -1,6 +1,5 @@
 import logging
-import json
-from typing import Dict, List, Any, Optional
+from typing import Dict, List
 from orchestration.llm_client import get_llm_client, extract_json
 
 logger = logging.getLogger(__name__)

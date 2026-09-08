@@ -1,0 +1,152 @@
+{% extends "users/base_app.html" %}
+{% load static %}
+{% load humanize %}
+
+{% block title %}Automations - Mathia{% endblock %}
+
+{% block meta_description %}Your Mathia automations - workflows, schedules and triggers.{% endblock %}
+
+{% block breadcrumb %}
+<a href="{% url 'users:dashboard' %}">Dashboard</a><span class="crumb-sep">&#8250;</span><span class="crumb-current">Automations</span>
+{% endblock %}
+
+{% block head %}
+<link href="{% static 'css/page-workflows.css' %}" rel="stylesheet">
+{% endblock %}
+
+{% block content %}
+<div class="app-header">
+    <div>
+        <div class="app-eyebrow">Operations</div>
+        <h1 class="app-title">Automations</h1>
+        <p class="app-subtitle">Workflows Mathia runs for you - scheduled, triggered or on demand.</p>
+    </div>
+    <div class="app-header-actions">
+        <a class="app-btn app-btn-outline" href="{% url 'workflows:operations_inbox' %}">
+            <i class="fas fa-inbox"></i> Operations inbox
+        </a>
+    </div>
+</div>
+
+{% if workflows %}
+<div class="wf-grid">
+    {% for workflow in workflows %}
+    <section class="app-card wf-card">
+        <div class="wf-card-top">
+            <div>
+                <h2 class="wf-name">{{ workflow.name }}</h2>
+                {% if workflow.status == "active" %}
+                <span class="app-pill app-pill-success">Active</span>
+                {% elif workflow.status == "paused" %}
+                <span class="app-pill app-pill-warning">Paused</span>
+                {% elif workflow.status == "failed" %}
+                <span class="app-pill app-pill-destructive">Failed</span>
+                {% else %}
+                <span class="app-pill app-pill-muted">{{ workflow.get_status_display }}</span>
+                {% endif %}
+            </div>
+            <i class="fas fa-diagram-project app-meta" style="font-size: 18px;"></i>
+        </div>
+        <p class="wf-desc">{{ workflow.description|default:"No description"|truncatechars:140 }}</p>
+        <div class="wf-triggers">
+            {% for trigger in workflow.registered_triggers.all %}
+            {% if trigger.trigger_type == "schedule" %}
+            <span class="trigger-chip{% if trigger.schedule_status != 'active' %} off{% endif %}" title="{{ trigger.schedule_cron }} ({{ trigger.schedule_timezone }})">
+                <i class="fas fa-clock"></i>{{ trigger.schedule_cron|default:"schedule" }}
+            </span>
+            {% elif trigger.trigger_type == "webhook" %}
+            <span class="trigger-chip{% if not trigger.is_active %} off{% endif %}" title="{{ trigger.webhook_url }}">
+                <i class="fas fa-link"></i>Webhook
+            </span>
+            {% else %}
+            <span class="trigger-chip{% if not trigger.is_active %} off{% endif %}">
+                <i class="fas fa-hand-pointer"></i>Manual
+            </span>
+            {% endif %}
+            {% empty %}
+            <span class="trigger-chip"><i class="fas fa-hand-pointer"></i>Manual</span>
+            {% endfor %}
+        </div>
+        <div class="wf-meta">
+            <span><i class="fas fa-rotate me-1"></i>{{ workflow.execution_count }} run{{ workflow.execution_count|pluralize }}</span>
+            {% if workflow.last_executed_at %}
+            <span><i class="far fa-clock me-1"></i>{{ workflow.last_executed_at|naturaltime }}</span>
+            {% endif %}
+        </div>
+        <div class="wf-actions">
+            {% if workflow.status == "active" %}
+            <form class="run-form" method="post" action="{% url 'workflows:run_workflow' workflow.id %}">
+                {% csrf_token %}
+                <button class="app-btn app-btn-primary" type="submit">
+                    <i class="fas fa-play"></i> Run now
+                </button>
+            </form>
+            {% endif %}
+            <a class="app-btn app-btn-outline" href="{% url 'workflows:workflow_executions' workflow.id %}">
+                <i class="fas fa-list"></i> Runs
+            </a>
+        </div>
+        {% if workflow.status == "active" %}
+        <details class="run-payload">
+            <summary>Run with input data</summary>
+            <form method="post" action="{% url 'workflows:run_workflow' workflow.id %}">
+                {% csrf_token %}
+                <textarea name="trigger_data" placeholder='{&quot;room_id&quot;: 1}' spellcheck="false"></textarea>
+                <div style="display: flex; justify-content: flex-end; margin-top: 8px;">
+                    <button class="app-btn app-btn-outline app-btn-sm" type="submit">
+                        <i class="fas fa-play"></i> Run with data
+                    </button>
+                </div>
+            </form>
+        </details>
+        {% endif %}
+        {% for trigger in workflow.registered_triggers.all %}
+        {% if trigger.trigger_type == "schedule" %}
+        <div style="border-top: 1px solid var(--line); padding-top: 10px;">
+            {% if trigger.schedule_status == "active" %}
+            <form method="post" action="{% url 'workflows:toggle_trigger' trigger.id %}">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="pause">
+                <button class="app-btn app-btn-ghost app-btn-sm" type="submit">
+                    <i class="fas fa-pause"></i> Pause schedule
+                </button>
+            </form>
+            {% else %}
+            <form method="post" action="{% url 'workflows:toggle_trigger' trigger.id %}">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="resume">
+                <button class="app-btn app-btn-ghost app-btn-sm" type="submit">
+                    <i class="fas fa-play"></i> Resume schedule
+                </button>
+            </form>
+            {% endif %}
+        </div>
+        {% endif %}
+        {% endfor %}
+    </section>
+    {% endfor %}
+</div>
+{% else %}
+<section class="app-card">
+    <div class="app-empty">
+        <div class="app-empty-icon"><i class="fas fa-diagram-project"></i></div>
+        <h2 class="app-empty-title">No automations yet</h2>
+        <p class="app-empty-text">
+            Describe what you want automated in a chat with Mathia - it will draft
+            the workflow, and you can review and run it here.
+        </p>
+        <a class="app-btn app-btn-primary app-btn-sm" href="{% url 'chatbot:redirect_to_home' %}">
+            <i class="fas fa-comments"></i> Start a chat
+        </a>
+    </div>
+</section>
+{% endif %}
+
+{% if messages %}
+<div class="toast-stack">
+    {% for message in messages %}
+    <div class="app-toast show" role="status" data-auto-dismiss>{{ message }}</div>
+    {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

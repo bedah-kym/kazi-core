@@ -9,7 +9,7 @@ This file is the contract: read it before editing. If you change behavior descri
 ## 1. Project at a glance
 
 - **What it is:** A self-hostable Django + Channels backend that runs an agent loop, plans multi-step workflows, executes tool calls through a pluggable connector registry, and persists conversation memory.
-- **Language / runtime:** Python 3.11, Django 5.x (ASGI). Postgres + Redis required in production; SQLite works for unit tests.
+- **Language / runtime:** Python 3.11–3.12 (see §6), Django 5.x (ASGI). Postgres + Redis required in production; SQLite works for unit tests.
 - **Async model:** ASGI (Daphne / Uvicorn) for HTTP + WebSockets via Django Channels. Celery + Beat for background work. Optional Temporal for durable workflows.
 - **Open vs in-house:** This repo (`kazi-core`) ships the **agent core**. The maintainer also runs an in-house SaaS called **Mathia OS** built on top of this core. Anything Mathia-specific is held back from this branch. If you find a path that is intentionally `.gitignore`d (e.g. `frontend/`, parts of `docs/`), assume it belongs to Mathia and is not yours to recreate.
 
@@ -32,7 +32,8 @@ Backend/
     llm_client.py          # LLM provider abstraction (Anthropic first, HF fallback)
     telemetry.py           # JSONL event log
     eval/                  # Golden scenario evaluator (run via run_golden_eval)
-    mcp_router.py          # Legacy filename — being renamed tool_router.py in v0.5
+    mcp_router.py          # Deprecation shim for tool_router.py (removed in v0.6)
+    tool_router.py         # Legacy filename was mcp_router.py — renamed in v0.5
     connectors/            # Built-in connectors — add yours here
     management/commands/
       kazi_trace.py        # Render a human-readable trace for any execution
@@ -44,6 +45,7 @@ Backend/
     tasks.py               # Watchdog + retry tasks
     management/commands/
       seed_demo_workflow.py
+      sync_beat_schedule.py  # Mirror settings.CELERY_BEAT_SCHEDULE into the DB scheduler
   travel/                  # Travel search + booking connectors (showcase module)
   payments/                # Double-entry ledger, invoices, wallets (showcase module)
   users/                   # Auth, profiles, quotas, encryption keys
@@ -60,7 +62,7 @@ scripts/
   demo.sh                  # Single-command driver for the canonical demo
 ```
 
-When in doubt, read `Backend/orchestration/agent_loop.py` first — that's where the ReAct loop lives. Tool dispatch is handled by `Backend/orchestration/connector_registry.py` (the single source of truth — collapsed in v0.4 M2-1) and routed by `Backend/orchestration/mcp_router.py` (filename is legacy; the "MCP" predates Anthropic's Model Context Protocol and is being renamed to `tool_router.py` in v0.5 — see the deprecation note at the top of the file).
+When in doubt, read `Backend/orchestration/agent_loop.py` first — that's where the ReAct loop lives. Tool dispatch is handled by `Backend/orchestration/connector_registry.py` (the single source of truth — collapsed in v0.4 M2-1) and routed by `Backend/orchestration/tool_router.py` (renamed from `mcp_router.py` in v0.5; the old name remains as a deprecation shim).
 
 For a "what is in this repo right now?" overview, read `docs/v0.4-brief.md` and `docs/v0.4-roadmap.md` — they describe the cycle, the freeze (no new connectors), and the milestones already shipped vs. queued.
 
@@ -85,10 +87,17 @@ docker compose exec web python Backend/manage.py createsuperuser
 ```powershell
 python -m venv .venv
 . .venv/Scripts/Activate.ps1
-pip install -r requirements.txt
+pip install -r requirements.lock
 python Backend/manage.py migrate
 python Backend/manage.py runserver
 ```
+
+`requirements.txt` holds the declared minimums; `requirements.lock` is the
+compiled, fully-pinned set CI tests against (regenerate with
+`uv pip compile requirements.txt --universal --no-annotate --no-header
+-o requirements.lock`). The flat format is deliberate: it is byte-identical no
+matter which OS regenerates it. If you edit `requirements.txt`, recompile the
+lock in the same commit — CI fails on a stale lock.
 
 You need Postgres + Redis running and a `.env` in the repo root (one level above `Backend/`). Required keys: `DJANGO_SECRET_KEY`, `DATABASE_URL`, `REDIS_URL`, `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`. Optional: `ANTHROPIC_API_KEY`, `HF_API_TOKEN`, plus per-connector keys (`OPENWEATHER_API_KEY`, `CALENDLY_CLIENT_*`, etc.).
 
@@ -96,7 +105,7 @@ You need Postgres + Redis running and a `.env` in the repo root (one level above
 
 ## 4. Code style
 
-- **Python:** flake8 enforced in CI with `--max-line-length=127 --max-complexity=10`. Match existing style in the touched module rather than imposing your own.
+- **Python:** flake8 enforced in CI with `--max-line-length=127 --max-complexity=10`. The blocking job covers every E/W/F rule except E501 (long lines), E402 (deferred imports), and W503 (black-style operator breaks) — those three plus C901 complexity remain advisory until their tracked cleanups land. Match existing style in the touched module rather than imposing your own.
 - **Comments:** default to none. Only comment when the *why* is non-obvious (a hidden constraint, a workaround for a specific bug). Don't narrate what the code does.
 - **Imports:** standard → third-party → local, blank line between groups.
 - **Async:** orchestration code is async-first. Use `asgiref.sync.sync_to_async` when calling Django ORM from async paths. Never block the event loop.
@@ -120,7 +129,7 @@ Full guide: [`docs/add-a-connector.md`](docs/add-a-connector.md) (workflow-orien
 
 ### Touching the LLM client
 
-Keep `generate_text` and `stream_text` semantics stable — `mcp_router.py`, `agent_loop.py`, and the chatbot consumers all depend on them. Use `get_llm_client()` to reuse the singleton; don't instantiate provider clients directly. Use `extract_json()` when expecting structured output.
+Keep `generate_text` and `stream_text` semantics stable — `tool_router.py`, `agent_loop.py`, and the chatbot consumers all depend on them. Use `get_llm_client()` to reuse the singleton; don't instantiate provider clients directly. Use `extract_json()` when expecting structured output.
 
 ### Touching security boundaries
 
@@ -137,11 +146,22 @@ python Backend/manage.py check
 python Backend/manage.py test
 ```
 
+**Supported Python matrix:** 3.11 and 3.12 (declared in `pyproject.toml` as
+`>=3.11,<3.13`). Python 3.13/3.14 are **not** supported yet — Django 5.x and
+several pinned deps are unvalidated there; treat an upgrade as a deliberate,
+CI-validated change, not drift. CI installs from `requirements.lock`, so the
+locked set is what every lane actually tests.
+
 **Lint + security:**
 ```bash
-flake8 Backend
-bandit -r Backend --skip B101
+flake8 Backend --max-line-length=127 --max-complexity=10
+bandit -r Backend --skip B101,B110
 ```
+
+Bandit medium+low is blocking in CI with two documented skips: B101 (asserts,
+pre-existing convention) and B110 (try/except/pass fail-soft blocks). Accepted
+findings carry an inline `# nosec <id>` plus a one-line reason on the same
+line; never add a bare `# nosec` without justification.
 
 **Test conventions** (see `Backend/tests/README.md` for the full version):
 - Deterministic, mocked, no real API calls. Use `example@example.com`, `fake-token`, etc.
@@ -150,8 +170,10 @@ bandit -r Backend --skip B101
 - Public agentic coverage lives in `Backend/tests/test_agentic.py` and `test_agentic_scenarios.py` — extend those before creating new ad-hoc files.
 
 **Known limitations:**
-- CI runs against SQLite. Some Postgres JSON SQL functions don't have SQLite equivalents — tests that rely on them should be marked or moved.
+- CI runs two lanes: the main job against Postgres + Redis service containers, and a `hermetic-tests` job with no services (SQLite + LocMem cache). Some Postgres JSON SQL functions don't have SQLite equivalents — tests that rely on them should be marked or moved.
 - `Backend/tests/` is a loose folder, not a Django app. If you add tests there and `manage.py test` doesn't pick them up, that's why; either co-locate tests with the relevant app (`Backend/<app>/tests.py`) or use a test runner configured to walk that directory.
+- Bare `manage.py test` (no labels) runs every suite via `tests.runner.KaziDiscoverRunner`. Under test runs the cache backend is swapped to LocMem so no live Redis is needed; `django_ratelimit.E003` is silenced for that reason only.
+- Django's parallel test runner (`--parallel > 1`) is known to crash on Windows ("cannot pickle 'traceback' object"); run serially on Windows.
 
 ## 7. Commits and pull requests
 
@@ -180,7 +202,7 @@ Examples:
 ## 9. What NOT to do (common agent failure modes)
 
 - **Don't recreate or commit content under `frontend/` or `docs/`** without first checking `.gitignore` and confirming with a maintainer. These paths intentionally hold private Mathia-OS content that is not part of this OSS repo.
-- **Don't bypass safety checks** (`--no-verify`, `bandit --skip` beyond `B101`) to make CI green. Fix the root cause.
+- **Don't bypass safety checks** (`--no-verify`, `bandit --skip` beyond `B101,B110`) to make CI green. Fix the root cause.
 - **Don't add backwards-compatibility shims** for code you just changed. If a caller is internal, update the caller.
 - **Don't hand-roll JSON parsing of LLM output** — use `extract_json()` from `llm_client.py`.
 - **Don't introduce a new connector by editing many existing files.** A new connector should be one new file plus its tests.

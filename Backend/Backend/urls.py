@@ -31,6 +31,7 @@ urlpatterns = [
     path('accounts/', include('allauth.urls')),  # Social Auth URLs
     path('api/', include('Api.urls')),
     path('api/workflows/', include('workflows.urls')),
+    path('workflows/', include('workflows.ui_urls')),
     path('travel/', include('travel.urls')),  # Travel Planning UI
     path('payments/', include('payments.urls')),  # Payment System
     path('notifications/', include('notifications.urls')),

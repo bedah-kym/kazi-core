@@ -26,7 +26,7 @@ class OrchestrationConfig(AppConfig):
         if not getattr(settings, "ORCHESTRATION_STRICT_STARTUP_CHECKS", True):
             return
         try:
-            from orchestration.mcp_router import get_mcp_router
+            from orchestration.tool_router import get_mcp_router
 
             get_mcp_router()
         except Exception as exc:

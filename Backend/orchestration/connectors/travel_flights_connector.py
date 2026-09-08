@@ -3,7 +3,7 @@ Travel Flights Connector
 Searches for flights using Amadeus API
 """
 import logging
-from typing import Dict, Any, List
+from typing import Dict, List
 from asgiref.sync import sync_to_async
 from django.conf import settings
 from orchestration.connectors.base_travel_connector import BaseTravelConnector
@@ -288,11 +288,11 @@ class TravelFlightsConnector(BaseTravelConnector):
                 price_ksh = self._convert_to_ksh(total, currency)
 
                 airline = first_segment.get('carrierCode', 'XX')
-                flight_number = first_segment.get('number', f'XX{i+1}')
+                flight_number = first_segment.get('number', f'XX{i + 1}')
 
                 results.append({
-                    'id': f"flight_{i+1:03d}",
-                    'provider_id': str(offer.get('id', f"offer_{i+1}")),
+                    'id': f"flight_{i + 1:03d}",
+                    'provider_id': str(offer.get('id', f"offer_{i + 1}")),
                     'provider': 'Amadeus',
                     'airline': airline,
                     'flight_number': f"{airline}{flight_number}",
@@ -361,8 +361,8 @@ class TravelFlightsConnector(BaseTravelConnector):
         results = []
         for i, flight in enumerate(flights):
             results.append({
-                'id': f'flight_{i+1:03d}',
-                'provider_id': f'fallback_{i+1:03d}',
+                'id': f'flight_{i + 1:03d}',
+                'provider_id': f'fallback_{i + 1:03d}',
                 'provider': 'Amadeus',
                 'airline': flight['airline'],
                 'flight_number': f"{flight['code']}{1000 + i}",
@@ -372,7 +372,7 @@ class TravelFlightsConnector(BaseTravelConnector):
                 'price_ksh': flight['price'],
                 'seats_available': 15 - i,
                 'cabin_class': 'economy',
-                'booking_url': f'https://amadeus.com/booking/{i+1}',
+                'booking_url': f'https://amadeus.com/booking/{i + 1}',
                 'stops': flight['stops']
             })
 

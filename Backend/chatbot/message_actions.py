@@ -12,7 +12,6 @@ from datetime import timedelta
 from django.core.files.storage import default_storage
 from django.core.files.base import ContentFile
 from chatbot.models import Chatroom, Message, RoomContext, RoomNote, DocumentUpload
-from chatbot.context_manager import ContextManager
 from orchestration.models import ActionReceipt
 from orchestration.action_receipts import format_receipt_summary
 
@@ -26,7 +25,7 @@ def get_action_receipts(request, room_id):
     Return recent action receipts for this room.
     """
     try:
-        chatroom = get_object_or_404(Chatroom, id=room_id)
+        get_object_or_404(Chatroom, id=room_id)
 
         # Verify user has access
         if not Chatroom.objects.filter(id=room_id, participants__User=request.user).exists():
@@ -86,7 +85,7 @@ def pin_message_to_notes(request, room_id, message_id):
             )
 
         # Get the message
-        message = get_object_or_404(Message, id=message_id)
+        get_object_or_404(Message, id=message_id)
 
         # Get decrypted content from request body (frontend sends decrypted content)
         message_content = request.data.get('message_content', '')
@@ -144,7 +143,7 @@ def reply_to_message(request, room_id, message_id):
     Returns the referenced message content to include in new message
     """
     try:
-        chatroom = get_object_or_404(Chatroom, id=room_id)
+        get_object_or_404(Chatroom, id=room_id)
 
         # Verify user has access
         if not Chatroom.objects.filter(id=room_id, participants__User=request.user).exists():
@@ -185,7 +184,7 @@ def retry_ai_message(request, room_id, message_id):
     This should trigger WebSocket to regenerate response
     """
     try:
-        chatroom = get_object_or_404(Chatroom, id=room_id)
+        get_object_or_404(Chatroom, id=room_id)
 
         # Verify user has access
         if not Chatroom.objects.filter(id=room_id, participants__User=request.user).exists():

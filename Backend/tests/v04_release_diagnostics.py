@@ -16,12 +16,9 @@ keys are configured, so don't wire it into CI without --skip flags.
 from __future__ import annotations
 
 import asyncio
-import json
 import os
-import sys
-import time
 import traceback
-from typing import Callable, Optional
+from typing import Callable
 
 
 RESULTS: list[tuple[str, str, str]] = []  # (category, name, outcome[+detail])
@@ -29,7 +26,7 @@ RESULTS: list[tuple[str, str, str]] = []  # (category, name, outcome[+detail])
 
 def _record(category: str, name: str, outcome: str) -> None:
     RESULTS.append((category, name, outcome))
-    print(f"  [{outcome.split(':',1)[0]:5}] {name}: {outcome.split(':',1)[1].strip() if ':' in outcome else ''}")
+    print(f"  [{outcome.split(':', 1)[0]:5}] {name}: {outcome.split(':', 1)[1].strip() if ':' in outcome else ''}")
 
 
 def check(category: str, name: str):
@@ -69,7 +66,7 @@ def _run_async(coro):
 def _():
     if not os.environ.get("OPENWEATHER_API_KEY"):
         return "SKIP: OPENWEATHER_API_KEY not set"
-    from orchestration.mcp_router import WeatherConnector
+    from orchestration.tool_router import WeatherConnector
     result = _run_async(WeatherConnector().execute(
         {"action": "get_weather", "city": "Nairobi"},
         {"user_id": 1},
@@ -83,7 +80,7 @@ def _():
 def _():
     if not os.environ.get("EXCHANGE_RATE_API_KEY"):
         return "SKIP: EXCHANGE_RATE_API_KEY not set"
-    from orchestration.mcp_router import CurrencyConnector
+    from orchestration.tool_router import CurrencyConnector
     result = _run_async(CurrencyConnector().execute(
         {"action": "convert_currency", "amount": 100, "from_currency": "USD", "to_currency": "KES"},
         {"user_id": 1},
@@ -97,7 +94,7 @@ def _():
 def _():
     if not os.environ.get("GIPHY_API_KEY"):
         return "SKIP: GIPHY_API_KEY not set"
-    from orchestration.mcp_router import GiphyConnector
+    from orchestration.tool_router import GiphyConnector
     result = _run_async(GiphyConnector().execute(
         {"action": "search_gif", "query": "cat"},
         {"user_id": 1},
@@ -196,8 +193,8 @@ def _():
     raw = {
         "to": "alex@example.com",
         "api_key": "sk-secret-12345",
-        "token": "tok-secret-67890",
-        "password": "hunter2",
+        "token": "tok-secret-67890",  # nosec B105 — test fixture — fake credential
+        "password": "hunter2",  # nosec B105 — test fixture — fake credential
         "message": "hi",
     }
     cleaned = sanitize_parameters(raw)
@@ -294,7 +291,8 @@ def _():
 
     User = get_user_model()
     user, _ = User.objects.get_or_create(username="diag-user", defaults={"email": "diag@example.com"})
-    user.set_password("x"); user.save()
+    user.set_password("x")
+    user.save()
     token, _ = Token.objects.get_or_create(user=user)
 
     # Use the seeded demo workflow if present, else create one with unsafe step
@@ -585,7 +583,7 @@ def _():
     if result.get("status") == "error" and "Unsupported" in (result.get("message") or result.get("error", "")):
         return f"FAIL: BUG #1 confirmed — {result.get('message') or result.get('error')}"
     if result.get("status") == "success":
-        return f"echo dispatched ok via workflow executor"
+        return "echo dispatched ok via workflow executor"
     return f"NOTE: unexpected result shape: {result}"
 
 
@@ -640,7 +638,7 @@ def _summary():
     print("\n" + "=" * 72)
     print("  v0.4 RELEASE DIAGNOSTICS — SUMMARY")
     print("=" * 72)
-    by_outcome = {"PASS": 0, "FAIL": 0, "SKIP": 0, "ERROR": 0, "NOTE": 0}
+    by_outcome = {"PASS": 0, "FAIL": 0, "SKIP": 0, "ERROR": 0, "NOTE": 0}  # nosec B105 — test fixture — fake credential
     by_cat = {}
     for cat, name, outcome in RESULTS:
         kind = outcome.split(":", 1)[0].strip()

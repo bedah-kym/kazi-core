@@ -3,7 +3,7 @@ Travel Hotels Connector
 Searches for hotels using Amadeus Hotel Offers API
 """
 import logging
-from typing import Dict, Any, List
+from typing import Dict, List
 from asgiref.sync import sync_to_async
 from django.conf import settings
 from orchestration.connectors.base_travel_connector import BaseTravelConnector
@@ -193,10 +193,10 @@ class TravelHotelsConnector(BaseTravelConnector):
                 price_ksh = self._convert_to_ksh(total, currency)
 
                 hotel_info = hotel.get('hotel', {})
-                name = hotel_info.get('name', f"Hotel {i+1}")
+                name = hotel_info.get('name', f"Hotel {i + 1}")
 
                 results.append({
-                    'id': f"hotel_{i+1:03d}",
+                    'id': f"hotel_{i + 1:03d}",
                     'provider_id': str(hotel_info.get('hotelId') or i + 1),
                     'provider': 'Amadeus',
                     'name': name,
@@ -279,8 +279,8 @@ class TravelHotelsConnector(BaseTravelConnector):
         results = []
         for i, hotel in enumerate(hotels):
             results.append({
-                'id': f'hotel_{i+1:03d}',
-                'provider_id': f'fallback_{i+1:03d}',
+                'id': f'hotel_{i + 1:03d}',
+                'provider_id': f'fallback_{i + 1:03d}',
                 'provider': 'Amadeus',
                 'name': hotel['name'],
                 'location': location,
@@ -292,7 +292,7 @@ class TravelHotelsConnector(BaseTravelConnector):
                 'amenities': ['Pool', 'WiFi', 'Restaurant'],
                 'room_type': 'Double Room',
                 'nights': 3,
-                'booking_url': f'https://amadeus.com/hotels/{i+1}',
+                'booking_url': f'https://amadeus.com/hotels/{i + 1}',
                 'image_url': ''
             })
 

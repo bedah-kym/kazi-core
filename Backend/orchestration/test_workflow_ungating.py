@@ -2,6 +2,7 @@ import asyncio
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from asgiref.sync import async_to_sync
 from django.test import SimpleTestCase, override_settings
 
 
@@ -18,41 +19,42 @@ class WorkflowPlannerUngatingTests(SimpleTestCase):
     @patch("orchestration.workflow_planner.get_llm_client")
     def test_plan_user_request_returns_real_adhoc_workflow(self, mock_get_llm):
         mock_llm = MagicMock()
-        mock_llm.generate_text = AsyncMock(return_value='{"mode":"adhoc_workflow"}')
-        mock_llm.extract_json.return_value = {
-            "mode": "adhoc_workflow",
-            "assistant_message": "Working on it.",
-            "confidence": 0.95,
-            "steps": [
-                {
-                    "id": "step_1",
-                    "service": "weather",
-                    "action": "get_weather",
-                    "params": {"city": "Nairobi"},
-                },
-                {
-                    "id": "step_2",
-                    "service": "currency",
-                    "action": "convert_currency",
-                    "params": {
-                        "amount": 100,
-                        "from_currency": "USD",
-                        "to_currency": "KES",
+        # plan_user_request uses generate_json() (v0.4.2 validated-output path),
+        # not generate_text()+extract_json().
+        mock_llm.generate_json = AsyncMock(
+            return_value={
+                "mode": "adhoc_workflow",
+                "assistant_message": "Working on it.",
+                "confidence": 0.95,
+                "steps": [
+                    {
+                        "id": "step_1",
+                        "service": "weather",
+                        "action": "get_weather",
+                        "params": {"city": "Nairobi"},
                     },
-                },
-            ],
-        }
+                    {
+                        "id": "step_2",
+                        "service": "currency",
+                        "action": "convert_currency",
+                        "params": {
+                            "amount": 100,
+                            "from_currency": "USD",
+                            "to_currency": "KES",
+                        },
+                    },
+                ],
+            }
+        )
         mock_get_llm.return_value = mock_llm
 
         from orchestration.workflow_planner import plan_user_request
 
-        result = run_async(
-            plan_user_request(
-                "Check Nairobi weather then convert 100 USD to KES",
-                history_text="",
-                user_id=None,
-                preferences={},
-            )
+        result = async_to_sync(plan_user_request)(
+            "Check Nairobi weather then convert 100 USD to KES",
+            history_text="",
+            user_id=None,
+            preferences={},
         )
         self.assertEqual(result.get("mode"), "adhoc_workflow")
         definition = result.get("workflow_definition") or {}
@@ -93,6 +95,94 @@ class ManagerVerifierUngatingTests(SimpleTestCase):
         self.assertEqual(reviewed_steps[1].get("action"), "send_email")
         self.assertEqual(reviewed_steps[1].get("depends_on"), [reviewed_steps[0].get("id")])
 
+    def test_manager_verifier_rejects_dependency_cycle(self):
+        from orchestration.manager_verifier import ManagerVerifier
+
+        steps = [
+            {
+                "id": "step_a",
+                "service": "weather",
+                "action": "get_weather",
+                "params": {"city": "Nairobi"},
+                "depends_on": ["step_b"],
+            },
+            {
+                "id": "step_b",
+                "service": "weather",
+                "action": "get_weather",
+                "params": {"city": "Mombasa"},
+                "depends_on": ["step_a"],
+            },
+        ]
+
+        review = ManagerVerifier().review_steps(steps, "Run two weather checks")
+        self.assertEqual(review.get("verdict"), "ask_user")
+        self.assertEqual(review.get("reason"), "cyclic_dependency")
+
+    def test_manager_verifier_rejects_indirect_dependency_cycle(self):
+        from orchestration.manager_verifier import ManagerVerifier
+
+        steps = [
+            {
+                "id": "step_a",
+                "service": "weather",
+                "action": "get_weather",
+                "params": {"city": "Nairobi"},
+                "depends_on": ["step_c"],
+            },
+            {
+                "id": "step_b",
+                "service": "weather",
+                "action": "get_weather",
+                "params": {"city": "Mombasa"},
+                "depends_on": ["step_a"],
+            },
+            {
+                "id": "step_c",
+                "service": "weather",
+                "action": "get_weather",
+                "params": {"city": "Kisumu"},
+                "depends_on": ["step_b"],
+            },
+        ]
+
+        review = ManagerVerifier().review_steps(steps, "Run three weather checks")
+        self.assertEqual(review.get("verdict"), "ask_user")
+        self.assertEqual(review.get("reason"), "cyclic_dependency")
+
+    def test_manager_verifier_allows_acyclic_dependencies(self):
+        from orchestration.manager_verifier import ManagerVerifier
+
+        steps = [
+            {
+                "id": "step_1",
+                "service": "weather",
+                "action": "get_weather",
+                "params": {"city": "Nairobi"},
+            },
+            {
+                "id": "step_2",
+                "service": "currency",
+                "action": "convert_currency",
+                "params": {"amount": 10, "from_currency": "USD", "to_currency": "KES"},
+                "depends_on": ["step_1"],
+            },
+        ]
+
+        review = ManagerVerifier().review_steps(steps, "Weather then convert currency")
+        self.assertEqual(review.get("verdict"), "approve")
+
+    def test_find_dependency_cycle_ignores_malformed_dependencies(self):
+        from workflows.capabilities import find_dependency_cycle
+
+        steps = [
+            {"id": "a", "depends_on": "b"},   # string, not a list
+            None,                              # non-dict step
+            {"id": "b", "depends_on": None},   # None, not a list
+            {"id": "c"},                        # no depends_on key
+        ]
+        self.assertEqual(find_dependency_cycle(steps), [])
+
 
 class ConnectorRegistryUngatingTests(SimpleTestCase):
     @patch.dict(os.environ, {"KAZI_DEMO_MODE": "false"}, clear=False)
@@ -117,7 +207,7 @@ class ConnectorRegistryUngatingTests(SimpleTestCase):
     @patch.dict(os.environ, {"KAZI_DEMO_MODE": "false"}, clear=False)
     def test_router_integrity_still_passes_after_dynamic_discovery(self):
         from orchestration.connector_registry import discover_connectors, reset_registry
-        from orchestration.mcp_router import MCPRouter
+        from orchestration.tool_router import MCPRouter
 
         reset_registry()
         discover_connectors()
@@ -128,7 +218,7 @@ class ConnectorRegistryUngatingTests(SimpleTestCase):
         # v0.4 M2-1: MCPRouter no longer maintains its own action->connector dict;
         # it must reflect exactly what connector_registry.discover_connectors() exposes.
         from orchestration.connector_registry import discover_connectors, reset_registry
-        from orchestration.mcp_router import MCPRouter
+        from orchestration.tool_router import MCPRouter
 
         reset_registry()
         registry_map = discover_connectors()

@@ -48,6 +48,7 @@ jobs:
       DJANGO_SECRET_KEY: ci-test-key-not-for-prod
       DJANGO_DEBUG: "true"
       DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1
+      ENCRYPTION_KEY: "I2m1pOTNatH-LkRdlnWXZXqZ9-8oQRm-JCwpwshx6dc="
       REDIS_URL: redis://localhost:6379/0
       CELERY_BROKER_URL: redis://localhost:6379/0
       CELERY_RESULT_BACKEND: redis://localhost:6379/0
@@ -56,17 +57,30 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Drift guard: regenerating the lock must be byte-identical regardless of
+      # the generating OS. --no-annotate/--no-header keep the output flat and
+      # deterministic (uv's "# via" comments differ per platform, which made
+      # annotated locks churn). A diff here means requirements.txt changed
+      # without a recompile — fail fast instead of testing a dependency set
+      # that differs from what contributors lock against.
+      - name: Lockfile freshness check
+        run: |
+          python -m pip install --upgrade pip
+          pip install uv
+          uv pip compile requirements.txt --universal --no-annotate --no-header -o requirements.lock
+          git diff --exit-code requirements.lock
+
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: requirements.lock
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements.lock
           pip install flake8 bandit coverage
 
       # v0.4 M6-1 phase 1: critical set now includes the real-bug rules
@@ -77,13 +91,24 @@ jobs:
         run: |
           flake8 Backend --count --select=E9,F63,F7,F82,F811,F202,E712,E722,E731 --show-source --statistics
 
-      # v0.4 M6-1 phase 1: ~80% reduction in advisory findings (autopep8 sweep
-      # for whitespace / tabs / blank lines / inline-comment spacing). The
-      # remaining ~487 findings are mostly E501 long lines, F401 unused
-      # imports, F841 unused locals, and complexity (C901) — these need
-      # per-file judgement and land as v0.5 cleanups before this job flips
-      # to blocking.
-      - name: Lint - full PEP 8 (advisory until v0.5 cleanup completes)
+      # v0.5: the mechanical PEP8 backlog (whitespace, unused imports/locals,
+      # f-string hygiene, indentation) is cleaned across Backend/. This job
+      # flips to blocking for every E/W/F rule except:
+      #   - E501 (163 long lines) and E402 (53 deferred imports): tracked for
+      #     the full-PEP8 flip; E402 often guards circular imports and needs
+      #     per-file judgement.
+      #   - W503 (black-style operator-at-line-start): the standard flake8
+      #     exemption, mutually exclusive with W504.
+      # C901 complexity (~89 functions) is deliberately out of this job's
+      # select set and lands with the function-splitting refactors.
+      - name: Lint - PEP 8 blocking subset (must pass)
+        run: |
+          flake8 Backend --count --statistics --select=E,W,F --ignore=E501,E402,W503 --max-line-length=127 --max-complexity=10
+
+      # Remaining advisory surface: E501 long lines, E402 deferred imports,
+      # and C901 complexity — each needs per-file judgement before this job
+      # can flip to blocking (tracked as v0.5 follow-ups).
+      - name: Lint - full PEP 8 (advisory until E501/E402/C901 land)
         continue-on-error: true
         run: |
           flake8 Backend --count --statistics
@@ -91,19 +116,58 @@ jobs:
       - name: Security scan - high severity (must pass)
         run: bandit -r Backend --skip B101 -lll
 
-      - name: Security scan - medium+low (advisory until v0.4 cleanup)
-        continue-on-error: true
-        run: bandit -r Backend --skip B101
+      # v0.5: medium+low is now blocking. Skips:
+      #   - B101 (asserts): pre-existing convention.
+      #   - B110 (try/except/pass): the fail-soft degradation blocks from the
+      #     resilience work; converting them to logging changes production
+      #     behavior for zero security gain. Tracked separately.
+      # Accepted findings carry an inline `# nosec <id>` with the reason.
+      - name: Security scan - medium+low (must pass)
+        run: bandit -r Backend --skip B101,B110
 
       - name: Django system checks
         run: python Backend/manage.py check
 
       - name: Run tests with coverage
         run: |
-          coverage run --source=Backend --omit='*/migrations/*,*/tests/*,*/test_*.py' \
-            Backend/manage.py test --noinput --verbosity=2
+          coverage run --source=Backend --omit='*/migrations/*,*/tests/*,*/test_*.py,*/tests.py' \
+            Backend/manage.py test --noinput --verbosity=2 orchestration workflows chatbot travel notifications tests users Api payments
           coverage xml -o coverage.xml
-          coverage report --skip-covered --fail-under=0
+          # Floor = measured 45% (2026-08) minus margin; ratchet upward as suites mature.
+          coverage report --skip-covered --fail-under=43
+
+  # Proves the suite runs hermetically (SQLite + LocMem cache, no service
+  # containers). Guards against tests silently requiring external infra.
+  hermetic-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+
+    env:
+      DJANGO_SECRET_KEY: ci-test-key-not-for-prod
+      DJANGO_DEBUG: "true"
+      DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1
+      ENCRYPTION_KEY: "I2m1pOTNatH-LkRdlnWXZXqZ9-8oQRm-JCwpwshx6dc="
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+          cache-dependency-path: requirements.lock
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.lock
+
+      - name: Run full suite without Postgres/Redis
+        run: python Backend/manage.py test --noinput
 
       # v0.4 M4-1: smoke-test the golden-scenario harness on every PR.
       # No --allow-llm so this works without ANTHROPIC_API_KEY; the harness

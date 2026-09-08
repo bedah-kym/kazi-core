@@ -14,11 +14,17 @@ except ImportError:
 # Set the default Django settings module
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'Backend.settings')
 
-# === CREATE CELERY APP WITH EXPLICIT BROKER ===
-REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
-print(f"Celery.py DEBUG: Using broker = {REDIS_URL}")
+# === CELERY APP ===
+# Same precedence as settings.py: explicit broker > REDIS_URL > compose default.
+# One shared default everywhere — the old localhost default here silently
+# diverged from the app cache/channels default (redis://redis:6379/0).
+REDIS_URL = (
+    os.environ.get('CELERY_BROKER_URL')
+    or os.environ.get('REDIS_URL')
+    or 'redis://redis:6379/0'
+)
 
-app = Celery('Backend', broker=REDIS_URL, backend='django-db')
+app = Celery('Backend', broker=REDIS_URL)
 
 # Load config from Django settings with CELERY_ prefix
 app.config_from_object('django.conf:settings', namespace='CELERY')

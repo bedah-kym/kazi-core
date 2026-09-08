@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional
 
 from asgiref.sync import sync_to_async
 from django.core.cache import cache
@@ -11,6 +11,7 @@ from django.core.cache import cache
 from chatbot.models import Chatroom
 
 ROOM_ACCESS_TTL_SECONDS = 300
+ROOM_ACCESS_EPOCH_KEY = "room_access_epoch"
 
 SENSITIVE_ACTIONS = {
     "send_email",
@@ -119,9 +120,11 @@ def sanitize_parameters(params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 async def user_has_room_access(user_id: Optional[int], room_id: Optional[int]) -> bool:
+    # Missing ids mean the request could not be scoped to a real membership;
+    # deny rather than grant (fail closed).
     if not user_id or not room_id:
-        return True
-    cache_key = f"room_access:{user_id}:{room_id}"
+        return False
+    cache_key = _room_access_cache_key(user_id, room_id)
     cached = cache.get(cache_key)
     if cached is not None:
         return bool(cached)
@@ -132,6 +135,27 @@ async def user_has_room_access(user_id: Optional[int], room_id: Optional[int]) -
     allowed = await sync_to_async(_check)()
     cache.set(cache_key, 1 if allowed else 0, ROOM_ACCESS_TTL_SECONDS)
     return bool(allowed)
+
+
+def _room_access_cache_key(user_id: int, room_id: int) -> str:
+    # The epoch segment makes every pre-bump entry unreachable at once — used
+    # when membership changes that we cannot enumerate precisely occur
+    # (e.g. cascade deletions of Members or whole rooms).
+    epoch = cache.get(ROOM_ACCESS_EPOCH_KEY) or 0
+    return f"room_access:v{epoch}:{user_id}:{room_id}"
+
+
+def invalidate_room_access_cache(user_ids, room_ids) -> None:
+    for uid in user_ids:
+        for rid in room_ids:
+            cache.delete(_room_access_cache_key(uid, rid))
+
+
+def bump_room_access_epoch() -> None:
+    try:
+        cache.incr(ROOM_ACCESS_EPOCH_KEY)
+    except ValueError:
+        cache.set(ROOM_ACCESS_EPOCH_KEY, 1, None)
 
 
 def sanitize_steps(steps: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -173,6 +197,27 @@ def sensitive_refusal_message() -> str:
         "Sorry, I can't help with that request. "
         "If you need account or data access changes, please use the official admin tools."
     )
+
+
+# ---------------------------------------------------------------------------
+# Capability prefs fallback (TE-2: fail closed on lookup failure)
+# ---------------------------------------------------------------------------
+
+SENSITIVE_CAPABILITY_GATES = ("allow_payments", "allow_whatsapp", "allow_email")
+
+
+def conservative_capability_prefs(prefs: Dict[str, Any]) -> Dict[str, Any]:
+    """Copy capability prefs with sensitive gates forced off.
+
+    Used when the preference store cannot be reached (DB error, profile
+    missing mid-request): a failed lookup must never widen what a caller is
+    allowed to do, so money/messaging gates default to denied while benign
+    gates keep their stored or default value.
+    """
+    conservative = dict(prefs)
+    for gate in SENSITIVE_CAPABILITY_GATES:
+        conservative[gate] = False
+    return conservative
 
 
 # ---------------------------------------------------------------------------

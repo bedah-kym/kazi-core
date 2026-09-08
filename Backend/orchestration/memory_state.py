@@ -55,12 +55,24 @@ def _compact_value(value: Any) -> str:
 
 
 def _merge_entities(state: Dict[str, Any], params: Optional[Dict[str, Any]], result: Optional[Dict[str, Any]]) -> None:
+    # User-intent entities come from tool params. Tool RESULTS are vendor
+    # payloads: merging them into the same dict once let provider echoes
+    # (support emails, cities, prices) overwrite the user's own entities for
+    # 24h and persist them into RoomContext.memory_facts. Results are tracked
+    # separately as provisional, session-scoped hints and never persisted.
     entities = dict(state.get("entities") or {})
-    for payload in (params or {}, result or {}):
-        for key, value in payload.items():
-            if key in ENTITY_KEYS and value not in (None, "", [], {}):
-                entities[key] = _compact_value(value)
+    for key, value in (params or {}).items():
+        if key in ENTITY_KEYS and value not in (None, "", [], {}):
+            entities[key] = _compact_value(value)
     state["entities"] = entities
+
+    volatile = {
+        key: _compact_value(value)
+        for key, value in (result or {}).items()
+        if key in ENTITY_KEYS and value not in (None, "", [], {})
+    }
+    if volatile:
+        state["result_entities"] = volatile
 
 
 def _append_action(state: Dict[str, Any], action: Optional[str]) -> None:
@@ -77,6 +89,7 @@ def build_memory_summary(state: Optional[Dict[str, Any]]) -> str:
     if not state:
         return ""
     entities = state.get("entities") or {}
+    provisional = state.get("result_entities") or {}
     actions = state.get("last_actions") or []
 
     lines: List[str] = []
@@ -88,6 +101,10 @@ def build_memory_summary(state: Optional[Dict[str, Any]]) -> str:
         pairs = [f"{k}={v}" for k, v in entities.items() if v]
         if pairs:
             lines.append("Known entities: " + "; ".join(pairs[:8]) + ".")
+    if provisional:
+        pairs = [f"{k}={v}" for k, v in provisional.items() if v]
+        if pairs:
+            lines.append("Last tool results (provisional, not user-confirmed): " + "; ".join(pairs[:8]) + ".")
 
     summary = "\n".join(lines).strip()
     if len(summary) > SUMMARY_MAX_CHARS:

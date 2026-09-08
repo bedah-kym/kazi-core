@@ -8,7 +8,6 @@ integrations like Calendly, WhatsApp, and others.
 import hmac
 import hashlib
 import logging
-from typing import Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +41,7 @@ def verify_calendly_signature(signature: str, secret: str, body: bytes) -> bool:
         is_valid = hmac.compare_digest(signature, expected_signature)
 
         if not is_valid:
-            logger.warning(f"Invalid Calendly webhook signature")
+            logger.warning("Invalid Calendly webhook signature")
 
         return is_valid
 
@@ -163,7 +162,7 @@ def verify_generic_hmac_sha256(signature: str, secret: str, body: bytes) -> bool
         is_valid = hmac.compare_digest(signature, expected_signature)
 
         if not is_valid:
-            logger.warning(f"Invalid HMAC-SHA256 signature")
+            logger.warning("Invalid HMAC-SHA256 signature")
 
         return is_valid
 

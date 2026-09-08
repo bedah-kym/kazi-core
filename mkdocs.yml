@@ -42,6 +42,7 @@ nav:
   - How-to:
       - Add a Connector: add-a-connector.md
       - Writing a Connector: writing-a-connector.md
+      - Community Connectors: community-connectors.md
       - Add a Workflow: add-a-workflow.md
       - Operate a Workflow: operate-a-workflow.md
       - Deploy Safely: deploy-safely.md

@@ -1,7 +1,6 @@
 """
 Plan ad-hoc multi-step workflows from a single user request and execute them.
 """
-import asyncio
 import hashlib
 import json
 import logging
@@ -12,6 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from asgiref.sync import sync_to_async
 from django.core.cache import cache
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 from django.conf import settings
 
@@ -25,7 +25,11 @@ from orchestration.user_preferences import (
     format_style_prompt,
 )
 from orchestration.action_receipts import requires_confirmation
-from orchestration.security_policy import sanitize_parameters, should_block_message
+from orchestration.security_policy import (
+    conservative_capability_prefs,
+    sanitize_parameters,
+    should_block_message,
+)
 from workflows.capabilities import SYSTEM_CAPABILITIES, validate_workflow_definition
 from workflows.temporal_integration import start_workflow_execution
 
@@ -35,7 +39,6 @@ MAX_ADHOC_STEPS = 7
 MIN_ADHOC_STEPS = 2
 MAX_WAIT_SECONDS = 20
 IDEMPOTENCY_TTL_SECONDS = 90
-IDEMPOTENCY_CACHE_PREFIX = "adhoc_workflow"
 VERIFIER_CACHE_TTL_SECONDS = 600
 
 # Phase 3B: Smart Confidence Thresholds
@@ -48,15 +51,13 @@ LLM_CONFIDENCE_REJECT = 0.20            # Intent unclear, ask user to rephrase
 # Backwards compatibility (deprecated, use above)
 LLM_CONFIDENCE_EXECUTE = LLM_CONFIDENCE_AUTO_EXECUTE
 LLM_CONFIDENCE_CONFIRM = LLM_CONFIDENCE_ASK_ONCE
-_CONFIRM_WORDS = {
-    "yes",
-    "approve",
-    "approved",
-    "confirm",
-    "confirmed",
-    "go ahead",
-    "proceed",
-}
+# Affirmative-led replies only. Substring matching here once let
+# "yesterday's weather" confirm a pending high-risk workflow because
+# "yes" is a substring of "yesterday".
+_AFFIRMATIVE_RE = re.compile(
+    r"^(?:y|ye|yes|yeah|yep|yup|ok|okay|approve[d]?|confirm(ed)?|proceed|go\s+ahead)\b",
+    re.IGNORECASE,
+)
 _SERVICE_ALIASES = {
     "email": "gmail",
     "mail": "gmail",
@@ -227,7 +228,7 @@ _MONTHS = {
 }
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _PHONE_RE = re.compile(r"\+?\d{7,15}")
-_AUTO_EMAIL_SUMMARY_TOKEN = "__AUTO_SUMMARY__"
+_AUTO_EMAIL_SUMMARY_TOKEN = "__AUTO_SUMMARY__"  # nosec B105 — sentinel marker, not a credential
 _DELIVERY_ACTIONS = {"send_email", "send_message"}
 _RESULT_TEXT_RE = re.compile(r"\b(results?|options?|summary|details)\b", re.IGNORECASE)
 
@@ -244,8 +245,7 @@ def _looks_like_automation(message: str) -> bool:
 
 
 def _looks_like_confirmation(message: str) -> bool:
-    lowered = message.strip().lower()
-    return any(word in lowered for word in _CONFIRM_WORDS)
+    return bool(_AFFIRMATIVE_RE.match(message.strip()))
 
 
 def looks_like_confirmation(message: str) -> bool:
@@ -1092,7 +1092,8 @@ async def _manager_llm_enabled_for_user(user_id: Optional[int]) -> bool:
             return False
         return bool(prefs.get("manager_llm_enabled", True))
     except Exception:
-        return True
+        # Lookup failed — assume the feature is off rather than guessing on.
+        return False
 
 
 async def _get_user_capability_prefs(user_id: Optional[int]) -> Dict[str, Any]:
@@ -1118,7 +1119,12 @@ async def _get_user_capability_prefs(user_id: Optional[int]) -> Dict[str, Any]:
         merged.update(prefs)
         return merged
     except Exception:
-        return defaults
+        logger.warning(
+            "Capability preference lookup failed for user %s; falling back to "
+            "conservative (fail-closed) prefs for sensitive gates.",
+            user_id,
+        )
+        return conservative_capability_prefs(defaults)
 
 
 async def _steps_allowed_for_user(steps: List[Dict[str, Any]], user_id: Optional[int]) -> Optional[str]:
@@ -1885,14 +1891,13 @@ async def plan_user_request(
     return {"mode": "single", "assistant_message": "", "workflow_definition": None, "confidence": confidence}
 
 
-def _idempotency_key(user_id: int, definition: Dict[str, Any], trigger_data: Dict[str, Any]) -> str:
+def _idempotency_key(definition: Dict[str, Any], trigger_data: Dict[str, Any]) -> str:
     payload = json.dumps(
         {"definition": definition, "trigger": trigger_data},
         sort_keys=True,
         default=str,
     )
-    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
-    return f"{IDEMPOTENCY_CACHE_PREFIX}:{user_id}:{digest}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
 async def _enqueue_deferred_execution(
@@ -1921,18 +1926,59 @@ async def _enqueue_deferred_execution(
         return None
 
 
-async def _create_adhoc_workflow(user_id: int, room_id: Optional[int], definition: Dict[str, Any]):
+async def _create_adhoc_workflow(
+    user_id: int,
+    room_id: Optional[int],
+    definition: Dict[str, Any],
+    idempotency_key: Optional[str] = None,
+):
+    """
+    Create the UserWorkflow row for an ad-hoc execution.
+
+    The (user, idempotency_key) unique constraint — not the cache — is what
+    blocks duplicate executions, so a Redis flush or a retry after the cache
+    TTL can no longer double-fire. Returns (workflow, False) on success and
+    (None, True) when an identical request is already inside the dedupe
+    window. A colliding row older than the window is released so deliberate
+    retries of the same definition still work.
+    """
     from workflows.models import UserWorkflow
 
     def _create():
-        return UserWorkflow.objects.create(
-            user_id=user_id,
-            name=definition.get("workflow_name", "Ad hoc request"),
-            description=definition.get("workflow_description", "Ad hoc execution"),
-            definition=definition,
-            status='active',
-            created_from_room_id=room_id,
-        )
+        try:
+            with transaction.atomic():
+                return UserWorkflow.objects.create(
+                    user_id=user_id,
+                    name=definition.get("workflow_name", "Ad hoc request"),
+                    description=definition.get("workflow_description", "Ad hoc execution"),
+                    definition=definition,
+                    status='active',
+                    created_from_room_id=room_id,
+                    idempotency_key=idempotency_key,
+                ), False
+        except IntegrityError:
+            stale = UserWorkflow.objects.filter(
+                user_id=user_id,
+                idempotency_key=idempotency_key,
+                created_at__lt=timezone.now() - timedelta(seconds=IDEMPOTENCY_TTL_SECONDS),
+            ).first()
+            if not stale:
+                return None, True
+            stale.idempotency_key = None
+            stale.save(update_fields=["idempotency_key"])
+            try:
+                with transaction.atomic():
+                    return UserWorkflow.objects.create(
+                        user_id=user_id,
+                        name=definition.get("workflow_name", "Ad hoc request"),
+                        description=definition.get("workflow_description", "Ad hoc execution"),
+                        definition=definition,
+                        status='active',
+                        created_from_room_id=room_id,
+                        idempotency_key=idempotency_key,
+                    ), False
+            except IntegrityError:
+                return None, True
 
     return await sync_to_async(_create)()
 
@@ -1964,8 +2010,9 @@ async def execute_adhoc_workflow(
         enriched.setdefault("receipt", None)
         return enriched
 
-    idempotency_key = _idempotency_key(user_id, definition, trigger_data)
-    if not cache.add(idempotency_key, {"status": "running"}, IDEMPOTENCY_TTL_SECONDS):
+    idempotency_key = _idempotency_key(definition, trigger_data)
+    workflow_obj, is_duplicate = await _create_adhoc_workflow(user_id, room_id, definition, idempotency_key)
+    if is_duplicate or workflow_obj is None:
         return _enrich({
             "status": "duplicate",
             "mode": "noop",
@@ -1975,13 +2022,10 @@ async def execute_adhoc_workflow(
             "message": "I already started that request. Please wait a moment.",
         })
 
-    workflow_obj = await _create_adhoc_workflow(user_id, room_id, definition)
-
     if settings.TEMPORAL_DISABLED:
         if requires_durable_runtime:
             deferred_id = await _enqueue_deferred_execution(workflow_obj, user_id, room_id, trigger_data)
             if deferred_id:
-                cache.set(idempotency_key, {"status": "queued"}, IDEMPOTENCY_TTL_SECONDS)
                 return _enrich({
                     "status": "queued",
                     "mode": "deferred",
@@ -2000,7 +2044,6 @@ async def execute_adhoc_workflow(
             })
         logger.info("Temporal disabled; using inline execution.")
         result = await _run_inline(definition, user_id, trigger_data)
-        cache.set(idempotency_key, {"status": "completed"}, IDEMPOTENCY_TTL_SECONDS)
         return _enrich({
             "status": "completed",
             "mode": "inline",
@@ -2015,7 +2058,6 @@ async def execute_adhoc_workflow(
         logger.error("Temporal start failed, falling back to inline execution: %s", exc)
         deferred_id = await _enqueue_deferred_execution(workflow_obj, user_id, room_id, trigger_data)
         if deferred_id:
-            cache.set(idempotency_key, {"status": "queued"}, IDEMPOTENCY_TTL_SECONDS)
             return _enrich({
                 "status": "queued",
                 "mode": "deferred",
@@ -2034,7 +2076,6 @@ async def execute_adhoc_workflow(
                 "message": "Temporal is unavailable and this workflow requires durable approvals, so it was not run inline.",
             })
         result = await _run_inline(definition, user_id, trigger_data)
-        cache.set(idempotency_key, {"status": "completed"}, IDEMPOTENCY_TTL_SECONDS)
         return _enrich({
             "status": "completed",
             "mode": "inline",
@@ -2045,7 +2086,6 @@ async def execute_adhoc_workflow(
 
     completed = await _wait_for_execution(execution.id, wait_seconds)
     if completed and completed.status == "completed":
-        cache.set(idempotency_key, {"status": "completed"}, IDEMPOTENCY_TTL_SECONDS)
         return _enrich({
             "status": "completed",
             "mode": "temporal",
@@ -2055,7 +2095,6 @@ async def execute_adhoc_workflow(
         })
 
     if completed and completed.status in ("failed", "cancelled"):
-        cache.set(idempotency_key, {"status": completed.status}, IDEMPOTENCY_TTL_SECONDS)
         return _enrich({
             "status": completed.status,
             "mode": "temporal",
@@ -2066,7 +2105,6 @@ async def execute_adhoc_workflow(
         })
 
     if completed and completed.status == "waiting":
-        cache.set(idempotency_key, {"status": "waiting"}, IDEMPOTENCY_TTL_SECONDS)
         return _enrich({
             "status": "waiting",
             "mode": "temporal",
@@ -2076,7 +2114,6 @@ async def execute_adhoc_workflow(
             "message": "The workflow is waiting for human approval before it can continue.",
         })
 
-    cache.set(idempotency_key, {"status": "running"}, IDEMPOTENCY_TTL_SECONDS)
     return _enrich({
         "status": "running",
         "mode": "temporal",

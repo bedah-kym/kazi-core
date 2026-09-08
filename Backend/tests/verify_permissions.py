@@ -7,7 +7,7 @@ import sys
 # Add the directory containing 'Backend' (package) to sys.path
 sys.path.append(r'c:\Users\user\Desktop\Dev2\MATHIA-PROJECT\Backend')
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'Backend.settings')
-os.environ['DJANGO_SECRET_KEY'] = 'django-insecure-test-key-12345'
+os.environ['DJANGO_SECRET_KEY'] = 'django-insecure-test-key-12345'  # nosec B105 — test fixture — fake credential
 django.setup()
 
 from django.contrib.auth import get_user_model
@@ -20,7 +20,7 @@ def verify_permissions():
     # Create a test user and room
     username = "test_perm_user_v2"
     email = "test_perm_v2@example.com"
-    password = "password123"
+    password = "password123"  # nosec B105 — test fixture — fake credential
 
     user, created = User.objects.get_or_create(username=username, email=email)
     if created:

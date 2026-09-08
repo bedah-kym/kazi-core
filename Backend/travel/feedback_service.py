@@ -1,6 +1,5 @@
 import logging
-import json
-from typing import Dict, List, Any
+from typing import Dict, List
 from orchestration.llm_client import get_llm_client, extract_json
 
 logger = logging.getLogger(__name__)
@@ -25,13 +24,13 @@ class FeedbackCollector:
         prompt = f"""
         The user just finished a trip to '{itinerary_title}'.
         Key activities were: {', '.join(highlights)}.
-        
+
         Generate a friendly, conversational message asking how it went.
         Ask specifically about:
         1. Safety (did they feel safe?)
         2. Cost (was it expensive?)
         3. Any hidden gems they found?
-        
+
         Keep it short (under 50 words). Sound like a friend, not a survey.
         """
 
@@ -48,7 +47,7 @@ class FeedbackCollector:
         prompt = f"""
         Analyze this travel review and extract structured data:
         Review: "{user_text}"
-        
+
         Return JSON:
         {{
             "safety_rating": 1-5 (5=Very Safe, 1=Unsafe),

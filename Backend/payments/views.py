@@ -15,8 +15,8 @@ import uuid
 import json
 import logging
 
-from .models import PaymentRequest, PaymentNotification, FeeSchedule
-from .services import WalletService, InvoiceService
+from .models import DepositIntent, PaymentRequest, PaymentNotification, FeeSchedule
+from .services import WalletService, InvoiceService, money
 from users.models import WalletTransaction
 from users.decorators import workspace_required
 
@@ -126,7 +126,7 @@ def initiate_deposit(request):
         return JsonResponse({'error': 'Method not allowed'}, status=405)
 
     try:
-        amount = Decimal(request.POST.get('amount', 0))
+        amount = money(request.POST.get('amount', 0))
 
         if amount < Decimal('1.00'):
             return JsonResponse({'error': 'Minimum deposit is 1 KES'}, status=400)
@@ -160,6 +160,18 @@ def initiate_deposit(request):
 
         if not payment_link:
             return JsonResponse({'error': 'Payment link not returned by gateway'}, status=502)
+
+        if invoice_id:
+            intent, created = DepositIntent.objects.get_or_create(
+                tracking_id=invoice_id,
+                defaults={'user': request.user, 'amount': amount},
+            )
+            if not created and intent.user_id != request.user.id:
+                logger.error(
+                    f"Tracking id {invoice_id} already bound to user "
+                    f"{intent.user_id}; refusing to rebind to {request.user.id}"
+                )
+                return JsonResponse({'error': 'Tracking id conflict'}, status=409)
 
         return JsonResponse({
             'status': 'success',
@@ -199,7 +211,9 @@ def payment_callback(request):
         log_webhook_verification('intasend', True)
 
         # Parse webhook data
-        data = json.loads(raw_body)
+        # parse_float=Decimal keeps provider amounts out of binary-float
+        # territory before any arithmetic sees them
+        data = json.loads(raw_body, parse_float=Decimal)
 
         invoice_id = (
             data.get('invoice_id')
@@ -208,8 +222,8 @@ def payment_callback(request):
             or data.get('invoice')
         )
         state = data.get('state')
-        gross_amount = Decimal(str(data.get('value') or data.get('amount') or 0))
-        fee = Decimal(str(data.get('fee') or 0))
+        gross_amount = money(data.get('value') or data.get('amount') or 0)
+        fee = money(data.get('fee') or 0)
         api_ref = data.get('api_ref') or data.get('api_ref_id')
 
         invoice = None
@@ -260,19 +274,26 @@ def payment_callback(request):
             except Exception:
                 user = None
 
-        if not user:
-            email = data.get('email')
-            if email:
-                user = User.objects.filter(email=email).first()
+        if not user and invoice_id:
+            intent = DepositIntent.objects.filter(tracking_id=invoice_id).first()
+            if intent:
+                user = intent.user
 
         if not user:
-            logger.error(f"User not found for deposit: api_ref={api_ref}, email={data.get('email')}")
+            logger.error(f"User not found for deposit: api_ref={api_ref}, invoice_id={invoice_id}")
             return JsonResponse({'error': 'User not found'}, status=404)
 
         from workflows.webhook_handlers import handle_intasend_webhook_event
         handle_intasend_webhook_event(user.id, data)
 
         if state in ('COMPLETE', 'COMPLETED'):
+            if not invoice_id:
+                logger.error(
+                    f"Deposit callback without invoice/tracking id rejected "
+                    f"(api_ref={api_ref}); a random reference would defeat idempotency"
+                )
+                return JsonResponse({'error': 'Missing invoice/tracking id'}, status=400)
+
             # Process deposit
             tx = WalletService.process_deposit(
                 user=user,

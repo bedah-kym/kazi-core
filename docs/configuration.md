@@ -49,7 +49,7 @@ root (one level above `Backend/`).
 | `CONTEXT_PROMPT_MAX_CHARS` | `8000` | Cap on room context injected into the system prompt. |
 | `HISTORY_MAX_CHARS` | `60000` | History budget before compaction. |
 | `HISTORY_MAX_MESSAGES` | `50` | Max history turns kept per agent loop. |
-| `HISTORY_COMPACTION_ENABLED` | `False` | Opt-in: trim the oldest turns when the budget is exceeded. |
+| `HISTORY_COMPACTION_ENABLED` | `True` | Trim the oldest turns when the budget is exceeded (opt-out). |
 
 ## Skills
 

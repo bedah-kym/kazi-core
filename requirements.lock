@@ -62,7 +62,7 @@ httpcore==1.0.9
 httpcore2==2.12.0 ; sys_platform != 'emscripten'
 httpx==0.28.1
 httpx2==2.12.0
-httpx2-jsfetch==1.0 ; python_full_version >= '3.12' and sys_platform == 'emscripten'
+httpx2-jsfetch==1.0 ; sys_platform == 'emscripten'
 huggingface-hub==1.28.0
 hyperlink==21.0.0
 idna==3.19

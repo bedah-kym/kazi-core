@@ -394,7 +394,7 @@ Rules:
                 "missing_slots": [],
                 "clarifying_question": "",
                 "raw_query": message,
-                "error": str(e)
+                "error": "An unexpected error occurred."
             }
 
     def _build_user_prompt(self, message: str, context: Optional[Dict]) -> str:

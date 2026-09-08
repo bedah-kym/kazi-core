@@ -40,4 +40,4 @@ class QuotaConnector(BaseConnector):
 
         except Exception as e:
             logger.error(f"Quota Connector Error: {str(e)}")
-            return {"status": "error", "message": str(e)}
+            return {"status": "error", "message": "An unexpected error occurred. Please try again."}

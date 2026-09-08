@@ -111,7 +111,7 @@ class IntersendPayConnector(BaseConnector):
 
         except Exception as e:
             logger.error(f"Intersend Create Link Error: {e}")
-            return {"status": "error", "message": str(e)}
+            return {"status": "error", "message": "An unexpected error occurred. Please try again."}
 
     def withdraw_to_mpesa(self, user, amount, phone_number):
         if not self.intasend:
@@ -122,8 +122,9 @@ class IntersendPayConnector(BaseConnector):
             }
         try:
             wallet = WalletService.get_or_create_user_wallet(user)
-        except Exception as e:
-            return {"status": "error", "message": f"User has no wallet configured: {str(e)}"}
+        except Exception:
+            logger.exception("Failed to get user wallet")
+            return {"status": "error", "message": "User has no wallet configured."}
 
         try:
             amount = Decimal(str(amount))
@@ -176,7 +177,7 @@ class IntersendPayConnector(BaseConnector):
             if tx:
                 tx.status = 'FAILED'
                 tx.save(update_fields=['status'])
-            return {"status": "error", "message": f"Payout failed: {str(e)}"}
+            return {"status": "error", "message": "Payout failed. Please try again."}
 
     def check_status(self, invoice_id):
         if not self.intasend:
@@ -194,5 +195,6 @@ class IntersendPayConnector(BaseConnector):
             elif not isinstance(result, dict):
                 result = {"status": "success", "data": result}
             return result
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
+        except Exception:
+            logger.exception("Failed to check payment status")
+            return {"status": "error", "message": "An unexpected error occurred. Please try again."}

@@ -38,7 +38,7 @@ class WhatsAppConnector(BaseConnector):
             return True, "Credentials valid"
         except Exception as e:
             logger.error(f"WhatsApp Validation Error: {e}")
-            return False, str(e)
+            return False, "Invalid WhatsApp credentials."
 
     def send_test_message(self, to, account_sid, auth_token, from_number):
         """
@@ -54,8 +54,9 @@ class WhatsAppConnector(BaseConnector):
                 body="Hello from Mathia! Your WhatsApp integration is now connected."
             )
             return {"status": "sent", "sid": message.sid}
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
+        except Exception:
+            logger.exception("Failed to send WhatsApp test message")
+            return {"status": "error", "message": "An unexpected error occurred. Please try again."}
 
     async def execute(self, parameters: dict, context: dict) -> dict:
         """
@@ -120,6 +121,6 @@ class WhatsAppConnector(BaseConnector):
                 return {"status": "error", "message": f"Twilio Error: {e.msg}", "code": e.code}
             except Exception as e:
                 logger.error(f"WhatsApp Connector Error: {str(e)}")
-                return {"status": "error", "message": str(e)}
+                return {"status": "error", "message": "An unexpected error occurred. Please try again."}
         else:
             return {"status": "error", "message": "Unsupported WhatsApp provider or missing credentials"}

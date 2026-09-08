@@ -1,4 +1,6 @@
 
+import logging
+
 from django.shortcuts import redirect
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
@@ -13,6 +15,8 @@ import json
 import secrets
 import time
 from urllib.parse import urlencode
+
+logger = logging.getLogger(__name__)
 
 
 def get_legacy_fernet():
@@ -249,8 +253,9 @@ def connect_whatsapp(request):
 
         messages.success(request, "WhatsApp connected and verified successfully!")
 
-    except Exception as e:
-        messages.error(request, f"Failed to connect WhatsApp: {str(e)}")
+    except Exception:
+        logger.exception("Failed to connect WhatsApp")
+        messages.error(request, "Failed to connect WhatsApp. Please try again.")
 
     return redirect('users:settings')
 
@@ -282,8 +287,9 @@ def connect_mailgun(request):
 
         messages.success(request, "Mailgun connected successfully!")
 
-    except Exception as e:
-        messages.error(request, f"Failed to connect Mailgun: {str(e)}")
+    except Exception:
+        logger.exception("Failed to connect Mailgun")
+        messages.error(request, "Failed to connect Mailgun. Please try again.")
 
     return redirect('users:settings')
 
@@ -317,8 +323,9 @@ def connect_intasend(request):
 
         messages.success(request, "IntaSend connected successfully!")
 
-    except Exception as e:
-        messages.error(request, f"Failed to connect IntaSend: {str(e)}")
+    except Exception:
+        logger.exception("Failed to connect IntaSend")
+        messages.error(request, "Failed to connect IntaSend. Please try again.")
 
     return redirect('users:settings')
 

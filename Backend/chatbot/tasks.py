@@ -567,7 +567,7 @@ def moderate_text_realtime(text_content):
 
     except Exception as e:
         logger.error(f"Realtime moderation error: {e}")
-        return {"error": str(e)}
+        return {"error": "An unexpected error occurred during moderation."}
 
 
 @shared_task(ignore_result=True)
@@ -729,7 +729,7 @@ def send_reminder(reminder_id: int):
         logger.error(f"Error sending reminder {reminder.id}: {e}")
         reminder.status = 'failed'
         reminder.save(update_fields=['status'])
-        return {"status": "error", "reason": str(e)}
+        return {"status": "error", "reason": "Reminder delivery failed."}
 
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=30, ignore_result=True)

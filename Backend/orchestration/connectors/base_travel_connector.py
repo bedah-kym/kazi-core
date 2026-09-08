@@ -145,7 +145,7 @@ class BaseTravelConnector(BaseConnector):
                 'count': 0,
                 'results': [],
                 'cached': False,
-                'message': f'Error: {str(e)}'
+                'message': 'An unexpected error occurred. Please try again.'
             }
 
     async def _fetch(self, parameters: Dict, context: Dict) -> Dict:

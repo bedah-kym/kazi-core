@@ -1,6 +1,8 @@
 """
 Registration and Onboarding Views
 """
+import logging
+
 from django.shortcuts import render, redirect
 from django.contrib.auth import login, authenticate
 from django.contrib.auth.decorators import login_required
@@ -12,6 +14,8 @@ from django.urls import reverse
 from django.utils import timezone
 from uuid import uuid4
 from users.models import Workspace, PlatformInvite, TrialInvite
+
+logger = logging.getLogger(__name__)
 
 
 def _resolve_invite_token(token):
@@ -112,8 +116,9 @@ def register(request):
 
             return redirect('users:onboarding')
 
-        except Exception as e:
-            messages.error(request, f'Error creating account: {str(e)}')
+        except Exception:
+            logger.exception("Account creation failed")
+            messages.error(request, 'Error creating account. Please try again.')
             return render(request, 'users/register.html', ctx)
 
     return render(request, 'users/register.html', {'invite_token': token})

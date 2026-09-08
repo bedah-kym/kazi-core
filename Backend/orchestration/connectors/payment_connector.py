@@ -86,7 +86,7 @@ class ReadOnlyPaymentConnector(BaseConnector):
             }
         except Exception as e:
             logger.error(f"Error checking balance: {e}")
-            return {"error": str(e)}
+            return {"error": "An unexpected error occurred. Please try again."}
 
     async def list_transactions(self, user, limit: int = 10) -> dict:
         """List recent transactions"""
@@ -122,7 +122,7 @@ class ReadOnlyPaymentConnector(BaseConnector):
             }
         except Exception as e:
             logger.error(f"Error listing transactions: {e}")
-            return {"error": str(e)}
+            return {"error": "An unexpected error occurred. Please try again."}
 
     async def check_invoice_status(self, user, invoice_id: str) -> dict:
         """Check status of an invoice"""
@@ -170,4 +170,4 @@ class ReadOnlyPaymentConnector(BaseConnector):
 
         except Exception as e:
             logger.error(f"Error checking invoice: {e}")
-            return {"error": str(e)}
+            return {"error": "An unexpected error occurred. Please try again."}

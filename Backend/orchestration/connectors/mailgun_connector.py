@@ -100,4 +100,4 @@ class MailgunConnector(BaseConnector):
 
         except Exception as e:
             logger.error(f"Mailgun Connector Error: {str(e)}")
-            return {"error": str(e)}
+            return {"error": "An unexpected error occurred. Please try again."}

@@ -182,7 +182,7 @@ def initiate_deposit(request):
 
     except Exception as e:
         logger.error(f"Deposit initiation error: {e}")
-        return JsonResponse({'error': str(e)}, status=500)
+        return JsonResponse({'error': 'An unexpected error occurred. Please try again.'}, status=500)
 
 
 @csrf_exempt
@@ -309,7 +309,7 @@ def payment_callback(request):
 
     except Exception as e:
         logger.error(f"Callback processing error: {e}")
-        return JsonResponse({'error': str(e)}, status=500)
+        return JsonResponse({'error': 'An unexpected error occurred. Please try again.'}, status=500)
 
 
 @login_required
@@ -366,8 +366,9 @@ def create_invoice_view(request):
             messages.success(request, f'Invoice created! Share link: {invoice.intasend_payment_link}')
             return redirect('payments:invoice_detail', reference_id=invoice.reference_id)
 
-        except Exception as e:
-            messages.error(request, f'Error creating invoice: {str(e)}')
+        except Exception:
+            logger.exception("Invoice creation failed")
+            messages.error(request, 'Error creating invoice. Please try again.')
             return redirect('payments:wallet_dashboard')
 
     context = {

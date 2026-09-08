@@ -100,7 +100,8 @@ class ItineraryConnector:
                 start_dt = self._parse_datetime(start_date)
                 end_date = start_dt + timedelta(days=int(duration_days))
             except Exception as e:
-                return {"status": "error", "message": f"Could not calculate end date: {e}"}
+                logger.error(f"Could not calculate end date: {e}")
+                return {"status": "error", "message": "Could not calculate end date."}
 
         def _create_itin():
             active_itin = Itinerary.objects.filter(user_id=user_id, status='active').first()

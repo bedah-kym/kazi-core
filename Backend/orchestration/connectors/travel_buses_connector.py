@@ -72,14 +72,14 @@ class TravelBusesConnector(BaseTravelConnector):
                 return {
                     'results': results,
                     'metadata': {
-                        'error': f'Failed to fetch from Buupass: {str(e)}',
+                        'error': 'Failed to fetch from Buupass.',
                         'fallback': True
                     }
                 }
             return {
                 'results': [],
                 'metadata': {
-                    'error': f'Failed to fetch from Buupass: {str(e)}'
+                    'error': 'Failed to fetch from Buupass.'
                 }
             }
 

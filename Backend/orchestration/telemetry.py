@@ -240,4 +240,4 @@ def load_user_correction_patterns(user_id: int, max_patterns: int = 5) -> Dict[s
     except Exception as e:
         # Return empty patterns on error - don't break the flow
         record_event("load_patterns_error", {"user_id": user_id, "error": str(e)})
-        return {"corrections_found": 0, "error": str(e)}
+        return {"corrections_found": 0}

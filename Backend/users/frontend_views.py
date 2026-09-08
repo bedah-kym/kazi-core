@@ -1,11 +1,15 @@
 """
 User frontend views for Wallet, Reminders, Settings, and Profile pages
 """
+import logging
+
 from django.shortcuts import render, redirect
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from datetime import datetime
 from chatbot.models import Reminder
+
+logger = logging.getLogger(__name__)
 
 
 # Wallet views moved to payments app
@@ -50,12 +54,14 @@ def create_reminder(request):
             try:
                 from chatbot.tasks import schedule_reminder_delivery
                 schedule_reminder_delivery(reminder.id, scheduled_time)
-            except Exception as e:
-                messages.warning(request, f'Reminder saved but not scheduled: {e}')
+            except Exception:
+                logger.exception("Reminder scheduling failed")
+                messages.warning(request, 'Reminder saved but not scheduled.')
 
             messages.success(request, 'Reminder created successfully!')
-        except Exception as e:
-            messages.error(request, f'Error creating reminder: {str(e)}')
+        except Exception:
+            logger.exception("Reminder creation failed")
+            messages.error(request, 'Error creating reminder. Please try again.')
 
     return redirect('users:reminders')
 

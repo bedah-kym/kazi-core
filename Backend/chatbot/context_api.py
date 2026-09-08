@@ -2,6 +2,8 @@
 Context API Views
 Endpoints for Room Context & Memory System
 """
+import logging
+
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -9,6 +11,8 @@ from rest_framework import status
 from django.shortcuts import get_object_or_404
 from chatbot.models import Chatroom
 from chatbot.context_manager import ContextManager
+
+logger = logging.getLogger(__name__)
 
 
 @api_view(['GET'])
@@ -39,9 +43,10 @@ def get_room_context(request, room_id):
             {"error": "Chatroom not found"},
             status=status.HTTP_404_NOT_FOUND
         )
-    except Exception as e:
+    except Exception:
+        logger.exception("Request failed")
         return Response(
-            {"error": str(e)},
+            {"error": "An unexpected error occurred. Please try again."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -102,8 +107,9 @@ def add_note(request, room_id):
             "content": note.content
         }, status=status.HTTP_201_CREATED)
 
-    except Exception as e:
+    except Exception:
+        logger.exception("Request failed")
         return Response(
-            {"error": str(e)},
+            {"error": "An unexpected error occurred. Please try again."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )

@@ -1,0 +1,11 @@
+# Normalize line endings for shell scripts (prevents CRLF crashes in containers)
+*.sh text eol=lf
+*.bash text eol=lf
+
+# Normalize Python files
+*.py text eol=lf
+
+# Keep Windows-specific files as-is
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf

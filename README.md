@@ -57,16 +57,25 @@ Because it's **yours**:
 
 ## Quick start
 
+**Prerequisites:** git, Docker, and one LLM API key (Anthropic / DeepSeek / Hugging Face).
+
 ```bash
 git clone https://github.com/bedah-kym/kazi-core.git && cd kazi-core
-docker compose up --build -d db redis web celery_worker celery_beat
-docker compose exec web python Backend/manage.py migrate
-docker compose exec web python Backend/manage.py createsuperuser
+cp .env.example .env            # 1. paste your LLM key into .env
+docker compose up --build -d    # 2. boots db, redis, web, celery — auto-migrates + seeds the bot
+docker compose exec web python Backend/manage.py createsuperuser   # 3. make your login
 ```
 
-Add your LLM key to a `.env` in the repo root, open `http://localhost:8000`,
-and start talking. No keys handy? `bash scripts/demo.sh` boots the whole thing
-in demo mode. → [run-locally](docs/run-locally.md)
+Open `http://localhost:8000`, log in, and say hi to **Mathia** — your General
+room routes messages to the AI automatically.
+
+> **No keys handy?** `bash scripts/demo.sh` boots a demo instead → [run-locally](docs/run-locally.md).
+> **Stuck, or want the full walkthrough** (troubleshooting, non-Docker setup, Temporal)?
+> → [Quick Start guide](docs/quickstart.md).
+
+> **Note:** "Mathia" appears in docker images, database defaults, and the bot
+> username. It's the AI assistant built into Kazi Core — same system, just the
+> name we gave the bot.
 
 ## Add a tool in one file
 

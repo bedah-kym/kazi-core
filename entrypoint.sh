@@ -1,4 +1,5 @@
 #!/bin/sh
+set -e
 
 # Wait for database
 python /app/wait_for_db.py

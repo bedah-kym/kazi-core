@@ -82,22 +82,24 @@ you set more than one, in this order: Anthropic → DeepSeek → Hugging Face.
     Free tier available. The default executor provider. Some models require
     router access on your HF token.
 
-### 1b. Leave `ENCRYPTION_KEY` alone (for now)
+### 1b. Leave `ENCRYPTION_KEY` blank (for dev)
 
-`.env.example` ships a **pre-filled** `ENCRYPTION_KEY`. This key encrypts every
-room's message key in the database.
+This key encrypts every room's message key in the database. In development it's
+handled for you: the first time the app boots it generates a key and persists it
+to `Backend/.encryption.key` (git-ignored), so it stays stable across restarts.
 
-!!! danger "Do not change or remove it after your first boot"
-    If `ENCRYPTION_KEY` is blank or changes, existing rooms can no longer be
-    decrypted and the chat socket rejects the connection (`403`). The symptom is
-    a room that never loads. **Generate a permanent key once and keep it**:
+!!! danger "Production: set it yourself"
+    In production (`DJANGO_DEBUG=0`) the app **refuses to start** if
+    `ENCRYPTION_KEY` is blank. Generate a permanent key once and keep it:
 
     ```bash
     python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
     ```
 
-    Treat it like a password: keep it out of git, and never rotate it without a
-    re-encryption plan.
+    If `ENCRYPTION_KEY` changes after rooms exist, those rooms can no longer be
+    decrypted and the chat socket rejects the connection (`403`) — a room that
+    never loads. Treat it like a password: keep it out of git, and never rotate
+    it without a re-encryption plan.
 
 ---
 
@@ -195,7 +197,7 @@ these to prove the loop works end-to-end:
 |---|---|---|
 | `ERROR: Couldn't find env file .env` | You skipped step 1. | `cp .env.example .env`, then `docker compose up -d` again. |
 | No AI reply — your message just sits there | No LLM key set, or an invalid key. | Add a key to `.env`, then `docker compose restart web celery_worker`. |
-| Room won't load; browser console shows a `403` on `/ws/chat/...` | `ENCRYPTION_KEY` changed/blank after rooms were created. | Restore the original key, or wipe the DB volume (`docker compose down -v`) and start over. |
+| Room won't load; browser console shows a `403` on `/ws/chat/...` | `ENCRYPTION_KEY` (or `Backend/.encryption.key`) changed/lost after rooms were created. | Restore the original key, or wipe the DB volume (`docker compose down -v`) and start over. |
 | `web` container exits immediately | Postgres/Redis health check still failing. | Wait ~30s and retry; check `docker compose logs db`. |
 | `set: Illegal option -` in container logs | Scripts have `CRLF` line endings. | Re-clone (`.gitattributes` fixes this on checkout). |
 | "Mathia user not found" warning in logs | You created a user *before* the web container finished seeding. | Run `docker compose exec web python Backend/manage.py seed_mathia`. |
@@ -203,7 +205,7 @@ these to prove the loop works end-to-end:
 
 !!! success "The two most common mistakes"
     Almost every "it doesn't work" report comes down to one of two things:
-    **(1)** no LLM key in `.env`, or **(2)** a changed/blank `ENCRYPTION_KEY`.
+    **(1)** no LLM key in `.env`, or **(2)** a changed/lost `ENCRYPTION_KEY`.
     Check those first.
 
 ---

@@ -7,6 +7,7 @@ using Fernet from cryptography library with environment-based key management.
 
 import os
 import logging
+from pathlib import Path
 from django.conf import settings
 from cryptography.fernet import Fernet
 import base64
@@ -37,7 +38,7 @@ class TokenEncryption:
         Get or initialize the encryption key.
 
         In production: key must be set via ENCRYPTION_KEY environment variable
-        In development: key is generated and cached (with warning)
+        In development: key is generated once and persisted to a gitignored file
 
         Returns:
             bytes: The encryption key
@@ -52,16 +53,8 @@ class TokenEncryption:
         key_string = os.environ.get('ENCRYPTION_KEY')
 
         if key_string:
-            try:
-                # Key should be base64-encoded 32 bytes (Fernet expects the encoded form)
-                key_bytes = key_string.strip().encode('utf-8')
-                decoded = base64.urlsafe_b64decode(key_bytes)
-                if len(decoded) != 32:
-                    raise ValueError(f"Encryption key must be 32 bytes, got {len(decoded)}")
-                cls._key = key_bytes
-                return cls._key
-            except Exception as e:
-                raise EncryptionKeyError(f"Invalid ENCRYPTION_KEY format: {e}")
+            cls._key = cls._validate_key(key_string)
+            return cls._key
 
         # In production without key, fail loudly
         if not settings.DEBUG:
@@ -70,14 +63,50 @@ class TokenEncryption:
                 "Generate a key with: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
             )
 
-        # Development: generate temporary key with warning
-        cls._key = Fernet.generate_key()
-        key_string = cls._key.decode()
-        logger.warning(
-            f"SECURITY WARNING: Using auto-generated encryption key in development. "
-            f"Set ENCRYPTION_KEY environment variable for consistency: {key_string}"
-        )
+        # Development: load or create a stable per-checkout key persisted to a
+        # gitignored file so room encryption keys survive restarts. Mirrors the
+        # DJANGO_SECRET_KEY fallback (.dev_secret_key) in settings.py.
+        cls._key = cls._load_or_create_dev_key()
         return cls._key
+
+    @classmethod
+    def _validate_key(cls, key_string):
+        try:
+            key_bytes = key_string.strip().encode('utf-8')
+            decoded = base64.urlsafe_b64decode(key_bytes)
+        except Exception as e:
+            raise EncryptionKeyError(f"Invalid encryption key format: {e}")
+        if len(decoded) != 32:
+            raise EncryptionKeyError(f"Encryption key must be 32 bytes, got {len(decoded)}")
+        return key_bytes
+
+    @classmethod
+    def _load_or_create_dev_key(cls, key_file=None):
+        if key_file is None:
+            key_file = Path(settings.BASE_DIR) / '.encryption.key'
+        try:
+            key = key_file.read_text().strip()
+        except OSError:
+            key = ''
+        if key:
+            try:
+                return cls._validate_key(key)
+            except EncryptionKeyError:
+                logger.warning("Stored encryption key at %s is invalid; regenerating.", key_file)
+        key = Fernet.generate_key()
+        try:
+            key_file.write_text(key.decode('utf-8'))
+            logger.warning(
+                "Generated and persisted a new encryption key to %s. "
+                "Keep this file; losing it makes existing rooms undecryptable.",
+                key_file,
+            )
+        except OSError as e:
+            logger.warning(
+                "Could not persist encryption key to %s (%s); using an in-memory key.",
+                key_file, e,
+            )
+        return key
 
     @classmethod
     def get_cipher(cls):

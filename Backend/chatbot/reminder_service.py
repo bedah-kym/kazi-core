@@ -1,8 +1,7 @@
 
 import logging
 import re
-import json
-from datetime import timedelta, datetime
+from datetime import timedelta, datetime, timezone as dt_tz
 from django.utils import timezone
 from .models import Reminder, Chatroom
 
@@ -38,7 +37,25 @@ def get_user_timezone(user_timezone: str = None):
         if user_timezone and user_timezone in pytz.all_timezones:
             return pytz.timezone(user_timezone)
         return pytz.UTC
-    return timezone.utc
+    return dt_tz.utc
+
+
+def _localize_naive(naive_dt, user_tz):
+    """Attach a timezone to a naive datetime, DST-aware where possible.
+
+    Args:
+        naive_dt: A naive datetime in the user's local wall-clock time.
+        user_tz: A pytz timezone (or datetime.timezone.utc fallback).
+
+    Returns:
+        An aware datetime in the user's timezone.
+    """
+    if PYTZ_AVAILABLE and hasattr(user_tz, "localize"):
+        try:
+            return user_tz.localize(naive_dt)
+        except (pytz.AmbiguousTimeError, pytz.NonExistentTimeError):
+            return user_tz.localize(naive_dt, is_dst=False)
+    return naive_dt.replace(tzinfo=user_tz)
 
 
 async def parse_reminder_time(text: str, user_timezone: str = "UTC"):
@@ -111,28 +128,38 @@ class LLMTimeParser:
     SYSTEM_PROMPT = (
         "You are a precise time parser for a reminder system. "
         "Parse natural language time expressions into ISO 8601 datetime strings.\n\n"
+        "IMPORTANT: You work entirely in the user's LOCAL timezone. Return datetimes as "
+        "NAIVE local datetimes with NO timezone offset and NO 'Z' suffix (e.g., "
+        "\"2024-12-25T10:30:00\"). Never convert to UTC.\n\n"
         "SUPPORTED FORMATS:\n"
-        '- ISO 8601: "2024-12-25T10:30:00", "2024-12-25T10:30:00+03:00"\n'
         '- Relative: "in 10 minutes", "in 3 hours", "in 3 days", "in 2 weeks"\n'
-        '- Relative days: "tomorrow", "tomorrow at 9am", "today at 5pm", "today", "yesterday"\n'
-        '- Clock times: "5pm", "5:30pm", "9:30am", "14:30"\n'
+        '- Relative days: "tomorrow", "tomorrow at 9am", "today at 5pm", "today"\n'
+        '- Clock times: "5pm", "5:30pm", "9:30am", "14:30", "noon", "midnight"\n'
         '- Plain numbers: "10" (minutes from now)\n\n'
         "RULES:\n"
-        "1. If the time is ambiguous (e.g., \"Monday\", \"next week\", \"Friday\"), "
-        "ask for clarification\n"
-        "2. \"Monday\" without \"this/next\" is ambiguous - ask \"this Monday\" or "
-        "\"next Monday\"?\n"
-        "3. \"Monday at 9am\" without \"this/next\" - ambiguous\n"
-        "4. \"Tomorrow at 9am\" is unambiguous (tomorrow is always tomorrow)\n"
-        "5. \"In 3 days\" is unambiguous\n"
-        "8. Return ISO 8601 in UTC for the parsed time\n\n"
+        "1. 'noon' = 12:00 and 'midnight' = 00:00, both local time.\n"
+        "2. A bare clock time (e.g., '9am', '5pm') that has already passed today refers "
+        "to the next day.\n"
+        "3. If the expression explicitly refers to the past (e.g., 'yesterday', 'last "
+        "week', a past date), set needs_clarification=true and ask for a future time.\n"
+        "4. If the time is ambiguous (e.g., \"Monday\", \"next week\", \"Friday\"), ask "
+        "for clarification.\n"
+        "5. \"Monday\" without \"this/next\" is ambiguous - ask \"this Monday\" or "
+        "\"next Monday\".\n"
+        "6. A clock time without am/pm (e.g., \"at 5\", \"at 10\") is ambiguous - ask "
+        "whether the user means AM or PM.\n"
+        "7. \"Tomorrow at 9am\" is unambiguous (tomorrow is always tomorrow).\n"
+        "8. \"tomorrow\" or \"today\" (bare, with no time and no relative quantity) "
+        "defaults to 9am local time. Relative expressions such as \"in 2 weeks\", "
+        "\"in 3 days\", \"a week from today\", or \"a month from now\" keep the current "
+        "time-of-day.\n\n"
         "RESPONSE FORMAT (JSON):\n"
         "{\n"
-        '  "datetime": "2024-12-25T10:30:00+00:00",\n'
+        '  "datetime": "2024-12-25T10:30:00",\n'
         '  "needs_clarification": false,\n'
         '  "clarification_question": null,\n'
         '  "confidence": 0.95,\n'
-        '  "interpretation": "User wants reminder for December 25th, 2024 at 10:30 AM UTC"\n'
+        '  "interpretation": "User wants a reminder on December 25th, 2024 at 10:30 AM local time"\n'
         "}\n\n"
         "If ambiguous, return:\n"
         "{\n"
@@ -181,7 +208,14 @@ class LLMTimeParser:
             # Fallback to deterministic parser
             return self._fallback_parse(text, user_timezone)
 
-        prompt = f"User timezone: {user_timezone}\nCurrent time: {timezone.now().isoformat()}\n\nParse: \"{text}\""
+        user_tz = get_user_timezone(user_timezone)
+        now_utc = timezone.now()
+        local_now = now_utc.astimezone(user_tz)
+        prompt = (
+            f"User's timezone: {user_timezone}\n"
+            f"Current local date and time: {local_now.strftime('%Y-%m-%d %H:%M %A')}\n\n"
+            f'Parse: "{text}"'
+        )
 
         try:
             response = await self.llm_client.generate_json(
@@ -193,16 +227,29 @@ class LLMTimeParser:
             )
             result = response
 
-            # Validate response
-            if "datetime" in result and result["datetime"]:
-                # Verify it's valid ISO format
-                parsed_dt = datetime.fromisoformat(result["datetime"].replace("Z", "+00:00"))
-                if parsed_dt <= timezone.now():
-                    # If in past, assume next occurrence (add 1 day)
-                    parsed_dt = parsed_dt + timedelta(days=1)
-                    result["datetime"] = parsed_dt.isoformat()
+            if result.get("datetime"):
+                parsed_dt = self._to_aware_utc(result["datetime"], user_tz)
+                if parsed_dt is None:
+                    return {
+                        "datetime": None,
+                        "needs_clarification": True,
+                        "clarification_question": "Could you clarify the time? (e.g., 'tomorrow at 9am' or 'in 2 hours')",
+                        "confidence": 0.0,
+                        "interpretation": "Failed to parse",
+                    }
+                if parsed_dt <= now_utc:
+                    # Fail-safe: the LLM should have rolled bare clock times forward or
+                    # flagged explicit past references. Treat a past result as needing
+                    # clarification rather than silently shifting it forward.
+                    return {
+                        "datetime": None,
+                        "needs_clarification": True,
+                        "clarification_question": "That time has already passed. Could you give me a future time?",
+                        "confidence": 0.0,
+                        "interpretation": "Resolved time is in the past",
+                    }
                 return {
-                    "datetime": result["datetime"],
+                    "datetime": parsed_dt.isoformat(),
                     "needs_clarification": result.get("needs_clarification", False),
                     "clarification_question": result.get("clarification_question"),
                     "confidence": result.get("confidence", 0.9),
@@ -219,6 +266,21 @@ class LLMTimeParser:
         except Exception as e:
             logging.error(f"LLM time parse error: {e}")
             return self._fallback_parse(text, user_timezone)
+
+    @staticmethod
+    def _to_aware_utc(dt_str, user_tz):
+        """Parse an ISO string (naive local or aware) and return a UTC-aware datetime.
+
+        The LLM returns a naive local datetime (no offset); the code attaches the
+        user's timezone deterministically instead of asking the LLM to do tz math.
+        """
+        try:
+            dt = datetime.fromisoformat(str(dt_str).replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            return None
+        if dt.tzinfo is None:
+            dt = _localize_naive(dt, user_tz)
+        return dt.astimezone(dt_tz.utc)
 
     def _fallback_parse(self, text: str, user_timezone: str = "UTC") -> dict:
         """Deterministic fallback parser for when LLM is unavailable.
@@ -447,7 +509,7 @@ class ReminderService:
             # Ensure timezone awareness
             from django.utils import timezone
             if timezone.is_naive(scheduled_time):
-                scheduled_time = timezone.make_aware(scheduled_time)
+                scheduled_time = timezone.make_aware(scheduled_time, dt_tz.utc)
 
             # Validation
             if scheduled_time <= timezone.now():

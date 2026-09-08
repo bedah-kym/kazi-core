@@ -17,7 +17,7 @@ import json
 import logging
 import threading
 from typing import Dict, Optional, Any
-from datetime import datetime
+from datetime import datetime, timedelta, timezone as dt_tz
 from django.core.cache import cache
 from django_redis import get_redis_connection
 from asgiref.sync import sync_to_async
@@ -605,7 +605,6 @@ class SearchConnector(BaseConnector):
     async def execute(self, parameters: Dict, context: Dict) -> Dict:
         """Perform web search with strict rate limiting"""
         from django.core.cache import cache
-        from datetime import datetime
 
         user_id = context.get("user_id")
         query = parameters.get("query")
@@ -882,7 +881,7 @@ class ReminderConnector(BaseConnector):
             # Ensure timezone awareness
             from django.utils import timezone as dj_tz
             if dj_tz.is_naive(scheduled_time):
-                scheduled_time = dj_tz.make_aware(scheduled_time)
+                scheduled_time = dj_tz.make_aware(scheduled_time, dt_tz.utc)
 
             # Validation
             now = dj_tz.now()

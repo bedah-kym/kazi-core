@@ -538,3 +538,31 @@ class ReminderTimeParserTests(SimpleTestCase):
         from chatbot.reminder_service import parse_reminder_time
         self.assertIsNone(await parse_reminder_time(""))
         self.assertIsNone(await parse_reminder_time(None))
+
+
+class TimeParserLocalizationTests(SimpleTestCase):
+    """The LLM returns a naive local datetime; the code attaches the user's
+    timezone deterministically instead of asking the LLM to do tz math."""
+
+    def _to_utc(self, dt_str, tz_name):
+        from chatbot.reminder_service import LLMTimeParser, get_user_timezone
+        return LLMTimeParser._to_aware_utc(dt_str, get_user_timezone(tz_name))
+
+    def test_naive_local_becomes_utc(self):
+        from chatbot.reminder_service import get_user_timezone
+        utc = self._to_utc("2026-09-09T09:00:00", "Africa/Nairobi")
+        self.assertEqual(utc.utcoffset(), timedelta(0))
+        local = utc.astimezone(get_user_timezone("Africa/Nairobi"))
+        self.assertEqual((local.hour, local.minute), (9, 0))
+
+    def test_aware_input_is_converted_to_utc(self):
+        utc = self._to_utc("2026-09-09T09:00:00+03:00", "Africa/Nairobi")
+        self.assertEqual(utc.isoformat(), "2026-09-09T06:00:00+00:00")
+
+    def test_z_suffix_means_utc(self):
+        utc = self._to_utc("2026-09-09T06:00:00Z", "Africa/Nairobi")
+        self.assertEqual(utc.isoformat(), "2026-09-09T06:00:00+00:00")
+
+    def test_invalid_input_returns_none(self):
+        self.assertIsNone(self._to_utc("not-a-date", "Africa/Nairobi"))
+        self.assertIsNone(self._to_utc(None, "Africa/Nairobi"))

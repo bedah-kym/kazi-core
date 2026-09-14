@@ -81,7 +81,7 @@ django-axes>=6.0.0
 django-ratelimit>=4.1.0
 django-csp>=3.8.0
 django-auditlog>=3.0.0
-bleach>=6.1.0
+bleach>=6.4.0
 pycryptodome>=3.17.0
 python-json-logger>=4.1.0
 

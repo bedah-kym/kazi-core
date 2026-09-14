@@ -9,7 +9,7 @@ channels-redis>=4.2.0
 daphne>=4.1.0
 
 # Database
-psycopg[binary]>=3.2.0
+psycopg[binary]>=3.3.5
 dj-database-url>=2.1.0
 
 # Celery & Redis

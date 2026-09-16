@@ -64,7 +64,7 @@ scripts/
 
 When in doubt, read `Backend/orchestration/agent_loop.py` first — that's where the ReAct loop lives. Tool dispatch is handled by `Backend/orchestration/connector_registry.py` (the single source of truth — collapsed in v0.4 M2-1) and routed by `Backend/orchestration/tool_router.py` (renamed from `mcp_router.py` in v0.5; the old name remains as a deprecation shim).
 
-For a "what is in this repo right now?" overview, read `docs/v0.4-brief.md` and `docs/v0.4-roadmap.md` — they describe the cycle, the freeze (no new connectors), and the milestones already shipped vs. queued.
+For a "what is in this repo right now?" overview, read `docs/v0.6-brief.md` and `docs/v0.6-roadmap.md` — they describe the cycle (shell-first governed execution + the learning foundation) and the milestones already shipped vs. queued. The v0.6 epic is GitHub issue #139; the v0.7 God-tier workflows epic is #160.
 
 ## 3. Setup commands
 
@@ -123,7 +123,7 @@ You need Postgres + Redis running and a `.env` in the repo root (one level above
 5. Add tests — at minimum a happy-path and an error path with the external service mocked.
 6. Document the action(s) in `docs/connector-api-reference.md` if the API surface is new.
 
-**v0.4 freeze** is in effect: no new vertical connectors merge during the cycle. See `docs/v0.4-brief.md` §3.
+**v0.6 direction** is in effect: the shell (`run_command`) is the reach story, not new connectors. No new vertical connectors merge this cycle; typed sysops connectors were explicitly retired (#129). See `docs/v0.6-brief.md` §3 and §9.
 
 Full guide: [`docs/add-a-connector.md`](docs/add-a-connector.md) (workflow-oriented) or [`docs/writing-a-connector.md`](docs/writing-a-connector.md) (deep reference).
 

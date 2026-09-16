@@ -11,13 +11,16 @@ timezone-aware reminder parser, and a big reliability + security pass
 (append-only receipts, agent budget caps, prompt-injection corpus, stack-trace
 hardening, payments integrity).
 
-## In flight: hardening toward v1.0
+## In flight: v0.6 — shell-first Jarvis
 
-The v0.4 human-gated-runtime cycle is complete; its backlog lives in
-[`v0.4-roadmap.md`](v0.4-roadmap.md) for reference. What ships next is queued as
-GitHub issues — no hidden backlog, no "coming soon" that never comes. Carryover
-still tracked: the two queued contracts (telemetry events, memory updates) and
-the 24-of-25-connector envelope migration.
+The next cycle gives Kazi a governed shell — sandboxed reach with two-tier
+escalation, persistent workspace, and the learning foundation that earns
+initiative one approval at a time. Typed connectors are retired; the shell is
+the reach story. Read the
+[`v0.6-brief.md`](v0.6-brief.md) and [`v0.6-roadmap.md`](v0.6-roadmap.md), then
+pick up work from the
+[v0.6 epic](https://github.com/bedah-kym/kazi-core/issues/139). The epic's
+checklist is the build order — start with the Phase 0 `good first issue`s.
 
 ## Why we publish it
 

@@ -36,11 +36,13 @@ Filed 2026-09-19: N1–N6 are now issues #166–#171; the four amendments below 
 
 ### N5 (v0.7 · W-D2) Shadow replay before a suggestion is shown — filed as #169
 - Build: run vN+1 against recorded inputs of the last K replay-safe executions with side-effect steps stubbed. Store `shadow_result`. Suggestions that regress the cited metric or any assertion are auto-rejected and logged.
+- K is explicit: K = 10, tunable via a versioned `shadow_replay_window` config.
 - The reviewer model must differ from the model that authored the workflow (config). The reviewer receives typed metrics only, no raw tool output.
 - Acceptance: mocked LLM; regressing suggestion never reaches the human; passing suggestion carries its shadow diff.
 
 ### N6 (v0.6 · P0-ext) Scenario packs + provider continuity test — filed as #171
 - Build: each capability ships at least N scenarios (goal, fixture, verifier script). `kazi eval` runs them and records pass rate and cost per model tier.
+- N is explicit: N = 3, tunable via a versioned `scenario_pack_min_size` config.
 - Use the results, not intuition, to choose defaults in the model catalog and per-room selector.
 - Add one multi-step tool-call fixture per provider adapter (DeepSeek, Claude) checking coherence within a turn and reset on a new user message. Check against each provider's current docs first.
 - Acceptance: CI runs a small smoke pack with a mocked LLM; a nightly job runs the full pack.

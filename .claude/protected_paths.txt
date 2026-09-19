@@ -20,3 +20,4 @@ docker-compose*.yml
 .claude/settings.json
 .claude/protected_paths.txt
 .claude/hooks/*
+scripts/boundary_baseline.json

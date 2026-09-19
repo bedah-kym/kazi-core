@@ -13,5 +13,10 @@
 /Backend/orchestration/connector_registry.py  @bedah-kym
 /Backend/orchestration/contracts.py           @bedah-kym
 /Backend/orchestration/base_connector.py      @bedah-kym
+/Backend/orchestration/connectors/base_travel_connector.py  @bedah-kym
+/Backend/**/migrations/                       @bedah-kym
+/Backend/payments/                            @bedah-kym
+/docker-compose*.yml                          @bedah-kym
+/.env*                                        @bedah-kym
 /.github/workflows/                           @bedah-kym
 /.claude/                                     @bedah-kym

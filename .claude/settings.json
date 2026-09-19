@@ -21,6 +21,15 @@
             "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/protect_paths.py\""
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/protect_bash.py\""
+          }
+        ]
       }
     ]
   }

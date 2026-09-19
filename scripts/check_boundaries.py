@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Architecture boundary ratchet for Kazi Core.
 
-Fails only on NEW violations. Existing ones live in scripts/boundary_baseline.json
-and may only shrink. First install: run `--update-baseline` once and review the diff.
-Never run `--update-baseline` to hide a violation you just introduced.
+Fails on NEW violations AND on stale baseline entries (a resolved violation
+must be removed from the baseline in the same PR). `--update-baseline` refuses
+to add entries — it only removes resolved ones. The baseline may only shrink.
 
 Error messages say what to do instead. Agents read them.
 """
@@ -63,6 +63,15 @@ def module_of(path: Path) -> str:
     return ".".join(parts)
 
 
+def package_of(path: Path) -> list[str]:
+    # __init__.py IS the package: keep all parts so relative imports resolve
+    # against the package name itself. Regular modules drop their own name.
+    parts = module_of(path).split(".")
+    if path.name == "__init__.py":
+        return parts
+    return parts[:-1]
+
+
 def dotted(node: ast.AST) -> str | None:
     parts: list[str] = []
     while isinstance(node, ast.Attribute):
@@ -89,6 +98,33 @@ def imported_modules(tree: ast.AST, pkg: list[str]) -> set[str]:
                 mods.add(name)
                 mods.update(f"{name}.{a.name}" for a in node.names)
     return mods
+
+
+def alias_map(tree: ast.AST, pkg: list[str]) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                if a.asname:
+                    aliases[a.asname] = a.name
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                base = pkg[: len(pkg) - (node.level - 1)] if node.level > 1 else pkg
+                module = ".".join(base + ([node.module] if node.module else []))
+            else:
+                module = node.module or ""
+            if module:
+                for a in node.names:
+                    if a.asname:
+                        aliases[a.asname] = f"{module}.{a.name}"
+    return aliases
+
+
+def resolve_call(name: str, aliases: dict[str, str]) -> str:
+    root, _, rest = name.partition(".")
+    if root in aliases:
+        return aliases[root] + (f".{rest}" if rest else "")
+    return name
 
 
 def check_rules(rel: str, mods: set[str], calls: set[str]) -> dict[str, str]:
@@ -118,9 +154,15 @@ def scan() -> dict[str, str]:
             tree = ast.parse(path.read_text(encoding="utf-8"))
         except (SyntaxError, UnicodeDecodeError):
             continue
-        pkg = module_of(path).split(".")[:-1]
+        pkg = package_of(path)
         mods = imported_modules(tree, pkg)
-        calls = {dotted(n.func) for n in ast.walk(tree) if isinstance(n, ast.Call)} - {None}
+        aliases = alias_map(tree, pkg)
+        calls: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                name = dotted(node.func)
+                if name:
+                    calls.add(resolve_call(name, aliases))
         found.update(check_rules(rel, mods, calls))
     return found
 
@@ -128,6 +170,15 @@ def scan() -> dict[str, str]:
 def main(argv: list[str]) -> int:
     found = scan()
     if "--update-baseline" in argv:
+        if BASELINE.exists():
+            old = set(json.loads(BASELINE.read_text()))
+            new_keys = sorted(set(found) - old)
+            if new_keys:
+                print("Refusing to grow the baseline. New violations must be fixed, not baselined:")
+                for key in new_keys:
+                    print(f"  - {key}")
+                print("Only resolved entries may be removed. Ask a human if this is wrong.")
+                return 1
         BASELINE.write_text(json.dumps(sorted(found), indent=2) + "\n")
         print(f"baseline written: {len(found)} known violation(s)")
         return 0
@@ -142,9 +193,9 @@ def main(argv: list[str]) -> int:
         rule_id, rel, detail = key.split("|", 2)
         print(f"BOUNDARY VIOLATION [{rule_id}] {rel}: {detail}\n  fix: {found[key]}")
     if stale:
-        print(f"note: {len(stale)} baseline entr{'y' if len(stale) == 1 else 'ies'} resolved. "
-              "Run --update-baseline to lock in the improvement.")
-    return 1 if new else 0
+        print(f"{len(stale)} baseline entr{'y' if len(stale) == 1 else 'ies'} resolved. "
+              "Run --update-baseline in the same PR to lock in the improvement.")
+    return 1 if (new or stale) else 0
 
 
 if __name__ == "__main__":

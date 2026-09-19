@@ -17,7 +17,7 @@ This file is the contract: read it before editing. If you change behavior descri
 7. **Money:** keep cent quantization and balanced-journal guards. No floats.
 8. **Workflow definitions are versioned artifacts.** Never mutate `UserWorkflow.definition` in place (see issue #155).
 
-Protected paths are listed in `.claude/protected_paths.txt` and `.github/CODEOWNERS`; the Claude Code hook (`.claude/hooks/protect_paths.py`) blocks edits to them — a block means write a plan (`docs/plans/TEMPLATE.md`) and ask a human. `scripts/check_boundaries.py` (CI) fails on new architectural violations; the baseline may only shrink.
+Protected paths are listed in `.claude/protected_paths.txt` and `.github/CODEOWNERS`; the Claude Code hook (`.claude/hooks/protect_paths.py`) blocks edits to them — a block means write a plan (`docs/plans/TEMPLATE.md`) and ask a human. `scripts/check_boundaries.py` (CI) fails on new architectural violations AND on stale baseline entries (a resolved violation must be removed from the baseline in the same PR); `--update-baseline` refuses to add entries, and the baseline may only shrink.
 
 ## 1. Project at a glance
 
@@ -175,7 +175,7 @@ python Backend/manage.py check
 python Backend/manage.py test
 ```
 
-**Architecture boundary ratchet** (CI-blocking; fails only on *new* violations):
+**Architecture boundary ratchet** (CI-blocking; fails on *new* violations and on *stale* baseline entries — `--update-baseline` only shrinks the baseline, it refuses to grow it):
 ```bash
 python scripts/check_boundaries.py
 ```
@@ -237,7 +237,7 @@ Examples:
 
 - **Don't recreate or commit content under `frontend/` or `docs/`** without first checking `.gitignore` and confirming with a maintainer. These paths intentionally hold private Mathia-OS content that is not part of this OSS repo.
 - **Don't bypass safety checks** (`--no-verify`, `bandit --skip` beyond `B101,B110`) to make CI green. Fix the root cause.
-- **Don't route around the guardrails**: never edit protected paths behind the hook's back (e.g. `Set-Content` instead of Edit), and never run `check_boundaries.py --update-baseline` to hide a violation you just introduced. The baseline may only shrink.
+- **Don't route around the guardrails**: never edit protected paths behind the hook's back (e.g. `Set-Content` instead of Edit), and never run `check_boundaries.py --update-baseline` to hide a violation you just introduced — the script refuses to grow the baseline anyway, and the baseline may only shrink.
 - **Don't add backwards-compatibility shims** for code you just changed. If a caller is internal, update the caller.
 - **Don't hand-roll JSON parsing of LLM output** — use `extract_json()` from `llm_client.py`.
 - **Don't introduce a new connector by editing many existing files.** A new connector should be one new file plus its tests.

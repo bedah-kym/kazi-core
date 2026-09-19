@@ -187,3 +187,20 @@ jobs:
           flags: backend
           fail_ci_if_error: false
           verbose: false
+
+  # Architecture boundary ratchet: only NEW violations fail; the committed
+  # baseline (scripts/boundary_baseline.json) may only shrink. Pure stdlib,
+  # no services needed. Rules live in scripts/check_boundaries.py.
+  boundaries:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Architecture boundary ratchet
+        run: python scripts/check_boundaries.py

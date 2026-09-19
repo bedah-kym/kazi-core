@@ -1,0 +1,11 @@
+# Golden principles: connectors
+- DO subclass `BaseConnector`. Declare `name`, `version`, `actions`, and `get_action_catalog_entries()` per `docs/contracts/tool-schema.md`.
+- DO return `{"status": ..., "data": ..., "message": ...}` per `docs/contracts/connector-execution.md`.
+- DO declare `risk_level` and `replay_safe` honestly. Unsure means `"high"` and `False`.
+- DO keep one connector per file. Start from the shape of `WeatherConnector`.
+- DO map upstream failures to an error status with a plain message. No stack traces in results.
+- DON'T call another connector, other apps' models, or core modules from a connector.
+- DON'T put secrets in `data` or `message`. The output guardrail redacts; do not rely on it.
+- DON'T add a vertical connector without checking the current brief for freezes and non-goals.
+- Tests: catalog-shape contract test, success path, upstream-failure path, and a replay-safety test if `replay_safe` is true.
+- If the action returns external text (web, email, chat), add a case to the prompt-injection golden corpus.

@@ -1,0 +1,22 @@
+# Protected ownership. Local mirror: .claude/protected_paths.txt (same intent,
+# enforced by the Claude Code hook). Enable "Require review from Code Owners"
+# in branch protection when a second maintainer exists; until then this file
+# documents which paths are core-governed.
+/docs/contracts/                              @bedah-kym
+/Backend/orchestration/agent_loop.py          @bedah-kym
+/Backend/orchestration/tool_executor.py       @bedah-kym
+/Backend/orchestration/tool_router.py         @bedah-kym
+/Backend/orchestration/security_policy.py     @bedah-kym
+/Backend/orchestration/action_receipts.py     @bedah-kym
+/Backend/orchestration/workflow_planner.py    @bedah-kym
+/Backend/orchestration/action_catalog.py      @bedah-kym
+/Backend/orchestration/connector_registry.py  @bedah-kym
+/Backend/orchestration/contracts.py           @bedah-kym
+/Backend/orchestration/base_connector.py      @bedah-kym
+/Backend/orchestration/connectors/base_travel_connector.py  @bedah-kym
+/Backend/**/migrations/                       @bedah-kym
+/Backend/payments/                            @bedah-kym
+/docker-compose*.yml                          @bedah-kym
+/.env*                                        @bedah-kym
+/.github/workflows/                           @bedah-kym
+/.claude/                                     @bedah-kym

@@ -1,0 +1,23 @@
+# Globs (relative to repo root) that coding agents may not edit without a human OK.
+# fnmatch rules: '*' also matches '/'. Lines starting with '#' are comments.
+Backend/orchestration/agent_loop.py
+Backend/orchestration/tool_executor.py
+Backend/orchestration/tool_router.py
+Backend/orchestration/security_policy.py
+Backend/orchestration/action_receipts.py
+Backend/orchestration/workflow_planner.py
+Backend/orchestration/action_catalog.py
+Backend/orchestration/connector_registry.py
+Backend/orchestration/contracts.py
+Backend/orchestration/base_connector.py
+Backend/orchestration/connectors/base_travel_connector.py
+Backend/**/migrations/*
+Backend/payments/*
+docs/contracts/*
+docker-compose*.yml
+.github/workflows/*
+.env*
+.claude/settings.json
+.claude/protected_paths.txt
+.claude/hooks/*
+scripts/boundary_baseline.json

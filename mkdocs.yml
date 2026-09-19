@@ -114,3 +114,7 @@ exclude_docs: |
   baileys_nodejs_bridge_plan.md
   demo-workflows/
   kazi-reference/
+  # Agent-facing working docs, not end-user documentation
+  golden-principles/
+  plans/
+  proposals/

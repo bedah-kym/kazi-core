@@ -56,6 +56,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       # Drift guard: regenerating the lock must be byte-identical regardless of
       # the generating OS. --no-annotate/--no-header keep the output flat and
@@ -153,6 +155,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
@@ -187,3 +191,22 @@ jobs:
           flags: backend
           fail_ci_if_error: false
           verbose: false
+
+  # Architecture boundary ratchet: only NEW violations fail; the committed
+  # baseline (scripts/boundary_baseline.json) may only shrink. Pure stdlib,
+  # no services needed. Rules live in scripts/check_boundaries.py.
+  boundaries:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Architecture boundary ratchet
+        run: python scripts/check_boundaries.py

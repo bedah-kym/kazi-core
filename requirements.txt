@@ -6,7 +6,7 @@ django-cors-headers>=4.9.0
 # Async & WebSockets
 channels>=4.1.0
 channels-redis>=4.2.0
-daphne>=4.1.0
+daphne>=4.2.3
 
 # Database
 psycopg[binary]>=3.3.5

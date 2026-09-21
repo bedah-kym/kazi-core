@@ -24,7 +24,7 @@ requests>=2.34.2
 urllib3>=2.7.0
 cryptography>=42.0.0
 pyOpenSSL>=26.4.0
-service-identity>=24.1.0
+service-identity>=26.1.0
 twisted[tls]>=26.4.0
 httpx>=0.28.1
 

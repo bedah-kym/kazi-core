@@ -9,7 +9,7 @@ return.
 > context)` dry run lets connectors describe an action's effects for
 > approval cards without committing anything. Connectors that don't
 > implement it keep working; cards simply show no effects. See
-> [Preview (dry run)](#preview-dry-run-v12) below.
+> [Preview (dry run)](#preview-dry-run) below.
 
 > **v1.1 honesty note** — v1.0 said `data` was required, but 24 of 25
 > built-in connectors return result fields at the top level instead.
@@ -79,7 +79,7 @@ When v2.0 ships:
   — it's already valid v1.1, will be the only valid shape in v2.0,
   and the runtime cost of switching later is just the diff
 
-## Preview (dry run) — v1.2
+## Preview (dry run)
 
 Connectors may implement an optional async method to enrich approval
 cards:

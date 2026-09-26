@@ -52,8 +52,12 @@ class MailgunConnector(BaseConnector):
         action = parameters.get("action")
         if action != "send_email":
             return None
-        to = parameters.get("to") or "the recipient"
-        subject = parameters.get("subject") or "(no subject)"
+        to = parameters.get("to")
+        subject = parameters.get("subject")
+        text = parameters.get("text")
+        html = parameters.get("html")
+        if not to or not subject or (not text and not html):
+            return None
         sender = parameters.get("from")
         if not sender:
             sender = f"Mathia <mailgun@{self.domain}>" if self.domain else "Mathia"

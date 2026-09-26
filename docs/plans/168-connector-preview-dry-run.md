@@ -69,7 +69,8 @@ no effects and never blocks or delays the approval flow.
 - `python Backend/manage.py test --noinput` → Ran 595 tests, OK (skipped=1,
   expected failures=3). Notifications tests are flaky on main too (verified
   on a clean tree; unrelated to this change).
-- `python Backend/manage.py test orchestration workflows` → 361 tests OK.
+- `python Backend/manage.py test orchestration workflows` → 365 tests OK
+  (3 expected failures).
 - `python Backend/manage.py run_golden_eval` → 21 passed, 4 skipped
   (LLM-only), 0 failed.
 - `flake8 Backend --count --statistics --select=E,W,F --ignore=E501,E402,W503 --max-line-length=127 --max-complexity=10` → 0.

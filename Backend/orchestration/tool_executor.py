@@ -7,6 +7,7 @@ and returns a standardized result dict.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -23,6 +24,7 @@ from orchestration.security_policy import is_prompt_injection, sanitize_paramete
 logger = logging.getLogger(__name__)
 
 _MAX_ERROR_CHARS = 300
+PREVIEW_TIMEOUT_SECONDS = 5
 
 
 def _normalize_error(raw: str) -> str:
@@ -195,7 +197,13 @@ async def preview_tool(
     parameters["action"] = action
 
     try:
-        result = await connector.preview(parameters, context)
+        result = await asyncio.wait_for(
+            connector.preview(parameters, context),
+            timeout=PREVIEW_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("Tool preview timed out for %s", action)
+        return None
     except Exception as exc:
         logger.warning("Tool preview error for %s: %s", action, exc)
         return None

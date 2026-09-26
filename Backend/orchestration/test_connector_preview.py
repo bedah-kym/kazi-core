@@ -87,6 +87,32 @@ class PreviewToolTests(SimpleTestCase):
         )
         self.assertIsNone(effects)
 
+    def test_preview_timeout_is_fail_closed(self):
+        class _SlowConnector(BaseConnector):
+            async def execute(self, parameters, context):
+                return {"status": "success"}
+
+            async def preview(self, parameters, context):
+                await asyncio.sleep(5)
+                return {"effects": ["never returned"]}
+
+        from orchestration.tool_executor import preview_tool
+
+        with patch(
+            "orchestration.tool_executor.PREVIEW_TIMEOUT_SECONDS", 0.05
+        ), patch(
+            "orchestration.tool_executor._get_connector_map",
+            return_value={"send_email": _SlowConnector()},
+        ):
+            effects = asyncio.run(
+                preview_tool(
+                    "send_email",
+                    {"to": "ops@example.com", "subject": "Hi"},
+                    {"user_id": 1, "room_id": 1},
+                )
+            )
+        self.assertIsNone(effects)
+
     def test_parameters_are_sanitized_with_action_key(self):
         connector = _PreviewConnector(preview_result={"effects": ["x"]})
         self._call_preview(connector)
@@ -106,6 +132,7 @@ class MailgunPreviewTests(SimpleTestCase):
                     "action": "send_email",
                     "to": "ops@example.com",
                     "subject": "Nightly report",
+                    "text": "All systems nominal.",
                 },
                 {},
             )
@@ -125,3 +152,30 @@ class MailgunPreviewTests(SimpleTestCase):
             MailgunConnector().preview({"action": "list_domains"}, {})
         )
         self.assertIsNone(result)
+
+    def test_invalid_email_params_preview_returns_none(self):
+        from orchestration.connectors.mailgun_connector import MailgunConnector
+
+        connector = MailgunConnector()
+        missing_recipient = asyncio.run(
+            connector.preview(
+                {
+                    "action": "send_email",
+                    "subject": "Hi",
+                    "text": "Body",
+                },
+                {},
+            )
+        )
+        self.assertIsNone(missing_recipient)
+        missing_body = asyncio.run(
+            connector.preview(
+                {
+                    "action": "send_email",
+                    "to": "ops@example.com",
+                    "subject": "Hi",
+                },
+                {},
+            )
+        )
+        self.assertIsNone(missing_body)

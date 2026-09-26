@@ -1145,6 +1145,28 @@ class TemporalUpdateApprovalTests(TestCase):
         self.assertIn("approval id does not match", response.json()["detail"])
 
 
+class PreviewApprovalEffectsActivityTests(SimpleTestCase):
+    """The workflow-step preview activity (issue #168) is fail-closed."""
+
+    def test_activity_returns_effects(self):
+        from workflows import temporal_integration as ti
+
+        with patch.object(ti, "preview_tool", new=AsyncMock(return_value=["Send an email"])):
+            effects = async_to_sync(ti.preview_approval_effects)(
+                "send_email", {"to": "ops@example.com"}, 1, 5
+            )
+        self.assertEqual(effects, ["Send an email"])
+
+    def test_activity_returns_none_when_preview_fails(self):
+        from workflows import temporal_integration as ti
+
+        with patch.object(ti, "preview_tool", new=AsyncMock(side_effect=RuntimeError("boom"))):
+            effects = async_to_sync(ti.preview_approval_effects)(
+                "send_email", {"to": "ops@example.com"}, 1, 5
+            )
+        self.assertIsNone(effects)
+
+
 class ApprovalUpdateHandlerTests(SimpleTestCase):
     """The update validator itself: only the pending approval id is accepted."""
 

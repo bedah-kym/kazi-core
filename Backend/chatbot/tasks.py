@@ -615,98 +615,230 @@ def schedule_reminder_delivery(reminder_id: int, scheduled_time):
     send_reminder.apply_async((reminder_id,), eta=scheduled_time)
 
 
-def _deliver_reminder(reminder: Reminder) -> bool:
-    logger.info(f"Sending reminder {reminder.id}: {reminder.content}")
+PRESENCE_ONLINE_SECONDS = 900
+REMINDER_URGENT_MAX_RETRIES = 5
+REMINDER_RETRY_BASE_SECONDS = 30
+REMINDER_RETRY_CAP_SECONDS = 300
 
-    # Rate limit: max 10 sends per user per 12h
-    rl_key = f"reminder_send_count:{reminder.user_id}"
-    sends = cache.get(rl_key, 0)
-    if sends >= 10:
-        reminder.status = 'failed'
-        reminder.error_log = "Rate limit exceeded (10/12h)"
-        reminder.save(update_fields=['status', 'error_log'])
-        logger.warning(f"Reminder {reminder.id} blocked by rate limit for user {reminder.user_id}")
+
+def _is_user_online(user) -> bool:
+    """A user is online if their websocket heartbeat is younger than the window."""
+    try:
+        from django_redis import get_redis_connection
+
+        redis = get_redis_connection("default")
+        raw = redis.get(f"lastseen:{user.username}")
+        if not raw:
+            return False
+        last_seen = timezone.datetime.fromisoformat(str(raw))
+        if timezone.is_naive(last_seen):
+            last_seen = timezone.make_aware(last_seen, timezone.utc)
+        return (timezone.now() - last_seen).total_seconds() < PRESENCE_ONLINE_SECONDS
+    except Exception:
         return False
 
-    channels = []
-    if reminder.via_whatsapp:
-        channels.append('whatsapp')
+
+def _resolve_delivery_mode(reminder: Reminder) -> str:
+    """Decode the channel flags into the delivery mode set at creation.
+
+    auto        -> both flags set  (presence routing at fire time)
+    email       -> via_email only
+    whatsapp    -> via_whatsapp only
+    in_app      -> neither flag
+    """
+    if reminder.via_email and reminder.via_whatsapp:
+        return "auto"
     if reminder.via_email:
-        channels.append('email')
-    if not channels:
-        channels = ['email']
+        return "email"
+    if reminder.via_whatsapp:
+        return "whatsapp"
+    return "in_app"
 
-    sent = False
-    errors = []
 
-    for ch in channels:
-        if ch == 'whatsapp':
-            try:
-                from orchestration.connectors.whatsapp_connector import WhatsAppConnector
-                wa = WhatsAppConnector()
-                resp = wa.send_message(
-                    to=getattr(reminder.user, 'phone_number', None) or "",
-                    body=f"Reminder: {reminder.content}"
-                )
-                if resp.get("status") == "sent":
-                    sent = True
-                    break
-                errors.append(str(resp))
-            except Exception as e:
-                errors.append(str(e))
-        elif ch == 'email':
-            try:
-                from asgiref.sync import async_to_sync
-                from orchestration.connectors.gmail_connector import GmailConnector
-                gmail = GmailConnector()
-                resp = async_to_sync(gmail.execute)({
-                    "action": "send_email",
-                    "to": getattr(reminder.user, 'email', None),
-                    "subject": "Reminder",
-                    "text": reminder.content
-                }, {"user_id": reminder.user_id})
-                if resp.get("status") in ("sent", "success"):
-                    sent = True
-                    break
-                errors.append(str(resp))
-            except Exception as e:
-                errors.append(str(e))
+def _reminder_retry_delay(retries: int) -> int:
+    return min(REMINDER_RETRY_BASE_SECONDS * (2 ** max(retries, 0)), REMINDER_RETRY_CAP_SECONDS)
 
-    if sent:
-        reminder.status = 'sent'
-        reminder.error_log = ''
-        reminder.save(update_fields=['status', 'error_log'])
-        if sends == 0:
-            cache.set(rl_key, 1, 60 * 60 * 12)
-        else:
-            cache.incr(rl_key)
-            cache.expire(rl_key, 60 * 60 * 12)
 
-        try:
-            from notifications.services import NotificationService
-            NotificationService.notify(
-                user=reminder.user,
-                event_type="reminder.due",
-                title="Reminder",
-                body=reminder.content,
-                severity="info",
-                related_reminder=reminder,
-                related_room=reminder.room,
-            )
-        except Exception:
-            pass
+def _send_reminder_email(reminder: Reminder) -> bool:
+    from orchestration.connectors.gmail_connector import GmailConnector
+    from orchestration.connectors.mailgun_connector import MailgunConnector
 
+    if getattr(settings, "GMAIL_OAUTH_CLIENT_ID", None) and getattr(settings, "GMAIL_OAUTH_CLIENT_SECRET", None):
+        connector = GmailConnector()
+    else:
+        connector = MailgunConnector()
+    try:
+        resp = async_to_sync(connector.execute)({
+            "action": "send_email",
+            "to": getattr(reminder.user, 'email', None),
+            "subject": f"Reminder: {reminder.content[:60]}",
+            "text": reminder.content,
+        }, {"user_id": reminder.user_id})
+    except Exception as exc:
+        logger.warning("Reminder email attempt failed: %s", exc)
+        return False
+    return bool(isinstance(resp, dict) and resp.get("status") in ("sent", "success"))
+
+
+def _send_reminder_telegram(reminder: Reminder) -> bool:
+    if not os.environ.get("TELEGRAM_BOT_TOKEN"):
+        return False
+    try:
+        from users.models import UserIntegration
+
+        integration = UserIntegration.objects.filter(
+            user_id=reminder.user_id,
+            integration_type="telegram",
+            is_connected=True,
+        ).first()
+        chat_id = (integration.metadata or {}).get("chat_id") if integration else None
+        if not chat_id:
+            return False
+        from orchestration.connectors.telegram_bot_connector import TelegramBotConnector
+
+        resp = async_to_sync(TelegramBotConnector().execute)({
+            "action": "send_telegram_message",
+            "chat_id": chat_id,
+            "message": f"Reminder: {reminder.content}",
+        }, {"user_id": reminder.user_id})
+        return bool(isinstance(resp, dict) and resp.get("status") == "success")
+    except Exception as exc:
+        logger.warning("Reminder telegram attempt failed: %s", exc)
+        return False
+
+
+def _deliver_reminder_to_chat(reminder: Reminder) -> bool:
+    room = reminder.room
+    if not room:
+        return False
+    try:
+        from channels.layers import get_channel_layer
+
+        encrypted_payload = _encrypt_message_for_room(room, f"Reminder: {reminder.content}")
+        if not encrypted_payload:
+            return False
+
+        ai_user, _ = User.objects.get_or_create(
+            username='mathia',
+            defaults={
+                'first_name': 'Mathia',
+                'last_name': 'AI',
+                'is_active': True,
+                'email': 'mathia@kwikchat.ai'
+            }
+        )
+        ai_member = Member.objects.filter(User=ai_user).first()
+        if not ai_member:
+            ai_member = Member.objects.create(User=ai_user)
+        payload = json.dumps({
+            "data": encrypted_payload["data"],
+            "nonce": encrypted_payload["nonce"],
+        })
+        ai_message = Message.objects.create(
+            member=ai_member,
+            content=payload,
+            timestamp=timezone.now()
+        )
+        room.chats.add(ai_message)
+        room.save()
+
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            f"chat_{room.id}",
+            {
+                "type": "ai_message_saved",
+                "message": {
+                    "id": ai_message.id,
+                    "member": "mathia",
+                    "content": f"Reminder: {reminder.content}",
+                    "timestamp": str(ai_message.timestamp),
+                    "parent_id": None,
+                }
+            }
+        )
         return True
+    except Exception as exc:
+        logger.warning("Reminder chat delivery failed: %s", exc)
+        return False
 
+
+def _deliver_reminder(reminder: Reminder) -> Tuple[bool, str]:
+    """Deliver a due reminder. Returns (delivered, channel).
+
+    The in-app notification is ALWAYS created: it is the guaranteed
+    channel and can never be skipped by a delivery failure.
+    """
+    try:
+        from notifications.services import NotificationService
+        NotificationService.notify(
+            user=reminder.user,
+            event_type="reminder.due",
+            title="Reminder",
+            body=reminder.content,
+            severity="warning" if reminder.priority == "high" else "info",
+            related_reminder=reminder,
+            related_room=reminder.room,
+        )
+    except Exception:
+        logger.exception("Reminder in-app notification failed")
+
+    mode = _resolve_delivery_mode(reminder)
+
+    if mode == "in_app":
+        return True, "in_app"
+
+    if mode == "auto":
+        if _is_user_online(reminder.user):
+            if _deliver_reminder_to_chat(reminder):
+                return True, "chat"
+        if _send_reminder_telegram(reminder):
+            return True, "telegram"
+        ok = _send_reminder_email(reminder)
+        return ok, "email"
+
+    if mode == "email":
+        return _send_reminder_email(reminder), "email"
+
+    if mode == "whatsapp":
+        try:
+            from orchestration.connectors.whatsapp_connector import WhatsAppConnector
+            wa = WhatsAppConnector()
+            resp = wa.send_message(
+                to=getattr(reminder.user, 'phone_number', None) or "",
+                body=f"Reminder: {reminder.content}"
+            )
+            return bool(resp.get("status") == "sent"), "whatsapp"
+        except Exception as exc:
+            logger.warning("Reminder whatsapp attempt failed: %s", exc)
+            return False, "whatsapp"
+
+    return False, mode
+
+
+def _finalize_failed_delivery(reminder: Reminder, attempts: int, channel: str) -> None:
+    """Dead-letter a reminder whose delivery exhausted its retries."""
+    Reminder.objects.filter(pk=reminder.pk).update(
+        status='failed',
+        error_log=f"dead letter after {attempts} delivery attempt(s) on {channel}",
+    )
     reminder.status = 'failed'
-    reminder.error_log = "; ".join(errors)[:500]
-    reminder.save(update_fields=['status', 'error_log'])
-    logger.error(f"Reminder {reminder.id} failed: {reminder.error_log}")
-    return False
+    try:
+        from notifications.services import NotificationService
+        NotificationService.notify(
+            user=reminder.user,
+            event_type="system.warning",
+            title="Reminder delivery failed",
+            body=f"Could not deliver: {reminder.content}",
+            severity="warning",
+            related_reminder=reminder,
+            related_room=reminder.room,
+        )
+    except Exception:
+        logger.exception("Reminder failure notification failed")
 
 
-@shared_task(ignore_result=True)
-def send_reminder(reminder_id: int):
+@shared_task(bind=True, max_retries=REMINDER_URGENT_MAX_RETRIES, ignore_result=True)
+def send_reminder(self, reminder_id: int):
     reminder = Reminder.objects.filter(id=reminder_id).select_related('user').first()
     if not reminder:
         return {"status": "skipped", "reason": "not_found"}
@@ -722,14 +854,33 @@ def send_reminder(reminder_id: int):
         schedule_reminder_delivery(reminder_id, scheduled_time)
         return {"status": "rescheduled", "run_at": scheduled_time.isoformat()}
 
-    try:
-        _deliver_reminder(reminder)
-        return {"status": "sent"}
-    except Exception as e:
-        logger.error(f"Error sending reminder {reminder.id}: {e}")
-        reminder.status = 'failed'
-        reminder.save(update_fields=['status'])
-        return {"status": "error", "reason": "Reminder delivery failed."}
+    delivered, channel = _deliver_reminder(reminder)
+    if delivered:
+        # Queryset update on purpose: Reminder.save() runs full_clean(),
+        # which rejects any save after scheduled_time is in the past, and
+        # that crash left delivered reminders stuck in 'pending' forever.
+        Reminder.objects.filter(pk=reminder.pk).update(
+            status='sent',
+            sent_at=now,
+            error_log='',
+        )
+        return {"status": "sent", "channel": channel}
+
+    # Urgent reminders get retries with exponential backoff before the
+    # dead-letter: the user must be able to rely on the email arriving.
+    if reminder.priority == 'high' and self.request.retries < self.max_retries:
+        attempt = self.request.retries + 1
+        Reminder.objects.filter(pk=reminder.pk).update(
+            error_log=f"delivery attempt {attempt} failed on {channel}",
+        )
+        countdown = _reminder_retry_delay(self.request.retries)
+        raise self.retry(
+            exc=RuntimeError(f"reminder {reminder.id} delivery failed on {channel}"),
+            countdown=countdown,
+        )
+
+    _finalize_failed_delivery(reminder, self.request.retries + 1, channel)
+    return {"status": "dead_letter", "channel": channel}
 
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=30, ignore_result=True)

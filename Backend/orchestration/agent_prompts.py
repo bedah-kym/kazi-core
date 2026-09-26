@@ -126,6 +126,24 @@ You have contact tools to look up and save user contacts:
 - Contacts already in the prompt context under USER CONTACTS do not need a lookup_contact call.
 """
 
+_REMINDER_RULES = """\
+## Reminders & notifications
+
+- To check existing reminders or notifications, ALWAYS use the list_reminders /
+  list_notifications tools. Never search notes or memory for them — notes are
+  not the source of truth for scheduled reminders.
+- set_reminder accepts a delivery channel: 'auto' (default), 'email',
+  'whatsapp', or 'in_app'. Pick the channel the user asked for; when the user
+  is vague, use 'auto'.
+- Urgency cues (exam, meeting, flight, deadline, "don't let me forget",
+  "I must not miss") mean urgent=true: it forces email delivery with retries
+  so the reminder survives a transient failure.
+- When the user asks to be reminded "by email", set delivery='email'. When
+  they ask for it "in chat" or "here", use delivery='auto' (auto delivers in
+  chat when they are online).
+- After creating a reminder, report the exact local time it will fire.
+"""
+
 
 # --------------------------------------------------------------------------- #
 #  Prompt assembly                                                            #
@@ -164,6 +182,7 @@ def build_system_prompt(
     sections.append(_RESPONSE_RULES)
     sections.append(_MEMORY_RULES)
     sections.append(_CONTACT_RULES)
+    sections.append(_REMINDER_RULES)
 
     # Contextual memory
     if context_prompt:

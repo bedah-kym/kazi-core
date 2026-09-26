@@ -813,16 +813,23 @@ class ReminderConnector(BaseConnector):
     """
 
     async def execute(self, parameters: Dict, context: Dict) -> Dict:
-        """Create a reminder with timezone-aware scheduling.
+        """Create a reminder with timezone-aware scheduling, or list
+        reminders/notifications (read-only).
 
-        Parses natural language time expressions, applies the user's timezone,
-        and schedules a reminder for delivery.
+        Delivery modes (stored in the channel flags):
+            auto      -> presence routing at fire time (chat when online,
+                         Telegram when connected, else email)
+            email     -> email at fire time
+            whatsapp  -> WhatsApp at fire time
+            in_app    -> in-app notification only
 
         Args:
             parameters: Dict containing:
                 - content (str): The reminder message content.
                 - time (str): Time expression (e.g., 'in 10 minutes', '5pm', 'tomorrow at 9am').
                 - priority (str, optional): Priority level ('low', 'medium', 'high'). Defaults to 'medium'.
+                - delivery (str, optional): 'auto', 'in_app', 'email', or 'whatsapp'. Defaults to 'auto'.
+                - urgent (bool, optional): Force email delivery with retries/backoff.
             context: Dict containing:
                 - user_id (int): ID of the user creating the reminder.
                 - room_id (int, optional): ID of the chatroom context.
@@ -839,16 +846,43 @@ class ReminderConnector(BaseConnector):
         user_id = context.get("user_id")
         room_id = context.get("room_id")
 
+        if parameters.get("action") == "list_reminders":
+            return await self._list_reminders(user_id)
+        if parameters.get("action") == "list_notifications":
+            return await self._list_notifications(user_id)
+
         content = parameters.get("content", "Reminder")
         time_str = parameters.get("time")
         priority = parameters.get("priority", "medium")
+        urgent = bool(parameters.get("urgent"))
+        delivery = str(parameters.get("delivery") or "auto").strip().lower()
+        if delivery not in ("auto", "in_app", "email", "whatsapp"):
+            delivery = "auto"
+        if urgent:
+            priority = "high"
 
         if not time_str:
             return {"status": "error", "message": "When should I remind you?"}
 
         try:
             user = await sync_to_async(User.objects.get)(pk=user_id)
-            user_tz = user.profile.timezone if hasattr(user, 'profile') else 'UTC'
+
+            def _user_timezone():
+                # Lazy related-object access is a sync ORM query; it must run
+                # on the sync thread, not the async event loop.
+                try:
+                    profile = getattr(user, "profile", None)
+                    tz = getattr(profile, "timezone", None)
+                except Exception:
+                    tz = None
+                # 'UTC' is the model default, not a user choice: fall back to
+                # the deployment timezone so "5:30 pm" means local time.
+                if not tz or tz == "UTC":
+                    from django.conf import settings
+                    tz = getattr(settings, "TIME_ZONE", "UTC")
+                return tz
+
+            user_tz = await sync_to_async(_user_timezone)()
 
             # Use LLM-based parser with clarification support
             try:
@@ -892,36 +926,144 @@ class ReminderConnector(BaseConnector):
             if scheduled_time < now + timedelta(minutes=1):
                 return {"status": "error", "message": "Cannot schedule for less than 1 minute from now."}
 
+            # Channel flags encode the delivery mode (see docstring).
+            if delivery == "auto":
+                via_email, via_whatsapp = True, True
+            elif delivery == "email":
+                via_email, via_whatsapp = True, False
+            elif delivery == "whatsapp":
+                via_email, via_whatsapp = False, True
+            else:
+                via_email, via_whatsapp = False, False
+            if urgent:
+                via_email = True
+
+            # Dedupe: an identical reminder created within a short window
+            # updates the existing row instead of stacking duplicates.
+            dedupe_window = now - timedelta(minutes=5)
+            existing = await sync_to_async(
+                lambda: Reminder.objects.filter(
+                    user=user,
+                    content=content,
+                    status="pending",
+                    scheduled_time__gte=scheduled_time - timedelta(seconds=60),
+                    scheduled_time__lte=scheduled_time + timedelta(seconds=60),
+                    created_at__gte=dedupe_window,
+                ).first()
+            )()
+
             # Create Reminder
             room = await sync_to_async(Chatroom.objects.get)(pk=room_id) if room_id else None
-            reminder = await sync_to_async(Reminder.objects.create)(
-                user=user,
-                room=room,
-                content=content,
-                scheduled_time=scheduled_time,
-                priority=priority,
-                status='pending',
-                timezone=user_tz
-            )
+            if existing:
+                await sync_to_async(
+                    lambda: Reminder.objects.filter(pk=existing.pk).update(
+                        priority=priority,
+                        via_email=via_email,
+                        via_whatsapp=via_whatsapp,
+                        timezone=user_tz,
+                    )
+                )()
+                reminder = await sync_to_async(Reminder.objects.get)(pk=existing.pk)
+                message = "updated the existing reminder"
+            else:
+                reminder = await sync_to_async(Reminder.objects.create)(
+                    user=user,
+                    room=room,
+                    content=content,
+                    scheduled_time=scheduled_time,
+                    priority=priority,
+                    status='pending',
+                    timezone=user_tz,
+                    via_email=via_email,
+                    via_whatsapp=via_whatsapp,
+                )
+                message = "set a reminder"
             try:
                 from chatbot.tasks import schedule_reminder_delivery
                 await sync_to_async(schedule_reminder_delivery)(reminder.id, scheduled_time)
             except Exception as e:
                 logger.warning(f"Reminder scheduling skipped: {e}")
 
-            # Format friendly time display
-            local_time = scheduled_time.strftime("%I:%M %p")
+            # Format friendly time display in the USER's timezone, not UTC.
+            local_dt = scheduled_time
+            try:
+                import pytz
+                local_dt = scheduled_time.astimezone(pytz.timezone(user_tz))
+            except Exception:
+                pass
+            local_time = local_dt.strftime("%I:%M %p")
+            local_date = local_dt.strftime("%a %d/%m/%Y")
 
             return {
                 "status": "success",
-                "message": f"✅ I've set a reminder: '{content}' for {local_time}.",
+                "message": f"✅ I've {message}: '{content}' for {local_time} ({local_date}).",
                 "reminder_id": reminder.id,
-                "timestamp": scheduled_time.isoformat()
+                "timestamp": scheduled_time.isoformat(),
+                "delivery": delivery,
+                "timezone": user_tz,
             }
 
         except Exception as e:
             logger.error(f"Reminder error: {e}")
             return {"status": "error", "message": "Failed to set reminder."}
+
+    async def _list_reminders(self, user_id: int) -> Dict:
+        from chatbot.models import Reminder
+        from asgiref.sync import sync_to_async
+
+        def _query():
+            reminders = Reminder.objects.filter(user_id=user_id).order_by('scheduled_time')[:50]
+            return [
+                {
+                    "id": r.id,
+                    "content": r.content,
+                    "scheduled_time": r.scheduled_time.isoformat(),
+                    "timezone": r.timezone,
+                    "priority": r.priority,
+                    "status": r.status,
+                    "delivery": (
+                        "auto" if (r.via_email and r.via_whatsapp)
+                        else "email" if r.via_email
+                        else "whatsapp" if r.via_whatsapp
+                        else "in_app"
+                    ),
+                    "error_log": r.error_log or "",
+                }
+                for r in reminders
+            ]
+
+        rows = await sync_to_async(_query)()
+        return {
+            "status": "success",
+            "count": len(rows),
+            "reminders": rows,
+        }
+
+    async def _list_notifications(self, user_id: int) -> Dict:
+        from asgiref.sync import sync_to_async
+
+        def _query():
+            from notifications.models import Notification
+            notifications = Notification.objects.filter(user_id=user_id).order_by('-created_at')[:50]
+            return [
+                {
+                    "id": n.id,
+                    "event_type": n.event_type,
+                    "title": n.title,
+                    "body": n.body,
+                    "severity": n.severity,
+                    "is_read": n.is_read,
+                    "created_at": n.created_at.isoformat(),
+                }
+                for n in notifications
+            ]
+
+        rows = await sync_to_async(_query)()
+        return {
+            "status": "success",
+            "count": len(rows),
+            "notifications": rows,
+        }
 
 
 _router = None

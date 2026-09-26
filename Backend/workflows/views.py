@@ -38,6 +38,7 @@ def _serialize_approval(approval: WorkflowApprovalRecord | None):
         "status": approval.status,
         "approval_message": approval.approval_message,
         "sanitized_params": approval.sanitized_params,
+        "effects": (approval.metadata or {}).get("effects"),
         "expires_at": approval.expires_at.isoformat() if approval.expires_at else None,
         "review_comment": approval.review_comment,
         "reviewed_by_id": approval.reviewed_by_id,

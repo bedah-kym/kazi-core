@@ -23,6 +23,7 @@ from temporalio.common import RetryPolicy
 from temporalio.exceptions import ApplicationError
 
 from orchestration.security_policy import sanitize_parameters, user_has_room_access
+from orchestration.tool_executor import preview_tool
 
 from .activity_executors import execute_workflow_step
 from .models import (
@@ -284,6 +285,29 @@ async def run_step_activity(step: Dict[str, Any], context: Dict[str, Any]) -> Di
     return await execute_workflow_step(step, context)
 
 
+@activity.defn
+async def preview_approval_effects(
+    action: str,
+    parameters: Dict[str, Any],
+    user_id: int,
+    execution_id: int,
+) -> Optional[List[str]]:
+    """Compute approval-card effects for a workflow step (read-only).
+
+    Runs as an activity so connector previews never execute inside
+    workflow code, where a replayed non-deterministic call would corrupt
+    history. Fail-closed: any error yields None.
+    """
+    try:
+        return await preview_tool(
+            action,
+            parameters,
+            {"user_id": user_id, "execution_id": execution_id},
+        )
+    except Exception:
+        return None
+
+
 @workflow.defn
 class DynamicUserWorkflow:
     def __init__(self) -> None:
@@ -429,6 +453,20 @@ class DynamicUserWorkflow:
                 if step_requires_approval(step):
                     timeout_minutes = get_approval_timeout_minutes(step)
                     approval_message = str(step.get("approval_message") or "").strip()
+                    step_action = str(step.get("action") or "")
+                    sanitized_step_params = sanitize_parameters(
+                        resolve_parameters(step.get("params") or {}, context)
+                    )
+                    effects = await workflow.execute_activity(
+                        preview_approval_effects,
+                        args=[
+                            step_action,
+                            sanitized_step_params,
+                            user_id or 0,
+                            execution_id,
+                        ],
+                        schedule_to_close_timeout=timedelta(seconds=15),
+                    )
                     approval_id = await workflow.execute_activity(
                         create_approval_record,
                         args=[
@@ -437,11 +475,11 @@ class DynamicUserWorkflow:
                             user_id or 0,
                             step_id,
                             str(step.get("service") or ""),
-                            str(step.get("action") or ""),
+                            step_action,
                             approval_message,
-                            sanitize_parameters(resolve_parameters(step.get("params") or {}, context)),
+                            sanitized_step_params,
                             (workflow.now() + timedelta(minutes=timeout_minutes)).isoformat(),
-                            {"trigger_type": trigger_type},
+                            {"trigger_type": trigger_type, "effects": effects},
                         ],
                         schedule_to_close_timeout=timedelta(seconds=30),
                     )

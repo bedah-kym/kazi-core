@@ -1,7 +1,22 @@
 from rest_framework.throttling import UserRateThrottle
 
 
-class AIRequestThrottle(UserRateThrottle):
+class PlanAwareUserThrottle(UserRateThrottle):
+    """Resolve the per-request rate lazily.
+
+    DRF parses ``self.rate`` in ``__init__``, before the request exists, so a
+    plan-aware ``get_rate()`` must be re-applied in ``get_cache_key`` where
+    ``request.user`` is available.
+    """
+
+    def get_cache_key(self, request, view):
+        self.user = getattr(request, 'user', None)
+        self.rate = self.get_rate()
+        self.num_requests, self.duration = self.parse_rate(self.rate)
+        return super().get_cache_key(request, view)
+
+
+class AIRequestThrottle(PlanAwareUserThrottle):
     scope = 'ai_request'
 
     def get_rate(self):
@@ -25,7 +40,7 @@ class AIRequestThrottle(UserRateThrottle):
         return '10/day'
 
 
-class GlobalApiThrottle(UserRateThrottle):
+class GlobalApiThrottle(PlanAwareUserThrottle):
     scope = 'global_api'
 
     def get_rate(self):

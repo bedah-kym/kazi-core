@@ -29,7 +29,7 @@ twisted[tls]>=26.4.0
 httpx>=0.28.1
 
 # Utilities
-python-dotenv>=1.0.1
+python-dotenv>=1.2.3
 async-timeout>=4.0.3
 attrs>=23.2.0
 cffi>=2.1.1

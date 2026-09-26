@@ -100,7 +100,9 @@ class Notification(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        ordering = ["-created_at"]
+        # -id tiebreaker: auto_now_add timestamps can tie under rapid inserts,
+        # which made pagination order nondeterministic.
+        ordering = ["-created_at", "-id"]
         indexes = [
             models.Index(fields=["user", "is_read", "-created_at"]),
             models.Index(fields=["user", "is_dismissed", "-created_at"]),

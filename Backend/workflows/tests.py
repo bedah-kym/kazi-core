@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -305,6 +306,66 @@ class WorkflowApiTests(TestCase):
         self.assertEqual(payload["receipt_ids"], [7])
         self.assertEqual(payload["pending_approval"]["id"], approval.id)
 
+    @override_settings(TEMPORAL_DISABLED=True)
+    def test_run_endpoint_queues_when_temporal_disabled(self):
+        response = self.client.post(
+            f"/api/workflows/{self.workflow.id}/run/",
+            {"trigger_data": {"stress_run": 7}},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json()["status"], "queued")
+        self.assertIsNotNone(response.json()["deferred_id"])
+        deferred = DeferredWorkflowExecution.objects.filter(
+            workflow=self.workflow, user=self.user
+        )
+        self.assertEqual(deferred.count(), 1)
+
+    @override_settings(TEMPORAL_DISABLED=True)
+    def test_run_endpoint_never_touches_temporal_when_disabled(self):
+        with patch("workflows.views.start_workflow_execution", new=AsyncMock()) as mock_start:
+            response = self.client.post(
+                f"/api/workflows/{self.workflow.id}/run/",
+                {"trigger_data": {"stress_run": 8}},
+                format="json",
+            )
+        self.assertEqual(response.status_code, 202)
+        mock_start.assert_not_awaited()
+
+    def test_run_endpoint_queues_when_temporal_unreachable(self):
+        with patch(
+            "workflows.views.start_workflow_execution",
+            new=AsyncMock(side_effect=RuntimeError("tcp connect error")),
+        ):
+            response = self.client.post(
+                f"/api/workflows/{self.workflow.id}/run/",
+                {"trigger_data": {"stress_run": 9}},
+                format="json",
+            )
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json()["status"], "queued")
+
+    @override_settings(TEMPORAL_DISABLED=True)
+    def test_run_endpoint_dedupes_identical_requests_within_window(self):
+        payload = {"trigger_data": {"stress_run": 10}}
+        first = self.client.post(
+            f"/api/workflows/{self.workflow.id}/run/", payload, format="json"
+        )
+        self.assertEqual(first.status_code, 202)
+        second = self.client.post(
+            f"/api/workflows/{self.workflow.id}/run/", payload, format="json"
+        )
+        self.assertEqual(second.status_code, 409)
+        self.assertEqual(second.json()["status"], "duplicate")
+        different = self.client.post(
+            f"/api/workflows/{self.workflow.id}/run/",
+            {"trigger_data": {"stress_run": 11}},
+            format="json",
+        )
+        self.assertEqual(different.status_code, 202)
+        queued = DeferredWorkflowExecution.objects.filter(workflow=self.workflow)
+        self.assertEqual(queued.count(), 2)
+
     def test_approval_payload_exposes_effects_from_metadata(self):
         execution = WorkflowExecution.objects.create(
             workflow=self.workflow,
@@ -372,6 +433,55 @@ class WorkflowApiTests(TestCase):
         pending = response.json()["execution"]["pending_approval"]
         self.assertIn("effects", pending)
         self.assertIsNone(pending["effects"])
+
+    def test_run_endpoint_fails_closed_when_reservation_cache_unavailable(self):
+        with patch("workflows.views.cache.add", side_effect=RuntimeError("redis down")):
+            response = self.client.post(
+                f"/api/workflows/{self.workflow.id}/run/",
+                {"trigger_data": {"stress_run": 20}},
+                format="json",
+            )
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(
+            DeferredWorkflowExecution.objects.filter(workflow=self.workflow).count(), 0
+        )
+
+    def test_run_endpoint_releases_reservation_when_queue_fails(self):
+        payload = {"trigger_data": {"stress_run": 21}}
+        with patch.object(
+            DeferredWorkflowExecution.objects, "create",
+            side_effect=RuntimeError("db down"),
+        ):
+            response = self.client.post(
+                f"/api/workflows/{self.workflow.id}/run/",
+                payload,
+                format="json",
+            )
+        self.assertEqual(response.status_code, 503)
+        retry = self.client.post(
+            f"/api/workflows/{self.workflow.id}/run/",
+            payload,
+            format="json",
+        )
+        self.assertEqual(retry.status_code, 202)
+
+    def test_run_endpoint_passes_deterministic_run_id(self):
+        from workflows import views
+
+        payload = {"trigger_data": {"stress_run": 22}}
+        execution = MagicMock(id=7)
+        with patch(
+            "workflows.views.start_workflow_execution",
+            new=AsyncMock(return_value=execution),
+        ) as mock_start:
+            response = self.client.post(
+                f"/api/workflows/{self.workflow.id}/run/",
+                payload,
+                format="json",
+            )
+        self.assertEqual(response.status_code, 200)
+        expected = f"workflow-{self.workflow.id}-{views._run_digest(self.workflow, payload['trigger_data'])}"
+        self.assertEqual(mock_start.await_args.kwargs["workflow_run_id"], expected)
 
     def test_approve_endpoint_signals_temporal_execution(self):
         execution = WorkflowExecution.objects.create(
@@ -518,6 +628,41 @@ class DeferredReplayTaskTests(TestCase):
         self.assertEqual(deferred.status, "abandoned")
         self.assertTrue(deferred.dead_letter_reason)
         self.assertTrue(deferred.recovery_hint)
+
+    def test_replay_reuses_reserved_run_identity(self):  # nosec B106 — test fixture — fake credential
+        cache.clear()
+        user = User.objects.create_user(username="replay-id-user", password="secret")  # nosec B106 — test fixture — fake credential
+        workflow = UserWorkflow.objects.create(
+            user=user,
+            name="Replay identity",
+            description="Queued run",
+            definition={"workflow_name": "Replay identity", "workflow_description": "Queued run", "triggers": [], "steps": []},
+        )
+        deferred = DeferredWorkflowExecution.objects.create(
+            workflow=workflow,
+            user=user,
+            status="queued",
+            trigger_data={},
+        )
+        cache.set(f"workflow_deferred_run:{deferred.id}", "workflow-9-abc123", timeout=300)
+        execution = WorkflowExecution.objects.create(
+            workflow=workflow,
+            temporal_workflow_id="wf-replay-id",
+            trigger_type="manual",
+            trigger_data={},
+            status="running",
+        )
+
+        with patch(
+            "workflows.tasks.start_workflow_execution",
+            new=AsyncMock(return_value=execution),
+        ) as mock_start:
+            result = replay_deferred_workflows(limit=1)
+
+        self.assertEqual(result["started"], 1)
+        self.assertEqual(
+            mock_start.await_args.kwargs["workflow_run_id"], "workflow-9-abc123"
+        )
 
 
 class SweepStuckApprovalsTaskTests(TestCase):

@@ -480,11 +480,13 @@ class LLMClient:
             )
 
         max_tokens = min(max_tokens, getattr(settings, 'LLM_MAX_TOKENS', 700))
-        system_prompt = _inject_current_datetime(system_prompt)
         user_prompt = self._truncate(user_prompt)
         system_prompt = self._truncate(system_prompt, is_system=True)
         cache_key = None
         if self._should_cache(json_mode=json_mode, temperature=temperature):
+            # Key from the timestamp-free prompt: the date line changes every
+            # minute and would otherwise defeat the response cache for
+            # otherwise-identical calls in adjacent minutes.
             cache_key = self._cache_key(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
@@ -499,6 +501,7 @@ class LLMClient:
             cached = cache.get(cache_key)
             if cached:
                 return cached
+        system_prompt = _inject_current_datetime(system_prompt)
         provider_order = self._provider_order(model_role, provider_preference)
         last_error: Optional[Exception] = None
         for provider in provider_order:
@@ -700,14 +703,27 @@ class LLMClient:
         }
         if system:
             if use_prompt_cache:
-                # Structured system prompt with cache_control for prompt caching
-                body["system"] = [
-                    {
-                        "type": "text",
-                        "text": system,
-                        "cache_control": {"type": "ephemeral"},
-                    }
-                ]
+                # Structured system prompt with cache_control for prompt caching.
+                # The date stamp is volatile: keep it AFTER the breakpoint so
+                # the static system text stays a cacheable exact prefix.
+                if system.startswith(_DATE_MARKER):
+                    stamp, _, static = system.partition("\n")
+                    body["system"] = [
+                        {
+                            "type": "text",
+                            "text": static,
+                            "cache_control": {"type": "ephemeral"},
+                        },
+                        {"type": "text", "text": stamp},
+                    ]
+                else:
+                    body["system"] = [
+                        {
+                            "type": "text",
+                            "text": system,
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ]
             else:
                 body["system"] = system
         if tools:

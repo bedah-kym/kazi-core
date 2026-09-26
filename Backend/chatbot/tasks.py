@@ -903,11 +903,14 @@ def send_reminder(self, reminder_id: int):
     if timezone.is_naive(scheduled_time):
         scheduled_time = timezone.make_aware(scheduled_time)
 
-    if scheduled_time > now + timedelta(minutes=1):
+    if scheduled_time > now:
+        # The dedupe path can push a pending reminder later by up to a
+        # minute; the earlier-queued task must not deliver before the
+        # updated time, so any future time reschedules.
         schedule_reminder_delivery(reminder_id, scheduled_time)
         return {"status": "rescheduled", "run_at": scheduled_time.isoformat()}
 
-    if not _claim_reminder_delivery(reminder_id):
+    if self.request.retries == 0 and not _claim_reminder_delivery(reminder_id):
         return {"status": "skipped", "reason": "delivery_in_progress"}
 
     delivered, channel = _deliver_reminder(

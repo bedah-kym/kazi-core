@@ -39,6 +39,23 @@ class _HeldRedis:
         return True
 
 
+class _ClaimRedis:
+    def __init__(self):
+        self.store = {}
+        self.set_calls = 0
+
+    def set(self, key, value, nx=False, ex=None):
+        self.set_calls += 1
+        if nx and key in self.store:
+            return None
+        self.store[key] = value
+        return True
+
+    def delete(self, *args, **kwargs):
+        self.store.pop(args[0], None)
+        return True
+
+
 class DeliveryModeResolutionTests(TestCase):
     def test_flag_combinations_map_to_modes(self):
         def reminder(email, whatsapp):
@@ -249,6 +266,38 @@ class ReminderDeliveryRouterTests(TransactionTestCase):
             result = chatbot_tasks.send_reminder.run(reminder.id)
         self.assertEqual(result["status"], "sent")
         self.assertIn(f"reminder_claim:{reminder.id}", fake.deleted)
+
+    def test_send_reminder_reschedules_within_the_final_minute(self):
+        reminder = self._reminder(via_email=True, via_whatsapp=False)
+        soon = timezone.now() + timedelta(seconds=30)
+        Reminder.objects.filter(pk=reminder.pk).update(scheduled_time=soon)
+        reminder.refresh_from_db()
+        with patch.object(chatbot_tasks, "schedule_reminder_delivery") as mock_sched, \
+             patch.object(chatbot_tasks, "_deliver_reminder") as mock_deliver:
+            result = chatbot_tasks.send_reminder.run(reminder.id)
+        self.assertEqual(result["status"], "rescheduled")
+        mock_sched.assert_called_once()
+        mock_deliver.assert_not_called()
+
+    def test_retry_skips_claim_and_redelivers(self):
+        reminder = self._reminder(priority="high")
+        Reminder.objects.filter(pk=reminder.pk).update(
+            scheduled_time=timezone.now() - timedelta(hours=1)
+        )
+        reminder.refresh_from_db()
+        redis = _ClaimRedis()
+        with override_settings(CELERY_TASK_ALWAYS_EAGER=True), \
+             patch("django_redis.get_redis_connection", return_value=redis), \
+             patch.object(chatbot_tasks, "_deliver_reminder",
+                          side_effect=[(False, "email"), (True, "email")]) as mock_deliver, \
+             patch("notifications.services.NotificationService.notify"):
+            chatbot_tasks.send_reminder.apply(args=[reminder.id], retries=0)
+        self.assertEqual(redis.set_calls, 1)
+        self.assertEqual(mock_deliver.call_count, 2)
+        reminder.refresh_from_db()
+        self.assertEqual(reminder.status, "sent")
+        reminder.refresh_from_db()
+        self.assertEqual(reminder.status, "sent")
 
 
 class ReminderConnectorToolTests(TransactionTestCase):

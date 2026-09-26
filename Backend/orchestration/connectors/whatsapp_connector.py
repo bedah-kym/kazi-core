@@ -92,7 +92,7 @@ class WhatsAppConnector(BaseConnector):
 
         if settings.DEBUG and not self.client:
             # Mock mode for dev
-            logger.debug(f"[WhatsApp-Mock] Sending to {to}: {body}")
+            logger.debug("[WhatsApp-Mock] Sending mock message (no Twilio client configured)")
             return {"status": "sent", "mock": True}
 
         if self.provider == 'twilio' and self.client:

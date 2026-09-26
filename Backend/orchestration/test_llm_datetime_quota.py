@@ -46,7 +46,9 @@ class DatetimeInjectionTests(SimpleTestCase):
                 client, "_call_huggingface",
                 new=AsyncMock(return_value="hello"),
             ) as mock_call:
-                await client.generate_text("You are helpful.", "hi", user_id=None)
+                await client.generate_text(
+                    "You are helpful.", "hi", user_id=None, provider_preference="deepseek",
+                )
             sent_system = mock_call.await_args.args[0]
             return sent_system
 

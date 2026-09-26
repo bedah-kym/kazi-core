@@ -31,7 +31,7 @@ class EmailRoutingTests(TestCase):
         connectors = discover_connectors()
         self.assertIsInstance(connectors["send_email"], MailgunConnector)
 
-    @override_settings(GMAIL_OAUTH_CLIENT_ID="client-x", GMAIL_OAUTH_CLIENT_SECRET="secret-y")
+    @override_settings(GMAIL_OAUTH_CLIENT_ID="client-x", GMAIL_OAUTH_CLIENT_SECRET="secret-y")  # nosec B106 — test fixture, fake credential
     def test_gmail_wins_when_oauth_configured(self):
         from orchestration.connector_registry import discover_connectors
         from orchestration.connectors.gmail_connector import GmailConnector

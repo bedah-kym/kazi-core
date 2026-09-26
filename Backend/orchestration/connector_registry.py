@@ -336,6 +336,8 @@ def _load_legacy_connectors() -> Dict[str, Any]:
             "send_whatsapp": WhatsAppConnector(),
             "send_email": _pick_send_email_connector(),
             "set_reminder": ReminderConnector(),
+            "list_reminders": ReminderConnector(),
+            "list_notifications": ReminderConnector(),
             "check_quotas": QuotaConnector(),
             "check_balance": ReadOnlyPaymentConnector(),
             "list_transactions": ReadOnlyPaymentConnector(),

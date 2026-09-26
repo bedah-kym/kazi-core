@@ -715,9 +715,10 @@ async def start_workflow_execution(
     trigger_data: Dict[str, Any],
     trigger_type: str,
     execution_id: Optional[int] = None,
+    workflow_run_id: Optional[str] = None,
 ) -> WorkflowExecution:
     client = await get_temporal_client()
-    workflow_run_id = f"workflow-{workflow_obj.id}-{uuid.uuid4()}"
+    workflow_run_id = workflow_run_id or f"workflow-{workflow_obj.id}-{uuid.uuid4()}"
 
     if not isinstance(trigger_data, dict):
         raise ValueError("trigger_data must be a dictionary")

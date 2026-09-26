@@ -113,10 +113,18 @@ def replay_deferred_workflows(limit: int = None) -> Dict[str, int]:
             continue
 
         try:
+            # Reuse the run identity reserved at queue time so a replay
+            # never starts a second Temporal workflow for the same request.
+            run_id = None
+            try:
+                run_id = cache.get(f"workflow_deferred_run:{deferred_id}")
+            except Exception:
+                run_id = None
             execution = async_to_sync(start_workflow_execution)(
                 workflow_obj,
                 deferred.trigger_data or {},
                 'manual',
+                workflow_run_id=run_id,
             )
             deferred.status = 'started'
             deferred.execution = execution

@@ -8,6 +8,7 @@ from rest_framework.response import Response
 
 import hashlib
 import json
+from typing import Optional
 
 from orchestration.security_policy import sanitize_parameters, user_has_room_access
 
@@ -31,32 +32,41 @@ from .temporal_integration import (
 )
 
 RUN_DEDUPE_TTL_SECONDS = 90
+DEFERRED_RUN_ID_TTL_SECONDS = 7 * 24 * 60 * 60
 
 
-def _run_dedupe_key(workflow: UserWorkflow, trigger_data: dict) -> str:
+def _run_digest(workflow: UserWorkflow, trigger_data: dict) -> str:
     payload = json.dumps(
         {"workflow": workflow.id, "trigger": trigger_data},
         sort_keys=True,
         default=str,
     )
-    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
-    return f"workflow_run:{workflow.user_id}:{digest}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-def _run_was_just_started(workflow: UserWorkflow, trigger_data: dict) -> bool:
+def _run_dedupe_key(workflow: UserWorkflow, trigger_data: dict) -> str:
+    return f"workflow_run:{workflow.user_id}:{_run_digest(workflow, trigger_data)}"
+
+
+def _reserve_run(workflow: UserWorkflow, trigger_data: dict) -> Optional[str]:
+    """Atomically reserve a run identity for (workflow, trigger_data).
+
+    Returns the reserved run id, None when the window already holds a
+    reservation, and raises on cache failure so the caller can fail
+    closed instead of silently dropping dedupe protection.
+    """
+    run_id = f"workflow-{workflow.id}-{_run_digest(workflow, trigger_data)}"
+    reserved = cache.add(
+        _run_dedupe_key(workflow, trigger_data),
+        run_id,
+        timeout=RUN_DEDUPE_TTL_SECONDS,
+    )
+    return run_id if reserved else None
+
+
+def _release_run(workflow: UserWorkflow, trigger_data: dict) -> None:
     try:
-        return bool(cache.get(_run_dedupe_key(workflow, trigger_data)))
-    except Exception:
-        return False
-
-
-def _mark_run_started(workflow: UserWorkflow, trigger_data: dict) -> None:
-    try:
-        cache.set(
-            _run_dedupe_key(workflow, trigger_data),
-            True,
-            timeout=RUN_DEDUPE_TTL_SECONDS,
-        )
+        cache.delete(_run_dedupe_key(workflow, trigger_data))
     except Exception:
         pass
 
@@ -265,7 +275,14 @@ def run_workflow(request, workflow_id):
             return Response({"error": "You do not have access to that room_id"}, status=403)
         trigger_data["room_id"] = room_id
 
-    if _run_was_just_started(workflow, trigger_data):
+    try:
+        run_id = _reserve_run(workflow, trigger_data)
+    except Exception:
+        return Response(
+            {"error": "Could not reserve the run; please try again shortly."},
+            status=503,
+        )
+    if run_id is None:
         return Response(
             {
                 "status": "duplicate",
@@ -276,7 +293,7 @@ def run_workflow(request, workflow_id):
 
     def _queue_deferred():
         try:
-            return DeferredWorkflowExecution.objects.create(
+            deferred = DeferredWorkflowExecution.objects.create(
                 workflow=workflow,
                 user_id=request.user.id,
                 room_id=room_id,
@@ -284,15 +301,24 @@ def run_workflow(request, workflow_id):
                 status="queued",
                 attempts=0,
                 next_attempt_at=timezone.now(),
-            ).id
+            )
         except Exception:
             return None
+        try:
+            cache.set(
+                f"workflow_deferred_run:{deferred.id}",
+                run_id,
+                timeout=DEFERRED_RUN_ID_TTL_SECONDS,
+            )
+        except Exception:
+            pass
+        return deferred.id
 
     if getattr(settings, "TEMPORAL_DISABLED", False):
         deferred_id = _queue_deferred()
         if deferred_id is None:
+            _release_run(workflow, trigger_data)
             return Response({"error": "Temporal is disabled and the run could not be queued."}, status=503)
-        _mark_run_started(workflow, trigger_data)
         return Response(
             {
                 "status": "queued",
@@ -308,12 +334,13 @@ def run_workflow(request, workflow_id):
             workflow,
             trigger_data=trigger_data,
             trigger_type="manual",
+            workflow_run_id=run_id,
         )
     except Exception:
         deferred_id = _queue_deferred()
         if deferred_id is None:
+            _release_run(workflow, trigger_data)
             return Response({"error": "Temporal is unavailable and the run could not be queued."}, status=503)
-        _mark_run_started(workflow, trigger_data)
         return Response(
             {
                 "status": "queued",
@@ -324,7 +351,6 @@ def run_workflow(request, workflow_id):
             status=202,
         )
 
-    _mark_run_started(workflow, trigger_data)
     return Response(
         {
             "status": "started",

@@ -615,7 +615,7 @@ def schedule_reminder_delivery(reminder_id: int, scheduled_time):
     send_reminder.apply_async((reminder_id,), eta=scheduled_time)
 
 
-PRESENCE_ONLINE_SECONDS = 300
+PRESENCE_ONLINE_SECONDS = 900
 REMINDER_URGENT_MAX_RETRIES = 5
 REMINDER_RETRY_BASE_SECONDS = 30
 REMINDER_RETRY_CAP_SECONDS = 300
@@ -817,9 +817,11 @@ def _deliver_reminder(reminder: Reminder) -> Tuple[bool, str]:
 
 def _finalize_failed_delivery(reminder: Reminder, attempts: int, channel: str) -> None:
     """Dead-letter a reminder whose delivery exhausted its retries."""
+    Reminder.objects.filter(pk=reminder.pk).update(
+        status='failed',
+        error_log=f"dead letter after {attempts} delivery attempt(s) on {channel}",
+    )
     reminder.status = 'failed'
-    reminder.error_log = f"dead letter after {attempts} delivery attempt(s) on {channel}"
-    reminder.save(update_fields=['status', 'error_log'])
     try:
         from notifications.services import NotificationService
         NotificationService.notify(
@@ -854,18 +856,23 @@ def send_reminder(self, reminder_id: int):
 
     delivered, channel = _deliver_reminder(reminder)
     if delivered:
-        reminder.status = 'sent'
-        reminder.sent_at = now
-        reminder.error_log = ''
-        reminder.save(update_fields=['status', 'sent_at', 'error_log'])
+        # Queryset update on purpose: Reminder.save() runs full_clean(),
+        # which rejects any save after scheduled_time is in the past, and
+        # that crash left delivered reminders stuck in 'pending' forever.
+        Reminder.objects.filter(pk=reminder.pk).update(
+            status='sent',
+            sent_at=now,
+            error_log='',
+        )
         return {"status": "sent", "channel": channel}
 
     # Urgent reminders get retries with exponential backoff before the
     # dead-letter: the user must be able to rely on the email arriving.
     if reminder.priority == 'high' and self.request.retries < self.max_retries:
         attempt = self.request.retries + 1
-        reminder.error_log = f"delivery attempt {attempt} failed on {channel}"
-        reminder.save(update_fields=['error_log'])
+        Reminder.objects.filter(pk=reminder.pk).update(
+            error_log=f"delivery attempt {attempt} failed on {channel}",
+        )
         countdown = _reminder_retry_delay(self.request.retries)
         raise self.retry(
             exc=RuntimeError(f"reminder {reminder.id} delivery failed on {channel}"),

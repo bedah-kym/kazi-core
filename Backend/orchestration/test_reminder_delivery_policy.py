@@ -118,6 +118,34 @@ class ReminderDeliveryRouterTests(TransactionTestCase):
         self.assertIn("dead letter", reminder.error_log)
         mock_notify.assert_called_once()
 
+    def test_delivery_save_survives_passed_scheduled_time(self):
+        reminder = self._reminder()
+        Reminder.objects.filter(pk=reminder.pk).update(
+            scheduled_time=timezone.now() - timedelta(hours=1)
+        )
+        reminder.refresh_from_db()
+        with patch.object(chatbot_tasks, "_deliver_reminder", return_value=(True, "chat")):
+            result = chatbot_tasks.send_reminder.run(reminder.id)
+        self.assertEqual(result["status"], "sent")
+        reminder.refresh_from_db()
+        self.assertEqual(reminder.status, "sent")
+        self.assertIsNotNone(reminder.sent_at)
+
+    def test_dead_letter_survives_passed_scheduled_time(self):
+        reminder = self._reminder(priority="high")
+        Reminder.objects.filter(pk=reminder.pk).update(
+            scheduled_time=timezone.now() - timedelta(hours=1)
+        )
+        reminder.refresh_from_db()
+        with patch.object(chatbot_tasks.send_reminder, "max_retries", 0), \
+             patch.object(chatbot_tasks, "_deliver_reminder", return_value=(False, "email")), \
+             patch("notifications.services.NotificationService.notify"):
+            result = chatbot_tasks.send_reminder.run(reminder.id)
+        self.assertEqual(result["status"], "dead_letter")
+        reminder.refresh_from_db()
+        self.assertEqual(reminder.status, "failed")
+        self.assertIn("dead letter", reminder.error_log)
+
 
 class ReminderConnectorToolTests(TransactionTestCase):
     def setUp(self):

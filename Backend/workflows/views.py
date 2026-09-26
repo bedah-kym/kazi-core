@@ -1,7 +1,13 @@
 from asgiref.sync import async_to_sync
+from django.conf import settings
+from django.core.cache import cache
+from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+
+import hashlib
+import json
 
 from orchestration.security_policy import sanitize_parameters, user_has_room_access
 
@@ -23,6 +29,36 @@ from .temporal_integration import (
     start_workflow_execution,
     submit_execution_approval,
 )
+
+RUN_DEDUPE_TTL_SECONDS = 90
+
+
+def _run_dedupe_key(workflow: UserWorkflow, trigger_data: dict) -> str:
+    payload = json.dumps(
+        {"workflow": workflow.id, "trigger": trigger_data},
+        sort_keys=True,
+        default=str,
+    )
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+    return f"workflow_run:{workflow.user_id}:{digest}"
+
+
+def _run_was_just_started(workflow: UserWorkflow, trigger_data: dict) -> bool:
+    try:
+        return bool(cache.get(_run_dedupe_key(workflow, trigger_data)))
+    except Exception:
+        return False
+
+
+def _mark_run_started(workflow: UserWorkflow, trigger_data: dict) -> None:
+    try:
+        cache.set(
+            _run_dedupe_key(workflow, trigger_data),
+            True,
+            timeout=RUN_DEDUPE_TTL_SECONDS,
+        )
+    except Exception:
+        pass
 
 
 def _serialize_approval(approval: WorkflowApprovalRecord | None):
@@ -228,12 +264,66 @@ def run_workflow(request, workflow_id):
             return Response({"error": "You do not have access to that room_id"}, status=403)
         trigger_data["room_id"] = room_id
 
-    execution = async_to_sync(start_workflow_execution)(
-        workflow,
-        trigger_data=trigger_data,
-        trigger_type="manual",
-    )
+    if _run_was_just_started(workflow, trigger_data):
+        return Response(
+            {
+                "status": "duplicate",
+                "error": "That run was already started within the last 90 seconds.",
+            },
+            status=409,
+        )
 
+    def _queue_deferred():
+        try:
+            return DeferredWorkflowExecution.objects.create(
+                workflow=workflow,
+                user_id=request.user.id,
+                room_id=room_id,
+                trigger_data=trigger_data,
+                status="queued",
+                attempts=0,
+                next_attempt_at=timezone.now(),
+            ).id
+        except Exception:
+            return None
+
+    if getattr(settings, "TEMPORAL_DISABLED", False):
+        deferred_id = _queue_deferred()
+        if deferred_id is None:
+            return Response({"error": "Temporal is disabled and the run could not be queued."}, status=503)
+        _mark_run_started(workflow, trigger_data)
+        return Response(
+            {
+                "status": "queued",
+                "workflow_id": workflow.id,
+                "deferred_id": deferred_id,
+                "message": "Temporal is disabled. This workflow was queued and will run when durable execution is back.",
+            },
+            status=202,
+        )
+
+    try:
+        execution = async_to_sync(start_workflow_execution)(
+            workflow,
+            trigger_data=trigger_data,
+            trigger_type="manual",
+        )
+    except Exception:
+        deferred_id = _queue_deferred()
+        if deferred_id is None:
+            return Response({"error": "Temporal is unavailable and the run could not be queued."}, status=503)
+        _mark_run_started(workflow, trigger_data)
+        return Response(
+            {
+                "status": "queued",
+                "workflow_id": workflow.id,
+                "deferred_id": deferred_id,
+                "message": "Temporal is unavailable. Your request is queued and will run when it is back up.",
+            },
+            status=202,
+        )
+
+    _mark_run_started(workflow, trigger_data)
     return Response(
         {
             "status": "started",

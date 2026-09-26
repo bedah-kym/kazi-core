@@ -305,6 +305,66 @@ class WorkflowApiTests(TestCase):
         self.assertEqual(payload["receipt_ids"], [7])
         self.assertEqual(payload["pending_approval"]["id"], approval.id)
 
+    @override_settings(TEMPORAL_DISABLED=True)
+    def test_run_endpoint_queues_when_temporal_disabled(self):
+        response = self.client.post(
+            f"/api/workflows/{self.workflow.id}/run/",
+            {"trigger_data": {"stress_run": 7}},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json()["status"], "queued")
+        self.assertIsNotNone(response.json()["deferred_id"])
+        deferred = DeferredWorkflowExecution.objects.filter(
+            workflow=self.workflow, user=self.user
+        )
+        self.assertEqual(deferred.count(), 1)
+
+    @override_settings(TEMPORAL_DISABLED=True)
+    def test_run_endpoint_never_touches_temporal_when_disabled(self):
+        with patch("workflows.views.start_workflow_execution", new=AsyncMock()) as mock_start:
+            response = self.client.post(
+                f"/api/workflows/{self.workflow.id}/run/",
+                {"trigger_data": {"stress_run": 8}},
+                format="json",
+            )
+        self.assertEqual(response.status_code, 202)
+        mock_start.assert_not_awaited()
+
+    def test_run_endpoint_queues_when_temporal_unreachable(self):
+        with patch(
+            "workflows.views.start_workflow_execution",
+            new=AsyncMock(side_effect=RuntimeError("tcp connect error")),
+        ):
+            response = self.client.post(
+                f"/api/workflows/{self.workflow.id}/run/",
+                {"trigger_data": {"stress_run": 9}},
+                format="json",
+            )
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json()["status"], "queued")
+
+    @override_settings(TEMPORAL_DISABLED=True)
+    def test_run_endpoint_dedupes_identical_requests_within_window(self):
+        payload = {"trigger_data": {"stress_run": 10}}
+        first = self.client.post(
+            f"/api/workflows/{self.workflow.id}/run/", payload, format="json"
+        )
+        self.assertEqual(first.status_code, 202)
+        second = self.client.post(
+            f"/api/workflows/{self.workflow.id}/run/", payload, format="json"
+        )
+        self.assertEqual(second.status_code, 409)
+        self.assertEqual(second.json()["status"], "duplicate")
+        different = self.client.post(
+            f"/api/workflows/{self.workflow.id}/run/",
+            {"trigger_data": {"stress_run": 11}},
+            format="json",
+        )
+        self.assertEqual(different.status_code, 202)
+        queued = DeferredWorkflowExecution.objects.filter(workflow=self.workflow)
+        self.assertEqual(queued.count(), 2)
+
     def test_approve_endpoint_signals_temporal_execution(self):
         execution = WorkflowExecution.objects.create(
             workflow=self.workflow,

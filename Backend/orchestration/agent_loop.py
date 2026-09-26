@@ -26,7 +26,7 @@ from orchestration.memory_state import update_memory_state, save_memory_summary
 from orchestration.model_catalog import find_model, model_pref_key, parse_model_id, provider_configured
 from orchestration.security_policy import redact_sensitive_text
 from orchestration.telemetry import record_event
-from orchestration.tool_executor import execute_tool, get_tool_risk_info
+from orchestration.tool_executor import execute_tool, get_tool_risk_info, preview_tool
 from orchestration.tool_schemas import get_tool_definitions
 from orchestration.user_preferences import enforce_agent_caps
 
@@ -175,6 +175,7 @@ async def save_pending_confirmation(
     user_id: int,
     tool: Dict[str, Any],
     confirmation_text: str,
+    effects: Optional[List[str]] = None,
 ) -> Optional[int]:
     """Durably persist a pending high-risk tool confirmation (DB)."""
 
@@ -192,7 +193,10 @@ async def save_pending_confirmation(
             "approval_message": confirmation_text,
             "sanitized_params": tool.get("input", {}),
             "expires_at": expires_at,
-            "metadata": {"tool_id": tool.get("id", "")},
+            "metadata": {
+                "tool_id": tool.get("id", ""),
+                "effects": effects,
+            },
         }
         record, created = WorkflowApprovalRecord.objects.get_or_create(
             kind=AGENT_LOOP_APPROVAL_KIND,
@@ -1392,16 +1396,24 @@ async def run_agent_loop(
                     tc["name"], tc["input"],
                 )
 
+                # Dry-run effects for the approval card (never executes).
+                try:
+                    effects = await preview_tool(tc["name"], tc["input"], context)
+                except Exception as exc:
+                    logger.warning("Preview failed for %s: %s", tc["name"], exc)
+                    effects = None
+
                 # Persist loop state (Redis) + durable approval record (DB)
                 if room_id and user_id:
                     save_loop_state(room_id, user_id, state)
                     await save_pending_confirmation(
-                        room_id, user_id, tc, confirmation_text,
+                        room_id, user_id, tc, confirmation_text, effects=effects,
                     )
                 yield AgentEvent("confirmation", {
                     "message": confirmation_text,
                     "tool_name": tc["name"],
                     "tool_input": tc["input"],
+                    "effects": effects,
                 })
                 # Pause the loop — consumer will resume after user confirms
                 return

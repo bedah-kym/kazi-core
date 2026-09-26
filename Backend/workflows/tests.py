@@ -365,6 +365,74 @@ class WorkflowApiTests(TestCase):
         queued = DeferredWorkflowExecution.objects.filter(workflow=self.workflow)
         self.assertEqual(queued.count(), 2)
 
+    def test_approval_payload_exposes_effects_from_metadata(self):
+        execution = WorkflowExecution.objects.create(
+            workflow=self.workflow,
+            temporal_workflow_id="wf-effects",
+            trigger_type="manual",
+            trigger_data={},
+            status="waiting",
+            current_step="email_step",
+            waiting_on="approval",
+        )
+        approval = WorkflowApprovalRecord.objects.create(
+            workflow=self.workflow,
+            execution=execution,
+            requested_by=self.user,
+            step_id="email_step",
+            service="gmail",
+            action="send_email",
+            approval_message="Approve the email",
+            sanitized_params={"to": "ops@example.com"},
+            metadata={
+                "trigger_type": "manual",
+                "effects": ["Send an email to ops@example.com"],
+            },
+        )
+        execution.pending_approval = approval
+        execution.save(update_fields=["pending_approval"])
+
+        with patch("workflows.views.fetch_execution_runtime_state", new=AsyncMock(return_value={
+            "status": "waiting",
+            "current_step": "email_step",
+            "waiting_on": "approval",
+        })):
+            response = self.client.get(f"/api/workflows/executions/{execution.id}/")
+
+        self.assertEqual(response.status_code, 200)
+        pending = response.json()["execution"]["pending_approval"]
+        self.assertEqual(pending["effects"], ["Send an email to ops@example.com"])
+
+    def test_approval_payload_effects_null_without_metadata(self):
+        execution = WorkflowExecution.objects.create(
+            workflow=self.workflow,
+            temporal_workflow_id="wf-no-effects",
+            trigger_type="manual",
+            trigger_data={},
+            status="waiting",
+        )
+        approval = WorkflowApprovalRecord.objects.create(
+            workflow=self.workflow,
+            execution=execution,
+            requested_by=self.user,
+            step_id="email_step",
+            service="gmail",
+            action="send_email",
+            sanitized_params={"to": "ops@example.com"},
+        )
+        execution.pending_approval = approval
+        execution.save(update_fields=["pending_approval"])
+
+        with patch("workflows.views.fetch_execution_runtime_state", new=AsyncMock(return_value={
+            "status": "waiting",
+        })):
+            response = self.client.get(f"/api/workflows/executions/{execution.id}/")
+
+        self.assertEqual(response.status_code, 200)
+        pending = response.json()["execution"]["pending_approval"]
+        self.assertIn("effects", pending)
+        self.assertIsNone(pending["effects"])
+
     def test_approve_endpoint_signals_temporal_execution(self):
         execution = WorkflowExecution.objects.create(
             workflow=self.workflow,
@@ -1135,6 +1203,28 @@ class TemporalUpdateApprovalTests(TestCase):
             response = self.client.post(f"/api/workflows/executions/{execution.id}/approve/", {}, format="json")
         self.assertEqual(response.status_code, 409)
         self.assertIn("approval id does not match", response.json()["detail"])
+
+
+class PreviewApprovalEffectsActivityTests(SimpleTestCase):
+    """The workflow-step preview activity (issue #168) is fail-closed."""
+
+    def test_activity_returns_effects(self):
+        from workflows import temporal_integration as ti
+
+        with patch.object(ti, "preview_tool", new=AsyncMock(return_value=["Send an email"])):
+            effects = async_to_sync(ti.preview_approval_effects)(
+                "send_email", {"to": "ops@example.com"}, 1, 5
+            )
+        self.assertEqual(effects, ["Send an email"])
+
+    def test_activity_returns_none_when_preview_fails(self):
+        from workflows import temporal_integration as ti
+
+        with patch.object(ti, "preview_tool", new=AsyncMock(side_effect=RuntimeError("boom"))):
+            effects = async_to_sync(ti.preview_approval_effects)(
+                "send_email", {"to": "ops@example.com"}, 1, 5
+            )
+        self.assertIsNone(effects)
 
 
 class ApprovalUpdateHandlerTests(SimpleTestCase):

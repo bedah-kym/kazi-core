@@ -141,6 +141,60 @@ class Scenario2MultiToolChainTest(SimpleTestCase):
 
 
 # ---------------------------------------------------------------------------
+#  Scenario 2b: Approval payload carries dry-run effects (issue #168)
+# ---------------------------------------------------------------------------
+
+class Scenario2bConfirmationEffectsTest(SimpleTestCase):
+    """The confirmation payload includes connector preview() effects."""
+
+    def _run_confirmation(self, mock_preview):
+        mock_exec = AsyncMock()
+        mock_llm = MagicMock()
+        mock_llm.create_message = AsyncMock(side_effect=[
+            _make_llm_response(
+                [_text_block("I'll email the report."),
+                 _tool_use_block("t1", "send_email", {
+                     "to": "ops@example.com", "subject": "Report", "text": "Hi"
+                 })],
+                stop_reason="tool_use",
+            ),
+        ])
+
+        with patch("orchestration.agent_loop.get_llm_client", return_value=mock_llm), \
+             patch("orchestration.agent_loop.execute_tool", mock_exec), \
+             patch("orchestration.agent_loop.cache") as mock_cache, \
+             patch("orchestration.agent_loop.preview_tool", mock_preview), \
+             patch("orchestration.agent_loop.save_pending_confirmation",
+                   new_callable=AsyncMock) as mock_save:
+            mock_cache.get.return_value = None
+
+            from orchestration.agent_loop import run_agent_loop
+            events = run_async(collect_events(run_agent_loop(
+                user_message="Email the report to ops",
+                context={"user_id": 1, "room_id": 1, "username": "test"},
+            )))
+            return events, mock_save
+
+    def test_confirmation_payload_contains_effects(self):
+        effects = ["Send an email to ops@example.com", "Subject: Report"]
+        mock_preview = AsyncMock(return_value=effects)
+        events, mock_save = self._run_confirmation(mock_preview)
+
+        confirm_event = next(e for e in events if e.kind == "confirmation")
+        self.assertEqual(confirm_event.data["effects"], effects)
+        self.assertEqual(mock_save.call_args.kwargs["effects"], effects)
+
+    def test_confirmation_payload_without_preview_has_null_effects(self):
+        mock_preview = AsyncMock(return_value=None)
+        events, mock_save = self._run_confirmation(mock_preview)
+
+        confirm_event = next(e for e in events if e.kind == "confirmation")
+        self.assertIn("effects", confirm_event.data)
+        self.assertIsNone(confirm_event.data["effects"])
+        self.assertIsNone(mock_save.call_args.kwargs["effects"])
+
+
+# ---------------------------------------------------------------------------
 #  Scenario 3: Error recovery — bad city name → retry
 # ---------------------------------------------------------------------------
 

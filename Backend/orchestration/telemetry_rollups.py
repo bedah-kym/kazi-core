@@ -18,6 +18,7 @@ Design rules:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -205,12 +206,15 @@ def _read_events_from_file(
 def extract_entity_facts(events: Iterable[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     """Deterministic entity extraction over structured event fields.
 
-    Returns a dict keyed by stable fact keys mapping to fact records:
-    ``{type, value, first_seen, last_seen, occurrences}``.
+    Returns a dict keyed by stable collection keys mapping to fact records:
+    ``{type, name, value, first_seen, last_seen, occurrences}``. Keys are
+    never rebuilt from type+value at the end: two hosts sharing one IP, or
+    two distinct values for the same entity field, must stay separate
+    records instead of colliding.
     """
     collected: Dict[str, Dict[str, Any]] = {}
 
-    def _add(fact_key: str, fact_type: str, value: str, ts: str) -> None:
+    def _add(fact_key: str, fact_type: str, value: str, ts: str, name: Optional[str] = None) -> None:
         value = str(value).strip()[:120]
         if not value or value in {"", "None", "null", "none"}:
             return
@@ -218,6 +222,7 @@ def extract_entity_facts(events: Iterable[Dict[str, Any]]) -> Dict[str, Dict[str
         if record is None:
             collected[fact_key] = {
                 "type": fact_type,
+                "name": name,
                 "value": value,
                 "first_seen": ts,
                 "last_seen": ts,
@@ -225,6 +230,8 @@ def extract_entity_facts(events: Iterable[Dict[str, Any]]) -> Dict[str, Dict[str
             }
         else:
             record["occurrences"] += 1
+            if not record.get("name") and name:
+                record["name"] = name
             if ts < record["first_seen"]:
                 record["first_seen"] = ts
             if ts > record["last_seen"]:
@@ -244,6 +251,7 @@ def extract_entity_facts(events: Iterable[Dict[str, Any]]) -> Dict[str, Dict[str
                 "host",
                 str(address) if address else host_label,
                 ts,
+                name=host_label,
             )
 
         ip_value = event.get("ip")
@@ -287,17 +295,19 @@ def extract_entity_facts(events: Iterable[Dict[str, Any]]) -> Dict[str, Dict[str
                 if value not in (None, "", [], {}):
                     if isinstance(value, (list, tuple)):
                         value = ", ".join(str(v) for v in value)
-                    _add(f"entity:{key}", "entity", str(value), ts)
+                    value = str(value).strip()
+                    # Bounded, value-derived discriminator: distinct values
+                    # for the same field stay separate records without
+                    # embedding free text in the key.
+                    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+                    _add(f"entity:{key}:{digest}", "entity", value, ts, name=key)
 
     ranked = sorted(
-        collected.values(),
-        key=lambda record: record["occurrences"],
+        collected.items(),
+        key=lambda item: item[1]["occurrences"],
         reverse=True,
     )[:MAX_FACTS]
-    return {
-        f"{record['type']}:{record['value']}": record
-        for record in ranked
-    }
+    return dict(ranked)
 
 
 # ---------------------------------------------------------------------------
@@ -543,18 +553,22 @@ def load_watches() -> List[Dict[str, Any]]:
         return []
 
 
-def _store_facts(facts: Dict[str, Any]) -> None:
+def _store_facts(facts: Dict[str, Any]) -> bool:
     try:
         cache.set(FACTS_CACHE_KEY, facts, timeout=FACTS_TTL_SECONDS)
+        return True
     except Exception:
         logger.warning("Telemetry rollup could not persist facts", exc_info=True)
+        return False
 
 
-def _store_watches(watches: List[Dict[str, Any]]) -> None:
+def _store_watches(watches: List[Dict[str, Any]]) -> bool:
     try:
         cache.set(WATCHES_CACHE_KEY, watches, timeout=WATCHES_TTL_SECONDS)
+        return True
     except Exception:
         logger.warning("Telemetry rollup could not persist watches", exc_info=True)
+        return False
 
 
 def _merge_facts(current: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
@@ -618,7 +632,7 @@ def run_rollup(
 
     events: List[Dict[str, Any]] = []
     lines_read = 0
-    files_touched = 0
+    pending_bookmarks: List[Tuple[str, int, bool]] = []
     for path in files:
         if lines_read >= max_lines:
             break
@@ -627,12 +641,7 @@ def run_rollup(
         file_events, new_offset = _read_events_from_file(path, bookmark, remaining)
         events.extend(file_events)
         lines_read += len(file_events)
-        if new_offset > bookmark:
-            try:
-                cache.set(_bookmark_key(path), new_offset, timeout=BOOKMARK_TTL_SECONDS)
-            except Exception:
-                logger.warning("Telemetry rollup could not persist bookmark for %s", path)
-            files_touched += 1
+        pending_bookmarks.append((path, new_offset, new_offset > bookmark))
 
     if not events:
         _mark_window_done(day)
@@ -640,7 +649,7 @@ def run_rollup(
             "noop": False,
             "day": day,
             "rotated": bool(rotated_path),
-            "files_processed": files_touched,
+            "files_processed": 0,
             "lines_processed": 0,
             "facts": 0,
             "watches": 0,
@@ -648,11 +657,37 @@ def run_rollup(
 
     new_facts = extract_entity_facts(events)
     stored_facts = _merge_facts(load_facts(), new_facts)
-    _store_facts(stored_facts)
+    facts_ok = _store_facts(stored_facts)
 
     previous_watches = load_watches()
     watches = compute_watches(events, previous_watches)
-    _store_watches(watches)
+    watches_ok = _store_watches(watches)
+
+    # Bookmarks and the window marker only advance once the computed facts
+    # and watches are durably stored. If storage failed, a later retry
+    # re-reads the same offsets instead of silently skipping the window.
+    if not (facts_ok and watches_ok):
+        return {
+            "noop": False,
+            "day": day,
+            "rotated": bool(rotated_path),
+            "error": "storage_unavailable",
+            "files_processed": 0,
+            "lines_processed": lines_read,
+            "facts": 0,
+            "watches": 0,
+        }
+
+    files_touched = 0
+    for path, new_offset, advanced in pending_bookmarks:
+        try:
+            # Always refresh the TTL, even at EOF where the offset is
+            # unchanged: an expired bookmark would force a full re-read.
+            cache.set(_bookmark_key(path), new_offset, timeout=BOOKMARK_TTL_SECONDS)
+        except Exception:
+            logger.warning("Telemetry rollup could not persist bookmark for %s", path)
+        if advanced:
+            files_touched += 1
 
     _mark_window_done(day)
     return {

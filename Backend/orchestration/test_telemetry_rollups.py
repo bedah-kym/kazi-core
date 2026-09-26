@@ -9,6 +9,7 @@ import json
 import os
 import tempfile
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 from django.core.cache import cache
 from django.test import SimpleTestCase, override_settings
@@ -101,6 +102,27 @@ class EntityExtractionTests(RollupTestCase):
             events.append({"event": "command_result", "ts": _iso(25), "ip": f"10.0.{i // 250}.{i % 250}"})
         facts = rollups.extract_entity_facts(events)
         self.assertLessEqual(len(facts), rollups.MAX_FACTS)
+
+    def test_distinct_values_for_same_entity_field_stay_separate(self):
+        events = [
+            {"event": "agent_loop_done", "ts": _iso(25), "transcript": [
+                {"tool": "get_weather", "input": {"city": "Nairobi"}},
+                {"tool": "get_weather", "input": {"city": "Mombasa"}},
+            ]},
+        ]
+        facts = rollups.extract_entity_facts(events)
+        cities = [r for r in facts.values() if r["type"] == "entity" and r["name"] == "city"]
+        self.assertEqual(len(cities), 2)
+        self.assertEqual({c["value"] for c in cities}, {"Nairobi", "Mombasa"})
+
+    def test_hosts_sharing_one_ip_do_not_collide(self):
+        events = [
+            {"event": "command_result", "ts": _iso(25), "host": "printer", "ip": "10.0.0.9"},
+            {"event": "command_result", "ts": _iso(25), "host": "nas", "ip": "10.0.0.9"},
+        ]
+        facts = rollups.extract_entity_facts(events)
+        host_keys = [k for k in facts if k.startswith("host:")]
+        self.assertEqual(sorted(host_keys), ["host:nas", "host:printer"])
 
 
 # ---------------------------------------------------------------------------
@@ -301,6 +323,22 @@ class RotationAndBookmarkTests(RollupTestCase):
         self.assertIn("facts", facts)
         self.assertTrue(any(r["type"] == "host" for r in facts["facts"].values()))
         self.assertIsInstance(load_derived_watches(), list)
+
+    def test_storage_failure_does_not_advance_bookmarks_or_window(self):
+        _write(self.telemetry_path, _line({"event": "progress_event", "ts": _iso(25), "room_id": 1}))
+        with patch("orchestration.telemetry_rollups._store_facts", return_value=False), \
+             patch("orchestration.telemetry_rollups._store_watches", return_value=False):
+            summary = self.roll(day=26)
+        self.assertEqual(summary.get("error"), "storage_unavailable")
+        self.assertEqual(summary["files_processed"], 0)
+        self.assertEqual(
+            rollups.load_watches(), []
+        )
+        # Window marker was not set, so the next run reprocesses the file
+        # from the unadvanced bookmark instead of silently skipping.
+        retry = self.roll(day=27)
+        self.assertEqual(retry["lines_processed"], 1)
+        self.assertFalse(retry["noop"])
 
 
 class RotationEdgeTests(RollupTestCase):

@@ -124,5 +124,24 @@ class BaseConnector:
             f"{self.__class__.__name__} must implement execute()"
         )
 
+    async def preview(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Optionally describe the effects of an action without committing it.
+
+        Implement this to enrich approval cards with human-readable effect
+        lines instead of raw parameters. Must never perform the action or
+        make any external change — this is a read-only dry run.
+
+        Args:
+            parameters: Sanitized params with "action" key.
+            context: Dict with "user_id", "room_id", and other context.
+
+        Returns:
+            {"effects": [str, ...]} where each string is a one-line
+            human-readable effect (e.g. "Send an email to a@b.c — subject:
+            Receipt"), or None when no preview is available for the action.
+        """
+        return None
+
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__} name={self.name!r} v{self.version}>"

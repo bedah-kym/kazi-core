@@ -1,9 +1,15 @@
 # Connector Execution Contract
 
-**Version:** 1.1 · **Status:** stable · **Tier:** documented only
+**Version:** 1.2 · **Status:** stable · **Tier:** documented only
 
 What every `BaseConnector.execute(parameters, context)` call must
 return.
+
+> **v1.2 addition** — an optional `BaseConnector.preview(parameters,
+> context)` dry run lets connectors describe an action's effects for
+> approval cards without committing anything. Connectors that don't
+> implement it keep working; cards simply show no effects. See
+> [Preview (dry run)](#preview-dry-run-v12) below.
 
 > **v1.1 honesty note** — v1.0 said `data` was required, but 24 of 25
 > built-in connectors return result fields at the top level instead.
@@ -72,6 +78,47 @@ When v2.0 ships:
 - Until then, prefer the envelope shape in any new connector you write
   — it's already valid v1.1, will be the only valid shape in v2.0,
   and the runtime cost of switching later is just the diff
+
+## Preview (dry run) — v1.2
+
+Connectors may implement an optional async method to enrich approval
+cards:
+
+```python
+async def preview(self, parameters, context) -> Optional[Dict[str, Any]]:
+    """Describe effects without committing anything. Read-only."""
+    return {
+        "effects": [
+            "Send an email to ops@example.com from Mathia",
+            "Subject: Daily report",
+        ],
+    }
+```
+
+### Rules
+
+- **Optional.** The base class returns `None`. A connector without
+  `preview()` keeps working; the approval card just shows no effects.
+- **Never commits.** `preview()` must not perform the action, make
+  network calls that change state, or write receipts. It is a
+  formatting/dry-run helper only.
+- **Shape.** Return `{"effects": [str, ...]}` — one human-readable
+  line per predicted effect — or `None` when no preview is available
+  for the action. Each string renders as one line on the card.
+- **Sanitized input.** `parameters` are already sanitized by the
+  runtime before `preview()` is called, but connectors must not put
+  secrets or credentials into effect lines either.
+- **Fail closed.** If `preview()` raises or returns an unexpected
+  shape, the runtime discards it and continues the approval flow with
+  no effects.
+
+### Consumer side
+
+`Backend/orchestration/tool_executor.py` exposes `preview_tool()`,
+which the agent loop and the workflow runtime call at approval-creation
+time. Effects are stored on the approval record's `metadata.effects`
+and included in the approval payload as an additive `"effects"` key
+(`null` when absent).
 
 ## Examples
 
@@ -144,8 +191,9 @@ prompt to the user.
 |---|---|---|
 | 1.0 | v0.4.0 | First documented version. |
 | 1.1 | v0.4.1 | Documents both legacy and envelope response shapes; `data` is now optional during the v1.x window. v1.0's claim that `data` was required did not match the 24/25 built-in connectors that return fields at top level. v1.1 makes the contract honest about ground truth; v2.0 will narrow back to envelope-only and ship the connector migration. |
+| 1.2 | v0.6 | Adds the optional `preview()` dry-run method (`{"effects": [...]}`) for approval cards. Fully additive — connectors without `preview()` are unaffected. |
 
 ## Breaking changes
 
-None in 1.1. The envelope shape from 1.0 is still valid; the legacy
-shape that 1.0 silently allowed is now explicitly documented.
+None in 1.1 or 1.2. The envelope shape from 1.0 is still valid; the
+legacy shape that 1.0 silently allowed is now explicitly documented.

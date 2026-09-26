@@ -48,6 +48,22 @@ class MailgunConnector(BaseConnector):
 
         return {"error": f"Unknown Mailgun action: {action}"}
 
+    async def preview(self, parameters: dict, context: dict) -> dict:
+        action = parameters.get("action")
+        if action != "send_email":
+            return None
+        to = parameters.get("to") or "the recipient"
+        subject = parameters.get("subject") or "(no subject)"
+        sender = parameters.get("from")
+        if not sender:
+            sender = f"Mathia <mailgun@{self.domain}>" if self.domain else "Mathia"
+        return {
+            "effects": [
+                f"Send an email to {to} from {sender}",
+                f"Subject: {subject}",
+            ],
+        }
+
     async def send_email(self, to, subject, text, html=None, from_email=None):
         if not to:
             return {"error": "Recipient 'to' is required for send_email"}

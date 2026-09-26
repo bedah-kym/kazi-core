@@ -23,6 +23,7 @@ from temporalio.common import RetryPolicy
 from temporalio.exceptions import ApplicationError
 
 from orchestration.security_policy import sanitize_parameters, user_has_room_access
+from orchestration.tool_executor import preview_tool
 
 from .activity_executors import execute_workflow_step
 from .models import (
@@ -429,6 +430,18 @@ class DynamicUserWorkflow:
                 if step_requires_approval(step):
                     timeout_minutes = get_approval_timeout_minutes(step)
                     approval_message = str(step.get("approval_message") or "").strip()
+                    step_action = str(step.get("action") or "")
+                    sanitized_step_params = sanitize_parameters(
+                        resolve_parameters(step.get("params") or {}, context)
+                    )
+                    try:
+                        effects = await preview_tool(
+                            step_action,
+                            sanitized_step_params,
+                            {"user_id": user_id or 0, "execution_id": execution_id},
+                        )
+                    except Exception:
+                        effects = None
                     approval_id = await workflow.execute_activity(
                         create_approval_record,
                         args=[
@@ -437,11 +450,11 @@ class DynamicUserWorkflow:
                             user_id or 0,
                             step_id,
                             str(step.get("service") or ""),
-                            str(step.get("action") or ""),
+                            step_action,
                             approval_message,
-                            sanitize_parameters(resolve_parameters(step.get("params") or {}, context)),
+                            sanitized_step_params,
                             (workflow.now() + timedelta(minutes=timeout_minutes)).isoformat(),
-                            {"trigger_type": trigger_type},
+                            {"trigger_type": trigger_type, "effects": effects},
                         ],
                         schedule_to_close_timeout=timedelta(seconds=30),
                     )

@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from orchestration.action_catalog import (
     get_action_definition,
@@ -163,6 +163,49 @@ async def execute_tool(
         result["status"] = "success"
 
     return result
+
+
+async def preview_tool(
+    tool_name: str,
+    tool_input: Dict[str, Any],
+    context: Dict[str, Any],
+) -> Optional[List[str]]:
+    """
+    Compute a connector's predicted effects for an approval card (dry run).
+
+    Never executes the action. Fail-closed: any missing connector, missing
+    ``preview()``, or error inside preview yields None so the approval flow
+    always proceeds without effects.
+    """
+    action = resolve_action_alias(tool_name)
+
+    from orchestration.contact_tools import _CONTACT_TOOL_MAP
+    from orchestration.memory_tools import _MEMORY_TOOL_MAP
+    if action in _CONTACT_TOOL_MAP or action in _MEMORY_TOOL_MAP:
+        return None
+
+    if not get_action_definition(action):
+        return None
+
+    connector = _get_connector_map().get(action)
+    if not connector:
+        return None
+
+    parameters = sanitize_parameters(dict(tool_input))
+    parameters["action"] = action
+
+    try:
+        result = await connector.preview(parameters, context)
+    except Exception as exc:
+        logger.warning("Tool preview error for %s: %s", action, exc)
+        return None
+
+    if not isinstance(result, dict):
+        return None
+    effects = result.get("effects")
+    if not isinstance(effects, list):
+        return None
+    return [str(effect) for effect in effects]
 
 
 def get_tool_risk_info(

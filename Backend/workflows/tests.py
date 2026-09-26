@@ -305,6 +305,74 @@ class WorkflowApiTests(TestCase):
         self.assertEqual(payload["receipt_ids"], [7])
         self.assertEqual(payload["pending_approval"]["id"], approval.id)
 
+    def test_approval_payload_exposes_effects_from_metadata(self):
+        execution = WorkflowExecution.objects.create(
+            workflow=self.workflow,
+            temporal_workflow_id="wf-effects",
+            trigger_type="manual",
+            trigger_data={},
+            status="waiting",
+            current_step="email_step",
+            waiting_on="approval",
+        )
+        approval = WorkflowApprovalRecord.objects.create(
+            workflow=self.workflow,
+            execution=execution,
+            requested_by=self.user,
+            step_id="email_step",
+            service="gmail",
+            action="send_email",
+            approval_message="Approve the email",
+            sanitized_params={"to": "ops@example.com"},
+            metadata={
+                "trigger_type": "manual",
+                "effects": ["Send an email to ops@example.com"],
+            },
+        )
+        execution.pending_approval = approval
+        execution.save(update_fields=["pending_approval"])
+
+        with patch("workflows.views.fetch_execution_runtime_state", new=AsyncMock(return_value={
+            "status": "waiting",
+            "current_step": "email_step",
+            "waiting_on": "approval",
+        })):
+            response = self.client.get(f"/api/workflows/executions/{execution.id}/")
+
+        self.assertEqual(response.status_code, 200)
+        pending = response.json()["execution"]["pending_approval"]
+        self.assertEqual(pending["effects"], ["Send an email to ops@example.com"])
+
+    def test_approval_payload_effects_null_without_metadata(self):
+        execution = WorkflowExecution.objects.create(
+            workflow=self.workflow,
+            temporal_workflow_id="wf-no-effects",
+            trigger_type="manual",
+            trigger_data={},
+            status="waiting",
+        )
+        approval = WorkflowApprovalRecord.objects.create(
+            workflow=self.workflow,
+            execution=execution,
+            requested_by=self.user,
+            step_id="email_step",
+            service="gmail",
+            action="send_email",
+            sanitized_params={"to": "ops@example.com"},
+        )
+        execution.pending_approval = approval
+        execution.save(update_fields=["pending_approval"])
+
+        with patch("workflows.views.fetch_execution_runtime_state", new=AsyncMock(return_value={
+            "status": "waiting",
+        })):
+            response = self.client.get(f"/api/workflows/executions/{execution.id}/")
+
+        self.assertEqual(response.status_code, 200)
+        pending = response.json()["execution"]["pending_approval"]
+        self.assertIn("effects", pending)
+        self.assertIsNone(pending["effects"])
+
     def test_approve_endpoint_signals_temporal_execution(self):
         execution = WorkflowExecution.objects.create(
             workflow=self.workflow,

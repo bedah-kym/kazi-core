@@ -829,7 +829,8 @@ class ReminderConnector(BaseConnector):
                 - time (str): Time expression (e.g., 'in 10 minutes', '5pm', 'tomorrow at 9am').
                 - priority (str, optional): Priority level ('low', 'medium', 'high'). Defaults to 'medium'.
                 - delivery (str, optional): 'auto', 'in_app', 'email', or 'whatsapp'. Defaults to 'auto'.
-                - urgent (bool, optional): Force email delivery with retries/backoff.
+                - urgent (bool, optional): Force email delivery with retries/backoff
+                  (overrides delivery to 'email').
             context: Dict containing:
                 - user_id (int): ID of the user creating the reminder.
                 - room_id (int, optional): ID of the chatroom context.
@@ -936,7 +937,8 @@ class ReminderConnector(BaseConnector):
             else:
                 via_email, via_whatsapp = False, False
             if urgent:
-                via_email = True
+                via_email, via_whatsapp = True, False
+                delivery = "email"
 
             # Dedupe: an identical reminder created within a short window
             # updates the existing row instead of stacking duplicates.
@@ -957,6 +959,7 @@ class ReminderConnector(BaseConnector):
             if existing:
                 await sync_to_async(
                     lambda: Reminder.objects.filter(pk=existing.pk).update(
+                        scheduled_time=scheduled_time,
                         priority=priority,
                         via_email=via_email,
                         via_whatsapp=via_whatsapp,

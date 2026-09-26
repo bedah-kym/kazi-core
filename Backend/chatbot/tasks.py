@@ -630,7 +630,9 @@ def _is_user_online(user) -> bool:
         raw = redis.get(f"lastseen:{user.username}")
         if not raw:
             return False
-        last_seen = timezone.datetime.fromisoformat(str(raw))
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8")
+        last_seen = timezone.datetime.fromisoformat(raw)
         if timezone.is_naive(last_seen):
             last_seen = timezone.make_aware(last_seen, timezone.utc)
         return (timezone.now() - last_seen).total_seconds() < PRESENCE_ONLINE_SECONDS
@@ -677,7 +679,11 @@ def _send_reminder_email(reminder: Reminder) -> bool:
     except Exception as exc:
         logger.warning("Reminder email attempt failed: %s", exc)
         return False
-    return bool(isinstance(resp, dict) and resp.get("status") in ("sent", "success"))
+    if not isinstance(resp, dict):
+        return False
+    if resp.get("mock"):
+        return False
+    return resp.get("status") in ("sent", "success")
 
 
 def _send_reminder_telegram(reminder: Reminder) -> bool:
@@ -762,30 +768,36 @@ def _deliver_reminder_to_chat(reminder: Reminder) -> bool:
         return False
 
 
-def _deliver_reminder(reminder: Reminder) -> Tuple[bool, str]:
+def _deliver_reminder(reminder: Reminder, create_notification: bool = True) -> Tuple[bool, str]:
     """Deliver a due reminder. Returns (delivered, channel).
 
-    The in-app notification is ALWAYS created: it is the guaranteed
-    channel and can never be skipped by a delivery failure.
+    The in-app notification is the guaranteed channel: it is created on
+    the first delivery attempt only (retries must not stack duplicates)
+    and dispatched in-app only — the mode branches below are the single
+    source of external (email/chat/telegram/whatsapp) delivery.
     """
-    try:
-        from notifications.services import NotificationService
-        NotificationService.notify(
-            user=reminder.user,
-            event_type="reminder.due",
-            title="Reminder",
-            body=reminder.content,
-            severity="warning" if reminder.priority == "high" else "info",
-            related_reminder=reminder,
-            related_room=reminder.room,
-        )
-    except Exception:
-        logger.exception("Reminder in-app notification failed")
+    notification_created = True
+    if create_notification:
+        try:
+            from notifications.services import NotificationService
+            NotificationService.notify(
+                user=reminder.user,
+                event_type="reminder.due",
+                title="Reminder",
+                body=reminder.content,
+                severity="warning" if reminder.priority == "high" else "info",
+                related_reminder=reminder,
+                related_room=reminder.room,
+                channels={"in_app": True, "email": False, "whatsapp": False},
+            )
+        except Exception:
+            logger.exception("Reminder in-app notification failed")
+            notification_created = False
 
     mode = _resolve_delivery_mode(reminder)
 
     if mode == "in_app":
-        return True, "in_app"
+        return notification_created, "in_app"
 
     if mode == "auto":
         if _is_user_online(reminder.user):
@@ -803,16 +815,57 @@ def _deliver_reminder(reminder: Reminder) -> Tuple[bool, str]:
         try:
             from orchestration.connectors.whatsapp_connector import WhatsAppConnector
             wa = WhatsAppConnector()
-            resp = wa.send_message(
-                to=getattr(reminder.user, 'phone_number', None) or "",
-                body=f"Reminder: {reminder.content}"
+            profile = getattr(reminder.user, "profile", None)
+            prefs = getattr(profile, "notification_preferences", None) or {}
+            to = (
+                getattr(profile, "phone_number", None)
+                or getattr(profile, "phone", None)
+                or prefs.get("phone_number")
+                or ""
             )
+            resp = wa._send_message_sync(to, f"Reminder: {reminder.content}")
             return bool(resp.get("status") == "sent"), "whatsapp"
         except Exception as exc:
             logger.warning("Reminder whatsapp attempt failed: %s", exc)
             return False, "whatsapp"
 
     return False, mode
+
+
+REMINDER_CLAIM_TTL_SECONDS = 7200
+
+
+def _should_create_notification(reminder: Reminder, retries: int) -> bool:
+    """In-app mode retries must recreate the notification: it is the
+    delivery itself, so a retry implies the previous attempt failed.
+    External modes only notify on the first attempt to avoid stacking
+    duplicate in-app rows across retries."""
+    return retries == 0 or _resolve_delivery_mode(reminder) == "in_app"
+
+
+def _claim_reminder_delivery(reminder_id: int) -> bool:
+    """Atomically claim delivery for a reminder row.
+
+    The periodic scanner and the ETA task can both queue the same row,
+    and both would read status='pending'. The Redis claim makes delivery
+    idempotent without a schema change. Fail-open: if Redis is down the
+    reminder is still delivered (degraded mode may duplicate).
+    """
+    try:
+        from django_redis import get_redis_connection
+        return bool(get_redis_connection("default").set(
+            f"reminder_claim:{reminder_id}", "1", nx=True, ex=REMINDER_CLAIM_TTL_SECONDS
+        ))
+    except Exception:
+        return True
+
+
+def _release_reminder_claim(reminder_id: int) -> None:
+    try:
+        from django_redis import get_redis_connection
+        get_redis_connection("default").delete(f"reminder_claim:{reminder_id}")
+    except Exception:
+        pass
 
 
 def _finalize_failed_delivery(reminder: Reminder, attempts: int, channel: str) -> None:
@@ -854,7 +907,12 @@ def send_reminder(self, reminder_id: int):
         schedule_reminder_delivery(reminder_id, scheduled_time)
         return {"status": "rescheduled", "run_at": scheduled_time.isoformat()}
 
-    delivered, channel = _deliver_reminder(reminder)
+    if not _claim_reminder_delivery(reminder_id):
+        return {"status": "skipped", "reason": "delivery_in_progress"}
+
+    delivered, channel = _deliver_reminder(
+        reminder, create_notification=_should_create_notification(reminder, self.request.retries)
+    )
     if delivered:
         # Queryset update on purpose: Reminder.save() runs full_clean(),
         # which rejects any save after scheduled_time is in the past, and
@@ -864,10 +922,13 @@ def send_reminder(self, reminder_id: int):
             sent_at=now,
             error_log='',
         )
+        _release_reminder_claim(reminder_id)
         return {"status": "sent", "channel": channel}
 
     # Urgent reminders get retries with exponential backoff before the
     # dead-letter: the user must be able to rely on the email arriving.
+    # The claim is held across retries so the periodic scanner cannot
+    # queue a competing delivery for the same row.
     if reminder.priority == 'high' and self.request.retries < self.max_retries:
         attempt = self.request.retries + 1
         Reminder.objects.filter(pk=reminder.pk).update(
@@ -880,6 +941,7 @@ def send_reminder(self, reminder_id: int):
         )
 
     _finalize_failed_delivery(reminder, self.request.retries + 1, channel)
+    _release_reminder_claim(reminder_id)
     return {"status": "dead_letter", "channel": channel}
 
 

@@ -340,6 +340,10 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'workflows.tasks.sweep_stuck_approvals',
         'schedule': float(WORKFLOW_APPROVAL_SWEEP_SECONDS),
     },
+    'roll-telemetry': {
+        'task': 'orchestration.tasks.roll_telemetry',
+        'schedule': crontab(hour=3, minute=0),  # Nightly: rotate + roll up JSONL telemetry
+    },
 }
 
 if MODERATION_ENABLED:

@@ -848,7 +848,17 @@ class ReminderConnector(BaseConnector):
 
         try:
             user = await sync_to_async(User.objects.get)(pk=user_id)
-            user_tz = user.profile.timezone if hasattr(user, 'profile') else 'UTC'
+
+            def _user_timezone():
+                # Lazy related-object access is a sync ORM query; it must run
+                # on the sync thread, not the async event loop.
+                try:
+                    profile = getattr(user, "profile", None)
+                    return getattr(profile, "timezone", None) or "UTC"
+                except Exception:
+                    return "UTC"
+
+            user_tz = await sync_to_async(_user_timezone)()
 
             # Use LLM-based parser with clarification support
             try:

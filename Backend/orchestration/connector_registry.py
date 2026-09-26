@@ -286,12 +286,26 @@ def reset_registry() -> None:
     _contract_violations = []
 
 
+def _pick_send_email_connector():
+    """Route send_email by credentials.
+
+    Gmail needs its OAuth app credentials; when they are absent, Mailgun
+    is the default (real send with keys, mock send without).
+    """
+    from orchestration.connectors.gmail_connector import GmailConnector
+    from orchestration.connectors.mailgun_connector import MailgunConnector
+
+    gmail = GmailConnector()
+    if gmail.client_id and gmail.client_secret:
+        return gmail
+    return MailgunConnector()
+
+
 def _load_legacy_connectors() -> Dict[str, Any]:
     """Load the existing hardcoded connector map for backward compatibility."""
     try:
         from orchestration.connectors.whatsapp_connector import WhatsAppConnector
         from orchestration.connectors.intersend_connector import IntersendPayConnector
-        from orchestration.connectors.gmail_connector import GmailConnector
         from orchestration.connectors.quota_connector import QuotaConnector
         from orchestration.connectors.payment_connector import ReadOnlyPaymentConnector
         from orchestration.connectors.invoice_connector import InvoiceConnector
@@ -320,7 +334,7 @@ def _load_legacy_connectors() -> Dict[str, Any]:
             "convert_currency": CurrencyConnector(),
             "send_message": WhatsAppConnector(),
             "send_whatsapp": WhatsAppConnector(),
-            "send_email": GmailConnector(),
+            "send_email": _pick_send_email_connector(),
             "set_reminder": ReminderConnector(),
             "check_quotas": QuotaConnector(),
             "check_balance": ReadOnlyPaymentConnector(),

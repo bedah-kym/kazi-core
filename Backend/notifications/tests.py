@@ -190,13 +190,23 @@ class NotificationCenterViewTests(TestCase):
     def test_dismissed_notifications_are_hidden(self):
         from notifications.models import Notification
 
-        latest = Notification.objects.filter(user=self.user).first()
-        latest.is_dismissed = True
-        latest.save()
+        # Dismiss an item created by THIS test: mutating a shared
+        # setUpTestData row would leak into the other tests in this class.
+        Notification.objects.create(
+            user=self.user,
+            event_type="system.info",
+            title="Item Dismissed",
+            body="Fresh row",
+            severity="info",
+        )
+        fresh = Notification.objects.filter(user=self.user, title="Item Dismissed").first()
+        fresh.is_dismissed = True
+        fresh.save()
         self.client.force_login(self.user)
         response = self.client.get("/notifications/")
         self.assertEqual(response.status_code, 200)
-        self.assertNotContains(response, "Item 24")
+        self.assertNotContains(response, "Item Dismissed")
+        self.assertContains(response, "Item 24")
 
     def test_related_room_links_to_chat(self):
         from chatbot.models import Chatroom

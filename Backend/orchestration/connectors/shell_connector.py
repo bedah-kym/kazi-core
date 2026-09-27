@@ -85,9 +85,19 @@ class ShellConnector(BaseConnector):
                 "message": "The shell is not configured (SHELL_EXEC_TOKEN is unset).",
             }
 
-        profile = str(_setting("SHELL_EXEC_PROFILE", "standard") or "standard")
+        try:
+            from orchestration.shell.profiles import resolve_profile
+            profile = resolve_profile(
+                context.get("room_id"), context.get("preferences"),
+            ).name
+        except Exception:
+            profile = str(_setting("SHELL_EXEC_PROFILE", "standard") or "standard")
         allowlist = list(_setting("SHELL_EXEC_NETWORK_ALLOWLIST", []) or [])
-        classification = classify_command(command, profile=profile, allowlist=allowlist)
+        requested_network = str(parameters.get("network") or "")
+        classification = classify_command(
+            command, profile=profile, allowlist=allowlist,
+            requested_network=requested_network,
+        )
         if classification["tier"] == "denied":
             return {
                 "status": "error",

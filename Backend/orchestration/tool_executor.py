@@ -126,7 +126,10 @@ async def execute_tool(
         params_text = json.dumps(tool_input, default=str)
     except Exception:
         params_text = str(tool_input)
-    if is_prompt_injection(params_text) and is_high_risk_action(action):
+    if is_prompt_injection(params_text) and is_high_risk_action(action) and action != "run_command":
+        # Shell commands are bounded by the sandbox, not this regex — blocking
+        # them here is the regex firewall the v0.6 brief rejects, and it
+        # false-positives on legitimate text (e.g. the word "root").
         return {
             "status": "error",
             "message": "This request was blocked by the safety policy.",
@@ -232,22 +235,36 @@ def _network_allowlist() -> List[str]:
         return []
 
 
-def _run_command_risk_info(tool_input: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def _run_command_risk_info(
+    tool_input: Optional[Dict[str, Any]],
+    user_preferences: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """Dynamic risk for the shell: classify the actual command.
 
     Phase 2 (#133) makes this tier-aware: `safe` runs without a prompt,
     `bounded` pauses inline, `destructive` pauses durably, `denied` is refused
     by the loop. A `bounded` command whose hosts are all allowlisted (#134) runs
-    without a prompt. User approval overrides are still ignored for run_command
-    so no learned preference can auto-run a shell command.
+    without a prompt. A request may ask for network explicitly (`network:
+    "bridge"`) so a script that pings internally still gets egress. User
+    approval overrides are still ignored for run_command so no learned
+    preference can auto-run a shell command.
     """
     from orchestration.shell.classifier import classify_command
 
     command = ""
+    requested_network = ""
     if isinstance(tool_input, dict):
         command = str(tool_input.get("command") or "")
+        requested_network = str(tool_input.get("network") or "")
+    profile = ""
+    if isinstance(user_preferences, dict):
+        profile = str(user_preferences.get("shell_profile") or "")
+    profile = profile or _shell_profile()
     classification = classify_command(
-        command, profile=_shell_profile(), allowlist=_network_allowlist(),
+        command,
+        profile=profile,
+        allowlist=_network_allowlist(),
+        requested_network=requested_network,
     )
     raw_tier = classification["tier"]
     # An allowlisted network command is effectively safe: it runs without a
@@ -286,7 +303,7 @@ def get_tool_risk_info(
     """
     action = resolve_action_alias(tool_name)
     if action == "run_command":
-        return _run_command_risk_info(tool_input)
+        return _run_command_risk_info(tool_input, user_preferences)
 
     catalog_requires = requires_confirmation(action)
 

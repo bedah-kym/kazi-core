@@ -201,6 +201,12 @@ class OrchestrationCoordinator:
             user_preferences = await sync_to_async(merge_learned_overrides)(user_preferences, user_id, room_id)
         except Exception as e:
             logger.debug("Learned override merge skipped: %s", e)
+        try:
+            from orchestration.shell.profiles import resolve_profile
+            resolved = await sync_to_async(resolve_profile)(room_id)
+            user_preferences["shell_profile"] = resolved.name
+        except Exception as e:
+            logger.debug("Shell profile resolution skipped: %s", e)
         style_prompt = format_style_prompt(user_preferences)
         conversation_mode = await get_conversation_mode(adaptive_context)
         mode_handled = False

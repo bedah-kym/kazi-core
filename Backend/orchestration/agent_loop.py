@@ -189,6 +189,15 @@ def _session_tool_call_cap(state: LoopState, caps_enforced: bool) -> int:
     return SHELL_SESSION_MAX_TOOL_CALLS if shell_used else MAX_TOOL_CALLS
 
 
+def _is_policy_block(output: Any) -> bool:
+    """True when a tool result is a safety-policy block (terminal, don't retry)."""
+    return (
+        isinstance(output, dict)
+        and output.get("status") == "error"
+        and "safety policy" in str(output.get("message") or "")
+    )
+
+
 # --------------------------------------------------------------------------- #
 #  Durable approval records (WorkflowApprovalRecord)                          #
 # --------------------------------------------------------------------------- #
@@ -1474,6 +1483,15 @@ async def run_agent_loop(
                     "role": "user",
                     "content": tool_result_blocks,
                 })
+
+            # If the safety policy blocked several tools in a row, stop — don't
+            # let the model keep rewording attempts until its budget is gone.
+            recent = state.tool_call_log[-3:]
+            if len(recent) == 3 and all(_is_policy_block(entry.get("output")) for entry in recent):
+                yield AgentEvent("error", {
+                    "message": "I was blocked by the safety policy repeatedly, so I stopped this request.",
+                })
+                break
 
             # Continue the loop — LLM will see results and decide next step
 

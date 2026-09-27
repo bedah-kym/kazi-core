@@ -521,6 +521,7 @@ ACTION_CATALOG: List[Dict[str, Any]] = [
             "command": {"type": "string", "required": True, "description": "The command line to run."},
             "cwd": {"type": "string", "required": False, "description": "Working directory relative to /workspace."},
             "timeout_s": {"type": "integer", "required": False, "description": "Timeout in seconds (capped by the sidecar)."},
+            "network": {"type": "string", "required": False, "description": "Set to 'bridge' when the command or a script it runs needs the network (ping, DNS, fetch)."},
         },
         "return_description": "Returns stdout, stderr, and exit_code.",
         "risk_level": "high",

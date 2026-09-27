@@ -51,7 +51,7 @@ _NETWORK_BINARIES = {
     "sftp", "ftp", "nc", "ncat", "netcat", "telnet", "traceroute", "tracepath",
     "whois", "rsync", "openssl", "apt", "apt-get", "apk", "yum", "dnf",
     "pip", "pip3", "npm", "yarn", "pnpm", "cargo", "go", "docker", "podman",
-    "git",
+    "git", "ip", "ifconfig", "route", "ss", "netstat", "arp",
 }
 _NETWORK_SUBCOMMANDS = {
     "git": {"clone", "fetch", "pull", "push", "ls-remote", "submodule"},
@@ -162,18 +162,21 @@ def classify_command(
     command: str,
     profile: str = "standard",
     allowlist: Optional[Iterable[str]] = None,
+    requested_network: Optional[str] = None,
 ) -> Dict[str, object]:
     """Return one tier for ``(command, profile)``.
 
     Tiers: ``safe`` (auto), ``bounded`` (needs network/root escalation),
     ``destructive`` (matches the tripwire), ``denied`` (out of envelope).
+    ``requested_network="bridge"`` lets the caller ask for network for a command
+    the classifier can't infer (e.g. a script that pings internally).
     """
     profile = str(profile or "standard")
     if profile not in PROFILES:
         profile = "standard"
 
     root = needs_root(command)
-    network = needs_network(command)
+    network = needs_network(command) or str(requested_network or "").strip().lower() == "bridge"
     destructive = is_destructive(command)
     hosts = extract_hosts(command)
     allow = {str(host).strip().lower() for host in (allowlist or []) if str(host).strip()}

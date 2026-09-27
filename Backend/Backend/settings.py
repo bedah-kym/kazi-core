@@ -140,6 +140,11 @@ SHELL_EXEC_NETWORK_ALLOWLIST = [
 # ship at least this many scenarios. Guarded by test_scenario_packs.
 SCENARIO_PACK_MIN_SIZE = int(os.environ.get('SCENARIO_PACK_MIN_SIZE', '3'))
 
+# Preference mining (#152): mine approve/deny history into learned overrides.
+PREFERENCE_MINING_ENABLED = os.environ.get('PREFERENCE_MINING_ENABLED', 'True').lower() in ('1', 'true', 'yes')
+PREFERENCE_MINING_MIN_APPROVALS = int(os.environ.get('PREFERENCE_MINING_MIN_APPROVALS', '3'))
+PREFERENCE_MINING_WINDOW_DAYS = int(os.environ.get('PREFERENCE_MINING_WINDOW_DAYS', '30'))
+
 # Application definition
 
 INSTALLED_APPS = [
@@ -375,6 +380,10 @@ CELERY_BEAT_SCHEDULE = {
     'roll-telemetry': {
         'task': 'orchestration.tasks.roll_telemetry',
         'schedule': crontab(hour=3, minute=0),  # Nightly: rotate + roll up JSONL telemetry
+    },
+    'mine-approval-preferences': {
+        'task': 'orchestration.tasks.mine_approval_preferences',
+        'schedule': crontab(hour=3, minute=30),  # Nightly: mine approve/deny -> learned overrides
     },
 }
 

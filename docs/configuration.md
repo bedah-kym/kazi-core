@@ -199,6 +199,18 @@ commands. Before a **destructive** command the sidecar tars it to
 |---|---|---|
 | `SCENARIO_PACK_MIN_SIZE` | `3` | Minimum scenarios each capability pack in the golden harness must ship. Guarded by `test_scenario_packs`. See [Eval](eval.md). |
 
+## Learning (preference mining)
+
+Approve/deny history is mined nightly into room-scoped learned approval
+overrides (v0.6 L2, #152). Denials outrank approvals; learned overrides are
+reversible and never override an explicit user setting.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `PREFERENCE_MINING_ENABLED` | `True` | Enable the nightly mining task. |
+| `PREFERENCE_MINING_MIN_APPROVALS` | `3` | Approvals (with zero denials) needed to earn an `auto` override. |
+| `PREFERENCE_MINING_WINDOW_DAYS` | `30` | How far back approval history is mined. |
+
 ## Celery tunables
 
 | Variable | Default | Purpose |

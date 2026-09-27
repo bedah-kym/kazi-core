@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from typing import Dict, Iterable, List, Optional
+from urllib.parse import urlparse
 
 TIER_SAFE = "safe"
 TIER_BOUNDED = "bounded"
@@ -63,6 +64,14 @@ _NETWORK_SUBCOMMANDS = {
     "docker": {"pull", "push", "run", "build", "login", "search"},
 }
 
+_URL_RE = re.compile(r"^[a-z][a-z0-9+.-]*://", re.IGNORECASE)
+_HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}$")
+_IP_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
+_HOST_COMMANDS = {
+    "ping", "ping6", "dig", "host", "nslookup", "ssh", "scp", "telnet",
+    "nc", "ncat", "netcat", "whois", "traceroute", "tracepath",
+}
+
 
 def _basename(word: str) -> str:
     return word.rsplit("/", 1)[-1].strip("\"'")
@@ -107,6 +116,48 @@ def is_destructive(command: str) -> bool:
     return any(pattern.search(command or "") for pattern in _DESTRUCTIVE_PATTERNS)
 
 
+def _clean_token(token: str) -> str:
+    token = token.strip("\"'")
+    if "@" in token:
+        token = token.rsplit("@", 1)[-1]
+    return token
+
+
+def extract_hosts(command: str) -> List[str]:
+    """Best-effort list of hosts a command will reach.
+
+    Heuristic on purpose: the host allowlist is a UX shortlist, not a firewall.
+    """
+    hosts: List[str] = []
+    for segment in _segments(command):
+        words = _words(segment)
+        if not words:
+            continue
+        binary = _basename(words[0])
+        candidates: List[str] = []
+        fallback = ""
+        for token in words[1:]:
+            clean = _clean_token(token)
+            if not clean or clean[0] in "-+":
+                continue
+            if _URL_RE.match(clean):
+                candidate = urlparse(clean).hostname or ""
+            elif _IP_RE.match(clean) or _HOST_RE.match(clean):
+                candidate = clean
+            else:
+                candidate = ""
+            if candidate:
+                candidates.append(candidate)
+            elif binary in _HOST_COMMANDS and not clean.isdigit():
+                fallback = clean
+        for candidate in candidates:
+            if candidate not in hosts:
+                hosts.append(candidate)
+        if not candidates and fallback and fallback not in hosts:
+            hosts.append(fallback)
+    return hosts
+
+
 def classify_command(
     command: str,
     profile: str = "standard",
@@ -124,6 +175,9 @@ def classify_command(
     root = needs_root(command)
     network = needs_network(command)
     destructive = is_destructive(command)
+    hosts = extract_hosts(command)
+    allow = {str(host).strip().lower() for host in (allowlist or []) if str(host).strip()}
+    allowlisted = bool(hosts) and all(host.lower() in allow for host in hosts)
 
     if destructive:
         tier, reason = TIER_DESTRUCTIVE, "matches the destructive tripwire"
@@ -149,5 +203,6 @@ def classify_command(
         "needs_network": network,
         "destructive": destructive,
         "profile": profile,
-        "allowlisted": bool(allowlist),
+        "hosts": hosts,
+        "allowlisted": allowlisted,
     }

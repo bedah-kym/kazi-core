@@ -61,6 +61,14 @@ a built-in connector — the conflicting registration is refused and logged. Any
 catalog entry that violates the tool-schema contract is recorded and surfaced,
 so a malformed connector can't silently redefine the tool surface.
 
+### Governed shell sandbox
+Shell reach (`run_command`) runs behind a deliberately dumb sidecar inside a
+sandboxed container — non-root, read-only root filesystem, `--cap-drop=ALL`,
+network off by default, memory/PID caps. The **sandbox is the boundary**; the
+command classifier is UX and a tripwire, so a classifier false negative costs
+nothing. The exact rules for what the environment may touch are in the
+[credential-scoping contract](contracts/credential-scoping.md).
+
 ## Where it lives
 
 | Concern | File |
@@ -70,6 +78,7 @@ so a malformed connector can't silently redefine the tool surface.
 | Audit receipts | `Backend/orchestration/action_receipts.py` |
 | Agent budget caps | `Backend/orchestration/agent_loop.py`, `user_preferences.py` |
 | Connector guardrails | `Backend/orchestration/connector_registry.py` |
+| Shell sandbox rules | `docs/contracts/credential-scoping.md` |
 
 See the [contracts](contracts/README.md) for the exact shapes connectors must
 respect.

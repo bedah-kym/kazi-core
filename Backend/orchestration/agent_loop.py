@@ -88,6 +88,7 @@ class LoopState:
     retry_counts: Dict[str, int] = field(default_factory=dict)  # tool_name -> retry count
     paused_for_confirmation: bool = False
     pending_tool: Optional[Dict[str, Any]] = None
+    pending_tier: Optional[str] = None
     budget_warning_sent: bool = False
 
 
@@ -109,6 +110,7 @@ def save_loop_state(room_id: int, user_id: int, state: LoopState) -> None:
         "tool_call_log": state.tool_call_log,
         "retry_counts": state.retry_counts,
         "pending_tool": state.pending_tool,
+        "pending_tier": state.pending_tier,
         "budget_warning_sent": state.budget_warning_sent,
     }
     cache.set(
@@ -135,6 +137,7 @@ def load_loop_state(room_id: int, user_id: int) -> Optional[LoopState]:
         tool_call_log=data.get("tool_call_log", []),
         retry_counts=data.get("retry_counts", {}),
         pending_tool=data.get("pending_tool"),
+        pending_tier=data.get("pending_tier"),
         budget_warning_sent=data.get("budget_warning_sent", False),
     )
     return state
@@ -142,6 +145,31 @@ def load_loop_state(room_id: int, user_id: int) -> Optional[LoopState]:
 
 def clear_loop_state(room_id: int, user_id: int) -> None:
     cache.delete(_state_key(room_id, user_id))
+
+
+def _bucket_tool_calls(
+    tool_calls: List[Dict[str, Any]],
+    preferences: Optional[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], List[Tuple[Dict[str, Any], Optional[str]]], List[Dict[str, Any]]]:
+    """Split tool calls into ``(auto, pause, denied)`` for the loop.
+
+    ``pause`` carries each call's shell tier (``None`` for non-shell tools) so
+    the loop can route ``bounded`` -> inline and ``destructive`` -> durable.
+    Shell calls outside the profile envelope (``denied``) are refused, never run.
+    """
+    auto: List[Dict[str, Any]] = []
+    pause: List[Tuple[Dict[str, Any], Optional[str]]] = []
+    denied: List[Dict[str, Any]] = []
+    for tc in tool_calls:
+        risk = get_tool_risk_info(tc["name"], preferences, tc.get("input"))
+        tier = risk.get("shell_tier")
+        if tier == "denied":
+            denied.append(tc)
+        elif risk.get("requires_confirmation"):
+            pause.append((tc, tier))
+        else:
+            auto.append(tc)
+    return auto, pause, denied
 
 
 # --------------------------------------------------------------------------- #
@@ -1258,16 +1286,8 @@ async def run_agent_loop(
         if stop_reason == "tool_use":
             tool_calls = _extract_tool_calls(content_blocks)
 
-            # Separate into safe (auto-execute) and needs-confirmation
-            safe_calls: List[Dict[str, Any]] = []
-            confirm_calls: List[Dict[str, Any]] = []
-
-            for tc in tool_calls:
-                risk = get_tool_risk_info(tc["name"], preferences, tc.get("input"))
-                if risk["requires_confirmation"]:
-                    confirm_calls.append(tc)
-                else:
-                    safe_calls.append(tc)
+            # Separate into auto-execute, needs-confirmation, and refused.
+            safe_calls, pause_calls, denied_calls = _bucket_tool_calls(tool_calls, preferences)
 
             # ---- Execute safe calls (possibly in parallel) ----------- #
             tool_results: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
@@ -1359,7 +1379,7 @@ async def run_agent_loop(
                         pass
                     await _record_receipt(tc["name"], tc["input"], result, context)
 
-            # ---- Append safe tool results to messages first ----------- #
+            # ---- Build tool_result blocks (auto + refused) ------------ #
             tool_result_blocks = []
             for tc, result in tool_results:
                 tool_result_blocks.append({
@@ -1368,11 +1388,21 @@ async def run_agent_loop(
                     "content": _sanitize_tool_result(json.dumps(result, default=str)),
                 })
 
-            # ---- Handle confirmation-required calls ------------------ #
-            if confirm_calls:
-                # Add error results for all unexecuted confirm calls so
-                # every tool_use has a matching tool_result in the messages
-                for tc in confirm_calls[1:]:
+            # Refused shell calls (outside the profile envelope) never run.
+            for tc in denied_calls:
+                tool_result_blocks.append({
+                    "type": "tool_result",
+                    "tool_use_id": tc["id"],
+                    "content": "Refused: this command is not allowed under the active shell profile.",
+                    "is_error": True,
+                })
+
+            # ---- Handle calls that need confirmation ------------------ #
+            if pause_calls:
+                # Every pending tool_use except the first still needs a result
+                # so the model's message contract stays valid; the first one
+                # becomes the pause.
+                for tc, _tier in pause_calls[1:]:
                     tool_result_blocks.append({
                         "type": "tool_result",
                         "tool_use_id": tc["id"],
@@ -1388,8 +1418,9 @@ async def run_agent_loop(
                     })
 
                 # Only handle the first one; the LLM will re-call the rest after
-                tc = confirm_calls[0]
+                tc, tier = pause_calls[0]
                 state.pending_tool = tc
+                state.pending_tier = tier
                 state.paused_for_confirmation = True
 
                 confirmation_text = build_confirmation_prompt(
@@ -1403,17 +1434,21 @@ async def run_agent_loop(
                     logger.warning("Preview failed for %s: %s", tc["name"], exc)
                     effects = None
 
-                # Persist loop state (Redis) + durable approval record (DB)
+                # Persist loop state (Redis) always. A `bounded` (inline) pause
+                # is chat-scoped and writes no durable record; `destructive`
+                # (and every non-shell high-risk action) keeps the durable path.
                 if room_id and user_id:
                     save_loop_state(room_id, user_id, state)
-                    await save_pending_confirmation(
-                        room_id, user_id, tc, confirmation_text, effects=effects,
-                    )
+                    if tier != "bounded":
+                        await save_pending_confirmation(
+                            room_id, user_id, tc, confirmation_text, effects=effects,
+                        )
                 yield AgentEvent("confirmation", {
                     "message": confirmation_text,
                     "tool_name": tc["name"],
                     "tool_input": tc["input"],
                     "effects": effects,
+                    "tier": tier,
                 })
                 # Pause the loop — consumer will resume after user confirms
                 return
@@ -1498,13 +1533,29 @@ async def resume_after_confirmation(
     user_id = context.get("user_id")
 
     record = await sync_to_async(_pending_approval_record)(room_id, user_id)
+    state = load_loop_state(room_id, user_id)
+
     if record is None:
+        # A `bounded` (inline) pause is chat-scoped: Redis loop state only, no
+        # durable record. Resume it directly.
+        if state and state.pending_tool and state.pending_tier == "bounded":
+            clear_loop_state(room_id, user_id)
+            async for event in run_agent_loop(
+                user_message="",  # Not used on resume
+                context=context,
+                preferences=preferences,
+                context_prompt=context_prompt,
+                memory_summary=memory_summary,
+                resumed_state=state,
+                confirmed_tool=True,
+            ):
+                yield event
+            return
         yield AgentEvent("error", {
             "message": "No pending action found to confirm.",
         })
         return
 
-    state = load_loop_state(room_id, user_id)
     if not state or not state.pending_tool:
         await _resolve_pending_approval(
             room_id, user_id, "rejected",
@@ -1547,7 +1598,11 @@ async def cancel_pending_action(
     """Cancel a pending confirmation and clean up state (durable)."""
     record = await sync_to_async(_pending_approval_record)(room_id, user_id)
     if record is None:
+        state = load_loop_state(room_id, user_id)
         clear_loop_state(room_id, user_id)
+        if state and state.pending_tool:
+            name = (state.pending_tool.get("name") or "action").replace("_", " ")
+            return f"Cancelled the pending {name}."
         return None
     tool_name = record.action or "action"
     await _resolve_pending_approval(

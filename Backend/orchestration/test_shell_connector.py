@@ -87,9 +87,9 @@ class ShellConnectorTests(SimpleTestCase):
 
 class DynamicRiskGateTests(SimpleTestCase):
     @override_settings(SHELL_EXEC_PROFILE="standard")
-    def test_run_command_is_always_gated_in_phase1(self):
+    def test_safe_command_is_not_gated(self):
         info = get_tool_risk_info("run_command", None, {"command": "echo hi"})
-        self.assertTrue(info["requires_confirmation"])
+        self.assertFalse(info["requires_confirmation"])
         self.assertTrue(info["is_high_risk"])
         self.assertEqual(info["shell_tier"], "safe")
 
@@ -103,10 +103,18 @@ class DynamicRiskGateTests(SimpleTestCase):
     def test_network_command_reports_bounded_tier(self):
         info = get_tool_risk_info("run_command", None, {"command": "ping -c 1 1.1.1.1"})
         self.assertEqual(info["shell_tier"], "bounded")
-
-    def test_risk_gate_without_tool_input_still_gates(self):
-        info = get_tool_risk_info("run_command")
         self.assertTrue(info["requires_confirmation"])
+
+    @override_settings(SHELL_EXEC_PROFILE="standard")
+    def test_root_command_reports_denied_tier(self):
+        info = get_tool_risk_info("run_command", None, {"command": "sudo ls"})
+        self.assertEqual(info["shell_tier"], "denied")
+        self.assertTrue(info["requires_confirmation"])
+
+    def test_risk_gate_without_tool_input_is_safe(self):
+        info = get_tool_risk_info("run_command")
+        self.assertEqual(info["shell_tier"], "safe")
+        self.assertFalse(info["requires_confirmation"])
 
     def test_existing_high_risk_action_is_unchanged(self):
         info = get_tool_risk_info("send_email", None, {"to": "a@b.c"})

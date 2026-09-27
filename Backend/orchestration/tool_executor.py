@@ -227,10 +227,10 @@ def _shell_profile() -> str:
 def _run_command_risk_info(tool_input: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """Dynamic risk for the shell: classify the actual command.
 
-    Phase 1 (roadmap §8) gates *every* shell command through the durable
-    approval path; #133 makes this tier-aware (safe auto / bounded inline /
-    destructive durable / denied). User approval overrides are deliberately
-    ignored here so no learned preference can auto-run a shell command.
+    Phase 2 (#133) makes this tier-aware: `safe` runs without a prompt,
+    `bounded` pauses inline, `destructive` pauses durably, `denied` is refused
+    by the loop. User approval overrides are still ignored for run_command so
+    no learned preference can auto-run a shell command.
     """
     from orchestration.shell.classifier import classify_command
 
@@ -238,11 +238,12 @@ def _run_command_risk_info(tool_input: Optional[Dict[str, Any]]) -> Dict[str, An
     if isinstance(tool_input, dict):
         command = str(tool_input.get("command") or "")
     classification = classify_command(command, profile=_shell_profile())
+    tier = classification["tier"]
     return {
         "is_high_risk": True,
         "risk_level": "high",
-        "requires_confirmation": True,
-        "shell_tier": classification["tier"],
+        "requires_confirmation": tier != "safe",
+        "shell_tier": tier,
         "shell_reason": classification["reason"],
     }
 

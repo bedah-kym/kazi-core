@@ -216,13 +216,49 @@ async def preview_tool(
     return [str(effect) for effect in effects]
 
 
+def _shell_profile() -> str:
+    try:
+        from django.conf import settings
+        return str(getattr(settings, "SHELL_EXEC_PROFILE", "standard") or "standard")
+    except Exception:
+        return "standard"
+
+
+def _run_command_risk_info(tool_input: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Dynamic risk for the shell: classify the actual command.
+
+    Phase 1 (roadmap §8) gates *every* shell command through the durable
+    approval path; #133 makes this tier-aware (safe auto / bounded inline /
+    destructive durable / denied). User approval overrides are deliberately
+    ignored here so no learned preference can auto-run a shell command.
+    """
+    from orchestration.shell.classifier import classify_command
+
+    command = ""
+    if isinstance(tool_input, dict):
+        command = str(tool_input.get("command") or "")
+    classification = classify_command(command, profile=_shell_profile())
+    return {
+        "is_high_risk": True,
+        "risk_level": "high",
+        "requires_confirmation": True,
+        "shell_tier": classification["tier"],
+        "shell_reason": classification["reason"],
+    }
+
+
 def get_tool_risk_info(
     tool_name: str,
     user_preferences: Optional[Dict[str, Any]] = None,
+    tool_input: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Return risk metadata for a tool call. Used by the agent loop
     to decide whether to pause for confirmation.
+
+    ``run_command`` is risk-classified from its actual ``tool_input`` (the
+    command), so its effective risk is dynamic. All other tools keep the
+    static catalog policy below.
 
     Supports user-configurable approval overrides via preferences:
         preferences.approval_overrides = {"send_email": "auto", "withdraw": "always"}
@@ -230,6 +266,9 @@ def get_tool_risk_info(
         "always" → force confirmation (default for high-risk)
     """
     action = resolve_action_alias(tool_name)
+    if action == "run_command":
+        return _run_command_risk_info(tool_input)
+
     catalog_requires = requires_confirmation(action)
 
     # Check user overrides

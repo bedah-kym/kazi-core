@@ -508,6 +508,26 @@ ACTION_CATALOG: List[Dict[str, Any]] = [
         "confirmation_policy": "never",
         "capability_gate": None,
     },
+    {
+        "action": "run_command",
+        "aliases": ["run_shell", "shell_command"],
+        "service": "shell",
+        "description": (
+            "Run a shell command on the shell-exec host inside a sandboxed container "
+            "(non-root, read-only, network off by default). Use for diagnostics and "
+            "system tasks: ping, dig, nslookup, ps, df, cat, etc."
+        ),
+        "params": {
+            "command": {"type": "string", "required": True, "description": "The command line to run."},
+            "cwd": {"type": "string", "required": False, "description": "Working directory relative to /workspace."},
+            "timeout_s": {"type": "integer", "required": False, "description": "Timeout in seconds (capped by the sidecar)."},
+        },
+        "return_description": "Returns stdout, stderr, and exit_code.",
+        "risk_level": "high",
+        "confirmation_policy": "always",
+        "capability_gate": None,
+        "router_required": False,
+    },
 ]
 
 
@@ -526,6 +546,7 @@ SERVICE_METADATA: Dict[str, Dict[str, Any]] = {
     "quota": {"description": "Usage and quota checks."},
     "schedule": {"description": "Scheduled trigger service."},
     "telegram": {"description": "Telegram Bot API actions for messaging and interaction."},
+    "shell": {"description": "Sandboxed shell execution on the shell-exec host."},
 }
 
 

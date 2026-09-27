@@ -155,6 +155,12 @@ boundary; the command classifier is UX and a tripwire. See the
 | `SHELL_EXEC_OUTPUT_BYTES_MAX` | `65536` | Truncate returned stdout/stderr beyond this many bytes. |
 | `SHELL_EXEC_NETWORK_ALLOWLIST` | empty | Comma-separated hosts that skip the network prompt. A UX shortlist, **not** a firewall (v0.6 Phase 2). |
 
+## Eval
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SCENARIO_PACK_MIN_SIZE` | `3` | Minimum scenarios each capability pack in the golden harness must ship. Guarded by `test_scenario_packs`. See [Eval](eval.md). |
+
 ## Celery tunables
 
 | Variable | Default | Purpose |

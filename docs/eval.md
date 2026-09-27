@@ -99,6 +99,9 @@ a JSON array. Minimal example:
 | `expected_intent_action` | string | If set, runs `parse_intent` and asserts the parsed action matches. |
 | `expected_mode` | string | If set, runs `plan_user_request` and asserts the planner mode matches (e.g. `adhoc_workflow`, `single_action`). |
 | `expected_actions` | array of strings | If set, runs `plan_user_request` and asserts every listed action appears in the plan. |
+| `pack` | string | Capability pack this scenario belongs to (`orchestration`, `injection`, `shell`, …). |
+| `expected_shell_tier` | string | If set, treats `message` as a command and asserts `classify_command` returns this tier (`safe`/`bounded`/`destructive`/`denied`). Deterministic — no LLM. |
+| `profile` | string | Optional isolation profile for `expected_shell_tier` (default `standard`). |
 
 ### Adding scenarios
 
@@ -111,6 +114,30 @@ a JSON array. Minimal example:
    in isolation and confirm it passes before committing.
 5. PRs that change planner or intent-parser logic should justify any
    scenario regressions in the description.
+
+## Scenario packs
+
+Every capability ships a **pack** of scenarios, and every pack must meet a
+minimum size (`SCENARIO_PACK_MIN_SIZE`, default `3`) so coverage is explicit
+rather than an ever-growing flat list. `test_scenario_packs` fails CI when a
+pack is under-sized.
+
+Current packs:
+
+| Pack | What it covers |
+|---|---|
+| `orchestration` | Intent parsing + workflow planning. |
+| `injection` | Prompt-injection detection / blocking. |
+| `shell` | The governed-shell classifier (`run_command` tiers). |
+
+Run a single pack:
+
+```bash
+python Backend/manage.py run_golden_eval --pack shell
+```
+
+The run prints a per-pack summary (`pack: passed=… total=…`) so a regression is
+attributable to a capability, not just a scenario count.
 
 ## CI integration
 
@@ -142,6 +169,14 @@ repo secret and edit the job to:
 The job stays advisory until enough scenarios accumulate that an
 unintended planner regression would show up as a failure. Flip
 `continue-on-error` to `false` once the coverage justifies it.
+
+### Nightly full pack
+
+`.github/workflows/nightly-eval.yml` runs the **full pack** every night at
+03:00 UTC (and on demand via `workflow_dispatch`). It runs the deterministic
+scenarios always, and adds the LLM-backed scenarios only when
+`ANTHROPIC_API_KEY` is configured as a repo secret — adding that secret is the
+explicit provider-spend approval. Without it, no provider is called.
 
 ## Roadmap
 

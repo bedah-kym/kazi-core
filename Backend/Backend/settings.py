@@ -136,6 +136,10 @@ SHELL_EXEC_NETWORK_ALLOWLIST = [
     if host.strip()
 ]
 
+# Eval scenario packs (#171): each capability pack in the golden harness must
+# ship at least this many scenarios. Guarded by test_scenario_packs.
+SCENARIO_PACK_MIN_SIZE = int(os.environ.get('SCENARIO_PACK_MIN_SIZE', '3'))
+
 # Application definition
 
 INSTALLED_APPS = [

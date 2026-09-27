@@ -75,6 +75,7 @@ examples/
   hooks/protect_paths.py   # Claude Code PreToolUse hook enforcing the list
   agents/reviewer.md       # Fresh-context PR reviewer subagent
 docs/                      # Public docs — workflow-organized (run/add/operate/deploy/debug)
+  agent-env-cheatsheet.md  # Machine/env gotchas (PowerShell, Docker, .env, hermetic tests) — read before shelling
   contracts/               # v1.0 stable runtime contracts
   golden-principles/       # Short DO/DON'T files: core invariants, connectors, tests
   plans/                   # Plan-first template for protected-path changes

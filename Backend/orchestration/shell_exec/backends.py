@@ -13,11 +13,14 @@ policy. See ``docs/contracts/credential-scoping.md``.
 from __future__ import annotations
 
 import asyncio
+import datetime
 import logging
 import os
 import re
+import shutil
 import signal
 import sys
+import tarfile
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -367,3 +370,46 @@ def get_backend(profile: str = "standard", config: Optional[ShellExecConfig] = N
     if str(profile) == "open":
         return LocalBackend(config)
     return DockerBackend(config)
+
+
+# --------------------------------------------------------------------------- #
+#  Workspace snapshots (tar): snapshot before destructive, restore on rollback #
+# --------------------------------------------------------------------------- #
+
+def _snapshots_dir(config: ShellExecConfig, room_id: str) -> Path:
+    safe = _ROOM_SAFE.sub("_", str(room_id or "default"))
+    if safe in {"", ".", ".."}:
+        safe = "default"
+    snapshots_root = (config.root / "snapshots").resolve()
+    path = (snapshots_root / safe).resolve()
+    if path != snapshots_root and snapshots_root not in path.parents:
+        raise ValueError("invalid room id")
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def snapshot_workspace(config: ShellExecConfig, room_id: str) -> str:
+    """Tar the room workspace and return the snapshot id (a filename)."""
+    workspace = config.workspace(room_id)
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    name = f"{stamp}.tar.gz"
+    with tarfile.open(_snapshots_dir(config, room_id) / name, "w:gz") as tar:
+        tar.add(workspace, arcname=".")
+    return name
+
+
+def restore_snapshot(config: ShellExecConfig, room_id: str, snapshot_id: str) -> None:
+    """Replace the room workspace with the contents of a snapshot."""
+    safe_name = Path(str(snapshot_id)).name
+    target = _snapshots_dir(config, room_id) / safe_name
+    if not target.is_file():
+        raise ValueError("snapshot not found")
+    workspace = config.workspace(room_id)
+    for child in workspace.iterdir():
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+    with tarfile.open(target, "r:gz") as tar:
+        # Snapshots are sidecar-created; filter guards member paths anyway.
+        tar.extractall(workspace, filter="data")  # nosec B202

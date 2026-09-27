@@ -111,6 +111,38 @@ class DaemonTests(unittest.TestCase):
         )
         self.assertEqual(status, 400)
 
+    def test_exec_with_snapshot_returns_id(self):
+        status, payload = asyncio.run(
+            _call(self.app, "POST", "/exec", token=_GOOD,
+                  body={"command": "echo hi", "room_id": "snap", "snapshot": True})
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(str(payload.get("snapshot", "")).endswith(".tar.gz"))
+
+    def test_rollback_restores_the_workspace(self):
+        config = _config()
+        app = create_app(config, backend=_FakeBackend())
+        workspace = config.workspace("rb")
+        (workspace / "a.txt").write_text("one", encoding="utf-8")
+        status, payload = asyncio.run(
+            _call(app, "POST", "/exec", token=_GOOD,
+                  body={"command": "echo hi", "room_id": "rb", "snapshot": True})
+        )
+        self.assertEqual(status, 200)
+        (workspace / "a.txt").write_text("two", encoding="utf-8")
+        status2, _ = asyncio.run(
+            _call(app, "POST", "/rollback", token=_GOOD,
+                  body={"room_id": "rb", "snapshot": payload["snapshot"]})
+        )
+        self.assertEqual(status2, 200)
+        self.assertEqual((workspace / "a.txt").read_text(encoding="utf-8"), "one")
+
+    def test_rollback_requires_a_snapshot(self):
+        status, _ = asyncio.run(
+            _call(self.app, "POST", "/rollback", token=_GOOD, body={"room_id": "r"})
+        )
+        self.assertEqual(status, 400)
+
     def test_exec_missing_command(self):
         status, _ = asyncio.run(_call(self.app, "POST", "/exec", token=_GOOD, body={}))
         self.assertEqual(status, 400)

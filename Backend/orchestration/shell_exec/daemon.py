@@ -17,7 +17,13 @@ import json
 import logging
 from typing import Any, Awaitable, Callable, Dict, Optional
 
-from orchestration.shell_exec.backends import ShellBackend, ShellExecConfig, get_backend
+from orchestration.shell_exec.backends import (
+    ShellBackend,
+    ShellExecConfig,
+    get_backend,
+    restore_snapshot,
+    snapshot_workspace,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +100,36 @@ def create_app(
         if path == "/health" and method == "GET":
             await _send_json(send, 200, {"status": "ok", "profile": config.profile})
             return
+        if path == "/rollback":
+            if method != "POST":
+                await _send_json(send, 405, {"error": "method not allowed"})
+                return
+            if not _authorized(scope, config.token):
+                await _send_json(send, 401, {"error": "unauthorized"})
+                return
+            try:
+                payload = json.loads(await _read_body(receive) or b"{}")
+            except ValueError:
+                await _send_json(send, 400, {"error": "invalid request body"})
+                return
+            if not isinstance(payload, dict) or not payload.get("snapshot"):
+                await _send_json(send, 400, {"error": "snapshot is required"})
+                return
+            try:
+                restore_snapshot(
+                    config,
+                    str(payload.get("room_id") or "default"),
+                    str(payload["snapshot"]),
+                )
+            except ValueError as exc:
+                await _send_json(send, 400, {"error": str(exc)})
+                return
+            except Exception:
+                logger.error("rollback failed", exc_info=True)
+                await _send_json(send, 500, {"error": "rollback failed"})
+                return
+            await _send_json(send, 200, {"status": "restored", "snapshot": str(payload["snapshot"])})
+            return
         if path != "/exec":
             await _send_json(send, 404, {"error": "not found"})
             return
@@ -134,6 +170,14 @@ def create_app(
             await _send_json(send, 400, {"error": f"unsupported network mode {network!r}"})
             return
 
+        # Snapshot the workspace before a destructive command (Kazi decides when).
+        snapshot_id = None
+        if payload.get("snapshot"):
+            try:
+                snapshot_id = snapshot_workspace(config, str(payload.get("room_id") or "default"))
+            except Exception:
+                logger.warning("workspace snapshot failed", exc_info=True)
+
         try:
             result = await resolve_backend(profile).execute(
                 command,
@@ -150,6 +194,9 @@ def create_app(
             await _send_json(send, 500, {"error": "execution failed"})
             return
 
-        await _send_json(send, 200, result.as_dict())
+        response = result.as_dict()
+        if snapshot_id:
+            response["snapshot"] = snapshot_id
+        await _send_json(send, 200, response)
 
     return app

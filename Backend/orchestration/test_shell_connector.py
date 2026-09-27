@@ -141,7 +141,8 @@ class DynamicRiskGateTests(SimpleTestCase):
     def test_safe_command_is_not_gated(self):
         info = get_tool_risk_info("run_command", None, {"command": "echo hi"})
         self.assertFalse(info["requires_confirmation"])
-        self.assertTrue(info["is_high_risk"])
+        self.assertFalse(info["is_high_risk"])
+        self.assertEqual(info["tier"], "safe")
         self.assertEqual(info["shell_tier"], "safe")
 
     @override_settings(SHELL_EXEC_PROFILE="standard")
@@ -166,6 +167,7 @@ class DynamicRiskGateTests(SimpleTestCase):
     def test_allowlisted_network_is_not_gated(self):
         info = get_tool_risk_info("run_command", None, {"command": "ping -c 1 1.1.1.1"})
         self.assertEqual(info["shell_tier"], "bounded")
+        self.assertEqual(info["tier"], "safe")
         self.assertFalse(info["requires_confirmation"])
 
     @override_settings(SHELL_EXEC_PROFILE="standard", SHELL_EXEC_NETWORK_ALLOWLIST=["other.example"])

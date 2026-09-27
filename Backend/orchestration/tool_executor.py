@@ -249,15 +249,19 @@ def _run_command_risk_info(tool_input: Optional[Dict[str, Any]]) -> Dict[str, An
     classification = classify_command(
         command, profile=_shell_profile(), allowlist=_network_allowlist(),
     )
-    tier = classification["tier"]
-    requires_confirmation = tier != "safe"
-    if tier == "bounded" and classification.get("needs_network") and classification.get("allowlisted"):
-        requires_confirmation = False
+    raw_tier = classification["tier"]
+    # An allowlisted network command is effectively safe: it runs without a
+    # prompt. Everything else keeps its raw tier.
+    if raw_tier == "bounded" and classification.get("needs_network") and classification.get("allowlisted"):
+        tier = "safe"
+    else:
+        tier = raw_tier
     return {
-        "is_high_risk": True,
-        "risk_level": "high",
-        "requires_confirmation": requires_confirmation,
-        "shell_tier": tier,
+        "is_high_risk": tier in ("destructive", "denied"),
+        "risk_level": {"destructive": "high", "denied": "high", "bounded": "medium"}.get(tier, "low"),
+        "requires_confirmation": tier != "safe",
+        "tier": tier,
+        "shell_tier": raw_tier,
         "shell_reason": classification["reason"],
     }
 

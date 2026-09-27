@@ -18,9 +18,8 @@ All tests are hermetic: no network, no real LLM, no database.
 """
 import asyncio
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, override_settings
 
-from unittest import expectedFailure
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
@@ -36,15 +35,13 @@ class V06SuccessMetricTests(SimpleTestCase):
             for entry in (integration.get("actions") or [])
         }
 
-    @expectedFailure
     def test_ping_isp_answered_by_sandboxed_allowlisted_shell_no_prompt_on_safe_tier(self):
-        """Metric: "ping my ISP" / "why is the DNS failing" answers by running
-        sandboxed, allowlisted `run_command` commands — no prompt on the safe
-        tier (brief §8.1, §4.1, §4.3).
+        """Metric: "ping my ISP" answers by running sandboxed, allowlisted
+        `run_command` commands — no prompt on the safe tier (brief §8.1).
 
-        Red until Phase 1 lands (#130, #131): `run_command` registered and
-        advertised, and the dynamic risk gate (which gains `tool_input`) tiers
-        a safe command as "safe" with no blanket high-risk/confirmation flag.
+        Shipped by #130/#131/#134: `run_command` is registered and advertised;
+        a read-only command is `safe` and ungated; an allowlisted network
+        command is also ungated. Risk is per-command, not blanket high-risk.
         """
         from orchestration.action_catalog import get_supported_actions
         from orchestration.tool_executor import get_tool_risk_info
@@ -60,28 +57,26 @@ class V06SuccessMetricTests(SimpleTestCase):
             "run_command is not advertised to the planner",
         )
 
-        safe_ping = get_tool_risk_info(
-            "run_command", {}, {"command": "ping 8.8.8.8"}
-        )
-        self.assertEqual(
-            safe_ping.get("tier"),
-            "safe",
-            "safe-tier commands must not require a prompt",
-        )
+        safe = get_tool_risk_info("run_command", {}, {"command": "ls -la"})
+        self.assertEqual(safe.get("tier"), "safe", "safe-tier commands must not require a prompt")
+        self.assertFalse(safe.get("requires_confirmation"))
         self.assertFalse(
-            get_tool_risk_info("run_command", {}).get("is_high_risk"),
+            safe.get("is_high_risk"),
             "run_command must not be blanket high-risk; risk is per-command",
         )
 
-    @expectedFailure
+        with override_settings(SHELL_EXEC_NETWORK_ALLOWLIST=["8.8.8.8"]):
+            allowlisted = get_tool_risk_info("run_command", {}, {"command": "ping -c 1 8.8.8.8"})
+        self.assertEqual(allowlisted.get("tier"), "safe", "an allowlisted host must not prompt")
+        self.assertFalse(allowlisted.get("requires_confirmation"))
+
     def test_high_risk_shell_action_pauses_for_human_with_diff_and_receipt(self):
         """Metric: a high-risk action (restart a service, destructive change)
         pauses for a human with a diff, and produces a receipt (brief §8.2).
 
-        Red until the dynamic gate and receipt coverage land (#131, #133):
-        destructive commands tier as destructive/denied, and `run_command`
-        is audited with a receipt. The diff mechanism lands with the
-        snapshot/rollback workspace (#135).
+        Shipped by #131/#133/#135: destructive commands tier as
+        destructive/denied (durable approval + workspace snapshot), and
+        `run_command` is audited with a receipt.
         """
         from orchestration.action_receipts import _AUDITED_ACTIONS
         from orchestration.tool_executor import get_tool_risk_info

@@ -67,6 +67,7 @@ _AUDITED_ACTIONS = {
     "remove_from_itinerary",
     "create_itinerary",
     "schedule_meeting",
+    "run_command",
 }
 
 _UNDO_RE = re.compile(r"\b(undo|revert|roll back|rollback|take that back)\b", re.IGNORECASE)

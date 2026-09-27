@@ -100,7 +100,8 @@ class ShellConnector(BaseConnector):
         payload: Dict[str, Any] = {
             "command": command,
             "room_id": str(context.get("room_id") or context.get("user_id") or "default"),
-            # Phase 1 standard profile: network off. #134 adds the toggle.
+            "profile": profile,
+            # Phase 1: network off. #134 adds the per-command toggle + allowlist.
             "network": "none",
         }
         if parameters.get("cwd"):

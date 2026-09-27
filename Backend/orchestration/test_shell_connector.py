@@ -50,6 +50,7 @@ class ShellConnectorTests(SimpleTestCase):
         self.assertEqual(captured["url"], "http://127.0.0.1:8765/exec")
         self.assertEqual(captured["headers"]["x-shell-exec-token"], _TOKEN)
         self.assertEqual(captured["json"]["network"], "none")
+        self.assertEqual(captured["json"]["profile"], "standard")
 
     @override_settings(SHELL_EXEC_TOKEN=_TOKEN, SHELL_EXEC_PROFILE="standard")
     def test_empty_command_is_rejected(self):

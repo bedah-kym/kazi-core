@@ -8,6 +8,7 @@ from django.test import SimpleTestCase, override_settings
 from orchestration.agent_loop import (
     LoopState,
     _bucket_tool_calls,
+    _is_policy_block,
     resume_after_confirmation,
 )
 
@@ -49,6 +50,16 @@ class BucketTests(SimpleTestCase):
         auto, pause, denied = _bucket_tool_calls([_tc("send_email", {"to": "a@b.c"})], None)
         self.assertEqual(len(pause), 1)
         self.assertIsNone(pause[0][1])  # no shell tier -> durable path
+
+
+class PolicyBlockTests(SimpleTestCase):
+    def test_detects_policy_block(self):
+        self.assertTrue(_is_policy_block({
+            "status": "error",
+            "message": "This request was blocked by the safety policy.",
+        }))
+        self.assertFalse(_is_policy_block({"status": "success"}))
+        self.assertFalse(_is_policy_block(None))
 
 
 class BoundedResumeTests(SimpleTestCase):

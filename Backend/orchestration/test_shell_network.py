@@ -35,3 +35,19 @@ class AllowlistTests(unittest.TestCase):
         result = classify_command("ls -la", allowlist=["1.1.1.1"])
         self.assertFalse(result["allowlisted"])
         self.assertEqual(result["hosts"], [])
+
+
+class RequestedNetworkTests(unittest.TestCase):
+    def test_ip_route_counts_as_network(self):
+        self.assertTrue(classify_command("ip route", "standard")["needs_network"])
+
+    def test_requested_network_makes_a_plain_command_bounded(self):
+        result = classify_command("/workspace/netcheck.sh", "standard", requested_network="bridge")
+        self.assertTrue(result["needs_network"])
+        self.assertEqual(result["tier"], "bounded")
+
+    def test_requested_network_on_locked_is_denied(self):
+        self.assertEqual(
+            classify_command("ls", "locked", requested_network="bridge")["tier"],
+            "denied",
+        )

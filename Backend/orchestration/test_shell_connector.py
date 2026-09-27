@@ -189,3 +189,40 @@ class DynamicRiskGateTests(SimpleTestCase):
     def test_low_risk_action_is_unchanged(self):
         info = get_tool_risk_info("get_weather", None, {"city": "Nairobi"})
         self.assertFalse(info["requires_confirmation"])
+
+
+class RequestedNetworkRiskTests(SimpleTestCase):
+    def test_requested_network_is_bounded(self):
+        info = get_tool_risk_info(
+            "run_command", None, {"command": "/workspace/netcheck.sh", "network": "bridge"},
+        )
+        self.assertEqual(info["tier"], "bounded")
+        self.assertTrue(info["requires_confirmation"])
+
+    def test_open_profile_preference_makes_it_safe(self):
+        info = get_tool_risk_info(
+            "run_command",
+            {"shell_profile": "open"},
+            {"command": "ping -c 1 9.9.9.9", "network": "bridge"},
+        )
+        self.assertEqual(info["tier"], "safe")
+
+
+class RunCommandInjectionExemptionTests(SimpleTestCase):
+    class _FakeConnector:
+        async def execute(self, parameters, context):
+            return {"status": "success", "message": "ran"}
+
+    def test_root_text_is_not_blocked_for_run_command(self):
+        from orchestration.security_policy import is_prompt_injection
+        from orchestration.tool_executor import execute_tool
+
+        self.assertTrue(is_prompt_injection("show the root filesystem"), "regex matches 'root'")
+        with patch(
+            "orchestration.tool_executor._get_connector_map",
+            return_value={"run_command": self._FakeConnector()},
+        ):
+            result = asyncio.run(
+                execute_tool("run_command", {"command": "show the root filesystem"}, {"user_id": 1})
+            )
+        self.assertEqual(result.get("status"), "success")

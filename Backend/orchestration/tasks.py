@@ -23,3 +23,15 @@ def roll_telemetry() -> Dict[str, Any]:
     except Exception:
         logger.exception("Telemetry rollup task failed")
         return {"noop": False, "error": "rollup_failed"}
+
+
+@shared_task(ignore_result=True)
+def mine_approval_preferences() -> Dict[str, Any]:
+    """Nightly mining of approve/deny history into learned overrides (#152)."""
+    from orchestration.preference_mining import mine_approval_overrides
+
+    try:
+        return mine_approval_overrides()
+    except Exception:
+        logger.exception("Preference mining task failed")
+        return {"error": "mining_failed"}

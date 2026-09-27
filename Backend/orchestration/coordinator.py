@@ -196,6 +196,11 @@ class OrchestrationCoordinator:
         except Exception as e:
             logger.warning(f"User preferences load failed: {e}")
             user_preferences = {}
+        try:
+            from orchestration.preference_mining import merge_learned_overrides
+            user_preferences = await sync_to_async(merge_learned_overrides)(user_preferences, user_id, room_id)
+        except Exception as e:
+            logger.debug("Learned override merge skipped: %s", e)
         style_prompt = format_style_prompt(user_preferences)
         conversation_mode = await get_conversation_mode(adaptive_context)
         mode_handled = False

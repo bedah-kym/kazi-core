@@ -20,6 +20,7 @@ Treat each contract as a small API. If you change one, you bump its
 | [Approval](approval.md) | What `WorkflowExecution.pending_approval` looks like and how operators answer it | 1.0 | stable |
 | [Execution detail](execution-detail.md) | What `GET /api/workflows/executions/<id>/` returns | 1.0 | stable |
 | [Replay safety](replay-safety.md) | Per-step `replay_safe` declaration + computed `replay_hints` | 1.0 | stable |
+| [Credential scoping](credential-scoping.md) | What the shell/delegate execution environment may touch | 1.0 | stable |
 
 Two more contracts (telemetry events, memory updates) remain queued for a
 future release because the underlying code is still settling.

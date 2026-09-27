@@ -90,6 +90,20 @@ class DaemonTests(unittest.TestCase):
         self.assertEqual(payload["stdout"], "hi\n")
         self.assertEqual(self.backend.calls[0][0], "echo hi")
 
+    def test_profile_must_be_enabled(self):
+        status, _ = asyncio.run(
+            _call(self.app, "POST", "/exec", token=_GOOD,
+                  body={"command": "echo hi", "profile": "open"})
+        )
+        self.assertEqual(status, 400)
+
+    def test_network_access_is_rejected_in_phase1(self):
+        status, _ = asyncio.run(
+            _call(self.app, "POST", "/exec", token=_GOOD,
+                  body={"command": "ping 1.1.1.1", "network": "bridge"})
+        )
+        self.assertEqual(status, 400)
+
     def test_exec_missing_command(self):
         status, _ = asyncio.run(_call(self.app, "POST", "/exec", token=_GOOD, body={}))
         self.assertEqual(status, 400)

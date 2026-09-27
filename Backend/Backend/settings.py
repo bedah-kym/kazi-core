@@ -115,6 +115,13 @@ SHELL_EXEC_HOST = os.environ.get('SHELL_EXEC_HOST', '127.0.0.1')
 SHELL_EXEC_PORT = int(os.environ.get('SHELL_EXEC_PORT', '8765'))
 SHELL_EXEC_TOKEN = os.environ.get('SHELL_EXEC_TOKEN', '')
 SHELL_EXEC_PROFILE = os.environ.get('SHELL_EXEC_PROFILE', 'standard')
+# Profiles the sidecar will serve. Empty = the single SHELL_EXEC_PROFILE (or
+# "standard"). Add "open" only on a disposable box — it runs unsandboxed.
+SHELL_EXEC_PROFILES = [
+    profile.strip()
+    for profile in os.environ.get('SHELL_EXEC_PROFILES', '').split(',')
+    if profile.strip()
+]
 SHELL_EXEC_ROOT = os.environ.get('SHELL_EXEC_ROOT', '')
 SHELL_EXEC_IMAGE = os.environ.get('SHELL_EXEC_IMAGE', 'alpine:3.20')
 SHELL_EXEC_USER = os.environ.get('SHELL_EXEC_USER', '65534:65534')

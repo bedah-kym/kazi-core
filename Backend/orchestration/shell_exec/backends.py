@@ -5,6 +5,7 @@ Two backends behind one ``execute()`` interface:
 - ``DockerBackend`` — ``standard`` / ``locked``: non-root, read-only rootfs,
   ``--cap-drop=ALL``, no-new-privileges, network off by default, memory/PID caps.
 - ``LocalBackend`` — ``open`` only: a subprocess in the workspace, full trust.
+  ``open`` is never enabled by default (see ``ShellExecConfig.allowed_profiles``).
 
 The sandbox is the security boundary; this module contains no classifier and no
 policy. See ``docs/contracts/credential-scoping.md``.
@@ -15,15 +16,23 @@ import asyncio
 import logging
 import os
 import re
+import signal
+import sys
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Awaitable, Callable, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
 _ROOM_SAFE = re.compile(r"[^A-Za-z0-9._-]")
 _TIMEOUT_EXIT_CODE = 124
+_CAP_CHUNK = 65536
+
+#: Profiles the sidecar understands. Which ones it will actually serve is
+#: controlled by ``ShellExecConfig.allowed_profiles``.
+SUPPORTED_PROFILES = ("open", "standard", "locked")
 
 
 @dataclass
@@ -53,6 +62,7 @@ class ShellExecConfig:
     host: str = "127.0.0.1"
     port: int = 8765
     profile: str = "standard"
+    allowed_profiles: Tuple[str, ...] = ("standard",)
     image: str = "alpine:3.20"
     user: str = "65534:65534"
     memory: str = "256m"
@@ -67,6 +77,16 @@ class ShellExecConfig:
         from django.conf import settings
 
         default_root = Path(__file__).resolve().parents[3] / "shell_workspaces"
+        profile = str(getattr(settings, "SHELL_EXEC_PROFILE", "standard") or "standard")
+        raw_profiles = getattr(settings, "SHELL_EXEC_PROFILES", None)
+        if raw_profiles is None:
+            raw_profiles = os.environ.get("SHELL_EXEC_PROFILES", "")
+        if isinstance(raw_profiles, str):
+            allowed = tuple(part.strip() for part in raw_profiles.split(",") if part.strip())
+        else:
+            allowed = tuple(str(part).strip() for part in (raw_profiles or ()) if str(part).strip())
+        if not allowed:
+            allowed = (profile,) if profile in SUPPORTED_PROFILES else ("standard",)
         return cls(
             root=Path(
                 getattr(settings, "SHELL_EXEC_ROOT", None)
@@ -77,7 +97,8 @@ class ShellExecConfig:
             or os.environ.get("SHELL_EXEC_TOKEN", ""),
             host=getattr(settings, "SHELL_EXEC_HOST", "127.0.0.1"),
             port=int(getattr(settings, "SHELL_EXEC_PORT", 8765)),
-            profile=getattr(settings, "SHELL_EXEC_PROFILE", "standard"),
+            profile=profile,
+            allowed_profiles=allowed,
             image=getattr(settings, "SHELL_EXEC_IMAGE", "alpine:3.20"),
             user=getattr(settings, "SHELL_EXEC_USER", "65534:65534"),
             memory=getattr(settings, "SHELL_EXEC_MEMORY", "256m"),
@@ -124,17 +145,18 @@ class ShellBackend:
         self.config = config or ShellExecConfig.from_settings()
 
     def resolve_timeout(self, timeout_s: Optional[int]) -> int:
-        requested = self.config.timeout_default if timeout_s is None else int(timeout_s)
+        """Clamp ``timeout_s`` to the configured bounds. Raises ``ValueError``
+        for a non-integer value so the daemon can answer 400, not 500."""
+        if timeout_s is None:
+            requested = self.config.timeout_default
+        else:
+            try:
+                requested = int(timeout_s)
+            except (TypeError, ValueError):
+                raise ValueError("timeout_s must be an integer")
         if requested <= 0:
             requested = self.config.timeout_default
         return min(requested, self.config.timeout_max)
-
-    def _decode(self, data: bytes) -> Tuple[str, bool]:
-        limit = self.config.output_bytes_max
-        truncated = len(data) > limit
-        if truncated:
-            data = data[:limit]
-        return data.decode("utf-8", errors="replace"), truncated
 
     async def execute(
         self,
@@ -170,12 +192,13 @@ class DockerBackend(ShellBackend):
         *,
         network: str = "none",
         cwd: Optional[str] = None,
+        name: Optional[str] = None,
     ) -> List[str]:
         net = "bridge" if str(network) == "bridge" else "none"
-        return [
-            "docker",
-            "run",
-            "--rm",
+        argv = ["docker", "run", "--rm"]
+        if name:
+            argv += ["--name", name]
+        argv += [
             "--user",
             self.config.user,
             "--read-only",
@@ -194,6 +217,19 @@ class DockerBackend(ShellBackend):
             "-c",
             command,
         ]
+        return argv
+
+    async def _remove_container(self, name: str) -> None:
+        """Force-remove a container left behind when the client was killed."""
+        try:
+            remover = await asyncio.create_subprocess_exec(  # nosec B603,B607 - fixed argv, no shell
+                "docker", "rm", "-f", name,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await remover.wait()
+        except Exception:
+            logger.warning("failed to remove container %s", name)
 
     async def execute(
         self,
@@ -205,7 +241,8 @@ class DockerBackend(ShellBackend):
         network: str = "none",
     ) -> ExecResult:
         workspace = self.config.workspace(room_id)
-        argv = self.build_argv(command, workspace, network=network, cwd=cwd)
+        name = f"kazi-exec-{uuid.uuid4().hex[:16]}"
+        argv = self.build_argv(command, workspace, network=network, cwd=cwd, name=name)
         timeout = self.resolve_timeout(timeout_s)
         start = time.monotonic()
         try:
@@ -216,7 +253,7 @@ class DockerBackend(ShellBackend):
             )
         except FileNotFoundError:
             return ExecResult("", "docker executable not found on the sidecar host", 127, _elapsed_ms(start))
-        return await _gather(proc, timeout, start, self)
+        return await _gather(proc, timeout, start, self, cleanup=lambda: self._remove_container(name))
 
 
 class LocalBackend(ShellBackend):
@@ -247,30 +284,78 @@ class LocalBackend(ShellBackend):
                 cwd=str(workdir),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                start_new_session=(sys.platform != "win32"),
             )
         except FileNotFoundError:
             return ExecResult("", "shell not available on the sidecar host", 127, _elapsed_ms(start))
-        return await _gather(proc, timeout, start, self)
+        return await _gather(proc, timeout, start, self, cleanup=lambda: _kill_process_group(proc))
 
 
-async def _gather(proc, timeout: int, start: float, backend: ShellBackend) -> ExecResult:
+async def _drain_capped(stream, limit: int) -> Tuple[bytes, bool]:
+    """Read a stream to EOF, keeping at most ``limit`` bytes."""
+    kept = bytearray()
+    truncated = False
+    while True:
+        chunk = await stream.read(_CAP_CHUNK)
+        if not chunk:
+            break
+        room = limit - len(kept)
+        if room > 0:
+            kept.extend(chunk[:room])
+        if len(chunk) > max(room, 0):
+            truncated = True
+    return bytes(kept), truncated
+
+
+async def _kill_process_group(proc) -> None:
+    if sys.platform == "win32":
+        return
     try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
-        proc.kill()
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except Exception:
+        logger.warning("failed to kill process group", exc_info=True)
+
+
+async def _abort(proc, cleanup: Optional[Callable[[], Awaitable[None]]]) -> None:
+    if cleanup is not None:
         try:
-            await proc.wait()
-        except Exception:  # pragma: no cover - best-effort reap
-            pass
+            await cleanup()
+        except Exception:
+            logger.warning("shell cleanup failed", exc_info=True)
+    try:
+        proc.kill()
+    except Exception:
+        pass
+    try:
+        await proc.wait()
+    except Exception:  # pragma: no cover - best-effort reap
+        pass
+
+
+async def _gather(
+    proc,
+    timeout: int,
+    start: float,
+    backend: ShellBackend,
+    cleanup: Optional[Callable[[], Awaitable[None]]] = None,
+) -> ExecResult:
+    limit = backend.config.output_bytes_max
+    out_task = asyncio.ensure_future(_drain_capped(proc.stdout, limit))
+    err_task = asyncio.ensure_future(_drain_capped(proc.stderr, limit))
+    try:
+        (out, out_truncated), (err, err_truncated) = await asyncio.wait_for(
+            asyncio.gather(out_task, err_task), timeout=timeout
+        )
+        await proc.wait()
+    except asyncio.TimeoutError:
+        await _abort(proc, cleanup)
         return ExecResult("", f"command timed out after {timeout}s", _TIMEOUT_EXIT_CODE, _elapsed_ms(start))
     except Exception as exc:
-        proc.kill()
+        await _abort(proc, cleanup)
         return ExecResult("", f"execution failed: {exc}", 1, _elapsed_ms(start))
-    stdout, out_truncated = backend._decode(out)
-    stderr, err_truncated = backend._decode(err)
     return ExecResult(
-        stdout=stdout,
-        stderr=stderr,
+        stdout=out.decode("utf-8", errors="replace"),
+        stderr=err.decode("utf-8", errors="replace"),
         exit_code=int(proc.returncode or 0),
         duration_ms=_elapsed_ms(start),
         truncated=out_truncated or err_truncated,

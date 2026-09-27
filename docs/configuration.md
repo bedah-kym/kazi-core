@@ -143,7 +143,8 @@ boundary; the command classifier is UX and a tripwire. See the
 | `SHELL_EXEC_TOKEN` | empty | Shared bearer token between Kazi and the sidecar. **Empty disables `run_command`.** |
 | `SHELL_EXEC_HOST` | `127.0.0.1` | Sidecar bind host (and the host Kazi connects to). |
 | `SHELL_EXEC_PORT` | `8765` | Sidecar bind/connect port. |
-| `SHELL_EXEC_PROFILE` | `standard` | Isolation profile: `standard` (Docker, sandboxed). `open`/`locked` land in v0.6 Phase 2. |
+| `SHELL_EXEC_PROFILE` | `standard` | Default profile. `standard`/`locked` run in the Docker sandbox; `open` runs unsandboxed on the host (Phase 2 refines the per-profile rules). |
+| `SHELL_EXEC_PROFILES` | the profile above | Comma-separated profiles the sidecar will serve. A request for any other profile is rejected with 400. Add `open` only on a disposable box. |
 | `SHELL_EXEC_ROOT` | `<repo>/shell_workspaces` | Root for per-room workspaces mounted at `/workspace`. |
 | `SHELL_EXEC_IMAGE` | `alpine:3.20` | Container image for the Docker backend. |
 | `SHELL_EXEC_USER` | `65534:65534` | Non-root uid:gid the container runs as. |

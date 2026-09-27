@@ -84,6 +84,7 @@ _DEFAULT_NOTIFY_MATRIX: Dict[str, Dict[str, bool]] = {
     "message.mention": {"in_app": True, "email": True, "whatsapp": False},
     "system.info": {"in_app": True, "email": False, "whatsapp": False},
     "system.warning": {"in_app": True, "email": True, "whatsapp": False},
+    "initiative.digest": {"in_app": True, "email": False, "whatsapp": False},
 }
 
 _NOTIFY_CHANNELS = {"in_app", "email", "whatsapp"}

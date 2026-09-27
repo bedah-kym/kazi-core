@@ -76,17 +76,18 @@ def proactive_budget_remaining(user_id: Optional[int]) -> int:
 
 
 def consume_proactive_budget(user_id: Optional[int]) -> bool:
-    """Consume one proactive slot. Fail closed (refuse) on any error."""
+    """Consume one proactive slot atomically. Fail closed (refuse) on any error."""
     if not user_id:
         return True
     from django.core.cache import cache
     try:
-        key = _budget_key(user_id)
-        used = int(cache.get(key) or 0)
-        if used >= proactive_budget_per_day():
+        limit = proactive_budget_per_day()
+        if limit <= 0:
             return False
-        cache.set(key, used + 1, _BUDGET_TTL_SECONDS)
-        return True
+        key = _budget_key(user_id)
+        cache.add(key, 0, _BUDGET_TTL_SECONDS)
+        used = cache.incr(key)
+        return used is not None and used <= limit
     except Exception:
         logger.warning("Proactive budget check failed; refusing action for user %s", user_id)
         return False
@@ -127,23 +128,66 @@ def open_proposals(user_id: Optional[int]) -> List[Dict[str, Any]]:
     return proposals
 
 
+def watch_label(watch: Dict[str, Any]) -> str:
+    """Human-readable label for a derived telemetry watch."""
+    if watch.get("summary") or watch.get("label"):
+        return str(watch.get("summary") or watch.get("label"))
+    metric = str(watch.get("metric") or watch.get("kind") or "watch")
+    labels = watch.get("labels") if isinstance(watch.get("labels"), dict) else {}
+    detail = ", ".join(f"{key}={value}" for key, value in list(labels.items())[:3])
+    parts = [metric]
+    if detail:
+        parts.append(f"({detail})")
+    if watch.get("current_value") is not None:
+        parts.append(f"= {watch.get('current_value')}")
+    if watch.get("trend"):
+        parts.append(f"[{watch.get('trend')}]")
+    return " ".join(str(part) for part in parts)
+
+
+def is_anomaly(watch: Dict[str, Any]) -> bool:
+    """A watch is an anomaly when it is rising or over its threshold."""
+    if str(watch.get("trend") or "") == "rising":
+        return True
+    threshold = watch.get("threshold")
+    value = watch.get("current_value")
+    if isinstance(threshold, (int, float)) and isinstance(value, (int, float)):
+        return value > threshold
+    return False
+
+
+def collect_anomalies(watches: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+    """Return the anomaly subset of the derived watches."""
+    source = watches if watches is not None else fired_watches()
+    return [watch for watch in source if is_anomaly(watch)]
+
+
 def build_digest(user_id: Optional[int]) -> Dict[str, Any]:
-    """Compose the rung-2 digest. Empty when there is nothing to report."""
+    """Compose the rung-2 digest: anomalies, watches, and open proposals."""
     watches = fired_watches()
+    anomalies = collect_anomalies(watches)
+    anomaly_ids = {id(watch) for watch in anomalies}
+    quiet = [watch for watch in watches if id(watch) not in anomaly_ids]
     proposals = open_proposals(user_id)
     lines: List[str] = []
-    if watches:
+    if anomalies:
+        lines.append("Anomalies:")
+        lines.extend(f"- {_sanitize(watch_label(watch))}" for watch in anomalies[:5])
+    if quiet:
         lines.append("Watches:")
-        for watch in watches[:5]:
-            label = watch.get("summary") or watch.get("label") or watch.get("kind") or str(watch)
-            lines.append(f"- {_sanitize(label)}")
+        lines.extend(f"- {_sanitize(watch_label(watch))}" for watch in quiet[:5])
     if proposals:
         lines.append("Waiting on your approval:")
         for proposal in proposals[:5]:
-            target = proposal.get("room_id")
-            lines.append(f"- {_sanitize(str(proposal.get('action')))} (room {target})")
+            lines.append(f"- {_sanitize(str(proposal.get('action')))} (room {proposal.get('room_id')})")
     message = "\n".join(lines)
-    return {"message": message, "watches": watches, "proposals": proposals, "empty": not message}
+    return {
+        "message": message,
+        "watches": watches,
+        "anomalies": anomalies,
+        "proposals": proposals,
+        "empty": not message,
+    }
 
 
 def send_digest_for_user(user_id: Optional[int]) -> bool:
@@ -201,6 +245,31 @@ async def propose_action(
     tool = {"id": f"proposal-{action}", "name": action, "input": params or {}}
     text = message or f"Shall I go ahead with {action.replace('_', ' ')}?"
     return await save_pending_confirmation(room_id, user_id, tool, text, effects=effects)
+
+
+async def propose_rule(
+    *,
+    user_id: int,
+    room_id: int,
+    action: str,
+    rule_text: str = "",
+    effects: Optional[List[str]] = None,
+) -> Optional[int]:
+    """Open a durable approval for a rung-4 rule *before* it is stored."""
+    from orchestration.agent_loop import save_pending_confirmation
+
+    tool = {
+        "id": f"rule-{action}",
+        "name": "promote_rule",
+        "input": {"action": action, "room_id": room_id, "rule_text": rule_text},
+    }
+    text = f"Approve this rule so I can run {action.replace('_', ' ')} automatically in this room?"
+    return await save_pending_confirmation(room_id, user_id, tool, text, effects=effects)
+
+
+def activate_rule(user_id: int, rule: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Store a rule after its durable approval (approval comes first)."""
+    return promote_rule(user_id, rule)
 
 
 # --------------------------------------------------------------------------- #
@@ -300,7 +369,7 @@ async def execute_approved_rule(
         from orchestration.action_receipts import record_action_receipt
 
         service = (get_action_definition(action) or {}).get("service", "")
-        await record_action_receipt(
+        receipt = await record_action_receipt(
             user_id=user_id,
             room_id=room_id,
             action=action,
@@ -310,8 +379,17 @@ async def execute_approved_rule(
             status=str((result or {}).get("status", "success")),
         )
     except Exception:
-        logger.warning("Proactive receipt failed for %s", action, exc_info=True)
+        logger.error("Proactive receipt failed for %s", action, exc_info=True)
+        receipt = None
 
+    if not receipt:
+        # A rung-4 run is only "successful" with its audit receipt written.
+        return {
+            "status": "error",
+            "message": "The action ran but its audit receipt could not be written; flagged for review.",
+            "receipt_failed": True,
+            "data": result if isinstance(result, dict) else {},
+        }
     return result
 
 
@@ -336,10 +414,11 @@ async def draft_rule(pattern: Dict[str, Any], user_id: Optional[int] = None) -> 
     try:
         from orchestration.llm_client import get_llm_client
 
+        safe_pattern = _sanitize(str(pattern))
         client = get_llm_client()
         prose = await client.generate_text(
             "You draft one-line automation rules.",
-            f"Draft one short rule for this repeated, always-approved pattern: {pattern}",
+            f"Draft one short rule for this repeated, always-approved pattern: {safe_pattern}",
         )
         if isinstance(prose, str) and prose.strip():
             fallback["text"] = prose.strip()

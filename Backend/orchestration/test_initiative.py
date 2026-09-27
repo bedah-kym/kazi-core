@@ -110,6 +110,20 @@ class ExecuteRuleTests(TransactionTestCase):
         self.assertEqual(result["status"], "error")
         self.assertFalse(execute.called)
 
+    @override_settings(PROACTIVE_BUDGET_PER_DAY=2)
+    def test_receipt_failure_is_a_defined_error(self):
+        promote_rule(self.user.id, {"action": "set_reminder", "room_id": 5})
+        with patch(
+            "orchestration.tool_executor.execute_tool",
+            new=AsyncMock(return_value={"status": "success"}),
+        ), patch(
+            "orchestration.action_receipts.record_action_receipt",
+            new=AsyncMock(side_effect=RuntimeError("db down")),
+        ):
+            result = _run(execute_approved_rule(user_id=self.user.id, room_id=5, action="set_reminder"))
+        self.assertEqual(result["status"], "error")
+        self.assertTrue(result.get("receipt_failed"))
+
 
 class ProposeTests(TestCase):
     def setUp(self):
@@ -128,6 +142,21 @@ class ProposeTests(TestCase):
             ))
         self.assertEqual(record_id, 42)
         self.assertTrue(save.called)
+
+    def test_propose_rule_opens_durable_approval(self):
+        with patch(
+            "orchestration.agent_loop.save_pending_confirmation",
+            new=AsyncMock(return_value=7),
+        ) as save:
+            record_id = _run(initiative.propose_rule(
+                user_id=self.user.id, room_id=5, action="set_reminder", rule_text="run it",
+            ))
+        self.assertEqual(record_id, 7)
+        self.assertTrue(save.called)
+
+    def test_activate_rule_stores_after_approval(self):
+        initiative.activate_rule(self.user.id, {"action": "set_reminder", "room_id": 5})
+        self.assertTrue(is_allowed_by_rule(self.user.id, "set_reminder", 5))
 
     @override_settings(OPENAI_API_KEY="")
     def test_draft_rule_falls_back_without_llm(self):
@@ -157,3 +186,15 @@ class DigestTests(TestCase):
         self.assertFalse(digest["empty"])
         self.assertIn("disk growth", digest["message"])
         self.assertIn("send_email", digest["message"])
+
+    def test_anomalies_are_listed(self):
+        watch = {
+            "metric": "action_error_rate",
+            "labels": {"action": "send_email"},
+            "trend": "rising",
+            "current_value": 0.5,
+        }
+        with patch("orchestration.initiative.fired_watches", return_value=[watch]):
+            digest = build_digest(self.user.id)
+        self.assertIn("Anomalies:", digest["message"])
+        self.assertEqual(len(digest["anomalies"]), 1)

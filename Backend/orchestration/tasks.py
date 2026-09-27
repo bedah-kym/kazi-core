@@ -45,5 +45,6 @@ def send_daily_digest() -> Dict[str, Any]:
     try:
         return send_digests()
     except Exception:
+        # Re-raise so Celery records a failed run (ignore_result hides returns).
         logger.exception("Daily digest task failed")
-        return {"error": "digest_failed"}
+        raise

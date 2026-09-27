@@ -155,6 +155,25 @@ async def clear_memory(context: Dict[str, Any]) -> None:
         return
 
 
+def load_entity_facts() -> Dict[str, Any]:
+    """Read rolled-up entity facts (hosts, devices, services, entities).
+
+    Populated by the nightly telemetry rollup (issue #153); consumers
+    (digests, proposals) read through here so the memory-state surface
+    is the single access point.
+    """
+    from orchestration.telemetry_rollups import load_facts
+
+    return load_facts()
+
+
+def load_derived_watches() -> List[Dict[str, Any]]:
+    """Read rolled-up derived watches (trends + thresholds)."""
+    from orchestration.telemetry_rollups import load_watches
+
+    return load_watches()
+
+
 async def update_memory_state(
     context: Dict[str, Any],
     *,

@@ -75,11 +75,10 @@ default, memory/PID caps. `LocalBackend` (full trust) is only selected by the
 Revert the commit. No schema, no persisted state; the sidecar is a separate
 process that is simply not started.
 
-## Open questions for the human
+## Open questions for the human (resolved 2026-09-27)
 
-- `aiohttp` (3.14.3) is currently **transitive** (via `twilio`/`aiohttp-retry`),
-  not in `requirements.txt`. Reuse it as the issue directs, or declare it and
-  recompile the lock? `uv` is not installed on this machine, so declaring it
-  would make the lock stale and fail CI. Recommend: reuse the locked version.
-- Default container image — `alpine:3.20` (small, has `sh`), pulled on first
-  run? Confirm the image name/registry policy.
+- HTTP server: use **uvicorn** (already a declared production dependency) with a
+  minimal ASGI app. `aiohttp` is only transitive and `uv` is unavailable here to
+  recompile the lock, so declaring it would fail CI. Self-hosters install
+  nothing extra.
+- Default container image: `alpine:3.20` (small, ships `sh`).

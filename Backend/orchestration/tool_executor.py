@@ -224,25 +224,39 @@ def _shell_profile() -> str:
         return "standard"
 
 
+def _network_allowlist() -> List[str]:
+    try:
+        from django.conf import settings
+        return list(getattr(settings, "SHELL_EXEC_NETWORK_ALLOWLIST", []) or [])
+    except Exception:
+        return []
+
+
 def _run_command_risk_info(tool_input: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """Dynamic risk for the shell: classify the actual command.
 
     Phase 2 (#133) makes this tier-aware: `safe` runs without a prompt,
     `bounded` pauses inline, `destructive` pauses durably, `denied` is refused
-    by the loop. User approval overrides are still ignored for run_command so
-    no learned preference can auto-run a shell command.
+    by the loop. A `bounded` command whose hosts are all allowlisted (#134) runs
+    without a prompt. User approval overrides are still ignored for run_command
+    so no learned preference can auto-run a shell command.
     """
     from orchestration.shell.classifier import classify_command
 
     command = ""
     if isinstance(tool_input, dict):
         command = str(tool_input.get("command") or "")
-    classification = classify_command(command, profile=_shell_profile())
+    classification = classify_command(
+        command, profile=_shell_profile(), allowlist=_network_allowlist(),
+    )
     tier = classification["tier"]
+    requires_confirmation = tier != "safe"
+    if tier == "bounded" and classification.get("needs_network") and classification.get("allowlisted"):
+        requires_confirmation = False
     return {
         "is_high_risk": True,
         "risk_level": "high",
-        "requires_confirmation": tier != "safe",
+        "requires_confirmation": requires_confirmation,
         "shell_tier": tier,
         "shell_reason": classification["reason"],
     }

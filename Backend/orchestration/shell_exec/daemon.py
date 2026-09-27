@@ -128,10 +128,10 @@ def create_app(
             await _send_json(send, 400, {"error": f"profile {profile!r} is not enabled on this sidecar"})
             return
 
-        # Phase 1: network is off. #134 adds the per-command toggle + allowlist.
+        # Network is off unless Kazi's gate explicitly enabled it per command.
         network = str(payload.get("network") or "none")
-        if network != "none":
-            await _send_json(send, 400, {"error": "network access is not enabled"})
+        if network not in ("none", "bridge"):
+            await _send_json(send, 400, {"error": f"unsupported network mode {network!r}"})
             return
 
         try:

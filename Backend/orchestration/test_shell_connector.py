@@ -53,6 +53,33 @@ class ShellConnectorTests(SimpleTestCase):
         self.assertEqual(captured["json"]["profile"], "standard")
 
     @override_settings(SHELL_EXEC_TOKEN=_TOKEN, SHELL_EXEC_PROFILE="standard")
+    def test_network_command_requests_bridge(self):
+        captured = {}
+
+        async def fake_post(self, url, json=None, headers=None):
+            captured["json"] = json
+            return _ok_response()
+
+        with patch.object(httpx.AsyncClient, "post", new=fake_post):
+            self._execute({"action": "run_command", "command": "ping -c 1 1.1.1.1"})
+        self.assertEqual(captured["json"]["network"], "bridge")
+
+    @override_settings(
+        SHELL_EXEC_TOKEN=_TOKEN, SHELL_EXEC_PROFILE="standard",
+        SHELL_EXEC_NETWORK_ALLOWLIST=["1.1.1.1"],
+    )
+    def test_allowlisted_network_command_still_requests_bridge(self):
+        captured = {}
+
+        async def fake_post(self, url, json=None, headers=None):
+            captured["json"] = json
+            return _ok_response()
+
+        with patch.object(httpx.AsyncClient, "post", new=fake_post):
+            self._execute({"action": "run_command", "command": "ping -c 1 1.1.1.1"})
+        self.assertEqual(captured["json"]["network"], "bridge")
+
+    @override_settings(SHELL_EXEC_TOKEN=_TOKEN, SHELL_EXEC_PROFILE="standard")
     def test_empty_command_is_rejected(self):
         self.assertEqual(self._execute({"action": "run_command", "command": "  "})["status"], "error")
 
@@ -109,6 +136,18 @@ class DynamicRiskGateTests(SimpleTestCase):
     def test_root_command_reports_denied_tier(self):
         info = get_tool_risk_info("run_command", None, {"command": "sudo ls"})
         self.assertEqual(info["shell_tier"], "denied")
+        self.assertTrue(info["requires_confirmation"])
+
+    @override_settings(SHELL_EXEC_PROFILE="standard", SHELL_EXEC_NETWORK_ALLOWLIST=["1.1.1.1"])
+    def test_allowlisted_network_is_not_gated(self):
+        info = get_tool_risk_info("run_command", None, {"command": "ping -c 1 1.1.1.1"})
+        self.assertEqual(info["shell_tier"], "bounded")
+        self.assertFalse(info["requires_confirmation"])
+
+    @override_settings(SHELL_EXEC_PROFILE="standard", SHELL_EXEC_NETWORK_ALLOWLIST=["other.example"])
+    def test_non_allowlisted_network_is_gated(self):
+        info = get_tool_risk_info("run_command", None, {"command": "ping -c 1 1.1.1.1"})
+        self.assertEqual(info["shell_tier"], "bounded")
         self.assertTrue(info["requires_confirmation"])
 
     def test_risk_gate_without_tool_input_is_safe(self):

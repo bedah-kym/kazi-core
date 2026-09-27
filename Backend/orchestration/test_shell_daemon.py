@@ -97,10 +97,17 @@ class DaemonTests(unittest.TestCase):
         )
         self.assertEqual(status, 400)
 
-    def test_network_access_is_rejected_in_phase1(self):
+    def test_bridge_network_is_accepted(self):
         status, _ = asyncio.run(
             _call(self.app, "POST", "/exec", token=_GOOD,
                   body={"command": "ping 1.1.1.1", "network": "bridge"})
+        )
+        self.assertEqual(status, 200)
+
+    def test_unsupported_network_is_rejected(self):
+        status, _ = asyncio.run(
+            _call(self.app, "POST", "/exec", token=_GOOD,
+                  body={"command": "ping 1.1.1.1", "network": "host"})
         )
         self.assertEqual(status, 400)
 

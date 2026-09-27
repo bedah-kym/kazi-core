@@ -86,12 +86,15 @@ class ShellConnector(BaseConnector):
             }
 
         profile = str(_setting("SHELL_EXEC_PROFILE", "standard") or "standard")
-        classification = classify_command(command, profile=profile)
+        allowlist = list(_setting("SHELL_EXEC_NETWORK_ALLOWLIST", []) or [])
+        classification = classify_command(command, profile=profile, allowlist=allowlist)
         if classification["tier"] == "denied":
             return {
                 "status": "error",
                 "message": f"This command is not allowed under the {profile} profile.",
             }
+        # Network is on only for a command that needs it and passed the gate.
+        network = "bridge" if classification.get("needs_network") else "none"
 
         host = str(_setting("SHELL_EXEC_HOST", "127.0.0.1") or "127.0.0.1")
         port = int(_setting("SHELL_EXEC_PORT", 8765) or 8765)
@@ -101,8 +104,7 @@ class ShellConnector(BaseConnector):
             "command": command,
             "room_id": str(context.get("room_id") or context.get("user_id") or "default"),
             "profile": profile,
-            # Phase 1: network off. #134 adds the per-command toggle + allowlist.
-            "network": "none",
+            "network": network,
         }
         if parameters.get("cwd"):
             payload["cwd"] = str(parameters["cwd"])

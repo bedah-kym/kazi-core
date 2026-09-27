@@ -166,7 +166,7 @@ on the host, so only enable it on a disposable box.
 | `SHELL_EXEC_TIMEOUT_DEFAULT` | `120` | Default per-command timeout (seconds). |
 | `SHELL_EXEC_TIMEOUT_MAX` | `600` | Hard per-command timeout ceiling (seconds). |
 | `SHELL_EXEC_OUTPUT_BYTES_MAX` | `65536` | Truncate returned stdout/stderr beyond this many bytes. |
-| `SHELL_EXEC_NETWORK_ALLOWLIST` | empty | Comma-separated hosts that skip the network prompt. A UX shortlist, **not** a firewall (v0.6 Phase 2). |
+| `SHELL_EXEC_NETWORK_ALLOWLIST` | empty | Comma-separated hosts whose network commands run **without a prompt** (e.g. your ISP/gateway). A UX shortlist, **not** a firewall — the sandbox still runs the command non-root, read-only, on the Docker bridge. |
 
 ## Eval
 

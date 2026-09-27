@@ -62,3 +62,41 @@ class TTSConnectorTests(SimpleTestCase):
         with patch.object(httpx.AsyncClient, "post", new=boom):
             result = _run(self.connector.execute({"action": "generate_speech", "text": "x"}, {}))
         self.assertEqual(result["status"], "error")
+
+    @override_settings(
+        TTS_PROVIDER="openai_compatible",
+        TTS_URL="http://localhost:8000/v1/audio/speech",
+        OPENAI_API_KEY="",
+    )
+    def test_self_hosted_provider_needs_no_key(self):
+        captured = {}
+
+        async def fake_post(self, url, headers=None, json=None):
+            captured["url"] = url
+            captured["headers"] = headers
+            return httpx.Response(200, content=b"AUDIO")
+
+        with patch.object(httpx.AsyncClient, "post", new=fake_post):
+            result = _run(self.connector.execute({"action": "generate_speech", "text": "hi"}, {}))
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(captured["url"], "http://localhost:8000/v1/audio/speech")
+        self.assertNotIn("authorization", captured["headers"])
+
+    @override_settings(TTS_PROVIDER="openai", TTS_API_KEY=_KEY, OPENAI_API_KEY="")
+    def test_tts_api_key_overrides_provider_key(self):
+        async def fake_post(self, url, headers=None, json=None):
+            return httpx.Response(200, content=b"AUDIO")
+
+        with patch.object(httpx.AsyncClient, "post", new=fake_post):
+            result = _run(self.connector.execute({"action": "generate_speech", "text": "hi"}, {}))
+        self.assertEqual(result["status"], "success")
+
+    @override_settings(TTS_PROVIDER="bogus")
+    def test_unknown_provider_is_an_error(self):
+        result = _run(self.connector.execute({"action": "generate_speech", "text": "hi"}, {}))
+        self.assertEqual(result["status"], "error")
+
+    @override_settings(TTS_PROVIDER="openai_compatible", TTS_URL="", OPENAI_API_KEY="")
+    def test_compatible_provider_needs_a_url(self):
+        result = _run(self.connector.execute({"action": "generate_speech", "text": "hi"}, {}))
+        self.assertEqual(result["status"], "error")

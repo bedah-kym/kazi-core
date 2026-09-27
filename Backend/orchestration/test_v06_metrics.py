@@ -100,15 +100,13 @@ class V06SuccessMetricTests(SimpleTestCase):
             "destructive commands must gate behind a human approval",
         )
 
-    @expectedFailure
     def test_lullaby_resolves_to_voice_note_on_voice_capable_channel(self):
         """Metric: "sing a lullaby" resolves to a voice note on a voice-capable
         channel without the user asking for voice (brief §8.3, §4.2).
 
-        Red until Phase 3 lands (#136): the `generate_speech` TTS connector
-        registered and advertised, with per-channel capability flags
-        (`supports_voice`, `max_audio_bytes`) on the notifications module —
-        a connector + hint + flags, NOT a modality-selection pipeline stage.
+        Shipped by #136: `generate_speech` is registered and advertised, with
+        per-channel capability flags on the notifications module — a connector
+        + hint + flags, NOT a modality-selection pipeline stage.
         """
         from orchestration.action_catalog import get_supported_actions
 

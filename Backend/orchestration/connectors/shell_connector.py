@@ -106,6 +106,9 @@ class ShellConnector(BaseConnector):
             "profile": profile,
             "network": network,
         }
+        # Snapshot the workspace before a destructive command so it can be rolled back.
+        if classification["tier"] == "destructive":
+            payload["snapshot"] = True
         if parameters.get("cwd"):
             payload["cwd"] = str(parameters["cwd"])
 

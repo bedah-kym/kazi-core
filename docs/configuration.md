@@ -151,6 +151,11 @@ default:
 `open` is never the default and logs a loud boot warning — it runs unsandboxed
 on the host, so only enable it on a disposable box.
 
+The per-room workspace (`<SHELL_EXEC_ROOT>/workspaces/<room_id>`) persists across
+commands. Before a **destructive** command the sidecar tars it to
+`<SHELL_EXEC_ROOT>/snapshots/<room_id>/`; roll back with
+`python Backend/manage.py shell_rollback --room <room_id> --snapshot <file>`.
+
 | Variable | Default | Purpose |
 |---|---|---|
 | `SHELL_EXEC_TOKEN` | empty | Shared bearer token between Kazi and the sidecar. **Empty disables `run_command`.** |

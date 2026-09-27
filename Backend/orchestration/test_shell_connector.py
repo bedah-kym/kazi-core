@@ -80,6 +80,30 @@ class ShellConnectorTests(SimpleTestCase):
         self.assertEqual(captured["json"]["network"], "bridge")
 
     @override_settings(SHELL_EXEC_TOKEN=_TOKEN, SHELL_EXEC_PROFILE="standard")
+    def test_destructive_command_requests_snapshot(self):
+        captured = {}
+
+        async def fake_post(self, url, json=None, headers=None):
+            captured["json"] = json
+            return _ok_response()
+
+        with patch.object(httpx.AsyncClient, "post", new=fake_post):
+            self._execute({"action": "run_command", "command": "rm -rf /"})
+        self.assertTrue(captured["json"].get("snapshot"))
+
+    @override_settings(SHELL_EXEC_TOKEN=_TOKEN, SHELL_EXEC_PROFILE="standard")
+    def test_safe_command_requests_no_snapshot(self):
+        captured = {}
+
+        async def fake_post(self, url, json=None, headers=None):
+            captured["json"] = json
+            return _ok_response()
+
+        with patch.object(httpx.AsyncClient, "post", new=fake_post):
+            self._execute({"action": "run_command", "command": "echo hi"})
+        self.assertNotIn("snapshot", captured["json"])
+
+    @override_settings(SHELL_EXEC_TOKEN=_TOKEN, SHELL_EXEC_PROFILE="standard")
     def test_empty_command_is_rejected(self):
         self.assertEqual(self._execute({"action": "run_command", "command": "  "})["status"], "error")
 

@@ -42,6 +42,9 @@ MAX_TOOL_CALLS = 15
 # "unlimited" means 10k, never infinite — a runaway loop must always terminate.
 HARD_CAP_ITERATIONS = 10000
 HARD_CAP_TOOL_CALLS = 10000
+# D9: a session that touches the shell gets a modestly higher tool-call cap so
+# it can chain a real investigation; the hard backstop above is unchanged.
+SHELL_SESSION_MAX_TOOL_CALLS = 25
 MAX_RETRIES_PER_TOOL = 2
 TOOL_TIMEOUT_SECONDS = 30
 LOOP_TIMEOUT_SECONDS = 120
@@ -170,6 +173,20 @@ def _bucket_tool_calls(
         else:
             auto.append(tc)
     return auto, pause, denied
+
+
+_SHELL_TOOL_NAMES = {"run_command", "run_shell", "shell_command"}
+
+
+def _session_tool_call_cap(state: LoopState, caps_enforced: bool) -> int:
+    """D9: a shell-touching session gets a modestly higher tool-call cap."""
+    if not caps_enforced:
+        return HARD_CAP_TOOL_CALLS
+    shell_used = any(
+        isinstance(entry, dict) and entry.get("name") in _SHELL_TOOL_NAMES
+        for entry in (state.tool_call_log or [])
+    )
+    return SHELL_SESSION_MAX_TOOL_CALLS if shell_used else MAX_TOOL_CALLS
 
 
 # --------------------------------------------------------------------------- #
@@ -1064,7 +1081,6 @@ async def run_agent_loop(
     )
     context["caps_enforced"] = caps_enforced
     max_iterations = MAX_ITERATIONS if caps_enforced else HARD_CAP_ITERATIONS
-    tool_call_cap = MAX_TOOL_CALLS if caps_enforced else HARD_CAP_TOOL_CALLS
     timeout_cap = LOOP_TIMEOUT_SECONDS if caps_enforced else None
 
     # Build tool definitions (filtered by user capabilities)
@@ -1191,8 +1207,8 @@ async def run_agent_loop(
             })
             break
 
-        # Tool call budget check
-        if state.tool_call_count >= tool_call_cap:
+        # Tool call budget check (D9: shell sessions get a higher cap)
+        if state.tool_call_count >= _session_tool_call_cap(state, caps_enforced):
             yield AgentEvent("error", {
                 "message": "I've reached the maximum number of tool calls "
                            "for this request.",

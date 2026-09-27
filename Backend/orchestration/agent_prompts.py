@@ -149,6 +149,13 @@ _REMINDER_RULES = """\
 #  Prompt assembly                                                            #
 # --------------------------------------------------------------------------- #
 
+_MODALITY_RULES = """\
+## Modality
+When the user asks you to sing, speak, or play something aloud, prefer a voice
+tool (generate_speech) so they get a voice note rather than lyrics as text.
+"""
+
+
 def build_system_prompt(
     *,
     preferences: Optional[Dict[str, Any]] = None,
@@ -183,6 +190,7 @@ def build_system_prompt(
     sections.append(_MEMORY_RULES)
     sections.append(_CONTACT_RULES)
     sections.append(_REMINDER_RULES)
+    sections.append(_MODALITY_RULES)
 
     # Contextual memory
     if context_prompt:

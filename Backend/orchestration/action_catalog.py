@@ -528,6 +528,25 @@ ACTION_CATALOG: List[Dict[str, Any]] = [
         "capability_gate": None,
         "router_required": False,
     },
+    {
+        "action": "generate_speech",
+        "aliases": ["speak", "text_to_speech", "tts", "sing"],
+        "service": "voice",
+        "description": (
+            "Generate a spoken audio clip (voice note) from text. Prefer this when "
+            "the user asks you to sing, speak, or play something aloud."
+        ),
+        "params": {
+            "text": {"type": "string", "required": True, "description": "The words to speak or sing."},
+            "voice": {"type": "string", "required": False, "description": "Voice name (defaults to the configured voice)."},
+            "format": {"type": "string", "required": False, "description": "Audio format: mp3 (default), opus, wav, etc."},
+        },
+        "return_description": "Returns base64 audio, its format, and byte size.",
+        "risk_level": "low",
+        "confirmation_policy": "never",
+        "capability_gate": None,
+        "router_required": False,
+    },
 ]
 
 
@@ -547,6 +566,7 @@ SERVICE_METADATA: Dict[str, Dict[str, Any]] = {
     "schedule": {"description": "Scheduled trigger service."},
     "telegram": {"description": "Telegram Bot API actions for messaging and interaction."},
     "shell": {"description": "Sandboxed shell execution on the shell-exec host."},
+    "voice": {"description": "Text-to-speech generation for voice-note delivery."},
 }
 
 

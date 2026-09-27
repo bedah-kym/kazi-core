@@ -103,6 +103,26 @@ fallback above.
 | `INTASEND_WEBHOOK_SECRET` | — | IntaSend webhook verification. |
 | `GOOGLE_*` / `GITHUB_*` / `LINKEDIN_*` / `TWITTER_*` | — | Social login via django-allauth. |
 
+## Voice / modality
+
+`generate_speech` turns text into a voice note (v0.6 §4.2). Per-channel flags
+(`supports_voice`, `supports_image`, `max_audio_bytes`) live in
+`notifications/capabilities.py`; a channel without voice degrades to text + a
+note.
+
+The connector is **provider-agnostic**: it speaks the OpenAI-compatible
+`/audio/speech` shape, so OpenAI, a self-hosted Llama/Kokoro/LocalAI server, or
+any compatible endpoint all work. Pick a provider and (for self-hosted) point
+`TTS_URL` at it.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `TTS_PROVIDER` | `openai` | Provider preset: `openai` or `openai_compatible` (self-hosted / any compatible endpoint). |
+| `TTS_URL` | provider default | Speech endpoint. Required for `openai_compatible`. |
+| `TTS_API_KEY` | empty | Credential override; else the provider's key (e.g. `OPENAI_API_KEY`). Optional for keyless self-hosted endpoints. |
+| `TTS_MODEL` | provider default | TTS model. |
+| `TTS_VOICE` | provider default | Default voice. |
+
 ## Object storage (Cloudflare R2 / S3)
 
 | Variable | Default | Purpose |

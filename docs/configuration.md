@@ -210,6 +210,12 @@ reversible and never override an explicit user setting.
 | `PREFERENCE_MINING_ENABLED` | `True` | Enable the nightly mining task. |
 | `PREFERENCE_MINING_MIN_APPROVALS` | `3` | Approvals (with zero denials) needed to earn an `auto` override. |
 | `PREFERENCE_MINING_WINDOW_DAYS` | `30` | How far back approval history is mined. |
+| `PROACTIVE_BUDGET_PER_DAY` | `2` | Max proactive actions (rung 4) per user per day. |
+
+The initiative ladder (#154) also adds a morning daily digest
+(`send_daily_digest`) listing fired watches and open proposals, and approved-rule
+promotion. Proactive actions never exceed the safe tier unless an approved rule
+exists, and every rung-4 run writes a receipt.
 
 ## Celery tunables
 

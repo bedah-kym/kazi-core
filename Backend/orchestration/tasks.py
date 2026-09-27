@@ -35,3 +35,16 @@ def mine_approval_preferences() -> Dict[str, Any]:
     except Exception:
         logger.exception("Preference mining task failed")
         return {"error": "mining_failed"}
+
+
+@shared_task(ignore_result=True)
+def send_daily_digest() -> Dict[str, Any]:
+    """Rung 2: deliver the daily initiative digest (#154)."""
+    from orchestration.initiative import send_digests
+
+    try:
+        return send_digests()
+    except Exception:
+        # Re-raise so Celery records a failed run (ignore_result hides returns).
+        logger.exception("Daily digest task failed")
+        raise

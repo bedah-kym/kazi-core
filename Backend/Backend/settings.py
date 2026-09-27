@@ -145,6 +145,9 @@ PREFERENCE_MINING_ENABLED = os.environ.get('PREFERENCE_MINING_ENABLED', 'True').
 PREFERENCE_MINING_MIN_APPROVALS = int(os.environ.get('PREFERENCE_MINING_MIN_APPROVALS', '3'))
 PREFERENCE_MINING_WINDOW_DAYS = int(os.environ.get('PREFERENCE_MINING_WINDOW_DAYS', '30'))
 
+# Initiative ladder (#154): proactive actions per user per day (hard cap).
+PROACTIVE_BUDGET_PER_DAY = int(os.environ.get('PROACTIVE_BUDGET_PER_DAY', '2'))
+
 # Application definition
 
 INSTALLED_APPS = [
@@ -384,6 +387,10 @@ CELERY_BEAT_SCHEDULE = {
     'mine-approval-preferences': {
         'task': 'orchestration.tasks.mine_approval_preferences',
         'schedule': crontab(hour=3, minute=30),  # Nightly: mine approve/deny -> learned overrides
+    },
+    'send-daily-digest': {
+        'task': 'orchestration.tasks.send_daily_digest',
+        'schedule': crontab(hour=7, minute=30),  # Morning: initiative rung-2 digest
     },
 }
 

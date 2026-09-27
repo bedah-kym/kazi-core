@@ -39,24 +39,37 @@ def _config(**overrides) -> ShellExecConfig:
     return ShellExecConfig(**defaults)
 
 
+class _FakeStream:
+    def __init__(self, data: bytes = b""):
+        self._data = data
+
+    async def read(self, n: int = -1) -> bytes:
+        if not self._data:
+            return b""
+        if n is None or n < 0:
+            out, self._data = self._data, b""
+        else:
+            out, self._data = self._data[:n], self._data[n:]
+        return out
+
+
+class _HangingStream:
+    async def read(self, n: int = -1) -> bytes:
+        raise asyncio.TimeoutError
+
+
 class _FakeProc:
     def __init__(self, out: bytes = b"", err: bytes = b"", returncode: int = 0):
-        self._out, self._err, self.returncode = out, err, returncode
+        self.stdout = _FakeStream(out)
+        self.stderr = _FakeStream(err)
+        self.returncode = returncode
         self.killed = False
-
-    async def communicate(self):
-        return self._out, self._err
 
     def kill(self):
         self.killed = True
 
     async def wait(self):
         return self.returncode
-
-
-class _TimeoutProc(_FakeProc):
-    async def communicate(self):
-        raise asyncio.TimeoutError
 
 
 class WorkspaceTests(unittest.TestCase):
@@ -107,33 +120,61 @@ class DockerBackendTests(unittest.TestCase):
         backend = DockerBackend(_config())
         proc = _FakeProc(out=b"hi\n", returncode=0)
         with patch(_SUBPROCESS, new=AsyncMock(return_value=proc)) as mocked:
-            result = asyncio.run(backend.execute("echo hi", room_id="r"))
+            result = _run(backend.execute("echo hi", room_id="r"))
         self.assertEqual(result.exit_code, 0)
         self.assertEqual(result.stdout, "hi\n")
         self.assertFalse(result.truncated)
         self.assertEqual(mocked.call_args.args[0], "docker")
 
+    def test_execute_names_container(self):
+        backend = DockerBackend(_config())
+        proc = _FakeProc(out=b"hi\n")
+        with patch(_SUBPROCESS, new=AsyncMock(return_value=proc)) as mocked:
+            _run(backend.execute("echo hi", room_id="r"))
+        argv = mocked.call_args.args
+        self.assertIn("--name", argv)
+        self.assertTrue(argv[argv.index("--name") + 1].startswith("kazi-exec-"))
+
     def test_missing_docker_maps_to_error(self):
         backend = DockerBackend(_config())
         with patch(_SUBPROCESS, side_effect=FileNotFoundError):
-            result = asyncio.run(backend.execute("echo hi"))
+            result = _run(backend.execute("echo hi"))
         self.assertEqual(result.exit_code, 127)
         self.assertIn("not found", result.stderr)
 
-    def test_timeout_kills_and_reports_124(self):
+    def test_timeout_removes_container(self):
         backend = DockerBackend(_config())
-        proc = _TimeoutProc()
-        with patch(_SUBPROCESS, new=AsyncMock(return_value=proc)):
-            result = asyncio.run(backend.execute("sleep 100"))
+        proc = _FakeProc()
+        proc.stdout = _HangingStream()
+        proc.stderr = _HangingStream()
+        with patch(_SUBPROCESS, new=AsyncMock(return_value=proc)), \
+                patch.object(DockerBackend, "_remove_container", new=AsyncMock()) as remover:
+            result = _run(backend.execute("sleep 100", room_id="r"))
         self.assertEqual(result.exit_code, 124)
         self.assertTrue(proc.killed)
+        self.assertGreaterEqual(remover.await_count, 1)
 
     def test_output_is_truncated(self):
         backend = DockerBackend(_config(output_bytes_max=3))
         with patch(_SUBPROCESS, new=AsyncMock(return_value=_FakeProc(out=b"abcdef"))):
-            result = asyncio.run(backend.execute("x"))
+            result = _run(backend.execute("x"))
         self.assertEqual(result.stdout, "abc")
         self.assertTrue(result.truncated)
+
+
+class TimeoutResolutionTests(unittest.TestCase):
+    def test_non_numeric_timeout_is_value_error(self):
+        backend = DockerBackend(_config())
+        with self.assertRaises(ValueError):
+            backend.resolve_timeout(["nope"])
+
+    def test_timeout_clamped_to_max(self):
+        backend = DockerBackend(_config(timeout_max=30))
+        self.assertEqual(backend.resolve_timeout(999), 30)
+
+    def test_non_positive_uses_default(self):
+        backend = DockerBackend(_config(timeout_default=7))
+        self.assertEqual(backend.resolve_timeout(0), 7)
 
 
 class LocalBackendTests(unittest.TestCase):

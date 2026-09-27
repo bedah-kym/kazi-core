@@ -23,7 +23,7 @@ no Kazi credentials.
 - New paths:
   - `Backend/orchestration/shell_exec/__init__.py`
   - `Backend/orchestration/shell_exec/backends.py` (`DockerBackend`, `LocalBackend`)
-  - `Backend/orchestration/shell_exec/daemon.py` (aiohttp app)
+  - `Backend/orchestration/shell_exec/daemon.py` (minimal ASGI app, served by uvicorn)
   - `Backend/orchestration/management/commands/run_shell_exec.py`
   - Tests: `Backend/orchestration/test_shell_backends.py`,
     `Backend/orchestration/test_shell_daemon.py`
@@ -51,7 +51,7 @@ default, memory/PID caps. `LocalBackend` (full trust) is only selected by the
    with `asyncio.create_subprocess_exec`, enforces `timeout_s` (kill on expiry)
    and `output_bytes_max`. `LocalBackend.execute()` uses
    `create_subprocess_shell(cwd=<ws>)`. `get_backend(profile)` factory.
-2. `daemon.py`: aiohttp app; constant-time token check on `X-Shell-Exec-Token`;
+2. `daemon.py`: minimal ASGI app (uvicorn); constant-time token check on `X-Shell-Exec-Token`;
    `POST /exec` validates and delegates; `GET /health`. Caps enforced here too,
    independent of Kazi. No policy.
 3. `run_shell_exec.py`: starts the app on `SHELL_EXEC_HOST`/`SHELL_EXEC_PORT`.

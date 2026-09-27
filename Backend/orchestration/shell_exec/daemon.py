@@ -4,7 +4,7 @@ Served by uvicorn via ``manage.py run_shell_exec``. Two endpoints:
 
 - ``GET /health`` — liveness.
 - ``POST /exec`` — bearer-token authenticated; runs one command through the
-  configured backend and returns stdout/stderr/exit code.
+  backend for the requested profile and returns stdout/stderr/exit code.
 
 The sidecar holds no policy and no Kazi credentials — only the shared token and
 a workspace directory. All policy lives in Kazi's orchestration layer. See
@@ -31,6 +31,7 @@ _TOKEN_HEADER = "x-shell-exec-token"  # nosec B105 - HTTP header name, not a cre
 
 
 async def _read_body(receive: Receive) -> bytes:
+    """Read the full request body, rejecting oversized payloads."""
     body = b""
     while True:
         message = await receive()
@@ -44,6 +45,7 @@ async def _read_body(receive: Receive) -> bytes:
 
 
 async def _send_json(send: Send, status: int, payload: Dict[str, Any]) -> None:
+    """Send a JSON HTTP response."""
     body = json.dumps(payload).encode("utf-8")
     await send({
         "type": "http.response.start",
@@ -54,6 +56,7 @@ async def _send_json(send: Send, status: int, payload: Dict[str, Any]) -> None:
 
 
 def _header(scope: Scope, name: str) -> str:
+    """Return a header value by case-insensitive name, or ``""``."""
     wanted = name.lower().encode("latin-1")
     for key, value in scope.get("headers", []):
         if key.lower() == wanted:
@@ -62,10 +65,12 @@ def _header(scope: Scope, name: str) -> str:
 
 
 def _authorized(scope: Scope, token: str) -> bool:
+    """Constant-time token check. Compares bytes so a non-ASCII header value
+    cannot raise inside ``hmac.compare_digest``."""
     provided = _header(scope, _TOKEN_HEADER)
     if not token or not provided:
         return False
-    return hmac.compare_digest(provided, token)
+    return hmac.compare_digest(provided.encode("utf-8"), token.encode("utf-8"))
 
 
 def create_app(
@@ -74,7 +79,11 @@ def create_app(
 ) -> Callable[[Scope, Receive, Send], Awaitable[None]]:
     """Build the ASGI application. Tests inject ``config`` and ``backend``."""
     config = config or ShellExecConfig.from_settings()
-    resolved_backend = backend or get_backend(config.profile, config)
+
+    def resolve_backend(profile: str) -> ShellBackend:
+        if backend is not None:
+            return backend
+        return get_backend(profile, config)
 
     async def app(scope: Scope, receive: Receive, send: Send) -> None:
         if scope.get("type") != "http":
@@ -114,13 +123,24 @@ def create_app(
             await _send_json(send, 400, {"error": "command is required"})
             return
 
+        profile = str(payload.get("profile") or config.profile or "standard")
+        if profile not in config.allowed_profiles:
+            await _send_json(send, 400, {"error": f"profile {profile!r} is not enabled on this sidecar"})
+            return
+
+        # Phase 1: network is off. #134 adds the per-command toggle + allowlist.
+        network = str(payload.get("network") or "none")
+        if network != "none":
+            await _send_json(send, 400, {"error": "network access is not enabled"})
+            return
+
         try:
-            result = await resolved_backend.execute(
+            result = await resolve_backend(profile).execute(
                 command,
                 room_id=str(payload.get("room_id") or "default"),
                 cwd=payload.get("cwd"),
                 timeout_s=payload.get("timeout_s"),
-                network=str(payload.get("network") or "none"),
+                network=network,
             )
         except ValueError as exc:
             await _send_json(send, 400, {"error": str(exc)})

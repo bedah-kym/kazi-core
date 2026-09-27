@@ -129,6 +129,32 @@ fallback above.
 | `WORKFLOW_APPROVAL_MAX_PENDING_AGE_SECONDS` | `86400` | Age after which a pending approval is dead-lettered. |
 | `TRAVEL_ALLOW_FALLBACK` | `DEBUG` | Allow fallback travel search results. |
 
+## Governed shell (v0.6)
+
+`run_command` executes one command through a deliberately dumb sidecar process
+in a sandboxed container (non-root, read-only rootfs, `--cap-drop=ALL`,
+network off by default, memory/PID caps). Start the sidecar with
+`python Backend/manage.py run_shell_exec`. The sandbox is the security
+boundary; the command classifier is UX and a tripwire. See the
+[credential-scoping contract](contracts/credential-scoping.md).
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SHELL_EXEC_TOKEN` | empty | Shared bearer token between Kazi and the sidecar. **Empty disables `run_command`.** |
+| `SHELL_EXEC_HOST` | `127.0.0.1` | Sidecar bind host (and the host Kazi connects to). |
+| `SHELL_EXEC_PORT` | `8765` | Sidecar bind/connect port. |
+| `SHELL_EXEC_PROFILE` | `standard` | Default profile. `standard`/`locked` run in the Docker sandbox; `open` runs unsandboxed on the host (Phase 2 refines the per-profile rules). |
+| `SHELL_EXEC_PROFILES` | the profile above | Comma-separated profiles the sidecar will serve. A request for any other profile is rejected with 400. Add `open` only on a disposable box. |
+| `SHELL_EXEC_ROOT` | `<repo>/shell_workspaces` | Root for per-room workspaces mounted at `/workspace`. |
+| `SHELL_EXEC_IMAGE` | `alpine:3.20` | Container image for the Docker backend. |
+| `SHELL_EXEC_USER` | `65534:65534` | Non-root uid:gid the container runs as. |
+| `SHELL_EXEC_MEMORY` | `256m` | Docker `--memory` cap. |
+| `SHELL_EXEC_PIDS_LIMIT` | `128` | Docker `--pids-limit` cap. |
+| `SHELL_EXEC_TIMEOUT_DEFAULT` | `120` | Default per-command timeout (seconds). |
+| `SHELL_EXEC_TIMEOUT_MAX` | `600` | Hard per-command timeout ceiling (seconds). |
+| `SHELL_EXEC_OUTPUT_BYTES_MAX` | `65536` | Truncate returned stdout/stderr beyond this many bytes. |
+| `SHELL_EXEC_NETWORK_ALLOWLIST` | empty | Comma-separated hosts that skip the network prompt. A UX shortlist, **not** a firewall (v0.6 Phase 2). |
+
 ## Celery tunables
 
 | Variable | Default | Purpose |

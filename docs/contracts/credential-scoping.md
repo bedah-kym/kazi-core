@@ -56,10 +56,16 @@ path passes a Kazi or user key into the workspace or a command's environment.
 - Rotation: regenerate the token, restart the sidecar, update Kazi's setting;
   the old value is invalid immediately (the sidecar compares against the
   current value on every request).
-- Blast radius of a leak: the holder can ask the sidecar to run a command in
-  the workspace under the active profile's sandbox. They cannot reach Kazi's
-  database, another room's workspace, or the host. Revoke and rotate contains
-  it.
+- Blast radius of a leak: the holder can run a command in the room workspace
+  the orchestration layer selects. Under `standard`/`locked` that command runs
+  in the Docker sandbox (non-root, read-only, `--cap-drop=ALL`, network off).
+  Under `open` it runs **directly on the sidecar host** with the sidecar user's
+  permissions and environment, so `open` must only be enabled on a disposable
+  box — the sidecar serves `standard` by default (`SHELL_EXEC_PROFILES`).
+  Revoke and rotate contains the blast.
+- The `room_id` a request carries is chosen by Kazi's orchestration layer from
+  authenticated context, never from model output, so room scoping is enforced
+  upstream of the sidecar; the sidecar only sanitizes the id into a safe path.
 
 **Checkable:** a leaked token cannot be exchanged for broader access, and
 losing it never exposes Kazi credentials.

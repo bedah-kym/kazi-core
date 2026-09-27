@@ -108,6 +108,34 @@ CALENDLY_WEBHOOK_SIGNING_KEY = (
 # IntaSend webhook secret for signature verification
 INTASEND_WEBHOOK_SECRET = os.environ.get('INTASEND_WEBHOOK_SECRET')
 
+# Governed shell sidecar (v0.6, #130). The sidecar runs one command in a
+# sandboxed container; Kazi never touches Docker or a raw shell itself.
+# Leaving SHELL_EXEC_TOKEN blank disables run_command entirely (fail closed).
+SHELL_EXEC_HOST = os.environ.get('SHELL_EXEC_HOST', '127.0.0.1')
+SHELL_EXEC_PORT = int(os.environ.get('SHELL_EXEC_PORT', '8765'))
+SHELL_EXEC_TOKEN = os.environ.get('SHELL_EXEC_TOKEN', '')
+SHELL_EXEC_PROFILE = os.environ.get('SHELL_EXEC_PROFILE', 'standard')
+# Profiles the sidecar will serve. Empty = the single SHELL_EXEC_PROFILE (or
+# "standard"). Add "open" only on a disposable box — it runs unsandboxed.
+SHELL_EXEC_PROFILES = [
+    profile.strip()
+    for profile in os.environ.get('SHELL_EXEC_PROFILES', '').split(',')
+    if profile.strip()
+]
+SHELL_EXEC_ROOT = os.environ.get('SHELL_EXEC_ROOT', '')
+SHELL_EXEC_IMAGE = os.environ.get('SHELL_EXEC_IMAGE', 'alpine:3.20')
+SHELL_EXEC_USER = os.environ.get('SHELL_EXEC_USER', '65534:65534')
+SHELL_EXEC_MEMORY = os.environ.get('SHELL_EXEC_MEMORY', '256m')
+SHELL_EXEC_PIDS_LIMIT = int(os.environ.get('SHELL_EXEC_PIDS_LIMIT', '128'))
+SHELL_EXEC_TIMEOUT_DEFAULT = int(os.environ.get('SHELL_EXEC_TIMEOUT_DEFAULT', '120'))
+SHELL_EXEC_TIMEOUT_MAX = int(os.environ.get('SHELL_EXEC_TIMEOUT_MAX', '600'))
+SHELL_EXEC_OUTPUT_BYTES_MAX = int(os.environ.get('SHELL_EXEC_OUTPUT_BYTES_MAX', '65536'))
+SHELL_EXEC_NETWORK_ALLOWLIST = [
+    host.strip()
+    for host in os.environ.get('SHELL_EXEC_NETWORK_ALLOWLIST', '').split(',')
+    if host.strip()
+]
+
 # Application definition
 
 INSTALLED_APPS = [

@@ -771,7 +771,7 @@ async def _execute_scoped_tool_calls(
             return result_blocks, True
 
         # Sub-agents cannot pause for confirmation; block high-risk actions.
-        risk = get_tool_risk_info(tc["name"], preferences)
+        risk = get_tool_risk_info(tc["name"], preferences, tc.get("input"))
         if risk.get("requires_confirmation"):
             result = {
                 "status": "error",
@@ -1263,7 +1263,7 @@ async def run_agent_loop(
             confirm_calls: List[Dict[str, Any]] = []
 
             for tc in tool_calls:
-                risk = get_tool_risk_info(tc["name"], preferences)
+                risk = get_tool_risk_info(tc["name"], preferences, tc.get("input"))
                 if risk["requires_confirmation"]:
                     confirm_calls.append(tc)
                 else:

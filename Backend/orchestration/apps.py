@@ -23,6 +23,10 @@ class OrchestrationConfig(AppConfig):
             )
             logger.warning(banner)
 
+        from orchestration.shell.profiles import warn_if_open_profile
+
+        warn_if_open_profile()
+
         if not getattr(settings, "ORCHESTRATION_STRICT_STARTUP_CHECKS", True):
             return
         try:

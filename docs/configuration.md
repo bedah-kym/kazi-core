@@ -138,6 +138,19 @@ network off by default, memory/PID caps). Start the sidecar with
 boundary; the command classifier is UX and a tripwire. See the
 [credential-scoping contract](contracts/credential-scoping.md).
 
+Isolation profiles (roadmap §3), resolved per room (override) else the global
+default:
+
+| | `open` | `standard` (default) | `locked` |
+|---|---|---|---|
+| Backend | direct subprocess | Docker | Docker |
+| Root filesystem | full | read-only | read-only |
+| Writable | full | `/workspace` | none |
+| Network | full | off by default | none |
+
+`open` is never the default and logs a loud boot warning — it runs unsandboxed
+on the host, so only enable it on a disposable box.
+
 | Variable | Default | Purpose |
 |---|---|---|
 | `SHELL_EXEC_TOKEN` | empty | Shared bearer token between Kazi and the sidecar. **Empty disables `run_command`.** |

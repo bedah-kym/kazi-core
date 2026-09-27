@@ -77,7 +77,7 @@ class BaseTravelConnector(BaseConnector):
 
             # Check cache first
             cached_result = await self._get_cached_result(query_hash)
-            if cached_result:
+            if cached_result and cached_result.get('results'):
                 logger.info(f"{self.PROVIDER_NAME}: Cache hit for {query_hash[:16]}")
                 return {
                     'status': 'success',
@@ -87,6 +87,8 @@ class BaseTravelConnector(BaseConnector):
                     'message': f'Results from {self.PROVIDER_NAME} (cached)',
                     'metadata': {'cache_age_seconds': cached_result.get('cache_age', 0)}
                 }
+            if cached_result:
+                logger.info(f"{self.PROVIDER_NAME}: ignoring stale empty cache entry for {query_hash[:16]}")
 
             # Cache miss: fetch fresh data with retry
             logger.info(f"{self.PROVIDER_NAME}: Cache miss for {query_hash[:16]}, fetching fresh data")
@@ -126,8 +128,12 @@ class BaseTravelConnector(BaseConnector):
                 result=result
             )
 
-            # Cache successful result
-            await self._cache_result(query_hash, parameters, result)
+            # Cache successful result — only when it actually contains data.
+            # Empty/error dicts (e.g. "departure date is in the past") must
+            # never poison the cache: caching them turns every retry into a
+            # fake success hit with zero results.
+            if result.get('results'):
+                await self._cache_result(query_hash, parameters, result)
 
             return {
                 'status': 'success',

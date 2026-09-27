@@ -10,10 +10,28 @@ import logging
 import httpx
 import hashlib
 from typing import Dict, List, Optional, Any
+from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.core.cache import cache
+from django.utils import timezone
 
 logger = logging.getLogger(__name__)
+
+_DATE_MARKER = "Current date and time:"
+
+
+def _inject_current_datetime(system_prompt: str, now=None) -> str:
+    """Prepend the server's current local date/time to a system prompt.
+
+    Models have no clock: without this, date math like "next Friday" is
+    guessed from training data and lands in the wrong year. Guarded so
+    retries and cached prompts never get the line twice.
+    """
+    if not system_prompt or _DATE_MARKER in system_prompt:
+        return system_prompt
+    now = now or timezone.localtime()
+    stamp = f"{_DATE_MARKER} {now.strftime('%Y-%m-%d %H:%M %A %Z')}."
+    return f"{stamp}\n{system_prompt}"
 
 
 class LLMClient:
@@ -354,7 +372,7 @@ class LLMClient:
         self._record_token_usage(usage.get("input_tokens", 0) + usage.get("output_tokens", 0), user_id)
         return result
 
-    def _get_user_token_budget(self, user_id: Optional[int]) -> Dict[str, int]:
+    async def _get_user_token_budget(self, user_id: Optional[int]) -> Dict[str, int]:
         """
         Get token budget and current usage for a user.
         Staff/superuser accounts are exempt.
@@ -366,10 +384,15 @@ class LLMClient:
         limit = int(getattr(settings, "LLM_TOKEN_LIMIT_PER_USER_PER_HOUR", 50000))
 
         # Staff / superusers are exempt from the token quota (owner debugging, support).
+        # Must run via sync_to_async: a sync ORM query inside the async agent
+        # loop raises SynchronousOnlyOperation, and the bare except used to
+        # swallow it — silently dropping the exemption for every staff user.
         try:
             from django.contrib.auth import get_user_model
             User = get_user_model()
-            user = User.objects.filter(pk=user_id).only('is_staff', 'is_superuser').first()
+            user = await sync_to_async(
+                lambda: User.objects.filter(pk=user_id).only('is_staff', 'is_superuser').first()
+            )()
             if user and (user.is_staff or user.is_superuser):
                 return {"limit": 10_000_000, "used": 0}
         except Exception:
@@ -393,7 +416,7 @@ class LLMClient:
         if not getattr(settings, "LLM_TOKEN_QUOTA_ENABLED", True):
             return True  # Quota disabled (dev) — don't starve batch jobs
 
-        budget = self._get_user_token_budget(user_id)
+        budget = await self._get_user_token_budget(user_id)
         if budget["used"] + estimated_tokens > budget["limit"]:
             logger.warning(
                 f"Token quota exceeded for user {user_id}: "
@@ -461,6 +484,9 @@ class LLMClient:
         system_prompt = self._truncate(system_prompt, is_system=True)
         cache_key = None
         if self._should_cache(json_mode=json_mode, temperature=temperature):
+            # Key from the timestamp-free prompt: the date line changes every
+            # minute and would otherwise defeat the response cache for
+            # otherwise-identical calls in adjacent minutes.
             cache_key = self._cache_key(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
@@ -475,6 +501,7 @@ class LLMClient:
             cached = cache.get(cache_key)
             if cached:
                 return cached
+        system_prompt = _inject_current_datetime(system_prompt)
         provider_order = self._provider_order(model_role, provider_preference)
         last_error: Optional[Exception] = None
         for provider in provider_order:
@@ -593,6 +620,7 @@ class LLMClient:
         Stream text generation. Yields chunks of text.
         """
         max_tokens = min(max_tokens, getattr(settings, 'LLM_MAX_TOKENS', 700))
+        system_prompt = _inject_current_datetime(system_prompt)
         user_prompt = self._truncate(user_prompt)
         system_prompt = self._truncate(system_prompt, is_system=True)
 
@@ -675,14 +703,27 @@ class LLMClient:
         }
         if system:
             if use_prompt_cache:
-                # Structured system prompt with cache_control for prompt caching
-                body["system"] = [
-                    {
-                        "type": "text",
-                        "text": system,
-                        "cache_control": {"type": "ephemeral"},
-                    }
-                ]
+                # Structured system prompt with cache_control for prompt caching.
+                # The date stamp is volatile: keep it AFTER the breakpoint so
+                # the static system text stays a cacheable exact prefix.
+                if system.startswith(_DATE_MARKER):
+                    stamp, _, static = system.partition("\n")
+                    body["system"] = [
+                        {
+                            "type": "text",
+                            "text": static,
+                            "cache_control": {"type": "ephemeral"},
+                        },
+                        {"type": "text", "text": stamp},
+                    ]
+                else:
+                    body["system"] = [
+                        {
+                            "type": "text",
+                            "text": system,
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ]
             else:
                 body["system"] = system
         if tools:
@@ -750,6 +791,8 @@ class LLMClient:
         """
         if not self.anthropic_key and not self.hf_key and not self.deepseek_key:
             raise Exception("No valid API keys configured for DeepSeek, Anthropic, or Hugging Face.")
+
+        system = _inject_current_datetime(system)
 
         estimated_tokens = sum(
             self._estimate_tokens(

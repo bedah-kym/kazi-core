@@ -28,7 +28,7 @@ class MailgunConnector(BaseConnector):
             self.api_key = os.environ.get('MAILGUN_API_KEY')
             self.domain = os.environ.get('MAILGUN_DOMAIN')
 
-        self.base_url = f"https://api.mailgun.net/v3/{self.domain}" if self.domain else None
+        self.base_url = f"{os.environ.get('MAILGUN_API_BASE', 'https://api.mailgun.net')}/v3/{self.domain}" if self.domain else None
         self.use_sandbox = use_sandbox
 
     async def execute(self, parameters: dict, context: dict) -> dict:

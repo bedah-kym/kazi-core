@@ -66,6 +66,7 @@ class NotificationService:
         related_room=None,
         related_message=None,
         metadata: Optional[Dict[str, Any]] = None,
+        channels: Optional[Dict[str, bool]] = None,
     ) -> Optional[Notification]:
         """
         Central entry point.  All code paths call this instead of creating
@@ -75,8 +76,14 @@ class NotificationService:
         2. Create Notification row (if in_app enabled)
         3. Push via WebSocket
         4. Queue async email / WhatsApp delivery
+
+        ``channels`` overrides the per-event matrix for this dispatch only
+        (e.g. reminder delivery manages its own external channels and
+        dispatches the notification in-app only).
         """
         prefs = NotificationService._get_channel_prefs(user, event_type)
+        if channels is not None:
+            prefs = {**prefs, **channels}
 
         notification = None
         if prefs.get("in_app", True):

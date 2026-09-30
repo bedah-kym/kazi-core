@@ -10,6 +10,7 @@ _ALLOWED_DATE_ORDERS = {"DMY", "MDY", "YMD"}
 _ALLOWED_TIME_FORMATS = {"24h", "12h"}
 _ALLOWED_CAPABILITY_MODES = {"custom", "conserve", "balanced", "max"}
 _ALLOWED_NUDGE_FREQUENCIES = {"off", "low", "medium", "high"}
+_ALLOWED_SHELL_PROFILES = {"open", "standard", "locked"}
 _TRUTHY_VALUES = {"1", "true", "yes", "on"}
 _FALSY_VALUES = {"0", "false", "no", "off"}
 
@@ -201,6 +202,9 @@ def normalize_preferences(
     approval_overrides = _normalize_approval_overrides(
         _pull_pref(raw_prefs, "approval_overrides")
     )
+    shell_profile = _normalize_choice(
+        _pull_pref(raw_prefs, "shell_profile"), _ALLOWED_SHELL_PROFILES, ""
+    )
 
     return {
         "tone": tone,
@@ -231,6 +235,8 @@ def normalize_preferences(
         "allow_calendar": _coerce_bool(_pull_pref(raw_prefs, "allow_calendar"), True),
         # Approval overrides for confirmation policy (e.g. {"send_email": "auto"})
         "approval_overrides": approval_overrides,
+        # Per-user shell isolation profile override (open/standard/locked)
+        "shell_profile": shell_profile,
         # Per-event-type notification channel matrix
         "notify_matrix": _normalize_notify_matrix(
             _pull_pref(raw_prefs, "notify_matrix")

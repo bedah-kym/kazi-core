@@ -19,6 +19,18 @@ root (one level above `Backend/`).
 | `CELERY_BROKER_URL` | `REDIS_URL` | Celery broker URL. |
 | `ENCRYPTION_KEY` | — | **Required in production.** Fernet key (URL-safe base64, 32 bytes) for per-room message encryption. In dev it's auto-generated and persisted to `Backend/.encryption.key`. A changed/lost key makes existing rooms undecryptable. |
 
+## Dev without Redis/Postgres (in-memory fallback)
+
+When `DJANGO_DEBUG` is on and Redis is unreachable at boot, settings fall back to
+an in-memory channel layer + LocMem cache and SQLite, and Celery runs tasks
+inline (`CELERY_TASK_ALWAYS_EAGER`). This lets `manage.py runserver` serve the
+chat UI natively from a venv with no Docker and no services. Production
+(`DEBUG=False`) never falls back. Force it with `KAZI_DEV_INMEMORY=1`.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `KAZI_DEV_INMEMORY` | auto (DEBUG + Redis unreachable) | Force the in-memory/SQLite dev fallback. |
+
 ## LLM providers & routing
 
 | Variable | Default | Purpose |

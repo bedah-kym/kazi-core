@@ -35,9 +35,18 @@ def create_user_profile(sender, instance, created, **kwargs):
             general_room = Chatroom.objects.create()
             general_room.participants.add(user_member)
 
-            # Try to add Mathia
+            # Ensure the Mathia bot exists, then add it so the General room is
+            # AI-ready even on a fresh database (bot created before first user).
             try:
-                mathia_user = User.objects.get(username='mathia')
+                mathia_user, _ = User.objects.get_or_create(
+                    username='mathia',
+                    defaults={
+                        'first_name': 'Mathia',
+                        'last_name': 'AI',
+                        'is_active': True,
+                        'email': 'mathia@kwikchat.ai',
+                    },
+                )
                 mathia_member, _ = Member.objects.get_or_create(User=mathia_user)
 
                 general_room.participants.add(mathia_member)
@@ -50,9 +59,6 @@ def create_user_profile(sender, instance, created, **kwargs):
                 )
                 general_room.chats.add(welcome_msg)
 
-            except User.DoesNotExist:
-                # Mathia doesn't exist, but user still gets their room
-                print(f"Warning: Mathia user not found. General room created for {instance.username} without bot.")
             except Exception as e:
                 # Log error but don't fail user creation
                 print(f"Error adding Mathia to room: {e}")

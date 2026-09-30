@@ -80,6 +80,38 @@ if not SECRET_KEY:
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DJANGO_DEBUG', 'False').lower() in ('1', 'true', 'yes')
 
+# --- Dev fallback: no Redis/Postgres (e.g. Docker unavailable) ---------------
+# When DEBUG is on and Redis is unreachable at boot, run fully in-memory and on
+# SQLite so `manage.py runserver` works natively from a venv. Production
+# (DEBUG=False) never falls back. Force with KAZI_DEV_INMEMORY=1.
+import socket as _socket
+from urllib.parse import urlparse as _urlparse
+
+
+def _redis_reachable(url: str) -> bool:
+    try:
+        parsed = _urlparse(str(url))
+        host, port = parsed.hostname, (parsed.port or 6379)
+    except Exception:
+        return False
+    if not host:
+        return False
+    try:
+        with _socket.create_connection((host, port), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
+_DEV_INMEMORY = DEBUG and os.environ.get('KAZI_DEV_INMEMORY', '').lower() in ('1', 'true', 'yes', 'on')
+if not _DEV_INMEMORY:
+    # Auto-fall back only when the config expects the Docker network (its DB
+    # host is a compose service) and Redis is unreachable. CI/hermetic runs with
+    # no DATABASE_URL keep the normal settings.
+    _db_host = _urlparse(os.environ.get('DATABASE_URL', '')).hostname or ""
+    if DEBUG and _db_host in {'db', 'postgres', 'postgresql'}:
+        _DEV_INMEMORY = not _redis_reachable(os.environ.get('REDIS_URL', 'redis://redis:6379/0'))
+
 ALLOWED_HOSTS = [host.strip() for host in os.environ.get('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',') if host.strip()]
 
 # CSRF & CORS configuration - be explicit and restrictive
@@ -246,9 +278,14 @@ ASGI_APPLICATION = "Backend.asgi.application"
 # Database
 # https://docs.djangoproject.com/en/4.1/ref/settings/#databases
 
+_DATABASE_URL = os.environ.get('DATABASE_URL', 'sqlite:///' + str(BASE_DIR / 'db.sqlite3'))
+if _DEV_INMEMORY and _urlparse(_DATABASE_URL).hostname in {'db', 'postgres', 'postgresql'}:
+    # The configured Postgres lives on the Docker network; fall back to SQLite.
+    _DATABASE_URL = 'sqlite:///' + str(BASE_DIR / 'db.sqlite3')
+
 DATABASES = {
-    'default': dj_database_url.config(
-        default=os.environ.get('DATABASE_URL', 'sqlite:///' + str(BASE_DIR / 'db.sqlite3')),
+    'default': dj_database_url.parse(
+        _DATABASE_URL,
         conn_max_age=600,
         conn_health_checks=True,
     )
@@ -267,6 +304,10 @@ USE_TZ = True
 # Read Redis URL from environment so containers use the Compose service hostname
 REDIS_URL = os.environ.get('REDIS_URL', 'redis://redis:6379/0')
 CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', REDIS_URL)
+if _DEV_INMEMORY:
+    # No broker; run tasks inline in the web process.
+    CELERY_BROKER_URL = 'memory://'
+CELERY_TASK_ALWAYS_EAGER = _DEV_INMEMORY
 
 # Temporal configuration for workflow execution
 TEMPORAL_HOST = os.environ.get('TEMPORAL_HOST', 'localhost:7233')
@@ -309,37 +350,50 @@ CELERY_RESULT_EXPIRES = int(os.environ.get('CELERY_RESULT_EXPIRES', 3600))  # 1 
 # IGNORE_EXCEPTIONS: when Redis is down, HTTP views must still serve —
 # cache reads return the default and writes are skipped (logged) instead of 500ing.
 REDIS_CACHE_IGNORE_EXCEPTIONS = os.environ.get('REDIS_CACHE_IGNORE_EXCEPTIONS', '1').lower() in ('1', 'true', 'yes')
-CACHES = {
-    "default": {
-        "BACKEND": "django_redis.cache.RedisCache",
-        "LOCATION": REDIS_URL,
-        "OPTIONS": {
-            "CLIENT_CLASS": "django_redis.client.DefaultClient",
-            "IGNORE_EXCEPTIONS": REDIS_CACHE_IGNORE_EXCEPTIONS,
+if _DEV_INMEMORY:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "kazi-dev-inmemory",
         }
     }
-}
-DJANGO_REDIS_LOG_IGNORED_EXCEPTIONS = True
+    CHANNEL_LAYERS = {
+        "default": {"BACKEND": "channels.layers.InMemoryChannelLayer"},
+    }
+    # LocMem is not a shared cache; ratelimit's check is a hard error otherwise.
+    SILENCED_SYSTEM_CHECKS = ['django_ratelimit.E003', 'django_ratelimit.W001']
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django_redis.cache.RedisCache",
+            "LOCATION": REDIS_URL,
+            "OPTIONS": {
+                "CLIENT_CLASS": "django_redis.client.DefaultClient",
+                "IGNORE_EXCEPTIONS": REDIS_CACHE_IGNORE_EXCEPTIONS,
+            }
+        }
+    }
+    DJANGO_REDIS_LOG_IGNORED_EXCEPTIONS = True
 
-# Channels Layer with local Redis
-CHANNEL_LAYERS = {
-    "default": {
-        "BACKEND": "channels_redis.core.RedisChannelLayer",
-        "CONFIG": {
-            "hosts": [
-                {
-                    "address": REDIS_URL,
-                    # redis-py 8.0.0 defaults socket_timeout to 5s, which
-                    # collides with channels_redis's 5s bzpopmin poll and
-                    # tears down otherwise-idle WebSockets. None restores the
-                    # pre-8.0 behaviour; bzpopmin still returns on its own
-                    # 5s poll without raising.
-                    "socket_timeout": None,
-                }
-            ],
+    # Channels Layer with local Redis
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels_redis.core.RedisChannelLayer",
+            "CONFIG": {
+                "hosts": [
+                    {
+                        "address": REDIS_URL,
+                        # redis-py 8.0.0 defaults socket_timeout to 5s, which
+                        # collides with channels_redis's 5s bzpopmin poll and
+                        # tears down otherwise-idle WebSockets. None restores the
+                        # pre-8.0 behaviour; bzpopmin still returns on its own
+                        # 5s poll without raising.
+                        "socket_timeout": None,
+                    }
+                ],
+            },
         },
-    },
-}
+    }
 
 # Celery Beat Schedule — single source of truth. A second definition later in
 # this file silently replaced this dict once already (dropping the reminder

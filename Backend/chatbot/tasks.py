@@ -412,7 +412,12 @@ def transcribe_voice_note(self, message_id):
         if not message.audio_url:
             return "No audio URL found"
 
-        file_path = os.path.join(settings.MEDIA_ROOT, message.audio_url)
+        # Confine the stored audio URL to MEDIA_ROOT before touching the disk.
+        media_root = os.path.realpath(settings.MEDIA_ROOT)
+        file_path = os.path.realpath(os.path.join(media_root, message.audio_url))
+        if not file_path.startswith(media_root + os.sep) or not os.path.isfile(file_path):
+            logger.warning("Voice note path rejected for message %s", message.id)
+            return "Invalid audio path"
 
         # OpenAI Whisper
         openai = _get_openai_module()

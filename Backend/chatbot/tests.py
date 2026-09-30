@@ -9,12 +9,16 @@ The TransactionTestCase class locks the handoff boundary: a routed `@mathia`
 message must delegate to the coordinator and persist the returned response.
 """
 import json
+import os
+import shutil
+import tempfile
 from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
-from django.test import SimpleTestCase, TransactionTestCase, override_settings
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIRequestFactory, force_authenticate
 
@@ -28,7 +32,8 @@ from .consumers import (
     _release_agent_loop_lock,
 )
 from .model_api import room_model
-from .models import Chatroom, Member
+from .models import Chatroom, Member, Message
+from .tasks import transcribe_voice_note
 
 
 class ChatConsumerContractTests(SimpleTestCase):
@@ -566,3 +571,43 @@ class TimeParserLocalizationTests(SimpleTestCase):
     def test_invalid_input_returns_none(self):
         self.assertIsNone(self._to_utc("not-a-date", "Africa/Nairobi"))
         self.assertIsNone(self._to_utc(None, "Africa/Nairobi"))
+
+
+class UploadSecurityTests(TestCase):
+    """Path-injection and extension-whitelist guards for uploads/transcription."""
+
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username="upload-user", password="pw")  # nosec B106 - test fixture - fake credential
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.client.force_login(self.user)
+
+    def test_pathlike_filename_is_confined_to_documents_dir(self):
+        upload = SimpleUploadedFile("../../evil.png", b"png-bytes", content_type="image/png")
+        with self.settings(MEDIA_ROOT=self.tmp):
+            response = self.client.post("/uploads/", {"file": upload})
+        self.assertEqual(response.status_code, 200)
+        saved = os.listdir(os.path.join(self.tmp, "documents"))
+        self.assertEqual(len(saved), 1)
+        self.assertTrue(saved[0].endswith(".png"))
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "evil.png")))
+
+    def test_disallowed_extension_is_rejected(self):
+        upload = SimpleUploadedFile("payload.exe", b"MZ", content_type="application/octet-stream")
+        with self.settings(MEDIA_ROOT=self.tmp):
+            response = self.client.post("/uploads/", {"file": upload})
+        self.assertEqual(response.status_code, 400)
+
+    def test_voice_transcription_rejects_path_outside_media_root(self):
+        member = Member.objects.create(User=self.user)
+        message = Message.objects.create(
+            member=member,
+            content="[Voice Message]",
+            timestamp=timezone.now(),
+            is_voice=True,
+            audio_url="../outside.webm",
+        )
+        with self.settings(MEDIA_ROOT=self.tmp):
+            result = transcribe_voice_note(message.id)
+        self.assertEqual(result, "Invalid audio path")

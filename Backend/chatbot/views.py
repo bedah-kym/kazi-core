@@ -18,6 +18,21 @@ from django.views.decorators.http import require_GET, require_POST, require_http
 from .notification_utils import get_unread_room_count
 
 
+def _ensure_mathia_in_room(room):
+    """Add Mathia to a single-human room so it is AI-ready (idempotent)."""
+    participants = list(room.participants.all())
+    humans = [p for p in participants if p.User.username != 'mathia']
+    has_mathia = any(p.User.username == 'mathia' for p in participants)
+    if has_mathia or len(humans) != 1:
+        return
+    User = get_user_model()
+    mathia_user = User.objects.filter(username='mathia').first()
+    if not mathia_user:
+        return
+    mathia_member, _ = Member.objects.get_or_create(User=mathia_user)
+    room.participants.add(mathia_member)
+
+
 def _ensure_default_room(user):
     """
     Create a default general room for the user if none exists.
@@ -27,6 +42,7 @@ def _ensure_default_room(user):
     with transaction.atomic():
         existing = Chatroom.objects.filter(participants__User=user).first()
         if existing:
+            _ensure_mathia_in_room(existing)
             return existing
 
         user_member, _ = Member.objects.get_or_create(User=user)

@@ -103,13 +103,13 @@ def _redis_reachable(url: str) -> bool:
         return False
 
 
-_DEV_INMEMORY = os.environ.get('KAZI_DEV_INMEMORY', '').lower() in ('1', 'true', 'yes', 'on')
-if not _DEV_INMEMORY and DEBUG:
+_DEV_INMEMORY = DEBUG and os.environ.get('KAZI_DEV_INMEMORY', '').lower() in ('1', 'true', 'yes', 'on')
+if not _DEV_INMEMORY:
     # Auto-fall back only when the config expects the Docker network (its DB
     # host is a compose service) and Redis is unreachable. CI/hermetic runs with
     # no DATABASE_URL keep the normal settings.
     _db_host = _urlparse(os.environ.get('DATABASE_URL', '')).hostname or ""
-    if _db_host in {'db', 'postgres', 'postgresql'}:
+    if DEBUG and _db_host in {'db', 'postgres', 'postgresql'}:
         _DEV_INMEMORY = not _redis_reachable(os.environ.get('REDIS_URL', 'redis://redis:6379/0'))
 
 ALLOWED_HOSTS = [host.strip() for host in os.environ.get('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',') if host.strip()]

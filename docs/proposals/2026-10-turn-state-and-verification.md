@@ -1,7 +1,7 @@
 # Proposed v0.8: Turns that own the truth
 
 **Date:** 2026-10-01
-**Status:** approved for filing (epic + issues)
+**Status:** filed — epic #227; issues #216–#226 (Phase A: #216–#219, Phase B: #220–#223, Phase C: #224–#226)
 **Basis labels:** `[Literature]` = backed by a cited writeup; `[Analysis]` = design judgment; `[Evidence]` = observed in the 2026-10-01 chat export + live DB.
 
 This document is issue-ready. Section 5 is the issue set; each has executable acceptance

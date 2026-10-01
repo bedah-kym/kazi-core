@@ -413,6 +413,8 @@ PROMOTION_MIN_SUCCESS_RATE = float(os.environ.get('PROMOTION_MIN_SUCCESS_RATE', 
 ROUTINE_ABSENCE_IDLE_DAYS = int(os.environ.get('ROUTINE_ABSENCE_IDLE_DAYS', 14))
 ROUTINE_ABSENCE_PROMPT_WINDOW_DAYS = int(os.environ.get('ROUTINE_ABSENCE_PROMPT_WINDOW_DAYS', 3))
 ROUTINE_HISTORY_LIMIT = int(os.environ.get('ROUTINE_HISTORY_LIMIT', 20))
+SKILL_STALE_AFTER_DAYS = int(os.environ.get('SKILL_STALE_AFTER_DAYS', 90))
+SKILL_ARCHIVE_AFTER_DAYS = int(os.environ.get('SKILL_ARCHIVE_AFTER_DAYS', 180))
 
 CELERY_BEAT_SCHEDULE = {
     'nightly_ledger_reconciliation': {
@@ -458,6 +460,10 @@ CELERY_BEAT_SCHEDULE = {
     'check-routine-absence': {
         'task': 'workflows.tasks.check_routine_absence',
         'schedule': crontab(hour=5, minute=0),  # Daily: idle owners -> keep-running prompt -> pause
+    },
+    'curate-skill-lifecycle': {
+        'task': 'orchestration.tasks.curate_skill_lifecycle',
+        'schedule': crontab(day_of_week=1, hour=4, minute=30),  # Weekly: demote unused skills
     },
 }
 

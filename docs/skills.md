@@ -13,7 +13,8 @@ containing a `SKILL.md` with a small frontmatter block:
 name: web-scraper
 description: Extract structured data from a public webpage
 tools: search_info
-stage: active        # staging | review | active
+stage: active        # staging | review | active | stale | archived
+pinned: false        # pinned skills are never archived by the curator
 ---
 ```
 
@@ -21,14 +22,28 @@ Only skills marked `active` are exposed to the agent. The others stay parked.
 
 ## Promotion gates
 
-Skills move through three stages:
+Skills move through five stages:
 
 - `staging` — draft, invisible to the agent
 - `review` — visible to operators, not yet live
 - `active` — loaded and usable
+- `stale` — unused, demoted but recoverable
+- `archived` — retired; only comes back to `stale` for re-review
 
-Flip the `stage:` line to promote a skill. There's a `SKILL_MAX_CHARS` cap
-(default `8000`) on the instruction body so one skill can't eat the context.
+Promotion is human-only and runs `staging → review → active` through
+`orchestration.skill_registry.transition_skill`; illegal jumps (for example
+`staging → active`) are refused. Demotion is reversible:
+`active → stale → active`, and `archived → stale → active` after re-review.
+
+A weekly curator (`orchestration.tasks.curate_skill_lifecycle`) may only
+**demote**: unused active skills become `stale` after `SKILL_STALE_AFTER_DAYS`
+(default 90), stale skills become `archived` after `SKILL_ARCHIVE_AFTER_DAYS`
+(default 180). It never promotes, never touches `staging`/`review`, and never
+archives a skill with `pinned: true`. `curate_skills(dry_run=True)` returns the
+same proposal without writing anything.
+
+There's a `SKILL_MAX_CHARS` cap (default `8000`) on the instruction body so
+one skill can't eat the context.
 
 ## Using skills
 

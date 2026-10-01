@@ -28,6 +28,7 @@ from orchestration.security_policy import sanitize_parameters, user_has_room_acc
 from orchestration.tool_executor import preview_tool
 
 from .activity_executors import execute_workflow_step
+from .capability_manifest import capability_delta_for_suggestion, manifest_from_definition
 from .models import (
     WorkflowApprovalRecord,
     WorkflowExecution,
@@ -271,7 +272,13 @@ async def create_improvement_suggestions(
         return
 
     def _create():
+        from .models import UserWorkflow
+
+        workflow = UserWorkflow.objects.filter(id=workflow_id).first()
+        if workflow is None:
+            return
         for suggestion in suggestions:
+            proposed_changes = suggestion.get("proposed_changes") or {}
             WorkflowImprovementSuggestion.objects.get_or_create(
                 workflow_id=workflow_id,
                 execution_id=execution_id,
@@ -280,7 +287,10 @@ async def create_improvement_suggestions(
                 title=suggestion.get("title") or "Workflow suggestion",
                 defaults={
                     "summary": suggestion.get("summary") or "",
-                    "proposed_changes": suggestion.get("proposed_changes") or {},
+                    "proposed_changes": proposed_changes,
+                    "capability_delta": capability_delta_for_suggestion(
+                        workflow.definition or {}, proposed_changes
+                    ),
                 },
             )
 
@@ -408,12 +418,18 @@ class DynamicUserWorkflow:
         execution_id: Optional[int],
         user_id: Optional[int],
         definition_version: int = 1,
+        capability_manifest: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         context: Dict[str, Any] = {
             "trigger": trigger_data,
             "workflow": {
                 "id": workflow_id,
                 "policy": workflow_definition.get("policy") or {},
+                "capabilities": (
+                    capability_manifest
+                    if capability_manifest is not None
+                    else manifest_from_definition(workflow_definition)
+                ),
             },
             "user_id": user_id,
         }
@@ -787,6 +803,7 @@ async def start_workflow_execution(
                 execution_id,
                 workflow_obj.user_id,
                 workflow_obj.definition_version or 1,
+                manifest_from_definition(workflow_obj.definition or {}),
             ],
             id=workflow_run_id,
             task_queue=settings.TEMPORAL_TASK_QUEUE,
@@ -917,6 +934,7 @@ async def create_schedule_for_trigger(trigger_obj) -> None:
             None,
             trigger_obj.workflow.user_id,
             trigger_obj.workflow.definition_version or 1,
+            manifest_from_definition(trigger_obj.workflow.definition or {}),
         ],
         id=f"workflow-{trigger_obj.workflow_id}-trigger-{trigger_obj.id}",
         task_queue=settings.TEMPORAL_TASK_QUEUE,
@@ -985,6 +1003,7 @@ async def refresh_schedule_definition(trigger_obj) -> None:
             None,
             workflow_obj.user_id,
             workflow_obj.definition_version or 1,
+            manifest_from_definition(workflow_obj.definition or {}),
         ],
         id=f"workflow-{workflow_obj.id}-trigger-{trigger_obj.id}",
         task_queue=settings.TEMPORAL_TASK_QUEUE,

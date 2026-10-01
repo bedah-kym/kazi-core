@@ -90,6 +90,7 @@ class WorkflowVersion(models.Model):
     workflow = models.ForeignKey(UserWorkflow, on_delete=models.CASCADE, related_name='versions')
     version = models.PositiveIntegerField()
     definition = models.JSONField()
+    capabilities = models.JSONField(default=list, blank=True)
     change_summary = models.CharField(max_length=255, blank=True)
     created_by = models.ForeignKey(
         User,
@@ -352,6 +353,7 @@ class WorkflowImprovementSuggestion(models.Model):
     title = models.CharField(max_length=200)
     summary = models.TextField()
     proposed_changes = models.JSONField(default=dict, blank=True)
+    capability_delta = models.JSONField(default=dict, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='proposed')
     created_at = models.DateTimeField(auto_now_add=True)
 

@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 
 from django.db import transaction
 
+from .capability_manifest import manifest_from_definition
 from .models import UserWorkflow, WorkflowVersion
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,7 @@ def record_initial_version(workflow: UserWorkflow, *, created_by=None) -> Workfl
         version=version,
         defaults={
             'definition': workflow.definition or {},
+            'capabilities': manifest_from_definition(workflow.definition or {}),
             'change_summary': 'Initial definition',
             'created_by': created_by,
         },
@@ -63,6 +65,7 @@ def create_workflow_version(
             workflow=locked,
             version=next_version,
             definition=definition,
+            capabilities=manifest_from_definition(definition),
             change_summary=(change_summary or '')[:255],
             created_by=created_by,
         )

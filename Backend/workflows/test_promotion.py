@@ -144,7 +144,8 @@ class StagedSkillTests(SimpleTestCase):
 class PromotionDraftTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(
-            username="promoter", email="example@example.com", password="pw"
+            username="promoter", email="example@example.com",
+            password="fake-token",  # nosec B106 — test fixture — fake credential
         )
 
     def test_explicit_save_stages_skill_and_awaiting_draft(self):
@@ -224,7 +225,8 @@ class PromotionDraftTests(TestCase):
 class WorkflowAgentSaveSkillTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(
-            username="chatpromoter", email="example@example.com", password="pw"
+            username="chatpromoter", email="example@example.com",
+            password="fake-token",  # nosec B106 — test fixture — fake credential
         )
 
     def test_save_skill_message_returns_staged_summary(self):

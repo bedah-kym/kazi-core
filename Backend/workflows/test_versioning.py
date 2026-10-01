@@ -38,7 +38,8 @@ def _definition(name="Backup check", step_action="send_email"):
 class WorkflowVersionTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(
-            username="versioner", email="example@example.com", password="pw"
+            username="versioner", email="example@example.com",
+            password="fake-token",  # nosec B106 — test fixture — fake credential
         )
         self.workflow = UserWorkflow.objects.create(
             user=self.user,

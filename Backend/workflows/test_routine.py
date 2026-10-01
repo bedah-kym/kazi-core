@@ -89,7 +89,7 @@ class RoutineContractTests(TestCase):
 class EnableGateTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(
-            username="routine-owner", email="example@example.com", password="pw"
+            username="routine-owner", email="example@example.com", password="fake-token",  # nosec B106 — test fixture — fake credential
         )
 
     def test_confirming_a_draft_without_no_data_policy_is_refused(self):
@@ -112,7 +112,7 @@ class EnableGateTests(TestCase):
 class RoutineTestRunTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(
-            username="testrun", email="example@example.com", password="pw"
+            username="testrun", email="example@example.com", password="fake-token",  # nosec B106 — test fixture — fake credential
         )
         definition = _schedule_definition(COMPLETE_ROUTINE)
         definition["steps"].append(
@@ -190,7 +190,7 @@ class RoutineTestRunTests(TestCase):
 class PauseOnAbsenceTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(
-            username="absent", email="example@example.com", password="pw"
+            username="absent", email="example@example.com", password="fake-token",  # nosec B106 — test fixture — fake credential
         )
         self.workflow = UserWorkflow.objects.create(
             user=self.user,
@@ -246,7 +246,7 @@ class PauseOnAbsenceTests(TestCase):
 class RoutineHistoryTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(
-            username="history", email="example@example.com", password="pw"
+            username="history", email="example@example.com", password="fake-token",  # nosec B106 — test fixture — fake credential
         )
         self.workflow = UserWorkflow.objects.create(
             user=self.user,

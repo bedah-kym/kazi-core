@@ -161,7 +161,8 @@ class CapabilityExecutorTests(SimpleTestCase):
 class CapabilityVersioningTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(
-            username="capowner", email="example@example.com", password="pw"
+            username="capowner", email="example@example.com",
+            password="fake-token",  # nosec B106 — test fixture — fake credential
         )
         self.workflow = UserWorkflow.objects.create(
             user=self.user,

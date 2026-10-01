@@ -177,6 +177,13 @@ logger = logging.getLogger(__name__)
 # File upload security configuration
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
 ALLOWED_FILE_EXTENSIONS = {'.pdf', '.doc', '.docx', '.txt', '.jpg', '.jpeg', '.png', '.gif', '.mp3', '.wav'}
+# Literal mapping used to canonicalize a user-supplied extension to a constant
+# before it is concatenated into a filesystem path (path-injection guard).
+_CANONICAL_EXTENSIONS = {
+    '.pdf': '.pdf', '.doc': '.doc', '.docx': '.docx', '.txt': '.txt',
+    '.jpg': '.jpg', '.jpeg': '.jpeg', '.png': '.png', '.gif': '.gif',
+    '.mp3': '.mp3', '.wav': '.wav',
+}
 
 
 @login_required
@@ -215,20 +222,21 @@ def upload_file(request):
                 status=400
             )
 
+        # Canonicalize the extension to a literal from the whitelist so no
+        # user-supplied string reaches the filesystem path.
+        safe_ext = _CANONICAL_EXTENSIONS[ext]
+
         # Generate safe random filename to prevent path traversal attacks
-        safe_filename = f"{uuid.uuid4()}{ext}"
+        safe_filename = f"{uuid.uuid4()}{safe_ext}"
 
         # Determine upload directory (user-specific or type-specific)
-        upload_dir = os.path.join(settings.MEDIA_ROOT, 'documents')
+        resolved_media_root = os.path.realpath(settings.MEDIA_ROOT)
+        upload_dir = os.path.join(resolved_media_root, 'documents')
         os.makedirs(upload_dir, exist_ok=True)
 
-        # Construct safe file path
-        file_path = os.path.join(upload_dir, safe_filename)
-
-        # Verify path is within MEDIA_ROOT (security check)
-        resolved_path = os.path.abspath(file_path)
-        resolved_media_root = os.path.abspath(settings.MEDIA_ROOT)
-        if not resolved_path.startswith(resolved_media_root):
+        # Construct and verify the path stays within MEDIA_ROOT
+        file_path = os.path.realpath(os.path.join(upload_dir, safe_filename))
+        if not file_path.startswith(resolved_media_root + os.sep):
             logger.error(f"Path traversal attempt detected: {file_path}")
             return JsonResponse({'error': 'Invalid file path'}, status=400)
 

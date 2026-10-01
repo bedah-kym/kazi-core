@@ -32,12 +32,12 @@ def upload_voice_note(request, room_id):
 
         audio_file = request.FILES['audio']
 
-        # Create directory if missing
-        voice_dir = os.path.join(settings.MEDIA_ROOT, 'voice_notes', str(room_id))
+        # Create directory if missing (path uses the DB-resolved integer id)
+        voice_dir = os.path.join(settings.MEDIA_ROOT, 'voice_notes', str(chatroom.id))
         os.makedirs(voice_dir, exist_ok=True)
 
-        # Save file
-        file_name = f"voice_{request.user.username}_{timezone.now().strftime('%Y%m%d_%H%M%S')}.webm"
+        # Save file (server-generated name; no user-controlled path components)
+        file_name = f"voice_{request.user.id}_{timezone.now().strftime('%Y%m%d_%H%M%S')}.webm"
         file_path = os.path.join(voice_dir, file_name)
 
         with open(file_path, 'wb+') as destination:
@@ -45,7 +45,7 @@ def upload_voice_note(request, room_id):
                 destination.write(chunk)
 
         # Construct relative URL for the audio
-        audio_url = os.path.join('voice_notes', str(room_id), file_name)
+        audio_url = os.path.join('voice_notes', str(chatroom.id), file_name)
 
         # Create a pending voice message
         member, _ = Member.objects.get_or_create(User=request.user)

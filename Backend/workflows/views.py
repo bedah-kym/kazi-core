@@ -8,6 +8,7 @@ from rest_framework.response import Response
 
 import hashlib
 import json
+import logging
 from typing import Optional
 
 from orchestration.security_policy import sanitize_parameters, user_has_room_access
@@ -30,6 +31,8 @@ from .temporal_integration import (
     start_workflow_execution,
     submit_execution_approval,
 )
+
+logger = logging.getLogger(__name__)
 
 RUN_DEDUPE_TTL_SECONDS = 90
 DEFERRED_RUN_ID_TTL_SECONDS = 7 * 24 * 60 * 60
@@ -360,15 +363,56 @@ def run_workflow(request, workflow_id):
     )
 
 
+_TEMPORAL_KNOWN_DETAILS = (
+    "approval id does not match the pending approval",
+    "workflow execution already completed",
+    "workflow execution not found",
+    "workflow execution already canceled",
+    "workflow execution already cancelled",
+    "workflow execution already terminated",
+    "workflow execution not running",
+)
+
+
+def _safe_temporal_detail(exc: Exception) -> str:
+    """Return only a known, non-sensitive Temporal status detail.
+
+    Raw exception text can carry internal state, so it is logged server-side
+    and never echoed back verbatim.
+    """
+    raw = str(exc).lower()
+    for known in _TEMPORAL_KNOWN_DETAILS:
+        if known in raw:
+            return known
+    return "temporal-unreachable"
+
+
 def _temporal_unreachable_response(exc: Exception, action: str) -> Response:
-    detail = str(exc) or exc.__class__.__name__
+    logger.warning("Temporal unreachable during %s: %s", action, exc)
     return Response(
         {
             "error": f"The workflow run is no longer reachable in Temporal, so the {action} could not be delivered.",
-            "detail": detail,
+            "detail": _safe_temporal_detail(exc),
         },
         status=409,
     )
+
+
+_REPLAY_ERROR_MESSAGES = (
+    ("failed step to replay", "This execution does not have a failed step to replay from."),
+    ("no steps to replay", "Workflow has no steps to replay."),
+    ("unknown replay step", "Unknown replay step requested."),
+    ("not safe to replay", "Replay is blocked because the selected steps are not safe to replay."),
+)
+
+
+def _replay_error_message(exc: Exception) -> str:
+    """Map a replay validation error to a literal, non-echoing message."""
+    raw = str(exc).lower()
+    for needle, message in _REPLAY_ERROR_MESSAGES:
+        if needle in raw:
+            return message
+    return "Replay request was rejected."
 
 
 def _approval_action(request, execution_id: int, decision: str):
@@ -474,7 +518,8 @@ def rerun_execution(request, execution_id):
             force=force,
         )
     except ValueError as exc:
-        return Response({"error": str(exc)}, status=400)
+        logger.warning("Replay request rejected for execution %s: %s", execution_id, exc)
+        return Response({"error": _replay_error_message(exc)}, status=400)
 
     new_execution = async_to_sync(start_workflow_execution)(
         execution.workflow,

@@ -123,7 +123,9 @@ def verify_intasend_signature(signature: str, secret: str, body: bytes) -> bool:
             algo = prefix.lower().strip()
 
         if algo not in ("sha256", "sha1"):
-            logger.warning("Unsupported IntaSend signature algorithm: %s", algo)
+            # The algorithm is derived from the attacker-supplied signature
+            # header; never echo it into the log.
+            logger.warning("Unsupported IntaSend signature algorithm")
             return False
 
         digest = hashlib.sha256 if algo == "sha256" else hashlib.sha1

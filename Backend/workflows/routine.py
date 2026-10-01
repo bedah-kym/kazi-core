@@ -172,9 +172,21 @@ def _notify(user, event_type: str, title: str, body: str) -> None:
 
 
 def _pause_workflow(workflow) -> None:
+    from asgiref.sync import async_to_sync
+
+    from .temporal_integration import pause_trigger_schedule
+
     workflow.status = "paused"
     workflow.save(update_fields=["status", "updated_at"])
     for trigger in workflow.registered_triggers.all():
+        if trigger.trigger_type == "schedule":
+            try:
+                # Pause the remote Temporal schedule too, or it keeps firing
+                # runs even though the DB row says paused.
+                async_to_sync(pause_trigger_schedule)(trigger)
+                continue
+            except Exception as exc:
+                logger.warning("Remote schedule pause failed for trigger %s: %s", trigger.id, exc)
         trigger.is_active = False
         trigger.schedule_status = "paused"
         trigger.save(update_fields=["is_active", "schedule_status", "updated_at"])

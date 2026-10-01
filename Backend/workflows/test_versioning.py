@@ -150,6 +150,25 @@ class WorkflowVersionTests(TestCase):
         handle.update.assert_awaited_once()
         client.get_schedule_handle.assert_called_once_with("workflow-1-trigger-1")
 
+    def test_new_version_refreshes_schedules(self):
+        from workflows import temporal_integration as ti
+
+        WorkflowTrigger.objects.create(
+            workflow=self.workflow,
+            trigger_type="schedule",
+            schedule_cron="0 9 * * 5",
+            temporal_schedule_id="workflow-1-trigger-1",
+        )
+        client = MagicMock()
+        handle = MagicMock()
+        handle.update = AsyncMock()
+        client.get_schedule_handle = MagicMock(return_value=handle)
+
+        with patch.object(ti, "get_temporal_client", new=AsyncMock(return_value=client)):
+            create_workflow_version(self.workflow, _definition(name="Second version"))
+
+        handle.update.assert_awaited_once()
+
     def test_version_history_view_renders(self):
         self.client.force_login(self.user)
         response = self.client.get(

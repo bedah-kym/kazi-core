@@ -237,6 +237,24 @@ class PauseOnAbsenceTests(TestCase):
         self.assertEqual(check_in.paused_workflow_ids, [self.workflow.id])
 
     @override_settings(ROUTINE_ABSENCE_IDLE_DAYS=14, ROUTINE_ABSENCE_PROMPT_WINDOW_DAYS=3)
+    def test_unanswered_prompt_pauses_the_temporal_schedule(self):
+        from workflows import temporal_integration as ti
+
+        self.trigger.temporal_schedule_id = "workflow-1-trigger-1"
+        self.trigger.save(update_fields=["temporal_schedule_id"])
+        client = MagicMock()
+        handle = MagicMock()
+        handle.pause = AsyncMock()
+        client.get_schedule_handle = MagicMock(return_value=handle)
+
+        now = timezone.now()
+        with patch.object(ti, "get_temporal_client", new=AsyncMock(return_value=client)):
+            check_routine_absence(now=now)
+            check_routine_absence(now=now + timedelta(days=4))
+
+        handle.pause.assert_awaited_once()
+
+    @override_settings(ROUTINE_ABSENCE_IDLE_DAYS=14, ROUTINE_ABSENCE_PROMPT_WINDOW_DAYS=3)
     def test_active_user_is_not_prompted(self):
         self.user.member_set.update(last_seen=timezone.now())
         counts = check_routine_absence()

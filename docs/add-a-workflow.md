@@ -67,7 +67,9 @@ python Backend/manage.py seed_demo_workflow --user <username>
 The command lives at
 `Backend/workflows/management/commands/seed_demo_workflow.py` and is
 the model to copy for your own seeders. It is idempotent
-(`update_or_create(user, name)`).
+(`get_or_create(user, name)`), and when the JSON definition has changed
+it appends a new definition version rather than editing the live one
+in place.
 
 ### Option 2 — Construct directly
 

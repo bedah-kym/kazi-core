@@ -48,12 +48,16 @@ def create_workflow_version(
     *,
     created_by=None,
     change_summary: str = '',
+    refresh_schedules: bool = True,
 ) -> WorkflowVersion:
     """Append ``definition`` as the next version and point the workflow at it.
 
     This is the only supported write path for a live definition change. It
     locks the workflow row, writes the immutable snapshot, then updates the
-    pointer and the cached ``name``/``description`` mirror.
+    pointer and the cached ``name``/``description`` mirror. After the
+    transaction commits, existing Temporal schedules are repointed at the new
+    version (best-effort; async callers should await
+    ``create_workflow_version_async`` instead so the refresh is guaranteed).
     """
     if not isinstance(definition, dict):
         raise ValueError("definition must be a dict")
@@ -79,6 +83,48 @@ def create_workflow_version(
     workflow.definition_version = locked.definition_version
     workflow.name = locked.name
     workflow.description = locked.description
+
+    if refresh_schedules:
+        _refresh_schedules_after_version(workflow)
+    return version
+
+
+def _refresh_schedules_after_version(workflow: UserWorkflow) -> None:
+    """Repoint schedule triggers; async callers use the async wrapper instead."""
+    from asgiref.sync import async_to_sync
+
+    from .temporal_integration import refresh_workflow_schedules
+
+    try:
+        async_to_sync(refresh_workflow_schedules)(workflow)
+    except RuntimeError:
+        # A running event loop means async_to_sync cannot be used here; the
+        # async wrapper awaits the refresh after this function returns.
+        logger.info("Schedule refresh deferred for workflow %s (async caller)", workflow.pk)
+    except Exception as exc:
+        logger.warning("Schedule refresh failed for workflow %s: %s", workflow.pk, exc)
+
+
+async def create_workflow_version_async(
+    workflow: UserWorkflow,
+    definition: Dict[str, Any],
+    *,
+    created_by=None,
+    change_summary: str = '',
+) -> WorkflowVersion:
+    """Async-safe ``create_workflow_version`` that guarantees the schedule refresh."""
+    from asgiref.sync import sync_to_async
+
+    from .temporal_integration import refresh_workflow_schedules
+
+    version = await sync_to_async(create_workflow_version)(
+        workflow,
+        definition,
+        created_by=created_by,
+        change_summary=change_summary,
+        refresh_schedules=False,
+    )
+    await refresh_workflow_schedules(workflow)
     return version
 
 

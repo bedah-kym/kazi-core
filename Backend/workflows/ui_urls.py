@@ -10,6 +10,7 @@ urlpatterns = [
     path("inbox/", ui_views.operations_inbox, name="operations_inbox"),
     path("<int:workflow_id>/run/", ui_views.run_workflow_ui, name="run_workflow"),
     path("<int:workflow_id>/executions/", ui_views.workflow_executions, name="workflow_executions"),
+    path("<int:workflow_id>/versions/", ui_views.workflow_versions, name="workflow_versions"),
     path("executions/<int:execution_id>/", ui_views.execution_detail, name="execution_detail"),
     path("executions/<int:execution_id>/approve/", ui_views.approve_execution_ui, name="approve_execution"),
     path("executions/<int:execution_id>/reject/", ui_views.reject_execution_ui, name="reject_execution"),

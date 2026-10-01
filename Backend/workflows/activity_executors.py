@@ -20,6 +20,7 @@ from orchestration.action_catalog import (
 )
 from orchestration.security_policy import should_block_action, sanitize_parameters
 
+from .capability_manifest import capability_for_step
 from .runtime import resolve_step_idempotency_key
 from .utils import resolve_parameters
 
@@ -206,6 +207,20 @@ def _enforce_withdraw_policy(params: Dict[str, Any], context: Dict[str, Any]) ->
 async def execute_workflow_step(step: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
     service = (step.get('service') or '').lower()
     action = resolve_action_alias(step.get('action'))
+
+    workflow_context = context.get("workflow") if isinstance(context.get("workflow"), dict) else {}
+    if "capabilities" in workflow_context:
+        allowed = set(workflow_context.get("capabilities") or [])
+        capability = capability_for_step(step)
+        if capability and capability not in allowed:
+            return {
+                "status": "error",
+                "error": (
+                    f"Step '{step.get('id') or action}' calls {capability}, which is not in "
+                    "this workflow's capability manifest."
+                ),
+            }
+
     params = sanitize_parameters(resolve_parameters(step.get('params', {}), context))
     idempotency_key = resolve_step_idempotency_key(step, context)
     if idempotency_key and "idempotency_key" not in params:

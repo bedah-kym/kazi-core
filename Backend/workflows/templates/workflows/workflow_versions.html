@@ -1,0 +1,93 @@
+{% extends "users/base_app.html" %}
+{% load static %}
+{% load humanize %}
+
+{% block title %}Versions - {{ workflow.name }} - Mathia{% endblock %}
+
+{% block meta_description %}Definition version history for {{ workflow.name }}.{% endblock %}
+
+{% block breadcrumb %}
+<a href="{% url 'users:dashboard' %}">Dashboard</a><span class="crumb-sep">&#8250;</span><a href="{% url 'workflows:workflows_list' %}">Automations</a><span class="crumb-sep">&#8250;</span><a href="{% url 'workflows:workflow_executions' workflow.id %}">{{ workflow.name }}</a><span class="crumb-sep">&#8250;</span><span class="crumb-current">Versions</span>
+{% endblock %}
+
+{% block head %}
+<link href="{% static 'css/page-workflows.css' %}" rel="stylesheet">
+{% endblock %}
+
+{% block content %}
+<div class="app-header">
+    <div>
+        <div class="app-eyebrow">
+            <a href="{% url 'workflows:workflows_list' %}" style="color: inherit; text-decoration: none;">Automations</a>
+            &nbsp;/&nbsp; {{ workflow.name }}
+        </div>
+        <h1 class="app-title">Definition versions</h1>
+        <p class="app-subtitle">
+            Current version: <strong>v{{ workflow.definition_version }}</strong>.
+            Definitions are append-only - a change creates a new version and leaves earlier runs untouched.
+        </p>
+    </div>
+</div>
+
+{% if diff_error %}
+<section class="app-card">
+    <p class="app-meta">{{ diff_error }}</p>
+</section>
+{% endif %}
+
+{% if diff_lines %}
+<section class="app-card">
+    <h2 class="wf-name">Diff v{{ from_version }} &#8594; v{{ to_version }}</h2>
+    <pre class="version-diff">{% for line in diff_lines %}{{ line }}
+{% endfor %}</pre>
+</section>
+{% endif %}
+
+<section class="app-card">
+    <h2 class="wf-name">History</h2>
+    <form method="get" class="version-compare-form" style="display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin: 12px 0;">
+        <label>
+            <span class="cell-label">From</span>
+            <input class="app-input" type="number" min="1" name="from" value="{{ from_version|default:'' }}" required>
+        </label>
+        <label>
+            <span class="cell-label">To</span>
+            <input class="app-input" type="number" min="1" name="to" value="{{ to_version|default:'' }}" required>
+        </label>
+        <button class="app-btn app-btn-outline app-btn-sm" type="submit">
+            <i class="fas fa-code-compare"></i> Compare
+        </button>
+    </form>
+    <div class="exec-grid">
+        {% for version in versions %}
+        <div class="exec-card">
+            <span class="exec-id">v{{ version.version }}</span>
+            <div class="exec-cells">
+                <div class="cell">
+                    <span class="cell-label">Created</span>
+                    <span class="cell-value">{{ version.created_at|naturaltime }}</span>
+                </div>
+                <div class="cell">
+                    <span class="cell-label">Summary</span>
+                    <span class="cell-value{% if not version.change_summary %} app-meta{% endif %}">{{ version.change_summary|default:"-" }}</span>
+                </div>
+                <div class="cell">
+                    <span class="cell-label">Steps</span>
+                    <span class="cell-value">{{ version.definition.steps|length }}</span>
+                </div>
+            </div>
+        </div>
+        {% empty %}
+        <p class="app-meta">No version history recorded yet.</p>
+        {% endfor %}
+    </div>
+</section>
+
+{% if messages %}
+<div class="toast-stack">
+    {% for message in messages %}
+    <div class="app-toast show" role="status" data-auto-dismiss>{{ message }}</div>
+    {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

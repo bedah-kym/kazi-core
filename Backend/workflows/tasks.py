@@ -1,5 +1,6 @@
 from typing import Dict
 from celery import shared_task
+from django.conf import settings
 from django.db import models
 from datetime import timedelta
 from django.utils import timezone
@@ -162,6 +163,37 @@ def replay_deferred_workflows(limit: int = None) -> Dict[str, int]:
                 break
 
     return {"processed": processed, "started": started, "failed": failed, "skipped": skipped}
+
+
+@shared_task(ignore_result=True)
+def mine_workflow_candidates(
+    min_occurrences: int = None,
+    min_success_rate: float = None,
+) -> Dict[str, int]:
+    """Queue repeated-tool-sequence promotion candidates from telemetry (W-B, #156).
+
+    Mining never drafts or activates anything: it only writes
+    ``WorkflowCandidate`` rows for a human to pick up.
+    """
+    from .promotion import mine_candidates, queue_candidates, read_telemetry_events
+
+    events = read_telemetry_events()
+    candidates = mine_candidates(
+        events,
+        min_occurrences=int(min_occurrences or getattr(settings, "PROMOTION_MIN_OCCURRENCES", 3)),
+        min_success_rate=float(min_success_rate or getattr(settings, "PROMOTION_MIN_SUCCESS_RATE", 0.8)),
+    )
+    result = queue_candidates(candidates)
+    result["mined"] = len(candidates)
+    return result
+
+
+@shared_task(ignore_result=True)
+def check_routine_absence() -> Dict[str, int]:
+    """Prompt idle owners once; pause unanswered routines (W-F, #204)."""
+    from .routine import check_routine_absence as _check_routine_absence
+
+    return _check_routine_absence()
 
 
 @shared_task(ignore_result=True)

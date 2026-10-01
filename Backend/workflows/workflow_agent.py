@@ -8,6 +8,8 @@ from orchestration.llm_client import get_llm_client
 
 from .capabilities import get_capabilities_prompt, validate_workflow_definition
 from .models import WorkflowDraft, UserWorkflow, WorkflowTrigger
+from .promotion import PromotionError, is_save_skill_request, save_session_as_skill
+from .routine import normalize_routine, validate_routine_contract
 from .temporal_integration import create_schedule_for_trigger
 
 logger = logging.getLogger(__name__)
@@ -130,6 +132,17 @@ async def _register_triggers(workflow: UserWorkflow) -> None:
 
 
 async def handle_workflow_message(user_id: int, room_id: Optional[int], message: str, history_text: str = '') -> str:
+    if is_save_skill_request(message):
+        try:
+            saved = await save_session_as_skill(user_id, room_id)
+        except PromotionError as exc:
+            return str(exc)
+        summary = _format_summary(saved.definition or {})
+        return (
+            f"I saved that as a staged skill and drafted the workflow '{saved.skill_name}'.\n\n"
+            f"{summary}\n\nReply 'approve' to create it, or tell me what to change."
+        )
+
     draft = await _get_active_draft(user_id, room_id)
 
     if draft and _is_cancellation(message):
@@ -141,6 +154,9 @@ async def handle_workflow_message(user_id: int, room_id: Optional[int], message:
         valid, error = validate_workflow_definition(definition)
         if not valid:
             return f"Draft is invalid: {error}"
+        routine_valid, routine_error = validate_routine_contract(definition)
+        if not routine_valid:
+            return f"This can't be enabled yet: {routine_error}"
         workflow = await _create_workflow(user_id, room_id, definition, draft)
         await _close_draft(draft, 'confirmed')
         return f"Workflow created and activated: {workflow.name}"
@@ -187,7 +203,7 @@ async def handle_workflow_message(user_id: int, room_id: Optional[int], message:
         if not valid:
             return f"{assistant_message}\n\nValidation issue: {error}"
 
-        await _save_draft(user_id, room_id, workflow_definition)
+        await _save_draft(user_id, room_id, normalize_routine(workflow_definition))
         summary = _format_summary(workflow_definition)
         return f"{assistant_message}\n\n{summary}\n\nReply 'approve' to create it or tell me what to change."
 

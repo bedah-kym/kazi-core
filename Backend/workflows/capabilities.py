@@ -6,6 +6,7 @@ from typing import Dict, List, Tuple
 
 from orchestration.action_catalog import build_capabilities_catalog
 
+from .capability_manifest import validate_declared_capabilities
 from .runtime import APPROVAL_TIMEOUT_POLICIES
 
 
@@ -83,6 +84,8 @@ def get_capabilities_prompt() -> str:
         '  "steps": [',
         '    {"id": "step_1", "service": "...", "action": "...", "params": {...}, "depends_on": ["step_0"], "condition": "...", "requires_approval": false, "approval_message": "...", "approval_timeout_minutes": 60, "on_timeout": "cancel", "safe_to_replay": false, "timeout_seconds": 300, "max_attempts": 3}',
         "  ],",
+        '  "capabilities": ["service:action", ...] // optional; must cover every step if present',
+        '  "routine": {"owner": "...", "inputs": [...], "output": "...", "approval_boundary": [...], "no_data_policy": "...", "partial_completion": "...", "idempotency": "execution"} // required when a schedule or webhook trigger is present',
         '  "policy": {"allowed_phone_numbers": [...], "max_withdraw_amount": 0} // only if withdrawals',
         "}",
     ]
@@ -243,6 +246,14 @@ def validate_workflow_definition(workflow_def: Dict) -> Tuple[bool, str]:
         max_amount = policy.get("max_withdraw_amount")
         if max_amount is None or max_amount == "":
             return False, "Withdrawals require policy.max_withdraw_amount"
+
+    capabilities_ok, capabilities_error = validate_declared_capabilities(workflow_def)
+    if not capabilities_ok:
+        return False, capabilities_error
+
+    routine = workflow_def.get("routine")
+    if routine is not None and not isinstance(routine, dict):
+        return False, "routine must be an object"
 
     return True, None
 

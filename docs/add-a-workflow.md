@@ -67,7 +67,9 @@ python Backend/manage.py seed_demo_workflow --user <username>
 The command lives at
 `Backend/workflows/management/commands/seed_demo_workflow.py` and is
 the model to copy for your own seeders. It is idempotent
-(`update_or_create(user, name)`).
+(`get_or_create(user, name)`), and when the JSON definition has changed
+it appends a new definition version rather than editing the live one
+in place.
 
 ### Option 2 — Construct directly
 
@@ -128,6 +130,50 @@ A param value can reference a prior step's output:
 The runtime resolves the template after the prior step completes and
 just before this step runs. References to steps that haven't run yet
 or that returned an error are caught by the manager verifier.
+
+## Scheduled and event workflows are routines
+
+A workflow with a `schedule` or `webhook` trigger must answer the
+routine questions before it can be enabled. The answers ride in
+`definition.routine`:
+
+```json
+"routine": {
+  "owner": "ops room",
+  "inputs": ["backup host"],
+  "output": "Friday backup summary email",
+  "approval_boundary": ["send", "purchase", "delete", "publish", "production_change"],
+  "no_data_policy": "Refuse and report when the backup log is missing or stale.",
+  "partial_completion": "Report partial results in the ops room.",
+  "idempotency": "execution"
+}
+```
+
+Rules:
+
+- A schedule/webhook draft missing `no_data_policy` (or any other
+  required answer) is refused at enable time: `validate_routine_contract`
+  in `Backend/workflows/routine.py`.
+- A routine cannot run under a standing grant until a **test run**
+  passes for the current definition version. Run one with
+  `workflows.test_run.run_test_run(workflow)`: replay-safe steps execute
+  for real, side-effect steps are stubbed, and the run records inputs,
+  output preview, audit trail, approval stop point and failure states on
+  `WorkflowTestRun`.
+- After a long absence Kazi asks once whether routines should keep
+  running. No answer inside the prompt window pauses them
+  (`ROUTINE_ABSENCE_IDLE_DAYS`, `ROUTINE_ABSENCE_PROMPT_WINDOW_DAYS`).
+- The last `ROUTINE_HISTORY_LIMIT` runs (default 20) are visible on the
+  workflow's run history page.
+
+## Definition versioning
+
+A live `UserWorkflow.definition` is never edited in place. Every change
+goes through `workflows.versioning.create_workflow_version`, which
+appends a `WorkflowVersion` row and moves the workflow's
+`definition_version` pointer. Executions record the version they
+started with, so a new version never reshapes a running run, and the
+ops UI can diff two versions.
 
 ## Common mistakes
 

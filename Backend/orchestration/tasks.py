@@ -38,6 +38,18 @@ def mine_approval_preferences() -> Dict[str, Any]:
 
 
 @shared_task(ignore_result=True)
+def curate_skill_lifecycle() -> Dict[str, Any]:
+    """Weekly skill curator pass: demote unused skills, never promote (#138)."""
+    from orchestration.skill_registry import curate_skills
+
+    try:
+        return curate_skills()
+    except Exception:
+        logger.exception("Skill curation task failed")
+        return {"error": "curation_failed"}
+
+
+@shared_task(ignore_result=True)
 def send_daily_digest() -> Dict[str, Any]:
     """Rung 2: deliver the daily initiative digest (#154)."""
     from orchestration.initiative import send_digests

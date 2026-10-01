@@ -36,6 +36,23 @@
     </div>
 </div>
 
+<section class="app-card">
+    <h2 class="wf-name">Routine history</h2>
+    <p class="app-subtitle">
+        Last {{ routine_history_limit }} run{{ routine_history_limit|pluralize }}:
+        {{ routine_history_passed }} passed, {{ routine_history_failed }} failed.
+    </p>
+    <div class="wf-triggers">
+        {% for run in routine_history %}
+        <span class="trigger-chip{% if run.status == 'failed' %} off{% endif %}" title="{{ run.summary|default:'' }}">
+            #{{ run.id }} {{ run.status }}{% if run.definition_version %} v{{ run.definition_version }}{% endif %}
+        </span>
+        {% empty %}
+        <span class="app-meta">No runs recorded yet.</span>
+        {% endfor %}
+    </div>
+</section>
+
 <div class="app-tabs">
     <a class="app-tab{% if not status_filter %} active{% endif %}" href="{% url 'workflows:workflow_executions' workflow.id %}">All</a>
     {% for value, label in status_choices %}

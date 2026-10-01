@@ -408,6 +408,13 @@ MODERATION_FLUSH_SECONDS = int(os.environ.get('MODERATION_FLUSH_SECONDS', 600))
 REMINDER_SWEEP_SECONDS = int(os.environ.get('REMINDER_SWEEP_SECONDS', 3600))
 WORKFLOW_REPLAY_SCHEDULE_SECONDS = int(os.environ.get('WORKFLOW_REPLAY_SCHEDULE_SECONDS', 300))
 WORKFLOW_APPROVAL_SWEEP_SECONDS = int(os.environ.get('WORKFLOW_APPROVAL_SWEEP_SECONDS', 300))
+PROMOTION_MIN_OCCURRENCES = int(os.environ.get('PROMOTION_MIN_OCCURRENCES', 3))
+PROMOTION_MIN_SUCCESS_RATE = float(os.environ.get('PROMOTION_MIN_SUCCESS_RATE', 0.8))
+ROUTINE_ABSENCE_IDLE_DAYS = int(os.environ.get('ROUTINE_ABSENCE_IDLE_DAYS', 14))
+ROUTINE_ABSENCE_PROMPT_WINDOW_DAYS = int(os.environ.get('ROUTINE_ABSENCE_PROMPT_WINDOW_DAYS', 3))
+ROUTINE_HISTORY_LIMIT = int(os.environ.get('ROUTINE_HISTORY_LIMIT', 20))
+SKILL_STALE_AFTER_DAYS = int(os.environ.get('SKILL_STALE_AFTER_DAYS', 90))
+SKILL_ARCHIVE_AFTER_DAYS = int(os.environ.get('SKILL_ARCHIVE_AFTER_DAYS', 180))
 
 CELERY_BEAT_SCHEDULE = {
     'nightly_ledger_reconciliation': {
@@ -445,6 +452,18 @@ CELERY_BEAT_SCHEDULE = {
     'send-daily-digest': {
         'task': 'orchestration.tasks.send_daily_digest',
         'schedule': crontab(hour=7, minute=30),  # Morning: initiative rung-2 digest
+    },
+    'mine-workflow-candidates': {
+        'task': 'workflows.tasks.mine_workflow_candidates',
+        'schedule': crontab(hour=4, minute=0),  # Nightly: repeated tool sequences -> skill candidates
+    },
+    'check-routine-absence': {
+        'task': 'workflows.tasks.check_routine_absence',
+        'schedule': crontab(hour=5, minute=0),  # Daily: idle owners -> keep-running prompt -> pause
+    },
+    'curate-skill-lifecycle': {
+        'task': 'orchestration.tasks.curate_skill_lifecycle',
+        'schedule': crontab(day_of_week=1, hour=4, minute=30),  # Weekly: demote unused skills
     },
 }
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from datetime import timedelta
 from typing import Any, Dict, List, Optional
@@ -17,6 +18,7 @@ from temporalio.client import (
     SchedulePolicy,
     ScheduleSpec,
     ScheduleOverlapPolicy,
+    ScheduleUpdate,
     WorkflowUpdateFailedError,
 )
 from temporalio.common import RetryPolicy
@@ -26,6 +28,7 @@ from orchestration.security_policy import sanitize_parameters, user_has_room_acc
 from orchestration.tool_executor import preview_tool
 
 from .activity_executors import execute_workflow_step
+from .capability_manifest import capability_delta_for_suggestion, manifest_from_definition
 from .models import (
     WorkflowApprovalRecord,
     WorkflowExecution,
@@ -46,7 +49,10 @@ from .runtime import (
     step_requires_approval,
 )
 from .utils import compact_context, resolve_parameters, safe_eval_condition
+from .versioning import definition_for_version
 
+
+logger = logging.getLogger(__name__)
 
 FINAL_STATUSES = {"completed", "failed", "cancelled"}
 RUNTIME_STATE_FIELDS = {
@@ -79,6 +85,7 @@ async def create_execution_record(
     temporal_run_id: str,
     trigger_type: str,
     trigger_data: Dict[str, Any],
+    definition_version: int = 1,
 ) -> int:
     def _create():
         return WorkflowExecution.objects.create(
@@ -87,6 +94,7 @@ async def create_execution_record(
             temporal_run_id=temporal_run_id,
             trigger_type=trigger_type,
             trigger_data=trigger_data,
+            definition_version=definition_version or 1,
             status="running",
         ).id
 
@@ -264,7 +272,13 @@ async def create_improvement_suggestions(
         return
 
     def _create():
+        from .models import UserWorkflow
+
+        workflow = UserWorkflow.objects.filter(id=workflow_id).first()
+        if workflow is None:
+            return
         for suggestion in suggestions:
+            proposed_changes = suggestion.get("proposed_changes") or {}
             WorkflowImprovementSuggestion.objects.get_or_create(
                 workflow_id=workflow_id,
                 execution_id=execution_id,
@@ -273,7 +287,10 @@ async def create_improvement_suggestions(
                 title=suggestion.get("title") or "Workflow suggestion",
                 defaults={
                     "summary": suggestion.get("summary") or "",
-                    "proposed_changes": suggestion.get("proposed_changes") or {},
+                    "proposed_changes": proposed_changes,
+                    "capability_delta": capability_delta_for_suggestion(
+                        workflow.definition or {}, proposed_changes
+                    ),
                 },
             )
 
@@ -400,12 +417,19 @@ class DynamicUserWorkflow:
         trigger_type: str,
         execution_id: Optional[int],
         user_id: Optional[int],
+        definition_version: int = 1,
+        capability_manifest: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         context: Dict[str, Any] = {
             "trigger": trigger_data,
             "workflow": {
                 "id": workflow_id,
                 "policy": workflow_definition.get("policy") or {},
+                "capabilities": (
+                    capability_manifest
+                    if capability_manifest is not None
+                    else manifest_from_definition(workflow_definition)
+                ),
             },
             "user_id": user_id,
         }
@@ -423,7 +447,14 @@ class DynamicUserWorkflow:
         if not execution_id:
             execution_id = await workflow.execute_activity(
                 create_execution_record,
-                args=[workflow_id, workflow.info().workflow_id, workflow.info().run_id, trigger_type, trigger_data],
+                args=[
+                    workflow_id,
+                    workflow.info().workflow_id,
+                    workflow.info().run_id,
+                    trigger_type,
+                    trigger_data,
+                    definition_version or 1,
+                ],
                 schedule_to_close_timeout=timedelta(seconds=30),
             )
             context["execution_id"] = execution_id
@@ -752,6 +783,7 @@ async def start_workflow_execution(
                 temporal_workflow_id=workflow_run_id,
                 trigger_type=trigger_type,
                 trigger_data=trigger_data,
+                definition_version=workflow_obj.definition_version or 1,
                 status="running",
             )
 
@@ -763,7 +795,16 @@ async def start_workflow_execution(
     try:
         handle = await client.start_workflow(
             DynamicUserWorkflow.run,
-            args=[workflow_obj.id, workflow_obj.definition, trigger_data, trigger_type, execution_id, workflow_obj.user_id],
+            args=[
+                workflow_obj.id,
+                workflow_obj.definition,
+                trigger_data,
+                trigger_type,
+                execution_id,
+                workflow_obj.user_id,
+                workflow_obj.definition_version or 1,
+                manifest_from_definition(workflow_obj.definition or {}),
+            ],
             id=workflow_run_id,
             task_queue=settings.TEMPORAL_TASK_QUEUE,
         )
@@ -892,7 +933,10 @@ async def create_schedule_for_trigger(trigger_obj) -> None:
             "schedule",
             None,
             trigger_obj.workflow.user_id,
+            trigger_obj.workflow.definition_version or 1,
+            manifest_from_definition(trigger_obj.workflow.definition or {}),
         ],
+        id=f"workflow-{trigger_obj.workflow_id}-trigger-{trigger_obj.id}",
         task_queue=settings.TEMPORAL_TASK_QUEUE,
     )
 
@@ -929,6 +973,74 @@ async def create_schedule_for_trigger(trigger_obj) -> None:
         trigger_obj.save(update_fields=["temporal_schedule_id", "schedule_status", "schedule_last_error", "is_active"])
 
     await sync_to_async(_save_schedule)()
+
+
+async def refresh_schedule_definition(trigger_obj) -> None:
+    """Repoint an existing Temporal schedule at its workflow's current version.
+
+    Schedules bake the definition into their start-workflow action, so a new
+    version would otherwise keep firing the old one. Failure is logged, never
+    fatal: the schedule keeps running its last known version until a later
+    refresh succeeds.
+    """
+    if trigger_obj.trigger_type != "schedule" or not trigger_obj.temporal_schedule_id:
+        return
+
+    workflow_obj = trigger_obj.workflow
+    action = ScheduleActionStartWorkflow(
+        DynamicUserWorkflow.run,
+        args=[
+            workflow_obj.id,
+            workflow_obj.definition,
+            {
+                "trigger_id": trigger_obj.id,
+                "schedule": {
+                    "cron": trigger_obj.schedule_cron,
+                    "timezone": trigger_obj.schedule_timezone,
+                },
+            },
+            "schedule",
+            None,
+            workflow_obj.user_id,
+            workflow_obj.definition_version or 1,
+            manifest_from_definition(workflow_obj.definition or {}),
+        ],
+        id=f"workflow-{workflow_obj.id}-trigger-{trigger_obj.id}",
+        task_queue=settings.TEMPORAL_TASK_QUEUE,
+    )
+
+    def _updater(input):
+        current = input.description.schedule
+        return ScheduleUpdate(
+            schedule=Schedule(
+                action=action,
+                spec=current.spec,
+                policy=current.policy,
+                state=current.state,
+            )
+        )
+
+    try:
+        client = await get_temporal_client()
+        handle = client.get_schedule_handle(trigger_obj.temporal_schedule_id)
+        await handle.update(_updater)
+    except Exception as exc:
+        logger.warning(
+            "Could not repoint schedule %s for workflow %s: %s",
+            trigger_obj.temporal_schedule_id,
+            workflow_obj.id,
+            exc,
+        )
+
+
+async def refresh_workflow_schedules(workflow_obj) -> int:
+    """Refresh every registered schedule for a workflow. Returns refreshes attempted."""
+    triggers = await sync_to_async(
+        lambda: list(workflow_obj.registered_triggers.filter(trigger_type="schedule"))
+    )()
+    for trigger in triggers:
+        await refresh_schedule_definition(trigger)
+    return len(triggers)
 
 
 async def pause_trigger_schedule(trigger_obj) -> None:
@@ -998,7 +1110,10 @@ async def build_replay_request(
     the safety check is bypassed and the override is recorded on
     trigger_data so the receipt + trace remain auditable.
     """
-    definition = dict(execution.workflow.definition or {})
+    bound_definition = await sync_to_async(definition_for_version)(
+        execution.workflow, execution.definition_version
+    ) or execution.workflow.definition
+    definition = dict(bound_definition or {})
     # Explicit from_step_id wins over the legacy boolean.
     target_step = from_step_id or (execution.current_step if from_failed_step else None)
     if from_failed_step and not target_step:

@@ -85,6 +85,9 @@
             <a class="app-btn app-btn-outline" href="{% url 'workflows:workflow_executions' workflow.id %}">
                 <i class="fas fa-list"></i> Runs
             </a>
+            <a class="app-btn app-btn-outline" href="{% url 'workflows:workflow_versions' workflow.id %}">
+                <i class="fas fa-code-branch"></i> v{{ workflow.definition_version }}
+            </a>
         </div>
         {% if workflow.status == "active" %}
         <details class="run-payload">

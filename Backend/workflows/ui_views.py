@@ -33,6 +33,7 @@ from .temporal_integration import (
     start_workflow_execution,
     submit_execution_approval,
 )
+from .versioning import definition_for_version, diff_definition_versions
 
 
 def _own_workflow(request, workflow_id):
@@ -115,6 +116,42 @@ def operations_inbox(request):
 
 
 @login_required
+def workflow_versions(request, workflow_id):
+    workflow = _own_workflow(request, workflow_id)
+    versions = workflow.versions.order_by("-version")
+
+    from_version = _parse_version_param(request.GET.get("from"))
+    to_version = _parse_version_param(request.GET.get("to"))
+    diff_lines = None
+    diff_error = None
+    if from_version and to_version:
+        diff_lines = diff_definition_versions(workflow, from_version, to_version)
+        if diff_lines is None:
+            diff_error = "One of those versions does not exist for this workflow."
+
+    return render(
+        request,
+        "workflows/workflow_versions.html",
+        {
+            "workflow": workflow,
+            "versions": versions,
+            "from_version": from_version,
+            "to_version": to_version,
+            "diff_lines": diff_lines,
+            "diff_error": diff_error,
+        },
+    )
+
+
+def _parse_version_param(raw):
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+@login_required
 def workflow_executions(request, workflow_id):
     workflow = _own_workflow(request, workflow_id)
     executions = workflow.executions.select_related("pending_approval")
@@ -144,7 +181,8 @@ def execution_detail(request, execution_id):
     except Exception:
         runtime_state = None
 
-    steps = workflow.get_steps()
+    bound_definition = definition_for_version(workflow, execution.definition_version) or workflow.definition
+    steps = bound_definition.get("steps", [])
     step_options = [
         {"id": str(step.get("id") or step.get("action") or ""), "label": str(step.get("id") or step.get("action") or "step")}
         for step in steps
@@ -326,5 +364,6 @@ __all__ = [
     "run_workflow_ui",
     "toggle_trigger_ui",
     "workflow_executions",
+    "workflow_versions",
     "workflows_list",
 ]

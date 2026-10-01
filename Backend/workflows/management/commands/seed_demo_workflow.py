@@ -16,6 +16,7 @@ from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
 
 from workflows.models import UserWorkflow
+from workflows.versioning import create_workflow_version
 
 
 DEMO_NAME = "Follow-up email demo"
@@ -66,7 +67,7 @@ class Command(BaseCommand):
 
         description = definition.get("description") or "Kazi v0.4 human-gated runtime demo."
 
-        workflow, created = UserWorkflow.objects.update_or_create(
+        workflow, created = UserWorkflow.objects.get_or_create(
             user=user,
             name=display_name,
             defaults={
@@ -75,6 +76,15 @@ class Command(BaseCommand):
                 "status": "active",
             },
         )
+
+        if not created:
+            workflow.description = description
+            workflow.status = "active"
+            workflow.save(update_fields=["description", "status", "updated_at"])
+            if workflow.definition != definition:
+                # Never edit a live definition in place - reseeding the demo
+                # appends a new version like any other change.
+                create_workflow_version(workflow, definition, change_summary="Demo workflow reseed")
 
         verb = "Created" if created else "Updated"
         self.stdout.write(self.style.SUCCESS(

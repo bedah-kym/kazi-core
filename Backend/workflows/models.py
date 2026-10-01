@@ -44,6 +44,7 @@ class UserWorkflow(models.Model):
     name = models.CharField(max_length=255)
     description = models.TextField()
     definition = models.JSONField()
+    definition_version = models.PositiveIntegerField(default=1)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -76,6 +77,37 @@ class UserWorkflow(models.Model):
 
     def get_steps(self):
         return self.definition.get('steps', [])
+
+
+class WorkflowVersion(models.Model):
+    """Immutable snapshot of a workflow definition.
+
+    A live definition is never edited in place: every change appends a row here
+    and moves ``UserWorkflow.definition_version`` forward. Executions bind the
+    version they started with, so a new version cannot reshape a running run.
+    """
+
+    workflow = models.ForeignKey(UserWorkflow, on_delete=models.CASCADE, related_name='versions')
+    version = models.PositiveIntegerField()
+    definition = models.JSONField()
+    change_summary = models.CharField(max_length=255, blank=True)
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_workflow_versions',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-version']
+        constraints = [
+            models.UniqueConstraint(fields=['workflow', 'version'], name='uniq_workflow_version'),
+        ]
+
+    def __str__(self):
+        return f"{self.workflow.name} v{self.version}"
 
 
 class WorkflowTrigger(models.Model):
@@ -138,6 +170,7 @@ class WorkflowExecution(models.Model):
     workflow = models.ForeignKey(UserWorkflow, on_delete=models.CASCADE, related_name='executions')
     temporal_workflow_id = models.CharField(max_length=255, unique=True)
     temporal_run_id = models.CharField(max_length=255, null=True, blank=True)
+    definition_version = models.PositiveIntegerField(default=1)
 
     trigger_type = models.CharField(max_length=20, default='manual')
     trigger_data = models.JSONField(default=dict)

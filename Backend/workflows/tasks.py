@@ -189,6 +189,14 @@ def mine_workflow_candidates(
 
 
 @shared_task(ignore_result=True)
+def check_routine_absence() -> Dict[str, int]:
+    """Prompt idle owners once; pause unanswered routines (W-F, #204)."""
+    from .routine import check_routine_absence as _check_routine_absence
+
+    return _check_routine_absence()
+
+
+@shared_task(ignore_result=True)
 def sweep_stuck_approvals(limit: int = None) -> Dict[str, int]:
     """
     Time out approvals stuck in ``pending`` past their expiry.

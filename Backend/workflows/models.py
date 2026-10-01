@@ -1,5 +1,6 @@
 from django.db import models
 from django.contrib.auth import get_user_model
+from django.utils.timezone import now as timezone_now
 
 User = get_user_model()
 
@@ -260,6 +261,69 @@ class WorkflowExecution(models.Model):
 
     def __str__(self):
         return f"Execution {self.id} - {self.status}"
+
+
+class WorkflowTestRun(models.Model):
+    """A dry run of a routine with side-effect steps stubbed (v0.7 W-F, #204).
+
+    A routine cannot be enabled under a standing grant until a test run for the
+    current definition version passes. The row records what the run selected,
+    what it would produce, where it would stop for approval, and how it fails.
+    """
+
+    STATUS_CHOICES = [
+        ('passed', 'Passed'),
+        ('failed', 'Failed'),
+    ]
+
+    workflow = models.ForeignKey(UserWorkflow, on_delete=models.CASCADE, related_name='test_runs')
+    definition_version = models.PositiveIntegerField(default=1)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='passed')
+    inputs = models.JSONField(default=dict, blank=True)
+    output_preview = models.JSONField(default=dict, blank=True)
+    audit_trail = models.JSONField(default=list, blank=True)
+    approval_stop_point = models.CharField(max_length=120, blank=True)
+    failure_states = models.JSONField(default=list, blank=True)
+    summary = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['workflow', 'definition_version', 'status']),
+        ]
+
+    def __str__(self):
+        return f"Test run {self.id} ({self.status})"
+
+
+class RoutineCheckIn(models.Model):
+    """Pause-on-absence state for a user's routines (v0.7 W-F/W-C, #204/#157).
+
+    After a long idle period Kazi asks once whether routines should keep
+    running. No answer inside the prompt window pauses them; nothing silently
+    keeps executing for an absent owner.
+    """
+
+    STATUS_CHOICES = [
+        ('prompted', 'Prompted'),
+        ('answered', 'Answered'),
+        ('paused', 'Paused'),
+    ]
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='routine_check_ins')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='prompted')
+    prompted_at = models.DateTimeField(default=timezone_now)
+    answered_at = models.DateTimeField(null=True, blank=True)
+    paused_workflow_ids = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-prompted_at']
+
+    def __str__(self):
+        return f"Routine check-in {self.id} ({self.status})"
 
 
 class DeferredWorkflowExecution(models.Model):

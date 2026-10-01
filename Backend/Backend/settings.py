@@ -410,6 +410,9 @@ WORKFLOW_REPLAY_SCHEDULE_SECONDS = int(os.environ.get('WORKFLOW_REPLAY_SCHEDULE_
 WORKFLOW_APPROVAL_SWEEP_SECONDS = int(os.environ.get('WORKFLOW_APPROVAL_SWEEP_SECONDS', 300))
 PROMOTION_MIN_OCCURRENCES = int(os.environ.get('PROMOTION_MIN_OCCURRENCES', 3))
 PROMOTION_MIN_SUCCESS_RATE = float(os.environ.get('PROMOTION_MIN_SUCCESS_RATE', 0.8))
+ROUTINE_ABSENCE_IDLE_DAYS = int(os.environ.get('ROUTINE_ABSENCE_IDLE_DAYS', 14))
+ROUTINE_ABSENCE_PROMPT_WINDOW_DAYS = int(os.environ.get('ROUTINE_ABSENCE_PROMPT_WINDOW_DAYS', 3))
+ROUTINE_HISTORY_LIMIT = int(os.environ.get('ROUTINE_HISTORY_LIMIT', 20))
 
 CELERY_BEAT_SCHEDULE = {
     'nightly_ledger_reconciliation': {
@@ -451,6 +454,10 @@ CELERY_BEAT_SCHEDULE = {
     'mine-workflow-candidates': {
         'task': 'workflows.tasks.mine_workflow_candidates',
         'schedule': crontab(hour=4, minute=0),  # Nightly: repeated tool sequences -> skill candidates
+    },
+    'check-routine-absence': {
+        'task': 'workflows.tasks.check_routine_absence',
+        'schedule': crontab(hour=5, minute=0),  # Daily: idle owners -> keep-running prompt -> pause
     },
 }
 

@@ -24,6 +24,7 @@ from .models import (
     WorkflowImprovementSuggestion,
     UserWorkflow,
 )
+from .routine import routine_history_limit, routine_run_history
 from .temporal_integration import (
     build_replay_request,
     fetch_execution_runtime_state,
@@ -158,6 +159,7 @@ def workflow_executions(request, workflow_id):
     status_filter = request.GET.get("status", "")
     if status_filter:
         executions = executions.filter(status=status_filter)
+    routine_history = routine_run_history(workflow)
     return render(
         request,
         "workflows/workflow_executions.html",
@@ -166,6 +168,10 @@ def workflow_executions(request, workflow_id):
             "executions": executions,
             "status_filter": status_filter,
             "status_choices": WorkflowExecution.STATUS_CHOICES,
+            "routine_history": routine_history,
+            "routine_history_limit": routine_history_limit(),
+            "routine_history_passed": sum(1 for run in routine_history if run["status"] == "completed"),
+            "routine_history_failed": sum(1 for run in routine_history if run["status"] == "failed"),
         },
     )
 

@@ -42,6 +42,8 @@ DEFAULT_NOTIFY_MATRIX: Dict[str, Dict[str, bool]] = {
     "workflow.approval": {"in_app": True, "email": True, "whatsapp": True},
     "workflow.failed": {"in_app": True, "email": True, "whatsapp": False},
     "workflow.deferred": {"in_app": True, "email": True, "whatsapp": False},
+    "workflow.routine_checkin": {"in_app": True, "email": True, "whatsapp": False},
+    "workflow.routine_paused": {"in_app": True, "email": True, "whatsapp": False},
     "initiative.digest": {"in_app": True, "email": False, "whatsapp": False},
 }
 

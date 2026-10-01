@@ -408,6 +408,8 @@ MODERATION_FLUSH_SECONDS = int(os.environ.get('MODERATION_FLUSH_SECONDS', 600))
 REMINDER_SWEEP_SECONDS = int(os.environ.get('REMINDER_SWEEP_SECONDS', 3600))
 WORKFLOW_REPLAY_SCHEDULE_SECONDS = int(os.environ.get('WORKFLOW_REPLAY_SCHEDULE_SECONDS', 300))
 WORKFLOW_APPROVAL_SWEEP_SECONDS = int(os.environ.get('WORKFLOW_APPROVAL_SWEEP_SECONDS', 300))
+PROMOTION_MIN_OCCURRENCES = int(os.environ.get('PROMOTION_MIN_OCCURRENCES', 3))
+PROMOTION_MIN_SUCCESS_RATE = float(os.environ.get('PROMOTION_MIN_SUCCESS_RATE', 0.8))
 
 CELERY_BEAT_SCHEDULE = {
     'nightly_ledger_reconciliation': {
@@ -445,6 +447,10 @@ CELERY_BEAT_SCHEDULE = {
     'send-daily-digest': {
         'task': 'orchestration.tasks.send_daily_digest',
         'schedule': crontab(hour=7, minute=30),  # Morning: initiative rung-2 digest
+    },
+    'mine-workflow-candidates': {
+        'task': 'workflows.tasks.mine_workflow_candidates',
+        'schedule': crontab(hour=4, minute=0),  # Nightly: repeated tool sequences -> skill candidates
     },
 }
 

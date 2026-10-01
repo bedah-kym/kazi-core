@@ -14,11 +14,23 @@ class WorkflowDraft(models.Model):
         ('cancelled', 'Cancelled'),
     ]
 
+    SOURCE_CHOICES = [
+        ('chat', 'Chat'),
+        ('explicit_save', 'Explicit Save'),
+        ('statistical', 'Statistical'),
+        ('reviewer', 'Reviewer'),
+    ]
+
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='workflow_drafts')
     room = models.ForeignKey('chatbot.Chatroom', on_delete=models.SET_NULL, null=True, blank=True)
     definition = models.JSONField(null=True, blank=True)
     context = models.JSONField(default=list)
     status = models.CharField(max_length=30, choices=STATUS_CHOICES, default='draft')
+    # v0.7 promotion pipeline (#156): where the draft came from, the staged
+    # skill folder it ships with, and the six-part skill contract body.
+    source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default='chat')
+    skill_name = models.CharField(max_length=100, blank=True)
+    skill_contract = models.JSONField(default=dict, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -28,6 +40,51 @@ class WorkflowDraft(models.Model):
 
     def __str__(self):
         return f"WorkflowDraft {self.id} ({self.user_id})"
+
+
+class WorkflowCandidate(models.Model):
+    """A repeated tool pattern queued for promotion into a skill/routine.
+
+    Mining never creates a live workflow: a candidate is a proposal, and a
+    human (or an explicit save request) has to turn it into a draft and then
+    confirm the draft before anything active exists.
+    """
+
+    STATUS_CHOICES = [
+        ('candidate', 'Candidate'),
+        ('drafted', 'Drafted'),
+        ('discarded', 'Discarded'),
+    ]
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='workflow_candidates')
+    room_id = models.IntegerField(null=True, blank=True)
+    pattern = models.JSONField(default=dict, blank=True)
+    pattern_key = models.CharField(max_length=64)
+    occurrences = models.PositiveIntegerField(default=0)
+    success_rate = models.FloatField(default=0.0)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='candidate')
+    draft = models.ForeignKey(
+        WorkflowDraft,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='promotion_candidates',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-occurrences', '-updated_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['user', 'pattern_key'],
+                condition=models.Q(status='candidate'),
+                name='uniq_candidate_per_user_pattern',
+            ),
+        ]
+
+    def __str__(self):
+        return f"Candidate {self.id} ({self.pattern_key[:12]})"
 
 
 class UserWorkflow(models.Model):

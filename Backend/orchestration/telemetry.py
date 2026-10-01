@@ -17,12 +17,17 @@ def _telemetry_enabled() -> bool:
     return getattr(settings, "ORCHESTRATION_TELEMETRY_ENABLED", True)
 
 
-def _telemetry_path() -> str:
+def telemetry_path() -> str:
+    """Public path accessor for readers (rollups, promotion mining)."""
     configured = getattr(settings, "ORCHESTRATION_TELEMETRY_PATH", None)
     if configured:
         return str(configured)
     base_dir = getattr(settings, "BASE_DIR", os.getcwd())
     return os.path.join(base_dir, "telemetry", "orchestration.jsonl")
+
+
+def _telemetry_path() -> str:
+    return telemetry_path()
 
 
 def _ensure_dir(path: str) -> None:

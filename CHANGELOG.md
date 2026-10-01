@@ -7,6 +7,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-01
+
+The **governed shell** release. Kazi gains one governed pair of hands — a
+sandboxed, per-command shell with two-tier escalation — plus the learning
+foundation (telemetry rollups, preference mining, the initiative ladder) that
+lets it earn initiative one approval at a time. Typed sysops connectors are
+retired: the shell is the reach story.
+
+### Added
+
+**Governed shell (`run_command`)** — the shell-exec sidecar with Docker and
+local backends (#130), `run_command` behind a dynamic risk gate (#131), and:
+
+- isolation profiles `open` / `standard` / `locked` with per-room overrides (#132);
+- two-tier escalation — safe commands run silently, bounded commands prompt
+  inline, destructive commands go to durable approval, out-of-envelope commands
+  are denied (#133);
+- per-command network on/off with a host allowlist (#134);
+- persistent per-room workspace with tar snapshot and rollback (#135);
+- a per-user shell profile preference and a raised shell-session tool-call cap (D9).
+
+**Modality** — a provider-agnostic `generate_speech` TTS connector, per-channel
+capability flags (`supports_voice`, `max_audio_bytes`), and a modality prompt
+hint (#136).
+
+**Learning foundation** — nightly telemetry rollups into entity facts and
+derived watches (#153), approve/deny preference mining into learned overrides
+(#152), and the initiative ladder: digest, proposals, and approved rules with a
+receipt per run (#154).
+
+**Governance and testing** — credential-scoping spec for the shell (#126), a
+prompt-injection corpus extended with shell cases (#127), v0.6 success metrics
+pinned as tests (#128), scenario packs with provider continuity fixtures (#171),
+optional connector `preview()` effects on approval cards (#168), and the agent
+governance harness (protected paths, boundary ratchet, CODEOWNERS mirror).
+
+**Developer experience** — native dev in-memory/SQLite fallback when Redis is
+unreachable, plus the hermetic test recipe for contributors.
+
+### Changed
+
+- Typed sysops connectors retired (#129); `run_command` is the reach story.
+- Shell metrics reconciled: effective tier, per-command risk, audited runs.
+- Reminder delivery: presence-based policy, atomic delivery claims, retry
+  dedupe, and `urgent=email`.
+- Mailgun EU endpoint support; travel search no longer caches empty/error results.
+- LLM prompt caching no longer includes the system time in cache keys.
+
+### Fixed
+
+- Manual workflow runs queue when Temporal is down or disabled, with atomic run
+  reservation and a dedupe window.
+- Fresh-database rooms are AI-ready (`mathia` provisioned; botless rooms
+  self-heal).
+- Idle WebSockets no longer flap on redis-py 8.x (channel-layer socket timeout).
+- WhatsApp mock debug logging redacts phone number and body.
+
+### Security
+
+- CodeQL code-scanning findings resolved: path-injection guards on uploads and
+  voice transcription, stack-trace exposure on workflow error responses, and
+  log hygiene in the IntaSend webhook validator.
+- Stack-trace hardening and credential-aware email routing across connectors.
+
+### Docs
+
+- New [v0.6 brief](docs/v0.6-brief.md) and [v0.6 roadmap](docs/v0.6-roadmap.md) —
+  the shell-first Jarvis direction.
+
 ## [0.5.0] - 2026-09-08
 
 The **operator + resilience release**. v0.4 built the human-gated runtime as a JSON
@@ -497,7 +566,8 @@ The full orchestration core was opened.
 - Project rebranded from Mathia.OS to **Kazi** (Swahili for "work").
   Agent identity is configurable via `KAZI_AGENT_NAME` (default `Kazi`).
 
-[Unreleased]: https://github.com/bedah-kym/kazi-core/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/bedah-kym/kazi-core/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/bedah-kym/kazi-core/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/bedah-kym/kazi-core/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/bedah-kym/kazi-core/releases/tag/v0.4.2
 [0.4.1]: https://github.com/bedah-kym/kazi-core/releases/tag/v0.4.1

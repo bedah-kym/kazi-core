@@ -71,6 +71,9 @@ nav:
       - Contributing: contributing.md
       - Roadmap: roadmap.md
       - Release Notes:
+          - v0.7 Brief: v0.7-brief.md
+          - v0.6 Brief: v0.6-brief.md
+          - v0.6 Roadmap: v0.6-roadmap.md
           - v0.4 Brief: v0.4-brief.md
           - v0.4 Roadmap: v0.4-roadmap.md
 

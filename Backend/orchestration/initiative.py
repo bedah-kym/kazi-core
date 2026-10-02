@@ -180,6 +180,12 @@ def build_digest(user_id: Optional[int]) -> Dict[str, Any]:
         lines.append("Waiting on your approval:")
         for proposal in proposals[:5]:
             lines.append(f"- {_sanitize(str(proposal.get('action')))} (room {proposal.get('room_id')})")
+    from orchestration.approval_telemetry import approval_digest_lines
+
+    approval_lines = approval_digest_lines(user_id)
+    if approval_lines:
+        lines.append("Approval patterns:")
+        lines.extend(approval_lines)
     message = "\n".join(lines)
     return {
         "message": message,

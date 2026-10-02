@@ -38,6 +38,18 @@ def mine_approval_preferences() -> Dict[str, Any]:
 
 
 @shared_task(ignore_result=True)
+def roll_approval_telemetry() -> Dict[str, Any]:
+    """Nightly approval telemetry rollup + rule candidates (#166)."""
+    from orchestration.approval_telemetry import rollup_approval_telemetry
+
+    try:
+        return rollup_approval_telemetry()
+    except Exception:
+        logger.exception("Approval telemetry rollup failed")
+        return {"error": "rollup_failed"}
+
+
+@shared_task(ignore_result=True)
 def curate_skill_lifecycle() -> Dict[str, Any]:
     """Weekly skill curator pass: demote unused skills, never promote (#138)."""
     from orchestration.skill_registry import curate_skills

@@ -416,6 +416,9 @@ ROUTINE_HISTORY_LIMIT = int(os.environ.get('ROUTINE_HISTORY_LIMIT', 20))
 SKILL_STALE_AFTER_DAYS = int(os.environ.get('SKILL_STALE_AFTER_DAYS', 90))
 SKILL_ARCHIVE_AFTER_DAYS = int(os.environ.get('SKILL_ARCHIVE_AFTER_DAYS', 180))
 STANDING_GRANT_LIFETIME_DAYS = int(os.environ.get('STANDING_GRANT_LIFETIME_DAYS', 30))
+APPROVAL_TELEMETRY_WINDOW_DAYS = int(os.environ.get('APPROVAL_TELEMETRY_WINDOW_DAYS', 1))
+APPROVAL_PROMOTE_THRESHOLD_RATE = float(os.environ.get('APPROVAL_PROMOTE_THRESHOLD_RATE', 0.95))
+APPROVAL_PROMOTE_THRESHOLD_COUNT = int(os.environ.get('APPROVAL_PROMOTE_THRESHOLD_COUNT', 50))
 
 CELERY_BEAT_SCHEDULE = {
     'nightly_ledger_reconciliation': {
@@ -469,6 +472,10 @@ CELERY_BEAT_SCHEDULE = {
     'sweep-expired-grants': {
         'task': 'workflows.tasks.sweep_expired_grants',
         'schedule': crontab(hour=3, minute=45),  # Nightly: lapse standing grants past expiry
+    },
+    'roll-approval-telemetry': {
+        'task': 'orchestration.tasks.roll_approval_telemetry',
+        'schedule': crontab(hour=3, minute=15),  # Nightly: approve/reject metrics + rule candidates
     },
 }
 

@@ -88,6 +88,10 @@
                         <button class="app-btn app-btn-primary app-btn-sm" type="submit">
                             <i class="fas fa-check"></i> Approve
                         </button>
+                        <label class="app-meta" style="display: flex; align-items: center; gap: 6px; margin-top: 8px;">
+                            <input type="checkbox" name="save_rule">
+                            Always allow this step (saves a standing rule)
+                        </label>
                     </form>
                     <form method="post" action="{% url 'workflows:reject_execution' approval.execution_id %}">
                         {% csrf_token %}
@@ -209,6 +213,34 @@
                     <a class="app-btn app-btn-outline app-btn-sm" href="{% url 'workflows:workflow_executions' suggestion.workflow_id %}">
                         <i class="fas fa-arrow-right"></i> View workflow
                     </a>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+
+    {% if grants %}
+    <section aria-labelledby="grants-title">
+        <div class="inbox-section-header">
+            <h2 class="inbox-section-title" id="grants-title">
+                <i class="fas fa-shield-halved me-1"></i> Active standing grants
+            </h2>
+            <span class="count-badge">{{ grants|length }}</span>
+        </div>
+        <div class="app-card">
+            {% for grant in grants %}
+            <div class="exec-row">
+                <div class="exec-main">
+                    <div class="exec-title">{{ grant.workflow.name }} v{{ grant.workflow_version }} &mdash; {{ grant.get_decision_display }}</div>
+                    <div class="app-meta" style="margin-top: 4px;">
+                        Scope: {{ grant.trigger_scope.trigger_type|default:"any trigger" }}
+                        &middot; {{ grant.capability_scope|join:", " }}
+                        {% if grant.expires_at %} &middot; expires {{ grant.expires_at|naturaltime }}{% endif %}
+                    </div>
+                    {% if grant.lapse_reason %}
+                    <div class="exec-failure">Last lapse: {{ grant.lapse_reason }}</div>
+                    {% endif %}
                 </div>
             </div>
             {% endfor %}

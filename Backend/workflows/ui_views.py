@@ -25,6 +25,7 @@ from .models import (
     UserWorkflow,
 )
 from .routine import routine_history_limit, routine_run_history
+from .grants import active_grants_for_user, create_grant_from_approval
 from .temporal_integration import (
     build_replay_request,
     fetch_execution_runtime_state,
@@ -100,6 +101,7 @@ def operations_inbox(request):
         user=request.user,
         status="proposed",
     ).select_related("workflow", "execution")
+    grants = active_grants_for_user(request.user.id)
 
     return render(
         request,
@@ -109,6 +111,7 @@ def operations_inbox(request):
             "attention_executions": attention_executions,
             "deferred_runs": deferred,
             "suggestions": suggestions,
+            "grants": grants,
             "needs_attention": bool(
                 approvals or attention_executions or deferred or suggestions
             ),
@@ -276,6 +279,17 @@ def _approval_decision_ui(request, execution_id: int, decision: str, label: str)
     except Exception as exc:
         messages.error(request, _temporal_error_message(exc, "decision"))
         return redirect("workflows:execution_detail", execution_id=execution.id)
+
+    if decision == "approved" and request.POST.get("save_rule") == "on":
+        try:
+            grant = create_grant_from_approval(execution.pending_approval, decision="always_allow")
+        except ValueError as exc:
+            messages.warning(request, f"Approved, but the standing rule was not saved: {exc}")
+        else:
+            messages.success(
+                request,
+                f"Standing rule saved: always allow this step on '{grant.workflow.name}'.",
+            )
 
     messages.success(request, f"Step \"{execution.pending_approval.step_id}\" {label}.")
     return redirect("workflows:operations_inbox")

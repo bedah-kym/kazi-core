@@ -197,6 +197,14 @@ def check_routine_absence() -> Dict[str, int]:
 
 
 @shared_task(ignore_result=True)
+def sweep_expired_grants() -> Dict[str, int]:
+    """Lapse standing grants past their expiry (W-E, #159)."""
+    from .grants import sweep_expired_grants as _sweep
+
+    return _sweep()
+
+
+@shared_task(ignore_result=True)
 def sweep_stuck_approvals(limit: int = None) -> Dict[str, int]:
     """
     Time out approvals stuck in ``pending`` past their expiry.

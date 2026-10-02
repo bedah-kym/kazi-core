@@ -415,6 +415,7 @@ ROUTINE_ABSENCE_PROMPT_WINDOW_DAYS = int(os.environ.get('ROUTINE_ABSENCE_PROMPT_
 ROUTINE_HISTORY_LIMIT = int(os.environ.get('ROUTINE_HISTORY_LIMIT', 20))
 SKILL_STALE_AFTER_DAYS = int(os.environ.get('SKILL_STALE_AFTER_DAYS', 90))
 SKILL_ARCHIVE_AFTER_DAYS = int(os.environ.get('SKILL_ARCHIVE_AFTER_DAYS', 180))
+STANDING_GRANT_LIFETIME_DAYS = int(os.environ.get('STANDING_GRANT_LIFETIME_DAYS', 30))
 
 CELERY_BEAT_SCHEDULE = {
     'nightly_ledger_reconciliation': {
@@ -464,6 +465,10 @@ CELERY_BEAT_SCHEDULE = {
     'curate-skill-lifecycle': {
         'task': 'orchestration.tasks.curate_skill_lifecycle',
         'schedule': crontab(day_of_week=1, hour=4, minute=30),  # Weekly: demote unused skills
+    },
+    'sweep-expired-grants': {
+        'task': 'workflows.tasks.sweep_expired_grants',
+        'schedule': crontab(hour=3, minute=45),  # Nightly: lapse standing grants past expiry
     },
 }
 

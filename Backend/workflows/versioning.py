@@ -84,6 +84,10 @@ def create_workflow_version(
     workflow.name = locked.name
     workflow.description = locked.description
 
+    from .grants import lapse_grants_for_workflow
+
+    lapse_grants_for_workflow(workflow, "version_changed")
+
     if refresh_schedules:
         _refresh_schedules_after_version(workflow)
     return version

@@ -78,6 +78,8 @@ class LLMClient:
             ordered = [getattr(settings, "LLM_PLANNER_PROVIDER", "anthropic").lower(), "deepseek", "anthropic", "huggingface"]
         elif role == "executor":
             ordered = [getattr(settings, "LLM_EXECUTOR_PROVIDER", "huggingface").lower(), "deepseek", "huggingface", "anthropic"]
+        elif role == "reviewer":
+            ordered = [getattr(settings, "LLM_REVIEWER_PROVIDER", "anthropic").lower(), "deepseek", "anthropic", "huggingface"]
         else:
             ordered = ["anthropic", "deepseek", "huggingface"]
         # De-dup while preserving order
@@ -96,17 +98,23 @@ class LLMClient:
                 return getattr(settings, "LLM_PLANNER_MODEL", self.claude_model)
             if role == "executor":
                 return getattr(settings, "LLM_EXECUTOR_MODEL", self.claude_model)
+            if role == "reviewer":
+                return getattr(settings, "LLM_REVIEWER_MODEL", self.claude_model)
             return self.claude_model
         if provider == "deepseek":
             if role == "planner":
                 return getattr(settings, "LLM_PLANNER_MODEL", self.deepseek_model)
             if role == "executor":
                 return getattr(settings, "LLM_EXECUTOR_MODEL", self.deepseek_model)
+            if role == "reviewer":
+                return getattr(settings, "LLM_REVIEWER_MODEL", self.deepseek_model)
             return self.deepseek_model
         if role == "planner":
             return getattr(settings, "LLM_PLANNER_MODEL", self.hf_model)
         if role == "executor":
             return getattr(settings, "LLM_EXECUTOR_MODEL", self.hf_model)
+        if role == "reviewer":
+            return getattr(settings, "LLM_REVIEWER_MODEL", self.hf_model)
         return self.hf_model
 
     def _estimate_tokens(self, text: Optional[str]) -> int:

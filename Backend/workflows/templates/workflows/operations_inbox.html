@@ -88,6 +88,10 @@
                         <button class="app-btn app-btn-primary app-btn-sm" type="submit">
                             <i class="fas fa-check"></i> Approve
                         </button>
+                        <label class="app-meta" style="display: flex; align-items: center; gap: 6px; margin-top: 8px;">
+                            <input type="checkbox" name="save_rule">
+                            Always allow this step (saves a standing rule)
+                        </label>
                     </form>
                     <form method="post" action="{% url 'workflows:reject_execution' approval.execution_id %}">
                         {% csrf_token %}
@@ -196,8 +200,19 @@
             {% for suggestion in suggestions %}
             <div class="exec-row">
                 <div class="exec-main">
-                    <div class="exec-title">{{ suggestion.title }}</div>
+                    <div class="exec-title">
+                        {{ suggestion.title }}
+                        {% if suggestion.capability_delta.widening %}
+                        <span class="app-pill app-pill-warning">Widens capabilities</span>
+                        {% endif %}
+                    </div>
                     <div class="exec-failure">{{ suggestion.summary|truncatechars:220 }}</div>
+                    {% if suggestion.metadata.shadow %}
+                    <div class="app-meta" style="margin-top: 4px;">
+                        Shadow replay: {{ suggestion.metadata.shadow.replays }} replay{{ suggestion.metadata.shadow.replays|pluralize }}
+                        {% if suggestion.metadata.cited_metric %} &middot; cites {{ suggestion.metadata.cited_metric }}{% endif %}
+                    </div>
+                    {% endif %}
                     {% if suggestion.proposed_changes %}
                     <details class="approval-params">
                         <summary>Proposed changes</summary>
@@ -206,9 +221,46 @@
                     {% endif %}
                 </div>
                 <div class="exec-actions">
-                    <a class="app-btn app-btn-outline app-btn-sm" href="{% url 'workflows:workflow_executions' suggestion.workflow_id %}">
-                        <i class="fas fa-arrow-right"></i> View workflow
-                    </a>
+                    <form method="post" action="{% url 'workflows:accept_suggestion' suggestion.id %}" style="display: inline;">
+                        {% csrf_token %}
+                        <button class="app-btn app-btn-primary app-btn-sm" type="submit">
+                            <i class="fas fa-check"></i> Apply
+                        </button>
+                    </form>
+                    <form method="post" action="{% url 'workflows:dismiss_suggestion' suggestion.id %}" style="display: inline;">
+                        {% csrf_token %}
+                        <button class="app-btn app-btn-outline app-btn-sm" type="submit">
+                            Dismiss
+                        </button>
+                    </form>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+
+    {% if grants %}
+    <section aria-labelledby="grants-title">
+        <div class="inbox-section-header">
+            <h2 class="inbox-section-title" id="grants-title">
+                <i class="fas fa-shield-halved me-1"></i> Active standing grants
+            </h2>
+            <span class="count-badge">{{ grants|length }}</span>
+        </div>
+        <div class="app-card">
+            {% for grant in grants %}
+            <div class="exec-row">
+                <div class="exec-main">
+                    <div class="exec-title">{{ grant.workflow.name }} v{{ grant.workflow_version }} &mdash; {{ grant.get_decision_display }}</div>
+                    <div class="app-meta" style="margin-top: 4px;">
+                        Scope: {{ grant.trigger_scope.trigger_type|default:"any trigger" }}
+                        &middot; {{ grant.capability_scope|join:", " }}
+                        {% if grant.expires_at %} &middot; expires {{ grant.expires_at|naturaltime }}{% endif %}
+                    </div>
+                    {% if grant.lapse_reason %}
+                    <div class="exec-failure">Last lapse: {{ grant.lapse_reason }}</div>
+                    {% endif %}
                 </div>
             </div>
             {% endfor %}

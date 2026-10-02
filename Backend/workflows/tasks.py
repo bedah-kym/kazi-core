@@ -197,6 +197,38 @@ def check_routine_absence() -> Dict[str, int]:
 
 
 @shared_task(ignore_result=True)
+def sweep_expired_grants() -> Dict[str, int]:
+    """Lapse standing grants past their expiry (W-E, #159)."""
+    from .grants import sweep_expired_grants as _sweep
+
+    return _sweep()
+
+
+@shared_task(ignore_result=True)
+def check_workflow_health() -> Dict[str, int]:
+    """Failure-spike detection pauses workflows; recovery is manual (W-C, #157)."""
+    from .health import check_workflow_health as _check
+
+    return _check()
+
+
+@shared_task(ignore_result=True)
+def send_workflow_health_digest() -> Dict[str, int]:
+    """Weekly healthy/degraded/paused digest (W-C, #157)."""
+    from .health import send_workflow_health_digest as _send
+
+    return _send()
+
+
+@shared_task(ignore_result=True)
+def run_workflow_reviewer(workflow_id: int = None) -> Dict[str, int]:
+    """Weekly reviewer sweep: metric outcomes + shadow-gated suggestions (#158/#169)."""
+    from .reviewer import run_workflow_reviewer as _run
+
+    return _run(workflow_id=workflow_id)
+
+
+@shared_task(ignore_result=True)
 def sweep_stuck_approvals(limit: int = None) -> Dict[str, int]:
     """
     Time out approvals stuck in ``pending`` past their expiry.

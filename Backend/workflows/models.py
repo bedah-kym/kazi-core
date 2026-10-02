@@ -108,6 +108,9 @@ class UserWorkflow(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     last_executed_at = models.DateTimeField(null=True, blank=True)
+    # Set when a paused workflow is manually reactivated; health windows start
+    # no earlier than this so pre-recovery failures never re-pause the routine.
+    reactivated_at = models.DateTimeField(null=True, blank=True)
     execution_count = models.IntegerField(default=0)
 
     created_from_room = models.ForeignKey('chatbot.Chatroom', on_delete=models.SET_NULL, null=True, blank=True)
@@ -451,6 +454,58 @@ class WorkflowApprovalRecord(models.Model):
         return f"Approval {self.id} ({self.step_id} - {self.status})"
 
 
+class StandingGrant(models.Model):
+    """A durable per-rule permission (v0.7 W-E, issue #159).
+
+    Created only from a human decision on a real approval card. Scoped to
+    ``(workflow, workflow_version, trigger, capability)`` — never a global
+    unlock. ``allow_once`` lapses after one use; ``always_allow`` lapses on
+    expiry, an out-of-scope attempt, or a new workflow version. Every
+    autonomous run writes a receipt via ``WorkflowApprovalRecord``.
+    """
+
+    DECISION_CHOICES = [
+        ('allow_once', 'Allow Once'),
+        ('always_allow', 'Always Allow'),
+        ('deny', 'Deny'),
+    ]
+    STATUS_CHOICES = [
+        ('active', 'Active'),
+        ('lapsed', 'Lapsed'),
+        ('revoked', 'Revoked'),
+    ]
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='standing_grants')
+    workflow = models.ForeignKey(UserWorkflow, on_delete=models.CASCADE, related_name='standing_grants')
+    workflow_version = models.PositiveIntegerField(default=1)
+    trigger_scope = models.JSONField(default=dict, blank=True)
+    capability_scope = models.JSONField(default=list, blank=True)
+    decision = models.CharField(max_length=20, choices=DECISION_CHOICES)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
+    lapse_reason = models.CharField(max_length=255, blank=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    lapsed_at = models.DateTimeField(null=True, blank=True)
+    approval_record = models.ForeignKey(
+        WorkflowApprovalRecord,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='standing_grants',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['workflow', 'status']),
+            models.Index(fields=['status', 'expires_at']),
+        ]
+
+    def __str__(self):
+        return f"StandingGrant {self.id} ({self.decision})"
+
+
 class WorkflowImprovementSuggestion(models.Model):
     """Suggested workflow edits derived from operator feedback or failures."""
 
@@ -475,6 +530,8 @@ class WorkflowImprovementSuggestion(models.Model):
     summary = models.TextField()
     proposed_changes = models.JSONField(default=dict, blank=True)
     capability_delta = models.JSONField(default=dict, blank=True)
+    # Reviewer bookkeeping: shadow-replay result, cited metric before/after.
+    metadata = models.JSONField(default=dict, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='proposed')
     created_at = models.DateTimeField(auto_now_add=True)
 

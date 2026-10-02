@@ -177,7 +177,8 @@ def _pause_workflow(workflow) -> None:
     from .temporal_integration import pause_trigger_schedule
 
     workflow.status = "paused"
-    workflow.save(update_fields=["status", "updated_at"])
+    workflow.reactivated_at = None
+    workflow.save(update_fields=["status", "reactivated_at", "updated_at"])
     for trigger in workflow.registered_triggers.all():
         if trigger.trigger_type == "schedule":
             try:
@@ -190,6 +191,11 @@ def _pause_workflow(workflow) -> None:
         trigger.is_active = False
         trigger.schedule_status = "paused"
         trigger.save(update_fields=["is_active", "schedule_status", "updated_at"])
+
+
+def pause_workflow(workflow) -> None:
+    """Pause a workflow and its triggers. Never mutates the definition."""
+    _pause_workflow(workflow)
 
 
 def acknowledge_check_in(user, *, keep_running: bool = True):

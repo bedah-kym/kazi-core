@@ -1,17 +1,15 @@
-"""Routine test runs: real work with side-effect steps stubbed (W-F, #204).
+"""Routine test runs and dry definition walks (W-F #204, W-D2 #169).
 
-The test run is the evidence gate in front of a standing grant. It walks the
-current version's steps, executes the replay-safe read-only ones, stubs every
-side-effect/approval step, and records inputs, output preview, audit trail,
-approval stop point and explicit failure states on ``WorkflowTestRun``.
-
-W-D2 (#169) upgrades the input side with recorded shadow-replay inputs; the
-record shape and gate stay the same.
+``execute_definition_dry`` walks a definition with side-effect steps stubbed:
+replay-safe read-only steps execute for real, everything else is stubbed.
+``run_test_run`` records the evidence gate in front of a standing grant;
+``shadow_replay.replay_candidate`` feeds the same engine recorded inputs so a
+reviewer suggestion must not regress a step that previously succeeded.
 """
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from django.utils import timezone
 
@@ -21,33 +19,21 @@ from .runtime import get_step_id, is_step_safe_to_replay, step_requires_approval
 
 logger = logging.getLogger(__name__)
 
-
-def _selected_inputs(definition: Dict[str, Any]) -> Dict[str, Any]:
-    selected = {}
-    for index, step in enumerate(definition.get("steps") or []):
-        step_id = get_step_id(step, index)
-        selected[step_id] = sorted(str(key) for key in (step.get("params") or {}))
-    return {"steps": selected}
+_SEED_RESERVED_KEYS = {"trigger", "workflow", "user_id", "execution_id", "preferences"}
 
 
-def _output_preview(definition: Dict[str, Any]) -> Dict[str, Any]:
-    preview = {}
-    for index, step in enumerate(definition.get("steps") or []):
-        step_id = get_step_id(step, index)
-        preview[step_id] = f"{step.get('service')}.{step.get('action')}"
-    return preview
-
-
-async def run_test_run(workflow, *, user_id=None) -> WorkflowTestRun:
-    """Execute a routine's read-only steps and stub the side-effecting ones."""
-    from asgiref.sync import sync_to_async
-
+async def execute_definition_dry(
+    definition: Dict[str, Any],
+    *,
+    workflow,
+    context_seed: Optional[Dict[str, Any]] = None,
+    user_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Walk ``definition`` with side effects stubbed. Returns outcome dict."""
     from .activity_executors import execute_workflow_step
 
-    definition = workflow.definition or {}
-    version = workflow.definition_version or 1
     context: Dict[str, Any] = {
-        "trigger": {},
+        "trigger": (context_seed or {}).get("trigger") or {},
         "workflow": {
             "id": workflow.id,
             "policy": definition.get("policy") or {},
@@ -56,6 +42,10 @@ async def run_test_run(workflow, *, user_id=None) -> WorkflowTestRun:
         "user_id": user_id or workflow.user_id,
         "test_run": True,
     }
+    if context_seed:
+        for key, value in context_seed.items():
+            if key not in _SEED_RESERVED_KEYS:
+                context[key] = value
 
     audit = []
     failure_states = []
@@ -90,20 +80,53 @@ async def run_test_run(workflow, *, user_id=None) -> WorkflowTestRun:
                 "error": result.get("error") or result.get("status") or "unknown failure",
             })
 
+    return {
+        "status": status,
+        "audit": audit,
+        "approval_stop_point": approval_stop_point,
+        "failure_states": failure_states,
+        "context": context,
+    }
+
+
+def _selected_inputs(definition: Dict[str, Any]) -> Dict[str, Any]:
+    selected = {}
+    for index, step in enumerate(definition.get("steps") or []):
+        step_id = get_step_id(step, index)
+        selected[step_id] = sorted(str(key) for key in (step.get("params") or {}))
+    return {"steps": selected}
+
+
+def _output_preview(definition: Dict[str, Any]) -> Dict[str, Any]:
+    preview = {}
+    for index, step in enumerate(definition.get("steps") or []):
+        step_id = get_step_id(step, index)
+        preview[step_id] = f"{step.get('service')}.{step.get('action')}"
+    return preview
+
+
+async def run_test_run(workflow, *, user_id=None) -> WorkflowTestRun:
+    """Execute a routine's read-only steps and stub the side-effecting ones."""
+    from asgiref.sync import sync_to_async
+
+    definition = workflow.definition or {}
+    version = workflow.definition_version or 1
+    outcome = await execute_definition_dry(definition, workflow=workflow, user_id=user_id)
+
     completed_at = timezone.now()
     return await sync_to_async(WorkflowTestRun.objects.create)(
         workflow=workflow,
         definition_version=version,
-        status=status,
+        status=outcome["status"],
         inputs=_selected_inputs(definition),
         output_preview=_output_preview(definition),
-        audit_trail=audit,
-        approval_stop_point=approval_stop_point,
-        failure_states=failure_states,
+        audit_trail=outcome["audit"],
+        approval_stop_point=outcome["approval_stop_point"],
+        failure_states=outcome["failure_states"],
         summary=(
             "Test run passed with side effects stubbed."
-            if status == "passed"
-            else f"Test run failed at {failure_states[0]['step']}."
+            if outcome["status"] == "passed"
+            else f"Test run failed at {outcome['failure_states'][0]['step']}."
         ),
         completed_at=completed_at,
     )

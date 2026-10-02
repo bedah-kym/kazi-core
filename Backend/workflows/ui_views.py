@@ -25,6 +25,9 @@ from .models import (
     UserWorkflow,
 )
 from .routine import routine_history_limit, routine_run_history
+from .grants import active_grants_for_user, create_grant_from_approval
+from .health import reactivate_workflow
+from .reviewer import accept_suggestion, dismiss_suggestion
 from .temporal_integration import (
     build_replay_request,
     fetch_execution_runtime_state,
@@ -100,6 +103,7 @@ def operations_inbox(request):
         user=request.user,
         status="proposed",
     ).select_related("workflow", "execution")
+    grants = active_grants_for_user(request.user.id)
 
     return render(
         request,
@@ -109,6 +113,7 @@ def operations_inbox(request):
             "attention_executions": attention_executions,
             "deferred_runs": deferred,
             "suggestions": suggestions,
+            "grants": grants,
             "needs_attention": bool(
                 approvals or attention_executions or deferred or suggestions
             ),
@@ -277,6 +282,17 @@ def _approval_decision_ui(request, execution_id: int, decision: str, label: str)
         messages.error(request, _temporal_error_message(exc, "decision"))
         return redirect("workflows:execution_detail", execution_id=execution.id)
 
+    if decision == "approved" and request.POST.get("save_rule") == "on":
+        try:
+            grant = create_grant_from_approval(execution.pending_approval, decision="always_allow")
+        except ValueError as exc:
+            messages.warning(request, f"Approved, but the standing rule was not saved: {exc}")
+        else:
+            messages.success(
+                request,
+                f"Standing rule saved: always allow this step on '{grant.workflow.name}'.",
+            )
+
     messages.success(request, f"Step \"{execution.pending_approval.step_id}\" {label}.")
     return redirect("workflows:operations_inbox")
 
@@ -360,13 +376,66 @@ def toggle_trigger_ui(request, trigger_id: int):
     return redirect("workflows:workflows_list")
 
 
+@login_required
+def reactivate_workflow_ui(request, workflow_id: int):
+    workflow = _own_workflow(request, workflow_id)
+    if workflow.status != "paused":
+        messages.error(request, "Only paused workflows can be reactivated.")
+        return redirect("workflows:workflows_list")
+
+    reactivate_workflow(workflow)
+    for trigger in workflow.registered_triggers.filter(trigger_type="schedule"):
+        try:
+            async_to_sync(resume_trigger_schedule)(trigger)
+        except Exception:
+            pass
+    messages.success(request, f"Reactivated '{workflow.name}'. Its health window restarts now.")
+    return redirect("workflows:workflows_list")
+
+
+@login_required
+def accept_suggestion_ui(request, suggestion_id: int):
+    suggestion = get_object_or_404(
+        WorkflowImprovementSuggestion,
+        id=suggestion_id,
+        user=request.user,
+        status="proposed",
+    )
+    try:
+        version = accept_suggestion(suggestion, by_user=request.user)
+    except ValueError as exc:
+        messages.error(request, f"Could not apply the suggestion: {exc}")
+        return redirect("workflows:operations_inbox")
+    messages.success(
+        request,
+        f"Applied '{suggestion.title}': '{suggestion.workflow.name}' is now v{version.version}.",
+    )
+    return redirect("workflows:operations_inbox")
+
+
+@login_required
+def dismiss_suggestion_ui(request, suggestion_id: int):
+    suggestion = get_object_or_404(
+        WorkflowImprovementSuggestion,
+        id=suggestion_id,
+        user=request.user,
+        status="proposed",
+    )
+    dismiss_suggestion(suggestion)
+    messages.info(request, f"Dismissed '{suggestion.title}'.")
+    return redirect("workflows:operations_inbox")
+
+
 __all__ = [
+    "accept_suggestion_ui",
     "approve_execution_ui",
     "cancel_execution_ui",
+    "dismiss_suggestion_ui",
     "execution_detail",
     "operations_inbox",
     "reject_execution_ui",
     "rerun_execution_ui",
+    "reactivate_workflow_ui",
     "run_workflow_ui",
     "toggle_trigger_ui",
     "workflow_executions",

@@ -28,7 +28,11 @@ from orchestration.security_policy import sanitize_parameters, user_has_room_acc
 from orchestration.tool_executor import preview_tool
 
 from .activity_executors import execute_workflow_step
-from .capability_manifest import capability_delta_for_suggestion, manifest_from_definition
+from .capability_manifest import (
+    capability_delta_for_suggestion,
+    capability_for_step,
+    manifest_from_definition,
+)
 from .models import (
     WorkflowApprovalRecord,
     WorkflowExecution,
@@ -303,6 +307,58 @@ async def run_step_activity(step: Dict[str, Any], context: Dict[str, Any]) -> Di
 
 
 @activity.defn
+async def resolve_step_grant(
+    workflow_id: int,
+    definition_version: int,
+    trigger_type: str,
+    trigger_id: Any,
+    capability: str,
+    action: str,
+    user_id: int,
+) -> Optional[Dict[str, Any]]:
+    """Deterministic grant gate: ask-first wins, deny/allow decisions come back."""
+    from .grants import resolve_standing_grant
+
+    return await sync_to_async(resolve_standing_grant)(
+        workflow_id,
+        definition_version,
+        trigger_type,
+        trigger_id,
+        capability,
+        action,
+        user_id or None,
+    )
+
+
+@activity.defn
+async def apply_grant_decision_activity(
+    execution_id: int,
+    workflow_id: int,
+    user_id: int,
+    step_id: str,
+    service: str,
+    action: str,
+    params: Dict[str, Any],
+    grant_id: int,
+    decision: str,
+) -> int:
+    """Receipt for an autonomous run; consumes allow-once grants."""
+    from .grants import apply_grant_decision
+
+    return await sync_to_async(apply_grant_decision)(
+        execution_id=execution_id,
+        workflow_id=workflow_id,
+        user_id=user_id or None,
+        step_id=step_id,
+        service=service,
+        action=action,
+        params=params,
+        grant_id=grant_id,
+        decision=decision,
+    )
+
+
+@activity.defn
 async def preview_approval_effects(
     action: str,
     parameters: Dict[str, Any],
@@ -481,10 +537,46 @@ class DynamicUserWorkflow:
                 attempts = dict(self._state.get("attempts") or {})
                 attempts[step_id] = int(attempts.get(step_id) or 0) + 1
 
+                step_action = str(step.get("action") or "")
+                grant = None
                 if step_requires_approval(step):
+                    grant = await workflow.execute_activity(
+                        resolve_step_grant,
+                        args=[
+                            workflow_id,
+                            definition_version or 1,
+                            trigger_type,
+                            trigger_data.get("trigger_id"),
+                            capability_for_step(step),
+                            step_action,
+                            user_id or 0,
+                        ],
+                        schedule_to_close_timeout=timedelta(seconds=15),
+                    )
+                    if grant and grant.get("decision") == "deny":
+                        sanitized_step_params = sanitize_parameters(
+                            resolve_parameters(step.get("params") or {}, context)
+                        )
+                        await workflow.execute_activity(
+                            apply_grant_decision_activity,
+                            args=[
+                                execution_id,
+                                workflow_id,
+                                user_id or 0,
+                                step_id,
+                                str(step.get("service") or ""),
+                                step_action,
+                                sanitized_step_params,
+                                grant["grant_id"],
+                                "deny",
+                            ],
+                            schedule_to_close_timeout=timedelta(seconds=30),
+                        )
+                        raise ApplicationError(f"Step '{step_id}' was denied by a standing rule.")
+
+                if step_requires_approval(step) and (grant is None or "grant_id" not in grant):
                     timeout_minutes = get_approval_timeout_minutes(step)
                     approval_message = str(step.get("approval_message") or "").strip()
-                    step_action = str(step.get("action") or "")
                     sanitized_step_params = sanitize_parameters(
                         resolve_parameters(step.get("params") or {}, context)
                     )
@@ -608,6 +700,27 @@ class DynamicUserWorkflow:
                         waiting_on="",
                         attempts=attempts,
                         pending_approval_id=None,
+                    )
+                elif grant is not None:
+                    # Auto-approve under a standing grant: write the receipt,
+                    # consume allow-once grants, and run the step.
+                    sanitized_step_params = sanitize_parameters(
+                        resolve_parameters(step.get("params") or {}, context)
+                    )
+                    await workflow.execute_activity(
+                        apply_grant_decision_activity,
+                        args=[
+                            execution_id,
+                            workflow_id,
+                            user_id or 0,
+                            step_id,
+                            str(step.get("service") or ""),
+                            step_action,
+                            sanitized_step_params,
+                            grant["grant_id"],
+                            grant["decision"],
+                        ],
+                        schedule_to_close_timeout=timedelta(seconds=30),
                     )
 
                 on_error = str(step.get("on_error") or "stop").lower()

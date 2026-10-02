@@ -192,6 +192,11 @@ def _pause_workflow(workflow) -> None:
         trigger.save(update_fields=["is_active", "schedule_status", "updated_at"])
 
 
+def pause_workflow(workflow) -> None:
+    """Pause a workflow and its triggers. Never mutates the definition."""
+    _pause_workflow(workflow)
+
+
 def acknowledge_check_in(user, *, keep_running: bool = True):
     """Answer the *"keep routines running?"* prompt.
 

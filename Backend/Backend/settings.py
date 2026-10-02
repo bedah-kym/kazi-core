@@ -419,6 +419,9 @@ STANDING_GRANT_LIFETIME_DAYS = int(os.environ.get('STANDING_GRANT_LIFETIME_DAYS'
 APPROVAL_TELEMETRY_WINDOW_DAYS = int(os.environ.get('APPROVAL_TELEMETRY_WINDOW_DAYS', 1))
 APPROVAL_PROMOTE_THRESHOLD_RATE = float(os.environ.get('APPROVAL_PROMOTE_THRESHOLD_RATE', 0.95))
 APPROVAL_PROMOTE_THRESHOLD_COUNT = int(os.environ.get('APPROVAL_PROMOTE_THRESHOLD_COUNT', 50))
+WORKFLOW_HEALTH_WINDOW_HOURS = int(os.environ.get('WORKFLOW_HEALTH_WINDOW_HOURS', 24))
+WORKFLOW_HEALTH_FAILURE_SPIKE = int(os.environ.get('WORKFLOW_HEALTH_FAILURE_SPIKE', 3))
+WORKFLOW_HEALTH_DEGRADED_RATE = float(os.environ.get('WORKFLOW_HEALTH_DEGRADED_RATE', 0.3))
 
 CELERY_BEAT_SCHEDULE = {
     'nightly_ledger_reconciliation': {
@@ -476,6 +479,14 @@ CELERY_BEAT_SCHEDULE = {
     'roll-approval-telemetry': {
         'task': 'orchestration.tasks.roll_approval_telemetry',
         'schedule': crontab(hour=3, minute=15),  # Nightly: approve/reject metrics + rule candidates
+    },
+    'check-workflow-health': {
+        'task': 'workflows.tasks.check_workflow_health',
+        'schedule': crontab(minute=0),  # Hourly: failure spikes -> auto-pause
+    },
+    'send-workflow-health-digest': {
+        'task': 'workflows.tasks.send_workflow_health_digest',
+        'schedule': crontab(day_of_week=1, hour=8, minute=0),  # Weekly: healthy/degraded/paused
     },
 }
 

@@ -205,6 +205,22 @@ def sweep_expired_grants() -> Dict[str, int]:
 
 
 @shared_task(ignore_result=True)
+def check_workflow_health() -> Dict[str, int]:
+    """Failure-spike detection pauses workflows; recovery is manual (W-C, #157)."""
+    from .health import check_workflow_health as _check
+
+    return _check()
+
+
+@shared_task(ignore_result=True)
+def send_workflow_health_digest() -> Dict[str, int]:
+    """Weekly healthy/degraded/paused digest (W-C, #157)."""
+    from .health import send_workflow_health_digest as _send
+
+    return _send()
+
+
+@shared_task(ignore_result=True)
 def sweep_stuck_approvals(limit: int = None) -> Dict[str, int]:
     """
     Time out approvals stuck in ``pending`` past their expiry.

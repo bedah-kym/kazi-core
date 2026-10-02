@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from workflows.models import (
     UserWorkflow,
@@ -201,3 +201,55 @@ class ReviewerTests(TestCase):
         self.assertEqual(outcomes[0]["suggestion_id"], suggestion.id)
         self.assertEqual(outcomes[0]["metric"], "step_count")
         self.assertTrue(mock_record.called)
+
+    @patch("orchestration.connector_registry.discover_connectors")
+    def test_suggestion_without_recorded_inputs_is_dismissed(self, mock_discover):
+        connector = MagicMock()
+        connector.execute = AsyncMock(return_value={"status": "success"})
+        mock_discover.return_value = {"get_weather": connector}
+        WorkflowExecution.objects.filter(workflow=self.workflow).delete()
+
+        suggestions = async_to_sync(review_workflow)(
+            self.workflow, llm=_FakeLLM(self._suggestion_payload(_definition()))
+        )
+
+        suggestion = suggestions[0]
+        self.assertEqual(suggestion.status, "dismissed")
+        self.assertIn("no recorded inputs", suggestion.metadata["auto_rejected_reason"])
+
+    @patch("orchestration.connector_registry.discover_connectors")
+    def test_accept_rejects_a_stale_base_version(self, mock_discover):
+        from workflows.versioning import create_workflow_version
+
+        connector = MagicMock()
+        connector.execute = AsyncMock(return_value={"status": "success"})
+        mock_discover.return_value = {"get_weather": connector}
+        suggestions = async_to_sync(review_workflow)(
+            self.workflow, llm=_FakeLLM(self._suggestion_payload(_definition()))
+        )
+        suggestion = suggestions[0]
+        self.assertEqual(suggestion.metadata["base_version"], 1)
+
+        create_workflow_version(self.workflow, _definition(workflow_name="Review demo v2"))
+
+        with self.assertRaises(ValueError):
+            accept_suggestion(suggestion, by_user=self.user)
+
+    @override_settings(LLM_REVIEWER_MODEL="")
+    def test_reviewer_run_fails_closed_without_distinct_model(self):
+        from workflows.reviewer import run_workflow_reviewer
+
+        result = run_workflow_reviewer(workflow_id=self.workflow.id)
+
+        self.assertFalse(result["enabled"])
+        self.assertEqual(result["reason"], "reviewer_model_not_distinct")
+
+    @override_settings(LLM_REVIEWER_MODEL="a-different-model-name")
+    def test_reviewer_run_proceeds_with_distinct_model(self):
+        from workflows.reviewer import run_workflow_reviewer
+
+        with patch("workflows.reviewer.review_workflow", new=AsyncMock(return_value=[])):
+            result = run_workflow_reviewer(workflow_id=self.workflow.id)
+
+        self.assertTrue(result.get("enabled", True))
+        self.assertIn("reviewed", result)

@@ -57,6 +57,10 @@ def compute_workflow_health(workflow: UserWorkflow, window_hours: Optional[int] 
     now = timezone.now()
     window = int(window_hours or _window_hours())
     since = now - timedelta(hours=window)
+    # Failures from before the most recent reactivation must not re-pause a
+    # manually recovered workflow: the window starts no earlier than that.
+    if workflow.reactivated_at and workflow.reactivated_at > since:
+        since = workflow.reactivated_at
 
     executions = list(workflow.executions.filter(started_at__gte=since))
     total = len(executions)
@@ -152,6 +156,17 @@ def pause_workflow_after_spike(workflow: UserWorkflow, health: Dict[str, Any]) -
     )
 
 
+def reactivate_workflow(workflow: UserWorkflow) -> UserWorkflow:
+    """Manual recovery: mark active and reset the health window."""
+    workflow.status = "active"
+    workflow.reactivated_at = timezone.now()
+    workflow.save(update_fields=["status", "reactivated_at", "updated_at"])
+    for trigger in workflow.registered_triggers.filter(trigger_type="webhook"):
+        trigger.is_active = True
+        trigger.save(update_fields=["is_active", "updated_at"])
+    return workflow
+
+
 def check_workflow_health(window_hours: Optional[int] = None) -> Dict[str, int]:
     """Spike detection pauses failing workflows; recovery is always manual."""
     checked = 0
@@ -171,7 +186,7 @@ def check_workflow_health(window_hours: Optional[int] = None) -> Dict[str, int]:
 def build_health_digest(user_id: int) -> Dict[str, Any]:
     """Per-user weekly digest: healthy / degraded / paused routine states."""
     states = {STATE_HEALTHY: [], STATE_DEGRADED: [], STATE_PAUSED: []}
-    for workflow in UserWorkflow.objects.filter(user_id=user_id):
+    for workflow in UserWorkflow.objects.filter(user_id=user_id).exclude(status="deleted"):
         health = compute_workflow_health(workflow)
         states[health["state"]].append(health)
 

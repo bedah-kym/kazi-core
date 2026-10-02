@@ -142,6 +142,44 @@ class StandingGrantServiceTests(TestCase):
         self.assertEqual(grant.status, "lapsed")
         self.assertEqual(grant.lapse_reason, "out_of_scope_action")
 
+    def test_different_preexisting_step_does_not_lapse_grant(self):
+        definition = _definition()
+        definition["steps"].append({
+            "id": "weather_step",
+            "service": "weather",
+            "action": "get_weather",
+            "params": {"city": "Nairobi"},
+            "requires_approval": True,
+        })
+        workflow = UserWorkflow.objects.create(
+            user=self.user,
+            name="Multi-step",
+            description="Multi-step workflow.",
+            definition=definition,
+            status="active",
+        )
+        approval = WorkflowApprovalRecord.objects.create(
+            workflow=workflow,
+            execution=self.execution,
+            requested_by=self.user,
+            kind="workflow",
+            step_id="email_step",
+            service="gmail",
+            action="send_email",
+            status="pending",
+            metadata={"trigger_type": "manual"},
+        )
+        grant = create_grant_from_approval(approval, decision="always_allow")
+
+        decision = resolve_standing_grant(
+            workflow.id, workflow.definition_version, "manual", None,
+            "weather:get_weather", "get_weather", self.user.id,
+        )
+
+        self.assertIsNone(decision)
+        grant.refresh_from_db()
+        self.assertEqual(grant.status, "active")
+
     def test_new_version_lapses_grants(self):
         grant = create_grant_from_approval(self.approval, decision="always_allow")
         new_definition = _definition()

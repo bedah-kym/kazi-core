@@ -28,14 +28,14 @@ from .versioning import create_workflow_version
 
 logger = logging.getLogger(__name__)
 
-CITED_METRICS = {"duration", "step_count", "cost"}
+CITED_METRICS = {"duration", "step_count", "receipt_count"}
 _MAX_SUGGESTIONS = 5
 _SUMMARIES_LIMIT = 20
 
 REVIEWER_SYSTEM_PROMPT = (
     "You are a workflow reviewer. Read a workflow definition and recent run summaries, "
     "then propose concrete vN+1 changes. Each proposal must cite ONE metric it is expected "
-    "to move: duration, step_count, or cost. Never execute anything; never touch live "
+    "to move: duration, step_count, or receipt_count. Never execute anything; never touch live "
     "definitions. Return JSON only in the shape: "
     '{"suggestions": [{"title": "...", "summary": "...", "cited_metric": "duration", '
     '"proposed_changes": {"definition": {...full workflow definition...}}}]}. '
@@ -68,7 +68,7 @@ def _metric_value(workflow: UserWorkflow, metric: str, summaries: List[Dict[str,
             if run.completed_at
         ]
         return round(median(durations), 1) if durations else None
-    if metric == "cost":
+    if metric == "receipt_count":
         receipt_counts = [len(run.receipt_ids or []) for run in executions]
         return round(sum(receipt_counts) / len(receipt_counts), 2) if receipt_counts else None
     return None
@@ -133,6 +133,7 @@ def _create_suggestion(workflow, raw, summaries) -> Optional[WorkflowImprovement
     metadata: Dict[str, Any] = {
         "cited_metric": cited_metric,
         "metric_before": _metric_value(workflow, cited_metric, summaries),
+        "base_version": workflow.definition_version,
         "shadow": {"replays": 0},
         "auto_rejected_reason": "",
     }
@@ -155,6 +156,9 @@ def _create_suggestion(workflow, raw, summaries) -> Optional[WorkflowImprovement
             if not replay["passed"]:
                 status = "dismissed"
                 metadata["auto_rejected_reason"] = "shadow replay regressed a previously succeeding step"
+            elif not replay["replays"]:
+                status = "dismissed"
+                metadata["auto_rejected_reason"] = "no recorded inputs to shadow-replay the proposal against"
 
     suggestion = WorkflowImprovementSuggestion.objects.create(
         workflow=workflow,
@@ -185,6 +189,9 @@ def _create_suggestion(workflow, raw, summaries) -> Optional[WorkflowImprovement
 def accept_suggestion(suggestion: WorkflowImprovementSuggestion, *, by_user=None):
     """Human accept: create vN+1 through the versioned write path."""
     workflow = suggestion.workflow
+    base_version = (suggestion.metadata or {}).get("base_version")
+    if base_version is not None and base_version != workflow.definition_version:
+        raise ValueError("The workflow changed since this suggestion was reviewed.")
     proposed = proposed_definition_from_changes(workflow.definition or {}, suggestion.proposed_changes)
     if proposed is None:
         raise ValueError("The proposed changes cannot be resolved to a definition.")
@@ -239,6 +246,29 @@ def report_suggestion_outcomes(workflow: UserWorkflow) -> List[Dict[str, Any]]:
     return outcomes
 
 
+def reviewer_model_distinct() -> bool:
+    """The reviewer model must differ from the model that drafts/author runs.
+
+    Returns False when ``LLM_REVIEWER_MODEL`` is unset or resolves to one of
+    the authoring models; the scheduled reviewer then fails closed.
+    """
+    configured = getattr(settings, "LLM_REVIEWER_MODEL", None)
+    if not configured:
+        return False
+    try:
+        from orchestration.llm_client import get_llm_client
+
+        client = get_llm_client()
+    except Exception:
+        return True
+    author_models = {
+        getattr(client, "claude_model", None),
+        getattr(client, "deepseek_model", None),
+        getattr(client, "hf_model", None),
+    }
+    return configured not in author_models
+
+
 def run_workflow_reviewer(workflow_id: Optional[int] = None) -> Dict[str, int]:
     """Scheduled reviewer sweep: outcomes first, then fresh suggestions."""
     from asgiref.sync import async_to_sync
@@ -246,6 +276,12 @@ def run_workflow_reviewer(workflow_id: Optional[int] = None) -> Dict[str, int]:
 
     if not bool(getattr(settings, "WORKFLOW_REVIEWER_ENABLED", True)):
         return {"enabled": False}
+    if not reviewer_model_distinct():
+        logger.warning(
+            "Reviewer skipped: LLM_REVIEWER_MODEL is not set to a model "
+            "distinct from the authoring model."
+        )
+        return {"enabled": False, "reason": "reviewer_model_not_distinct"}
 
     reviewed = 0
     suggested = 0

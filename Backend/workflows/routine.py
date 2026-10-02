@@ -177,7 +177,8 @@ def _pause_workflow(workflow) -> None:
     from .temporal_integration import pause_trigger_schedule
 
     workflow.status = "paused"
-    workflow.save(update_fields=["status", "updated_at"])
+    workflow.reactivated_at = None
+    workflow.save(update_fields=["status", "reactivated_at", "updated_at"])
     for trigger in workflow.registered_triggers.all():
         if trigger.trigger_type == "schedule":
             try:

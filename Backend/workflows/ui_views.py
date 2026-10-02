@@ -26,6 +26,7 @@ from .models import (
 )
 from .routine import routine_history_limit, routine_run_history
 from .grants import active_grants_for_user, create_grant_from_approval
+from .health import reactivate_workflow
 from .reviewer import accept_suggestion, dismiss_suggestion
 from .temporal_integration import (
     build_replay_request,
@@ -376,6 +377,23 @@ def toggle_trigger_ui(request, trigger_id: int):
 
 
 @login_required
+def reactivate_workflow_ui(request, workflow_id: int):
+    workflow = _own_workflow(request, workflow_id)
+    if workflow.status != "paused":
+        messages.error(request, "Only paused workflows can be reactivated.")
+        return redirect("workflows:workflows_list")
+
+    reactivate_workflow(workflow)
+    for trigger in workflow.registered_triggers.filter(trigger_type="schedule"):
+        try:
+            async_to_sync(resume_trigger_schedule)(trigger)
+        except Exception:
+            pass
+    messages.success(request, f"Reactivated '{workflow.name}'. Its health window restarts now.")
+    return redirect("workflows:workflows_list")
+
+
+@login_required
 def accept_suggestion_ui(request, suggestion_id: int):
     suggestion = get_object_or_404(
         WorkflowImprovementSuggestion,
@@ -417,6 +435,7 @@ __all__ = [
     "operations_inbox",
     "reject_execution_ui",
     "rerun_execution_ui",
+    "reactivate_workflow_ui",
     "run_workflow_ui",
     "toggle_trigger_ui",
     "workflow_executions",

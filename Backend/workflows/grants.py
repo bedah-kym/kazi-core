@@ -139,9 +139,25 @@ def resolve_standing_grant(
         if not _trigger_matches(grant, trigger_type, trigger_id):
             continue
         if capability and capability not in set(grant.capability_scope or []):
-            lapse_grant(grant, LAPSE_OUT_OF_SCOPE)
+            # Only lapse when the capability is genuinely new relative to the
+            # version the grant was approved under. A different pre-existing
+            # approval step is simply not covered by this grant, not out of
+            # scope.
+            if capability not in _manifest_for_grant_version(grant):
+                lapse_grant(grant, LAPSE_OUT_OF_SCOPE)
 
     return None
+
+
+def _manifest_for_grant_version(grant: StandingGrant) -> set:
+    from .models import WorkflowVersion
+
+    version = WorkflowVersion.objects.filter(
+        workflow_id=grant.workflow_id, version=grant.workflow_version
+    ).first()
+    if version is None:
+        return set()
+    return set(version.capabilities or [])
 
 
 def _step_for_approval(workflow: UserWorkflow, approval: WorkflowApprovalRecord) -> Optional[Dict[str, Any]]:

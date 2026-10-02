@@ -108,6 +108,9 @@ class UserWorkflow(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     last_executed_at = models.DateTimeField(null=True, blank=True)
+    # Set when a paused workflow is manually reactivated; health windows start
+    # no earlier than this so pre-recovery failures never re-pause the routine.
+    reactivated_at = models.DateTimeField(null=True, blank=True)
     execution_count = models.IntegerField(default=0)
 
     created_from_room = models.ForeignKey('chatbot.Chatroom', on_delete=models.SET_NULL, null=True, blank=True)

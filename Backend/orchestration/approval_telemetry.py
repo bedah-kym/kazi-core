@@ -18,10 +18,12 @@ logger = logging.getLogger(__name__)
 
 METRICS_CACHE_KEY = "approval_telemetry:metrics:{user_id}"
 CANDIDATES_CACHE_KEY = "approval_telemetry:candidates:{user_id}"
+_USERS_REGISTRY_KEY = "approval_telemetry:users"
 _CACHE_TTL_SECONDS = 48 * 3600
 
-_EXPIRE_STATUSES = {"timed_out", "cancelled"}
+_EXPIRE_STATUSES = {"timed_out"}
 _DECIDED_STATUSES = {"approved", "rejected"}
+_COUNTED_STATUSES = _DECIDED_STATUSES | _EXPIRE_STATUSES | {"cancelled"}
 
 
 def _window_days() -> int:
@@ -66,7 +68,7 @@ def compute_approval_metrics(records: Iterable[Dict[str, Any]]) -> List[Dict[str
         if not isinstance(record, dict):
             continue
         status = str(record.get("status") or "")
-        if status not in _DECIDED_STATUSES and status not in _EXPIRE_STATUSES:
+        if status not in _COUNTED_STATUSES:
             continue
         key = (
             str(record.get("service") or ""),
@@ -82,14 +84,19 @@ def compute_approval_metrics(records: Iterable[Dict[str, Any]]) -> List[Dict[str
             "approved": 0,
             "rejected": 0,
             "expired": 0,
+            "cancelled": 0,
             "latencies": [],
         })
         if status == "approved":
             group["approved"] += 1
         elif status == "rejected":
             group["rejected"] += 1
-        else:
+        elif status == "timed_out":
             group["expired"] += 1
+        elif status == "cancelled":
+            group["cancelled"] += 1
+        else:
+            continue
 
         created = record.get("created_at")
         reviewed = record.get("reviewed_at")
@@ -110,7 +117,8 @@ def compute_approval_metrics(records: Iterable[Dict[str, Any]]) -> List[Dict[str
             "approved": group["approved"],
             "rejected": group["rejected"],
             "expired": group["expired"],
-            "total": decided + group["expired"],
+            "cancelled": group["cancelled"],
+            "total": decided + group["expired"] + group["cancelled"],
             "approval_rate": round(group["approved"] / decided, 4) if decided else 0.0,
             "median_latency_seconds": round(median(group["latencies"]), 1) if group["latencies"] else None,
         })
@@ -128,7 +136,12 @@ def _rule_for_record(metadata: Any) -> str:
 
 
 def rollup_approval_telemetry(window_days: Optional[int] = None, now=None) -> Dict[str, Any]:
-    """Aggregate approval rows into per-user cached metrics + rule candidates."""
+    """Aggregate approval rows into per-user cached metrics + rule candidates.
+
+    Decisions are bucketed by resolution time, so a request created before the
+    window but decided inside it is still counted. Users absent from the
+    current window have their cached metrics and candidates cleared.
+    """
     from django.core.cache import cache
 
     from workflows.models import WorkflowApprovalRecord
@@ -138,7 +151,7 @@ def rollup_approval_telemetry(window_days: Optional[int] = None, now=None) -> Di
     since = now - timezone.timedelta(days=window)
 
     rows = (
-        WorkflowApprovalRecord.objects.filter(created_at__gte=since)
+        WorkflowApprovalRecord.objects.filter(reviewed_at__gte=since)
         .exclude(status="pending")
         .values(
             "requested_by_id", "service", "action", "status",
@@ -157,6 +170,13 @@ def rollup_approval_telemetry(window_days: Optional[int] = None, now=None) -> Di
             "reviewed_at": row["reviewed_at"],
         })
 
+    previous_users = set(cache.get(_USERS_REGISTRY_KEY) or [])
+    current_users = set(by_user.keys())
+    for user_id in previous_users - current_users:
+        cache.delete(METRICS_CACHE_KEY.format(user_id=user_id))
+        cache.delete(CANDIDATES_CACHE_KEY.format(user_id=user_id))
+    cache.set(_USERS_REGISTRY_KEY, sorted(current_users), _CACHE_TTL_SECONDS)
+
     threshold_rate = _promote_rate()
     threshold_count = _promote_count()
     users = 0
@@ -171,13 +191,13 @@ def rollup_approval_telemetry(window_days: Optional[int] = None, now=None) -> Di
                 "service": metric["service"],
                 "risk_level": metric["risk_level"],
                 "rule": metric["rule"],
-                "approval_rate": metric["approval_rate"],
-                "total_decided": metric["approved"] + metric["rejected"],
+                "approval_rate": round(metric["approved"] / metric["total"], 4) if metric["total"] else 0.0,
+                "total": metric["total"],
             }
             for metric in metrics
             if metric["rule"] == "none"
-            and metric["approved"] + metric["rejected"] >= threshold_count
-            and metric["approval_rate"] >= threshold_rate
+            and metric["total"] >= threshold_count
+            and metric["approved"] / metric["total"] >= threshold_rate
         ]
         cache.set(CANDIDATES_CACHE_KEY.format(user_id=user_id), user_candidates, _CACHE_TTL_SECONDS)
         users += 1
@@ -226,6 +246,6 @@ def approval_digest_lines(user_id: Optional[int]) -> List[str]:
     for candidate in user_rule_candidates(user_id)[:3]:
         lines.append(
             f"- Consider a standing rule for {candidate['service']}.{candidate['action']}: "
-            f"{int(candidate['approval_rate'] * 100)}% approved over {candidate['total_decided']} requests."
+            f"{int(candidate['approval_rate'] * 100)}% approved over {candidate['total']} requests."
         )
     return lines

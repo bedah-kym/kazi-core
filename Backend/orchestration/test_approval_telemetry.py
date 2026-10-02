@@ -31,6 +31,7 @@ class ApprovalMetricsUnitTests(SimpleTestCase):
              "created_at": now - timedelta(minutes=30), "reviewed_at": now - timedelta(minutes=20)},
             {"service": "gmail", "action": "send_email", "status": "rejected", "risk_level": "high"},
             {"service": "gmail", "action": "send_email", "status": "timed_out", "risk_level": "high"},
+            {"service": "gmail", "action": "send_email", "status": "cancelled", "risk_level": "high"},
         ]
         metrics = compute_approval_metrics(records)
 
@@ -39,6 +40,7 @@ class ApprovalMetricsUnitTests(SimpleTestCase):
         self.assertEqual(metric["approved"], 3)
         self.assertEqual(metric["rejected"], 1)
         self.assertEqual(metric["expired"], 1)
+        self.assertEqual(metric["cancelled"], 1)
         self.assertEqual(metric["approval_rate"], 0.75)
         self.assertEqual(metric["median_latency_seconds"], 360.0)
 
@@ -51,7 +53,7 @@ class ApprovalMetricsUnitTests(SimpleTestCase):
         ])
         allowed = {
             "service", "action", "risk_level", "rule", "approved", "rejected",
-            "expired", "total", "approval_rate", "median_latency_seconds",
+            "expired", "cancelled", "total", "approval_rate", "median_latency_seconds",
         }
         for metric in metrics:
             self.assertEqual(set(metric.keys()), allowed)
@@ -113,3 +115,31 @@ class ApprovalTelemetryRollupTests(TestCase):
 
         self.assertTrue(any("standing rule" in line for line in lines))
         self.assertTrue(any("send_email" in line for line in lines))
+
+    def test_decisions_bucketed_by_resolution_time(self):
+        self._create_approvals(3)
+        WorkflowApprovalRecord.objects.filter(requested_by=self.user).update(
+            created_at=timezone.now() - timedelta(days=2),
+        )
+        result = rollup_approval_telemetry(window_days=1)
+
+        self.assertEqual(result["rows"], 3)
+        self.assertTrue(user_metrics(self.user.id))
+
+    def test_timeouts_do_not_inflate_candidates(self):
+        self._create_approvals(50, status="approved")
+        self._create_approvals(60, status="timed_out")
+        rollup_approval_telemetry()
+
+        self.assertEqual(user_rule_candidates(self.user.id), [])
+
+    def test_absent_user_cache_is_cleared(self):
+        self._create_approvals(5)
+        rollup_approval_telemetry()
+        self.assertTrue(user_metrics(self.user.id))
+
+        WorkflowApprovalRecord.objects.filter(requested_by=self.user).delete()
+        rollup_approval_telemetry()
+
+        self.assertEqual(user_metrics(self.user.id), [])
+        self.assertEqual(user_rule_candidates(self.user.id), [])

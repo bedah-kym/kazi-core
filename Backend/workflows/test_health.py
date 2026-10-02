@@ -105,6 +105,23 @@ class WorkflowHealthTests(TestCase):
         self.workflow.refresh_from_db()
         self.assertEqual(self.workflow.status, "paused")
 
+    def test_reactivation_restarts_the_health_window(self):
+        from workflows.health import reactivate_workflow
+
+        for minute in (5, 10, 15):
+            self._execution("failed", minute)
+        check_workflow_health()
+        self.workflow.refresh_from_db()
+        self.assertEqual(self.workflow.status, "paused")
+
+        reactivate_workflow(self.workflow)
+        result = check_workflow_health()
+
+        self.assertEqual(result["paused"], 0)
+        self.workflow.refresh_from_db()
+        self.assertEqual(self.workflow.status, "active")
+        self.assertIsNotNone(self.workflow.reactivated_at)
+
     def test_health_digest_lists_states(self):
         self._execution("failed", 5)
         self._execution("failed", 10)

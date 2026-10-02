@@ -141,10 +141,12 @@ def _notify_health(user, event_type: str, title: str, body: str) -> None:
 
 
 def pause_workflow_after_spike(workflow: UserWorkflow, health: Dict[str, Any]) -> None:
-    """Pause only — never mutate the definition."""
+    """Pause only — never mutate the definition. A spike also lapses grants."""
+    from .grants import lapse_grants_for_workflow
     from .routine import pause_workflow
 
     pause_workflow(workflow)
+    lapse_grants_for_workflow(workflow, "failure_spike")
     _notify_health(
         workflow.user,
         "workflow.health",
@@ -152,6 +154,7 @@ def pause_workflow_after_spike(workflow: UserWorkflow, health: Dict[str, Any]) -
         (
             f"{health['failed']} failures in the last {_window_hours()}h. Failing runs:\n"
             + "\n".join(f"- {summary}" for summary in _failing_summaries(workflow))
+            + "\nStanding grants for this routine have lapsed and will ask again."
         ),
     )
 

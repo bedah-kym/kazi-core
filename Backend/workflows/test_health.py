@@ -122,6 +122,57 @@ class WorkflowHealthTests(TestCase):
         self.assertEqual(self.workflow.status, "active")
         self.assertIsNotNone(self.workflow.reactivated_at)
 
+    def test_failure_spike_lapses_standing_grants(self):
+        from workflows.grants import create_grant_from_approval, resolve_standing_grant
+        from workflows.models import WorkflowApprovalRecord
+        from workflows.versioning import create_workflow_version
+
+        create_workflow_version(self.workflow, {
+            "workflow_name": "Health watch",
+            "workflow_description": "Health watch workflow.",
+            "triggers": [{"trigger_type": "manual"}],
+            "steps": [{
+                "id": "step_1",
+                "service": "gmail",
+                "action": "send_email",
+                "params": {"to": "example@example.com", "subject": "Hi", "text": "Hello"},
+                "requires_approval": True,
+            }],
+        })
+        self.workflow.refresh_from_db()
+        approval = WorkflowApprovalRecord.objects.create(
+            workflow=self.workflow,
+            execution=WorkflowExecution.objects.create(
+                workflow=self.workflow,
+                temporal_workflow_id="wf-grant-spike",
+                trigger_type="manual",
+                trigger_data={},
+                status="waiting",
+            ),
+            requested_by=self.user,
+            kind="workflow",
+            step_id="step_1",
+            service="gmail",
+            action="send_email",
+            status="pending",
+            metadata={"trigger_type": "manual"},
+        )
+        grant = create_grant_from_approval(approval, decision="always_allow")
+        self.assertEqual(grant.status, "active")
+
+        for minute in (5, 10, 15):
+            self._execution("failed", minute)
+        check_workflow_health()
+
+        grant.refresh_from_db()
+        self.assertEqual(grant.status, "lapsed")
+        self.assertEqual(grant.lapse_reason, "failure_spike")
+        decision = resolve_standing_grant(
+            self.workflow.id, self.workflow.definition_version, "manual", None,
+            "gmail:send_email", "send_email", self.user.id,
+        )
+        self.assertIsNone(decision)
+
     def test_health_digest_lists_states(self):
         self._execution("failed", 5)
         self._execution("failed", 10)

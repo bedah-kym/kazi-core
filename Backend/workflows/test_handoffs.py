@@ -9,7 +9,6 @@ from django.test import TestCase
 
 from orchestration.personas import confirm_persona, create_persona
 from workflows.handoffs import create_handoff, run_handoff
-from workflows.models import Handoff, Persona
 
 User = get_user_model()
 

@@ -26,6 +26,7 @@ from .models import (
 )
 from .routine import routine_history_limit, routine_run_history
 from .grants import active_grants_for_user, create_grant_from_approval
+from .reviewer import accept_suggestion, dismiss_suggestion
 from .temporal_integration import (
     build_replay_request,
     fetch_execution_runtime_state,
@@ -374,9 +375,44 @@ def toggle_trigger_ui(request, trigger_id: int):
     return redirect("workflows:workflows_list")
 
 
+@login_required
+def accept_suggestion_ui(request, suggestion_id: int):
+    suggestion = get_object_or_404(
+        WorkflowImprovementSuggestion,
+        id=suggestion_id,
+        user=request.user,
+        status="proposed",
+    )
+    try:
+        version = accept_suggestion(suggestion, by_user=request.user)
+    except ValueError as exc:
+        messages.error(request, f"Could not apply the suggestion: {exc}")
+        return redirect("workflows:operations_inbox")
+    messages.success(
+        request,
+        f"Applied '{suggestion.title}': '{suggestion.workflow.name}' is now v{version.version}.",
+    )
+    return redirect("workflows:operations_inbox")
+
+
+@login_required
+def dismiss_suggestion_ui(request, suggestion_id: int):
+    suggestion = get_object_or_404(
+        WorkflowImprovementSuggestion,
+        id=suggestion_id,
+        user=request.user,
+        status="proposed",
+    )
+    dismiss_suggestion(suggestion)
+    messages.info(request, f"Dismissed '{suggestion.title}'.")
+    return redirect("workflows:operations_inbox")
+
+
 __all__ = [
+    "accept_suggestion_ui",
     "approve_execution_ui",
     "cancel_execution_ui",
+    "dismiss_suggestion_ui",
     "execution_detail",
     "operations_inbox",
     "reject_execution_ui",

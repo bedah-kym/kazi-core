@@ -422,6 +422,9 @@ APPROVAL_PROMOTE_THRESHOLD_COUNT = int(os.environ.get('APPROVAL_PROMOTE_THRESHOL
 WORKFLOW_HEALTH_WINDOW_HOURS = int(os.environ.get('WORKFLOW_HEALTH_WINDOW_HOURS', 24))
 WORKFLOW_HEALTH_FAILURE_SPIKE = int(os.environ.get('WORKFLOW_HEALTH_FAILURE_SPIKE', 3))
 WORKFLOW_HEALTH_DEGRADED_RATE = float(os.environ.get('WORKFLOW_HEALTH_DEGRADED_RATE', 0.3))
+SHADOW_REPLAY_WINDOW = int(os.environ.get('SHADOW_REPLAY_WINDOW', 10))
+WORKFLOW_REVIEWER_WINDOW_DAYS = int(os.environ.get('WORKFLOW_REVIEWER_WINDOW_DAYS', 30))
+WORKFLOW_REVIEWER_ENABLED = os.environ.get('WORKFLOW_REVIEWER_ENABLED', 'true').lower() in ('1', 'true', 'yes')
 
 CELERY_BEAT_SCHEDULE = {
     'nightly_ledger_reconciliation': {
@@ -487,6 +490,10 @@ CELERY_BEAT_SCHEDULE = {
     'send-workflow-health-digest': {
         'task': 'workflows.tasks.send_workflow_health_digest',
         'schedule': crontab(day_of_week=1, hour=8, minute=0),  # Weekly: healthy/degraded/paused
+    },
+    'run-workflow-reviewer': {
+        'task': 'workflows.tasks.run_workflow_reviewer',
+        'schedule': crontab(day_of_week=1, hour=2, minute=0),  # Weekly: metric-citing suggestions
     },
 }
 

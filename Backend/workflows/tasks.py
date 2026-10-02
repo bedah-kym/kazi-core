@@ -221,6 +221,14 @@ def send_workflow_health_digest() -> Dict[str, int]:
 
 
 @shared_task(ignore_result=True)
+def run_workflow_reviewer(workflow_id: int = None) -> Dict[str, int]:
+    """Weekly reviewer sweep: metric outcomes + shadow-gated suggestions (#158/#169)."""
+    from .reviewer import run_workflow_reviewer as _run
+
+    return _run(workflow_id=workflow_id)
+
+
+@shared_task(ignore_result=True)
 def sweep_stuck_approvals(limit: int = None) -> Dict[str, int]:
     """
     Time out approvals stuck in ``pending`` past their expiry.

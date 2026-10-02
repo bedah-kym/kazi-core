@@ -17,4 +17,6 @@ urlpatterns = [
     path("executions/<int:execution_id>/cancel/", ui_views.cancel_execution_ui, name="cancel_execution"),
     path("executions/<int:execution_id>/rerun/", ui_views.rerun_execution_ui, name="rerun_execution"),
     path("triggers/<int:trigger_id>/toggle/", ui_views.toggle_trigger_ui, name="toggle_trigger"),
+    path("suggestions/<int:suggestion_id>/accept/", ui_views.accept_suggestion_ui, name="accept_suggestion"),
+    path("suggestions/<int:suggestion_id>/dismiss/", ui_views.dismiss_suggestion_ui, name="dismiss_suggestion"),
 ]

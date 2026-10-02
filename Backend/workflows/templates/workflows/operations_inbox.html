@@ -200,8 +200,19 @@
             {% for suggestion in suggestions %}
             <div class="exec-row">
                 <div class="exec-main">
-                    <div class="exec-title">{{ suggestion.title }}</div>
+                    <div class="exec-title">
+                        {{ suggestion.title }}
+                        {% if suggestion.capability_delta.widening %}
+                        <span class="app-pill app-pill-warning">Widens capabilities</span>
+                        {% endif %}
+                    </div>
                     <div class="exec-failure">{{ suggestion.summary|truncatechars:220 }}</div>
+                    {% if suggestion.metadata.shadow %}
+                    <div class="app-meta" style="margin-top: 4px;">
+                        Shadow replay: {{ suggestion.metadata.shadow.replays }} replay{{ suggestion.metadata.shadow.replays|pluralize }}
+                        {% if suggestion.metadata.cited_metric %} &middot; cites {{ suggestion.metadata.cited_metric }}{% endif %}
+                    </div>
+                    {% endif %}
                     {% if suggestion.proposed_changes %}
                     <details class="approval-params">
                         <summary>Proposed changes</summary>
@@ -210,9 +221,18 @@
                     {% endif %}
                 </div>
                 <div class="exec-actions">
-                    <a class="app-btn app-btn-outline app-btn-sm" href="{% url 'workflows:workflow_executions' suggestion.workflow_id %}">
-                        <i class="fas fa-arrow-right"></i> View workflow
-                    </a>
+                    <form method="post" action="{% url 'workflows:accept_suggestion' suggestion.id %}" style="display: inline;">
+                        {% csrf_token %}
+                        <button class="app-btn app-btn-primary app-btn-sm" type="submit">
+                            <i class="fas fa-check"></i> Apply
+                        </button>
+                    </form>
+                    <form method="post" action="{% url 'workflows:dismiss_suggestion' suggestion.id %}" style="display: inline;">
+                        {% csrf_token %}
+                        <button class="app-btn app-btn-outline app-btn-sm" type="submit">
+                            Dismiss
+                        </button>
+                    </form>
                 </div>
             </div>
             {% endfor %}

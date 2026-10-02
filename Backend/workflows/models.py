@@ -527,6 +527,8 @@ class WorkflowImprovementSuggestion(models.Model):
     summary = models.TextField()
     proposed_changes = models.JSONField(default=dict, blank=True)
     capability_delta = models.JSONField(default=dict, blank=True)
+    # Reviewer bookkeeping: shadow-replay result, cited metric before/after.
+    metadata = models.JSONField(default=dict, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='proposed')
     created_at = models.DateTimeField(auto_now_add=True)
 

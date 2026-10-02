@@ -18,7 +18,7 @@ from orchestration.personas import (
     persona_bounds,
     resolve_room_persona,
 )
-from workflows.models import Persona, WorkflowDraft
+from workflows.models import WorkflowDraft
 
 User = get_user_model()
 

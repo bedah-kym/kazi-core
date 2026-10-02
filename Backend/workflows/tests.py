@@ -446,6 +446,7 @@ class WorkflowApiTests(TestCase):
             DeferredWorkflowExecution.objects.filter(workflow=self.workflow).count(), 0
         )
 
+    @override_settings(TEMPORAL_DISABLED=True)
     def test_run_endpoint_releases_reservation_when_queue_fails(self):
         payload = {"trigger_data": {"stress_run": 21}}
         with patch.object(
@@ -480,8 +481,33 @@ class WorkflowApiTests(TestCase):
                 format="json",
             )
         self.assertEqual(response.status_code, 200)
-        expected = f"workflow-{self.workflow.id}-{views._run_digest(self.workflow, payload['trigger_data'])}"
-        self.assertEqual(mock_start.await_args.kwargs["workflow_run_id"], expected)
+        expected_prefix = f"workflow-{self.workflow.id}-{views._run_digest(self.workflow, payload['trigger_data'])}-"
+        self.assertTrue(mock_start.await_args.kwargs["workflow_run_id"].startswith(expected_prefix))
+
+    def test_rerun_after_dedupe_window_gets_a_fresh_run_id(self):
+        from workflows import views
+
+        payload = {"trigger_data": {"road_test_rerun": 99}}
+        execution = MagicMock(id=7)
+        cache.clear()
+        self.addCleanup(cache.clear)
+        with patch(
+            "workflows.views.start_workflow_execution",
+            new=AsyncMock(return_value=execution),
+        ) as mock_start:
+            first = self.client.post(
+                f"/api/workflows/{self.workflow.id}/run/", payload, format="json",
+            )
+            first_id = mock_start.await_args.kwargs["workflow_run_id"]
+            cache.delete(views._run_dedupe_key(self.workflow, payload["trigger_data"]))
+            second = self.client.post(
+                f"/api/workflows/{self.workflow.id}/run/", payload, format="json",
+            )
+            second_id = mock_start.await_args.kwargs["workflow_run_id"]
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertNotEqual(first_id, second_id)
 
     def test_approve_endpoint_signals_temporal_execution(self):
         execution = WorkflowExecution.objects.create(

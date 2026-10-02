@@ -425,6 +425,8 @@ WORKFLOW_HEALTH_DEGRADED_RATE = float(os.environ.get('WORKFLOW_HEALTH_DEGRADED_R
 SHADOW_REPLAY_WINDOW = int(os.environ.get('SHADOW_REPLAY_WINDOW', 10))
 WORKFLOW_REVIEWER_WINDOW_DAYS = int(os.environ.get('WORKFLOW_REVIEWER_WINDOW_DAYS', 30))
 WORKFLOW_REVIEWER_ENABLED = os.environ.get('WORKFLOW_REVIEWER_ENABLED', 'true').lower() in ('1', 'true', 'yes')
+HANDOFF_DEFAULT_BUDGET = int(os.environ.get('HANDOFF_DEFAULT_BUDGET', 20))
+HANDOFF_MAX_BUDGET = int(os.environ.get('HANDOFF_MAX_BUDGET', 50))
 
 CELERY_BEAT_SCHEDULE = {
     'nightly_ledger_reconciliation': {

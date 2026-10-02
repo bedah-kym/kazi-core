@@ -350,6 +350,14 @@ async def draft_workflow_from_candidate(
 
     from asgiref.sync import sync_to_async
 
+    owner_persona = None
+    if candidate.get("room_id"):
+        from orchestration.personas import resolve_room_persona
+
+        owner_persona = await sync_to_async(resolve_room_persona)(
+            candidate.get("room_id"), user_id
+        )
+
     draft = await sync_to_async(WorkflowDraft.objects.create)(
         user_id=user_id,
         room_id=candidate.get("room_id"),
@@ -358,6 +366,7 @@ async def draft_workflow_from_candidate(
         source=source,
         skill_name=slugify_skill_name(name),
         skill_contract=contract,
+        owner_persona=owner_persona,
     )
     logger.info("Staged skill %s (%s) as draft %s", draft.skill_name, skill_md, draft.id)
     return draft

@@ -32,6 +32,15 @@ class WorkflowDraft(models.Model):
     source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default='chat')
     skill_name = models.CharField(max_length=100, blank=True)
     skill_contract = models.JSONField(default=dict, blank=True)
+    # v0.7 personas (#203): the persona that owns this draft, when the room
+    # resolves to one. Nullable — no persona means today's behavior.
+    owner_persona = models.ForeignKey(
+        'Persona',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='owned_drafts',
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -371,6 +380,107 @@ class DeferredWorkflowExecution(models.Model):
 
     def __str__(self):
         return f"Deferred {self.id} ({self.status})"
+
+
+class Persona(models.Model):
+    """A named specialist with deterministic bounds (v0.7 W-G, issue #203).
+
+    Draft until a human confirms, like workflows. Scope and ceiling are
+    enforced in the tool path — never by prompt. A persona can never exceed
+    its human's access: there is no machine identity.
+    """
+
+    STATUS_CHOICES = [
+        ('draft', 'Draft'),
+        ('active', 'Active'),
+        ('archived', 'Archived'),
+    ]
+    RISK_CEILING_CHOICES = [
+        ('low', 'Low'),
+        ('medium', 'Medium'),
+        ('high', 'High'),
+    ]
+
+    name = models.CharField(max_length=100)
+    description = models.TextField(blank=True)
+    tool_scope = models.JSONField(default=list, blank=True)
+    risk_ceiling = models.CharField(max_length=20, choices=RISK_CEILING_CHOICES, default='medium')
+    approval_boundary = models.JSONField(default=list, blank=True)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='personas')
+    room = models.OneToOneField(
+        'chatbot.Chatroom',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='persona',
+    )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
+    created_from = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='duplicates',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(fields=['user', 'name'], name='uniq_persona_user_name'),
+        ]
+
+    def __str__(self):
+        return f"{self.name} ({self.status})"
+
+
+class Handoff(models.Model):
+    """An internal, visible specialist handoff (v0.7 W-G2, issue #137).
+
+    One owner per stage: the requesting side supplies task, context refs,
+    working scope and budget; the specialist returns a result with artifacts
+    and receipts. Handoffs are never hidden from the human.
+    """
+
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('in_progress', 'In Progress'),
+        ('completed', 'Completed'),
+        ('failed', 'Failed'),
+    ]
+
+    from_persona = models.ForeignKey(
+        Persona,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='sent_handoffs',
+    )
+    to_persona = models.ForeignKey(
+        Persona,
+        on_delete=models.CASCADE,
+        related_name='received_handoffs',
+    )
+    requested_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='requested_handoffs')
+    room_id = models.IntegerField(null=True, blank=True)
+    task = models.JSONField(default=dict, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    result = models.JSONField(default=dict, blank=True)
+    artifacts = models.JSONField(default=list, blank=True)
+    receipts = models.JSONField(default=list, blank=True)
+    outcome = models.CharField(max_length=20, blank=True)
+    budget_used = models.IntegerField(default=0)
+    stopped_reason = models.CharField(max_length=50, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Handoff {self.id} -> {self.to_persona.name}"
 
 
 class WorkflowApprovalRecord(models.Model):

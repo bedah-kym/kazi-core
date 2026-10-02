@@ -64,6 +64,10 @@ async def _save_draft(user_id: int, room_id: Optional[int], definition: Dict[str
             draft = WorkflowDraft(user_id=user_id, room_id=room_id)
         draft.definition = definition
         draft.status = 'awaiting_confirmation'
+        if room_id:
+            from orchestration.personas import resolve_room_persona
+
+            draft.owner_persona = resolve_room_persona(room_id, user_id)
         draft.save()
         return draft
     return await sync_to_async(_save)()

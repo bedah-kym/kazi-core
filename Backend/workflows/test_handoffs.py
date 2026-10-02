@@ -114,3 +114,45 @@ class HandoffTests(TestCase):
         self.assertEqual(completed.outcome, "failed")
         self.assertIn("sub-agent down", completed.result["error"])
         self.assertEqual(len(completed.receipts), 1)
+
+    def test_omitted_scope_defaults_to_persona_scope(self):
+        handoff = create_handoff(
+            to_persona_name="Research bot", requested_by=self.user, task="research",
+        )
+        self.assertEqual(handoff.task["working_scope"], ["get_weather", "search_info"])
+
+    def test_persona_without_scope_cannot_receive_handoffs(self):
+        persona = confirm_persona(create_persona(
+            self.user, name="Scopeless bot", tool_scope=[],
+        ))
+        self.assertIsNotNone(persona)
+        with self.assertRaises(ValueError):
+            create_handoff(to_persona_name="Scopeless bot", requested_by=self.user, task="x")
+
+    def test_executor_error_result_fails_not_completes(self):
+        handoff = create_handoff(
+            to_persona_name="Research bot", requested_by=self.user,
+            task="boom", working_scope=["get_weather"],
+        )
+        executor = AsyncMock(return_value={"status": "error", "message": "LLM down"})
+        completed = async_to_sync(run_handoff)(handoff.id, executor=executor)
+
+        self.assertEqual(completed.status, "failed")
+        self.assertIn("LLM down", completed.result["error"])
+
+    def test_concurrent_run_does_not_rerun(self):
+        handoff = create_handoff(
+            to_persona_name="Research bot", requested_by=self.user,
+            task="once", working_scope=["get_weather"],
+        )
+        executor = AsyncMock(return_value={
+            "status": "success", "summary": "done", "tools_used": ["get_weather"],
+        })
+        async_to_sync(run_handoff)(handoff.id, executor=executor)
+
+        second = AsyncMock(side_effect=AssertionError("must not run twice"))
+        result = async_to_sync(run_handoff)(handoff.id, executor=second)
+
+        self.assertEqual(result.status, "completed")
+        executor.assert_awaited_once()
+        second.assert_not_awaited()

@@ -57,9 +57,11 @@ def create_handoff(
     if persona is None:
         raise ValueError(f"No active persona named '{to_persona_name}' owned by you.")
 
-    scope = sorted({str(item).strip() for item in (working_scope or []) if item})
     persona_scope = {str(item).strip().lower() for item in (persona.tool_scope or []) if item}
-    if scope and persona_scope and not set(item.lower() for item in scope) <= persona_scope:
+    if not persona_scope:
+        raise ValueError("The persona has no tool scope to hand off.")
+    scope = sorted({str(item).strip().lower() for item in (working_scope or []) if item}) or sorted(persona_scope)
+    if not set(scope) <= persona_scope:
         raise ValueError("Working scope exceeds the persona's tool scope.")
 
     configured_budget = int(budget or _default_budget())
@@ -120,15 +122,17 @@ async def run_handoff(
     """
     from asgiref.sync import sync_to_async
 
+    def _claim() -> bool:
+        updated = Handoff.objects.filter(id=handoff_id, status="pending").update(status="in_progress")
+        return updated == 1
+
+    claimed = await sync_to_async(_claim)()
+    if not claimed:
+        # Already running or finished: concurrent callers and retries must
+        # never re-run the sub-agent.
+        return await sync_to_async(Handoff.objects.select_related("to_persona").get)(id=handoff_id)
+
     handoff = await sync_to_async(Handoff.objects.select_related("to_persona").get)(id=handoff_id)
-    if handoff.status in ("completed", "failed"):
-        return handoff
-
-    def _mark_in_progress():
-        handoff.status = "in_progress"
-        handoff.save(update_fields=["status", "updated_at"])
-
-    await sync_to_async(_mark_in_progress)()
 
     task = handoff.task or {}
     scope = {str(item).strip().lower() for item in (task.get("working_scope") or []) if item}
@@ -136,6 +140,7 @@ async def run_handoff(
     tool_input = {
         "task": task.get("task") or "",
         "tools": ",".join(sorted(scope)),
+        "max_tool_calls": budget,
     }
 
     if executor is None:
@@ -153,6 +158,12 @@ async def run_handoff(
         return handoff
 
     result = result if isinstance(result, dict) else {"status": "error", "summary": str(result)}
+    if result.get("status") != "success":
+        await sync_to_async(_fail_handoff)(
+            handoff, str(result.get("message") or result.get("summary") or "executor_error"),
+        )
+        return handoff
+
     tools_used = [str(tool).strip().lower() for tool in (result.get("tools_used") or []) if tool]
     stopped_reason = str(result.get("stopped_reason") or "")
 

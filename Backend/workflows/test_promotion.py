@@ -213,6 +213,28 @@ class PromotionDraftTests(TestCase):
                 )
             self.assertEqual(WorkflowDraft.objects.count(), 0)
 
+    def test_statistical_draft_stamps_owner_persona(self):
+        from chatbot.models import Chatroom
+        from orchestration.personas import confirm_persona, create_persona
+
+        room = Chatroom.objects.create()
+        persona = confirm_persona(create_persona(
+            self.user, name="Ops bot", tool_scope=["get_weather"], room=room,
+        ))
+        with tempfile.TemporaryDirectory() as tmp:
+            draft = async_to_sync(draft_workflow_from_candidate)(
+                {
+                    "user_id": self.user.id,
+                    "room_id": room.id,
+                    "tool_sequence": ["get_weather"],
+                    "occurrences": 1,
+                },
+                llm=_FakeLLM(VALID_DEFINITION),
+                skills_root_override=Path(tmp),
+            )
+
+        self.assertEqual(draft.owner_persona_id, persona.id)
+
     def test_mine_task_queues_candidates(self):
         events = [_event(self.user.id, 5, ["search_info", "send_email"])] * 3
         with patch("workflows.promotion.read_telemetry_events", return_value=events):

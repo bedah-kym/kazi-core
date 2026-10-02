@@ -354,7 +354,9 @@ async def draft_workflow_from_candidate(
     if candidate.get("room_id"):
         from orchestration.personas import resolve_room_persona
 
-        owner_persona = resolve_room_persona(candidate.get("room_id"), user_id)
+        owner_persona = await sync_to_async(resolve_room_persona)(
+            candidate.get("room_id"), user_id
+        )
 
     draft = await sync_to_async(WorkflowDraft.objects.create)(
         user_id=user_id,

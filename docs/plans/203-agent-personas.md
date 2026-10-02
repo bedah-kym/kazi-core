@@ -42,7 +42,7 @@ failed persona lookup means "no persona = today's behavior".
 
 ## Verification (executable)
 
-- `python Backend/manage.py test orchestration.test_personas workflows.test_personas`
+- `python Backend/manage.py test orchestration.test_personas`
 - Full suite + flake8 + bandit + boundaries in the PR.
 - Failure paths covered: out-of-scope denied; above-ceiling pauses; another
   user's persona is invisible; inactive persona = no persona; duplication

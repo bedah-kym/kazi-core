@@ -120,7 +120,9 @@ def apply_persona_bounds(
     if action in boundary:
         risk_info["requires_confirmation"] = True
 
-    action_rank = RISK_RANK.get(str(risk_info.get("risk_level") or "low"), 0)
+    level = str(risk_info.get("risk_level") or "low").strip().lower()
+    # Unknown risk levels fail closed: they rank as high, never as low.
+    action_rank = RISK_RANK.get(level, RISK_RANK["high"])
     if action_rank > int(bounds.get("ceiling_rank", 1)):
         risk_info["requires_confirmation"] = True
         risk_info["risk_level"] = "high"

@@ -54,6 +54,16 @@ class PersonaBoundsUnitTests(SimpleTestCase):
         self.assertTrue(risk["requires_confirmation"])
         self.assertEqual(risk["risk_level"], "high")
 
+    def test_unknown_risk_level_fails_closed(self):
+        persona = MagicMock(tool_scope=["mystery"], approval_boundary=[], risk_ceiling="medium")
+        risk, _ = apply_persona_bounds(
+            {"requires_confirmation": False, "risk_level": "extreme"},
+            persona_bounds(persona),
+            "mystery",
+        )
+        self.assertTrue(risk["requires_confirmation"])
+        self.assertEqual(risk["risk_level"], "high")
+
 
 class PersonaBucketTests(SimpleTestCase):
     def test_out_of_scope_call_is_denied_in_bucket(self):

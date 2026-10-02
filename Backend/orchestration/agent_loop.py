@@ -862,6 +862,7 @@ async def _execute_scoped_tool_calls(
     context: Dict[str, Any],
     preferences: Optional[Dict[str, Any]],
     sub_tool_log: List[Dict[str, Any]],
+    tool_call_cap: Optional[int] = None,
 ) -> Tuple[List[Dict[str, Any]], bool]:
     """Execute one response's tool_use batch under the sub-agent cap.
 
@@ -871,7 +872,7 @@ async def _execute_scoped_tool_calls(
     """
     result_blocks = []
     caps_enforced = context.get("caps_enforced", True)
-    effective_cap = SUB_AGENT_MAX_TOOL_CALLS if caps_enforced else HARD_CAP_TOOL_CALLS
+    effective_cap = tool_call_cap or (SUB_AGENT_MAX_TOOL_CALLS if caps_enforced else HARD_CAP_TOOL_CALLS)
     for tc in tool_calls:
         if len(sub_tool_log) >= effective_cap:
             return result_blocks, True
@@ -944,7 +945,11 @@ async def _run_sub_agent(
 
     caps_enforced = context.get("caps_enforced", True)
     max_iterations = SUB_AGENT_MAX_ITERATIONS if caps_enforced else HARD_CAP_ITERATIONS
-    tool_call_cap = SUB_AGENT_MAX_TOOL_CALLS if caps_enforced else HARD_CAP_TOOL_CALLS
+    try:
+        requested_cap = int(tool_input.get("max_tool_calls") or 0)
+    except (TypeError, ValueError):
+        requested_cap = 0
+    tool_call_cap = requested_cap or (SUB_AGENT_MAX_TOOL_CALLS if caps_enforced else HARD_CAP_TOOL_CALLS)
 
     while iteration < max_iterations:
         if len(sub_tool_log) >= tool_call_cap:
@@ -987,6 +992,7 @@ async def _run_sub_agent(
             tool_calls = _extract_tool_calls(content_blocks)
             result_blocks, capped = await _execute_scoped_tool_calls(
                 tool_calls, context, preferences, sub_tool_log,
+                tool_call_cap=tool_call_cap,
             )
             sub_messages.append({"role": "user", "content": result_blocks})
             if capped:

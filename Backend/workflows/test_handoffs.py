@@ -156,3 +156,35 @@ class HandoffTests(TestCase):
         self.assertEqual(result.status, "completed")
         executor.assert_awaited_once()
         second.assert_not_awaited()
+
+    def test_archived_persona_fails_at_execution_time(self):
+        from orchestration.personas import archive_persona
+
+        handoff = create_handoff(
+            to_persona_name="Research bot", requested_by=self.user,
+            task="late", working_scope=["get_weather"],
+        )
+        archive_persona(self.persona)
+
+        result = async_to_sync(run_handoff)(handoff.id, executor=AsyncMock())
+
+        self.assertEqual(result.status, "failed")
+        self.assertIn("inactive", result.result["error"])
+
+    def test_completion_publishes_room_note(self):
+        from chatbot.models import Chatroom, RoomNote
+
+        room = Chatroom.objects.create()
+        handoff = create_handoff(
+            to_persona_name="Research bot", requested_by=self.user,
+            task="visible work", working_scope=["get_weather"], room_id=room.id,
+        )
+        executor = AsyncMock(return_value={
+            "status": "success", "summary": "All visible.", "tools_used": ["get_weather"],
+        })
+        async_to_sync(run_handoff)(handoff.id, executor=executor)
+
+        note = RoomNote.objects.filter(note_type="handoff").first()
+        self.assertIsNotNone(note)
+        self.assertIn("Handoff #", note.content)
+        self.assertIn("All visible.", note.content)

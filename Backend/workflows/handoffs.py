@@ -133,6 +133,16 @@ async def run_handoff(
         return await sync_to_async(Handoff.objects.select_related("to_persona").get)(id=handoff_id)
 
     handoff = await sync_to_async(Handoff.objects.select_related("to_persona").get)(id=handoff_id)
+    if (
+        handoff.to_persona.status != "active"
+        or handoff.to_persona.user_id != handoff.requested_by_id
+    ):
+        # Re-verified at execution time, not just creation: a handoff can
+        # never run under an archived or foreign persona.
+        await sync_to_async(_fail_handoff)(
+            handoff, "Target persona is inactive or not owned by the requester.",
+        )
+        return handoff
 
     task = handoff.task or {}
     scope = {str(item).strip().lower() for item in (task.get("working_scope") or []) if item}
@@ -187,6 +197,28 @@ async def run_handoff(
     return handoff
 
 
+def _publish_room_note(handoff: Handoff, text: str) -> None:
+    """Make the handoff visible in the originating conversation."""
+    if not handoff.room_id:
+        return
+    try:
+        from chatbot.context_manager import ContextManager
+        from chatbot.models import Chatroom
+
+        room = Chatroom.objects.filter(id=handoff.room_id).first()
+        if room is None:
+            return
+        ContextManager.add_note(
+            room,
+            "handoff",
+            text,
+            created_by=handoff.requested_by,
+            priority="medium",
+        )
+    except Exception as exc:
+        logger.warning("Handoff room note failed: %s", exc)
+
+
 def _complete_handoff(handoff: Handoff, result: Dict[str, Any], tools_used: List[str], outcome: str, reason: str) -> None:
     handoff.status = "completed" if outcome in ("completed", "partial") else "failed"
     handoff.outcome = outcome
@@ -203,6 +235,12 @@ def _complete_handoff(handoff: Handoff, result: Dict[str, Any], tools_used: List
         "status", "outcome", "result", "artifacts", "budget_used",
         "stopped_reason", "completed_at", "updated_at",
     ])
+    _publish_room_note(
+        handoff,
+        f"Handoff #{handoff.id} to '{handoff.to_persona.name}' {outcome}"
+        + (f" ({reason})" if reason else "")
+        + f": {handoff.result['summary'][:300]}",
+    )
 
 
 def _fail_handoff(handoff: Handoff, error: str) -> None:
@@ -216,3 +254,7 @@ def _fail_handoff(handoff: Handoff, error: str) -> None:
     ])
     _record_receipt(handoff, "failed", tools_used=[], reason=error)
     handoff.save(update_fields=["receipts", "updated_at"])
+    _publish_room_note(
+        handoff,
+        f"Handoff #{handoff.id} to '{handoff.to_persona.name}' failed: {error[:300]}",
+    )

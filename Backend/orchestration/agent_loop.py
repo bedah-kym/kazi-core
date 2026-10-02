@@ -93,6 +93,10 @@ class LoopState:
     pending_tool: Optional[Dict[str, Any]] = None
     pending_tier: Optional[str] = None
     budget_warning_sent: bool = False
+    # v0.7 (#170): set once output from an untrusted source (shell, web
+    # search) enters context. Tainted runs escalate external-write and
+    # credential-scoped actions to a durable approval one tier up.
+    tainted: bool = False
 
 
 # --------------------------------------------------------------------------- #
@@ -115,6 +119,7 @@ def save_loop_state(room_id: int, user_id: int, state: LoopState) -> None:
         "pending_tool": state.pending_tool,
         "pending_tier": state.pending_tier,
         "budget_warning_sent": state.budget_warning_sent,
+        "tainted": state.tainted,
     }
     cache.set(
         _state_key(room_id, user_id),
@@ -142,6 +147,7 @@ def load_loop_state(room_id: int, user_id: int) -> Optional[LoopState]:
         pending_tool=data.get("pending_tool"),
         pending_tier=data.get("pending_tier"),
         budget_warning_sent=data.get("budget_warning_sent", False),
+        tainted=bool(data.get("tainted", False)),
     )
     return state
 
@@ -150,24 +156,70 @@ def clear_loop_state(room_id: int, user_id: int) -> None:
     cache.delete(_state_key(room_id, user_id))
 
 
+_UNTRUSTED_TOOL_NAMES = {"run_command", "run_shell", "shell_command", "web_search"}
+
+
+def _untrusted_source(tool_name: str) -> bool:
+    """Output from these tools is untrusted text that taints the run (#170)."""
+    return str(tool_name or "").strip().lower() in _UNTRUSTED_TOOL_NAMES
+
+
+def _taint_gated(action: str) -> bool:
+    """External-write / credential-scoped actions that a tainted run escalates."""
+    from orchestration.action_catalog import is_high_risk_action, resolve_action_alias
+    from orchestration.action_receipts import requires_confirmation
+
+    resolved = resolve_action_alias(action)
+    return requires_confirmation(resolved) or is_high_risk_action(resolved)
+
+
+async def _resolve_persona(room_id: Optional[int], user_id: Optional[int]):
+    """The active room persona for the requesting user, or None (fail closed)."""
+    if not room_id or not user_id:
+        return None
+    try:
+        from orchestration.personas import resolve_room_persona
+
+        return await sync_to_async(resolve_room_persona)(room_id, user_id)
+    except Exception:
+        return None
+
+
 def _bucket_tool_calls(
     tool_calls: List[Dict[str, Any]],
     preferences: Optional[Dict[str, Any]],
-) -> Tuple[List[Dict[str, Any]], List[Tuple[Dict[str, Any], Optional[str]]], List[Dict[str, Any]]]:
+    persona=None,
+    tainted: bool = False,
+) -> Tuple[List[Dict[str, Any]], List[Tuple[Dict[str, Any], Optional[str]]], List[Tuple[Dict[str, Any], str]]]:
     """Split tool calls into ``(auto, pause, denied)`` for the loop.
 
     ``pause`` carries each call's shell tier (``None`` for non-shell tools) so
     the loop can route ``bounded`` -> inline and ``destructive`` -> durable.
-    Shell calls outside the profile envelope (``denied``) are refused, never run.
+    ``denied`` carries a human-readable refusal reason. A persona narrows the
+    scope deterministically (#203); a tainted run escalates external-write
+    and credential-scoped actions so no stored rule can bypass them (#170).
     """
     auto: List[Dict[str, Any]] = []
     pause: List[Tuple[Dict[str, Any], Optional[str]]] = []
-    denied: List[Dict[str, Any]] = []
+    denied: List[Tuple[Dict[str, Any], str]] = []
     for tc in tool_calls:
         risk = get_tool_risk_info(tc["name"], preferences, tc.get("input"))
+        if persona is not None:
+            from orchestration.action_catalog import resolve_action_alias
+            from orchestration.personas import apply_persona_bounds, persona_bounds
+
+            risk, denial_reason = apply_persona_bounds(
+                risk, persona_bounds(persona), resolve_action_alias(tc["name"]),
+            )
+            if denial_reason:
+                denied.append((tc, denial_reason))
+                continue
         tier = risk.get("shell_tier")
         if tier == "denied":
-            denied.append(tc)
+            denied.append((tc, "Refused: this command is not allowed under the active shell profile."))
+        elif tainted and _taint_gated(tc["name"]):
+            # One tier up: a tainted run never lets a stored rule skip the ask.
+            pause.append((tc, tier))
         elif risk.get("requires_confirmation"):
             pause.append((tc, tier))
         else:
@@ -1143,6 +1195,8 @@ async def run_agent_loop(
             "output": result,
             "iteration": state.iteration,
         })
+        if _untrusted_source(pending["name"]):
+            state.tainted = True
 
         yield AgentEvent("tool_result", {
             "name": pending["name"],
@@ -1284,6 +1338,7 @@ async def run_agent_loop(
                 "searches": search_count,
                 "remaining": get_remaining_searches(user_id),
             })
+            state.tainted = True
 
         # Append the assistant message to the conversation
         state.messages.append({"role": "assistant", "content": content_blocks})
@@ -1312,7 +1367,11 @@ async def run_agent_loop(
             tool_calls = _extract_tool_calls(content_blocks)
 
             # Separate into auto-execute, needs-confirmation, and refused.
-            safe_calls, pause_calls, denied_calls = _bucket_tool_calls(tool_calls, preferences)
+            safe_calls, pause_calls, denied_calls = _bucket_tool_calls(
+                tool_calls, preferences,
+                persona=await _resolve_persona(room_id, user_id),
+                tainted=state.tainted,
+            )
 
             # ---- Execute safe calls (possibly in parallel) ----------- #
             tool_results: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
@@ -1391,6 +1450,8 @@ async def run_agent_loop(
                         "output": result,
                         "iteration": state.iteration,
                     })
+                    if _untrusted_source(tc["name"]):
+                        state.tainted = True
                     yield AgentEvent("tool_start", {"name": tc["name"], "input": tc["input"]})
                     yield AgentEvent("tool_result", {"name": tc["name"], "result": result})
 
@@ -1413,12 +1474,12 @@ async def run_agent_loop(
                     "content": _sanitize_tool_result(json.dumps(result, default=str)),
                 })
 
-            # Refused shell calls (outside the profile envelope) never run.
-            for tc in denied_calls:
+            # Refused calls (shell envelope or persona scope) never run.
+            for tc, reason in denied_calls:
                 tool_result_blocks.append({
                     "type": "tool_result",
                     "tool_use_id": tc["id"],
-                    "content": "Refused: this command is not allowed under the active shell profile.",
+                    "content": reason,
                     "is_error": True,
                 })
 

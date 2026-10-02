@@ -9,6 +9,7 @@ from rest_framework.response import Response
 import hashlib
 import json
 import logging
+import uuid
 from typing import Optional
 
 from orchestration.security_policy import sanitize_parameters, user_has_room_access
@@ -57,8 +58,15 @@ def _reserve_run(workflow: UserWorkflow, trigger_data: dict) -> Optional[str]:
     Returns the reserved run id, None when the window already holds a
     reservation, and raises on cache failure so the caller can fail
     closed instead of silently dropping dedupe protection.
+
+    The suffix is random: once the dedupe window expires, a deliberate
+    re-run of the same definition+trigger must start a fresh workflow id
+    rather than collide with the completed one (AlreadyStarted).
     """
-    run_id = f"workflow-{workflow.id}-{_run_digest(workflow, trigger_data)}"
+    run_id = (
+        f"workflow-{workflow.id}-{_run_digest(workflow, trigger_data)}"
+        f"-{uuid.uuid4().hex[:8]}"
+    )
     reserved = cache.add(
         _run_dedupe_key(workflow, trigger_data),
         run_id,

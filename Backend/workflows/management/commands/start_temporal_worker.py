@@ -14,6 +14,8 @@ from workflows.temporal_integration import (
     run_step_activity,
     create_execution_record,
     update_execution_record,
+    resolve_step_grant,
+    apply_grant_decision_activity,
 )
 
 
@@ -38,6 +40,8 @@ class Command(BaseCommand):
                 resolve_approval_record,
                 notify_workflow_event,
                 create_improvement_suggestions,
+                resolve_step_grant,
+                apply_grant_decision_activity,
             ],
             workflow_runner=UnsandboxedWorkflowRunner(),
         )

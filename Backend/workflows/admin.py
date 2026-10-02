@@ -2,12 +2,21 @@ from django.contrib import admin
 from django.utils.html import format_html
 from import_export import resources
 from import_export.admin import ImportExportModelAdmin
+from orchestration.personas import archive_persona, confirm_persona
+from .grants import revoke_grant
 from .models import (
+    Handoff,
+    Persona,
+    RoutineCheckIn,
+    StandingGrant,
     WorkflowApprovalRecord,
+    WorkflowCandidate,
     WorkflowDraft,
     WorkflowExecution,
     WorkflowImprovementSuggestion,
+    WorkflowTestRun,
     WorkflowTrigger,
+    WorkflowVersion,
     UserWorkflow,
 )
 
@@ -285,3 +294,103 @@ class WorkflowImprovementSuggestionAdmin(admin.ModelAdmin):
     search_fields = ['workflow__name', 'title', 'summary']
     readonly_fields = ['created_at']
     autocomplete_fields = ['workflow', 'execution', 'user']
+
+
+@admin.register(Persona)
+class PersonaAdmin(admin.ModelAdmin):
+    list_display = ['name', 'user', 'status_badge', 'risk_ceiling', 'room', 'created_at']
+    list_filter = ['status', 'risk_ceiling', 'created_at']
+    search_fields = ['name', 'user__username', 'description']
+    readonly_fields = ['created_at', 'updated_at']
+    autocomplete_fields = ['user', 'room', 'created_from']
+    actions = ['activate_personas', 'archive_personas']
+
+    @admin.action(description="Activate selected personas (human promotion)")
+    def activate_personas(self, request, queryset):
+        for persona in queryset:
+            confirm_persona(persona)
+        self.message_user(request, f"Activated {queryset.count()} persona(s).")
+
+    @admin.action(description="Archive selected personas")
+    def archive_personas(self, request, queryset):
+        for persona in queryset:
+            archive_persona(persona)
+        self.message_user(request, f"Archived {queryset.count()} persona(s).")
+
+    def status_badge(self, obj):
+        colors = {'draft': '#95a5a6', 'active': '#27ae60', 'archived': '#e74c3c'}
+        return format_html(
+            '<span style="background-color: {}; color: white; padding: 3px 8px; border-radius: 3px;">{}</span>',
+            colors.get(obj.status, '#3498db'),
+            obj.get_status_display(),
+        )
+    status_badge.short_description = 'Status'
+
+
+@admin.register(Handoff)
+class HandoffAdmin(admin.ModelAdmin):
+    list_display = ['id', 'to_persona', 'requested_by', 'status', 'outcome', 'budget_used', 'created_at']
+    list_filter = ['status', 'outcome', 'created_at']
+    search_fields = ['to_persona__name', 'requested_by__username']
+    readonly_fields = [
+        'result', 'artifacts', 'receipts', 'budget_used', 'stopped_reason',
+        'created_at', 'updated_at', 'completed_at',
+    ]
+    autocomplete_fields = ['from_persona', 'to_persona', 'requested_by']
+
+
+@admin.register(StandingGrant)
+class StandingGrantAdmin(admin.ModelAdmin):
+    list_display = ['id', 'workflow', 'user', 'decision', 'status', 'workflow_version', 'lapse_reason', 'expires_at']
+    list_filter = ['decision', 'status', 'created_at']
+    search_fields = ['workflow__name', 'user__username', 'lapse_reason']
+    readonly_fields = ['created_at', 'updated_at', 'lapsed_at']
+    autocomplete_fields = ['workflow', 'user', 'approval_record']
+    actions = ['revoke_grants']
+
+    @admin.action(description="Revoke selected grants")
+    def revoke_grants(self, request, queryset):
+        for grant in queryset:
+            revoke_grant(grant)
+        self.message_user(request, f"Revoked {queryset.count()} grant(s).")
+
+
+@admin.register(WorkflowVersion)
+class WorkflowVersionAdmin(admin.ModelAdmin):
+    list_display = ['workflow', 'version', 'change_summary', 'created_by', 'created_at']
+    list_filter = ['created_at']
+    search_fields = ['workflow__name', 'change_summary']
+    readonly_fields = ['workflow', 'version', 'definition', 'capabilities', 'change_summary', 'created_by', 'created_at']
+
+
+@admin.register(WorkflowTestRun)
+class WorkflowTestRunAdmin(admin.ModelAdmin):
+    list_display = ['workflow', 'definition_version', 'status', 'approval_stop_point', 'created_at']
+    list_filter = ['status', 'created_at']
+    search_fields = ['workflow__name', 'summary']
+    readonly_fields = [
+        'workflow', 'definition_version', 'status', 'inputs', 'output_preview',
+        'audit_trail', 'approval_stop_point', 'failure_states', 'summary',
+        'created_at', 'completed_at',
+    ]
+
+
+@admin.register(RoutineCheckIn)
+class RoutineCheckInAdmin(admin.ModelAdmin):
+    list_display = ['user', 'status', 'prompted_at', 'answered_at']
+    list_filter = ['status']
+    search_fields = ['user__username']
+    readonly_fields = ['status', 'prompted_at', 'answered_at', 'paused_workflow_ids', 'created_at']
+
+
+@admin.register(WorkflowCandidate)
+class WorkflowCandidateAdmin(admin.ModelAdmin):
+    list_display = ['user', 'tool_sequence_display', 'occurrences', 'success_rate', 'status', 'created_at']
+    list_filter = ['status', 'created_at']
+    search_fields = ['user__username']
+    readonly_fields = ['pattern', 'pattern_key', 'occurrences', 'success_rate', 'created_at', 'updated_at']
+    autocomplete_fields = ['user', 'draft']
+
+    def tool_sequence_display(self, obj):
+        return ', '.join(obj.pattern.get('tool_sequence') or [])
+    tool_sequence_display.short_description = 'Tool sequence'

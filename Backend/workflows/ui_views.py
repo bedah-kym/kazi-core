@@ -14,10 +14,10 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.http import HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
+from django.views.decorators.http import require_POST
 
 from orchestration.security_policy import sanitize_parameters, user_has_room_access
 from orchestration.shell import autopilot as shell_autopilot
-from orchestration.shell import grants as shell_grants
 from orchestration.shell.profiles import resolve_profile as resolve_shell_profile
 
 from .models import (
@@ -126,80 +126,67 @@ def operations_inbox(request):
 
 
 def _shell_rooms_for(user):
-    """Assemble the shell-autonomy panel rows for one user (ops UI)."""
-    grants_by_room = shell_grants.all_grants_for_user(user.id)
+    """Rooms where the autopilot window applies: the user's unsandboxed rooms."""
+    from chatbot.models import Chatroom
+
+    from orchestration.user_preferences import get_user_preferences
+
     auto_by_room = shell_autopilot.all_for_user(user.id)
+    preferences = get_user_preferences(user.id)
+    room_ids = (
+        Chatroom.objects.filter(participants__User_id=user.id).order_by("id").values_list("id", flat=True)[:50]
+    )
     rooms = []
-    for room_key in sorted(set(grants_by_room) | set(auto_by_room)):
-        active = [
-            {
-                "fingerprint": fp,
-                "command": entry.get("command") or fp,
-                "expires_at": entry.get("expires_at"),
-            }
-            for fp, entry in sorted((grants_by_room.get(room_key) or {}).items())
-            if shell_grants.entry_is_active(entry)
-        ]
-        auto = auto_by_room.get(room_key)
+    for room_id in room_ids:
+        profile = resolve_shell_profile(room_id, preferences)
+        auto = auto_by_room.get(str(room_id))
         armed = shell_autopilot.entry_is_armed(auto)
-        if not active and not armed:
+        if profile.backend != "local" and not armed:
             continue
-        room_id = int(room_key) if str(room_key).isdigit() else None
         rooms.append({
             "room_id": room_id,
-            "room_label": f"Room #{room_id}" if room_id is not None else "Unscoped room",
-            "profile": resolve_shell_profile(room_id).name if room_id is not None else "standard",
+            "room_label": f"Room #{room_id}",
+            "profile": profile.name,
             "autopilot_armed": armed,
             "autopilot_expires_at": (auto or {}).get("expires_at") if armed else None,
-            "grants": active,
         })
     return rooms
 
 
 def _post_room_id(request):
     raw = str(request.POST.get("room_id") or "").strip()
-    return int(raw) if raw.isdigit() else None
+    return int(raw) if raw.isdigit() and len(raw) <= 12 else None
 
 
 @login_required
+@require_POST
 def shell_autopilot_arm(request):
     room_id = _post_room_id(request)
     if room_id is None:
         messages.error(request, "A valid room is required to arm autopilot.")
         return redirect("workflows:operations_inbox")
     raw_minutes = str(request.POST.get("minutes") or "").strip()
-    minutes = int(raw_minutes) if raw_minutes.isdigit() else None
+    minutes = int(raw_minutes) if raw_minutes.isdigit() and len(raw_minutes) <= 6 else None
+    # arm() checks membership and the room profile, caps the window, and
+    # refuses unless the receipt is written.
     if shell_autopilot.arm(request.user.id, room_id, minutes=minutes, armed_by=request.user.id):
         messages.success(request, f"Autopilot armed for room #{room_id}.")
     else:
-        messages.error(request, "Could not arm autopilot for that room.")
+        messages.error(request, "Autopilot is only available in your rooms on the unsandboxed shell profile.")
     return redirect("workflows:operations_inbox")
 
 
 @login_required
+@require_POST
 def shell_autopilot_disarm(request):
     room_id = _post_room_id(request)
     if room_id is None:
         messages.error(request, "A valid room is required.")
         return redirect("workflows:operations_inbox")
-    if shell_autopilot.disarm(request.user.id, room_id):
+    if shell_autopilot.disarm(request.user.id, room_id, reason="ops_ui"):
         messages.success(request, f"Autopilot disarmed for room #{room_id}.")
     else:
         messages.info(request, "Autopilot was not armed for that room.")
-    return redirect("workflows:operations_inbox")
-
-
-@login_required
-def shell_grant_revoke(request):
-    room_id = _post_room_id(request)
-    fingerprint = (request.POST.get("fingerprint") or "").strip()
-    if room_id is None or not fingerprint:
-        messages.error(request, "A valid grant is required.")
-        return redirect("workflows:operations_inbox")
-    if shell_grants.revoke_fingerprint(request.user.id, room_id, fingerprint):
-        messages.success(request, "Command grant revoked.")
-    else:
-        messages.info(request, "That grant was already gone.")
     return redirect("workflows:operations_inbox")
 
 

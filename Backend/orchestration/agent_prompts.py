@@ -217,17 +217,8 @@ def build_confirmation_prompt(
         param_lines.append(f"  - **{key}**: {value}")
     params_text = "\n".join(param_lines) if param_lines else "  (no parameters)"
 
-    hint = ""
-    if str(tool_name or "").strip().lower() in {"run_command", "run_shell", "shell_command"}:
-        hint = (
-            "\n\nTip: reply **always allow** to auto-run this exact command in this "
-            "room, or **autopilot** to auto-run safe and bounded (local) commands "
-            "until the window expires. Destructive, denied, and unallowlisted "
-            "network commands still ask."
-        )
-
     return (
         f"I'd like to **{readable}** with the following details:\n"
         f"{params_text}\n\n"
-        f"Should I go ahead? (yes / no){hint}"
+        f"Should I go ahead? (yes / no)"
     )

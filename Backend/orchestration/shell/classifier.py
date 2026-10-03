@@ -30,8 +30,8 @@ _ROOT_PATTERNS = (
 
 # Short, honest blocklist. A miss is intentional: the sandbox still bounds it.
 _DESTRUCTIVE_PATTERNS = (
-    re.compile(r"\brm\s+-[a-z]*r[a-z]*f\b"),
-    re.compile(r"\brm\s+-[a-z]*f[a-z]*r\b"),
+    re.compile(r"\brm\s+-[a-z]*r[a-z]*f\b", re.IGNORECASE),
+    re.compile(r"\brm\s+-[a-z]*f[a-z]*r\b", re.IGNORECASE),
     re.compile(r"\bdd\b.*\bof="),
     re.compile(r"\bmkfs(\.\w+)?\b"),
     re.compile(r"\bmkswap\b"),
@@ -44,6 +44,25 @@ _DESTRUCTIVE_PATTERNS = (
     re.compile(r">\s*/dev/(sd|nvme|hd)"),
     re.compile(r"\bchmod\s+-R\s+777\s+/"),
     re.compile(r"\bmv\s+/\*"),
+    # PowerShell cmdlets with unambiguous names, wherever they appear.
+    re.compile(r"\bremove-item\b[^|;&\n]*\s-(?:r|fo)\w*", re.IGNORECASE),
+    re.compile(r"\b(?:clear-disk|format-volume|remove-partition)\b", re.IGNORECASE),
+)
+
+# Windows hosts (the `open` profile runs cmd/PowerShell with no sandbox). These
+# verbs are short words, so they only count as the command of a segment —
+# never inside a flag or path (`docker run --rm`, `git rm -r`, `grep rm -r`).
+_WINDOWS_SEGMENT_PATTERNS = (
+    re.compile(r"^(?:rmdir|rd)\b.*?/s\b", re.IGNORECASE),
+    re.compile(r"^(?:del|erase)\b.*?/s\b", re.IGNORECASE),
+    re.compile(r"^(?:del|erase)\b(?=.*/q\b).*[*?]", re.IGNORECASE),
+    re.compile(r"^format(?:\.com)?\s+[a-z]:", re.IGNORECASE),
+    re.compile(r"^(?:ri|rm|del|erase|rd|rmdir)\b.*\s-rec\w*", re.IGNORECASE),
+    re.compile(r"^diskpart\b", re.IGNORECASE),
+    re.compile(r"^cipher\s+/w", re.IGNORECASE),
+)
+_POWERSHELL_PREFIX = re.compile(
+    r"^(?:powershell|pwsh)(?:\.exe)?\s+(?:-\w+\s+)*?-(?:command|c)\s+[\"']?", re.IGNORECASE,
 )
 
 _NETWORK_BINARIES = {
@@ -113,7 +132,13 @@ def needs_network(command: str) -> bool:
 
 
 def is_destructive(command: str) -> bool:
-    return any(pattern.search(command or "") for pattern in _DESTRUCTIVE_PATTERNS)
+    if any(pattern.search(command or "") for pattern in _DESTRUCTIVE_PATTERNS):
+        return True
+    for segment in _segments(command):
+        text = _POWERSHELL_PREFIX.sub("", " ".join(_words(segment)))
+        if any(pattern.search(text) for pattern in _WINDOWS_SEGMENT_PATTERNS):
+            return True
+    return False
 
 
 def _clean_token(token: str) -> str:

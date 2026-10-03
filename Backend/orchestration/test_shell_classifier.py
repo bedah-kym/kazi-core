@@ -28,6 +28,54 @@ class DetectionTests(unittest.TestCase):
             self.assertTrue(classify_command(command)["destructive"], command)
             self.assertEqual(classify_command(command)["tier"], TIER_DESTRUCTIVE, command)
 
+    def test_windows_destructive_tripwire(self):
+        for command in (
+            "rmdir /s /q qa_auto_mode",
+            "RD /S /Q C:\\data",
+            "rd/s/q C:\\data",
+            "del /s /q C:\\Users\\User\\Documents",
+            "del/s/q build",
+            "del /q *.*",
+            "erase /s build",
+            "format D: /q",
+            "powershell -Command Remove-Item -Recurse -Force C:\\data",
+            "powershell -NoProfile -Command \"rm -Recurse build\"",
+            "Remove-Item -Rec -Fo C:\\data",
+            "Get-ChildItem C:\\x -Recurse | Remove-Item -Force",
+            "rm -Recurse -Force build",
+            "cd build && rmdir /s /q out",
+            "diskpart /s wipe.txt",
+            "cipher /w:C",
+            "rm -Rf /",
+        ):
+            for profile in ("open", "standard", "locked"):
+                self.assertEqual(classify_command(command, profile)["tier"], TIER_DESTRUCTIVE, command)
+
+    def test_windows_everyday_commands_are_not_destructive(self):
+        for command in (
+            "dir /s /b",
+            "del notes.txt",
+            "del /q notes.txt",
+            "rmdir empty_folder",
+            "mkdir build",
+            "type README.md",
+            "python -m unittest -v",
+            "echo format the report",
+            "git log --format c:",
+            "rm -r build",
+            "rm -R build",
+            "git rm -r --cached .",
+            "docker run --rm img pip install -r requirements.txt",
+            "docker compose run --rm web pytest -r a",
+            "grep 'rm' -r .",
+            "cp src/rd dest -r",
+            "python del.py -r",
+            "zip rm.zip -r dir",
+            "pip install -r requirements.txt",
+            "Remove-Item notes.txt",
+        ):
+            self.assertFalse(classify_command(command)["destructive"], command)
+
     def test_network_detection(self):
         for command in ("ping -c 1 1.1.1.1", "curl https://example.com",
                         "git clone https://x/y.git", "pip install requests",

@@ -247,13 +247,14 @@ def _run_command_risk_info(
     without a prompt. A request may ask for network explicitly (`network:
     "bridge"`) so a script that pings internally still gets egress.
 
-    Two 2026-10 autonomy inputs (injected by the coordinator, never read from
-    the DB here) can lower a `bounded` prompt to auto-run:
-      - ``_shell_autopilot``: a human-armed, time-boxed window for the room.
-      - ``_shell_grants``: ``{exact-command-fingerprint: decision}`` the human
-        approved. Both are ignored for `destructive`/`denied` and for a tainted
-        run's egress/sensitive step. Learned ``approval_overrides`` remain
-        ignored for ``run_command`` — no mined preference can auto-run shell.
+    The prompt follows the sandbox boundary, not the command (2026-10 auto
+    mode). A tainted run (``_shell_tainted``, set by the loop) asks only for a
+    command with ``egress``: sandboxed, that is a bridge request; on the
+    unsandboxed profile it is every command. ``_shell_autopilot`` (a
+    human-armed window injected by the coordinator, never read from the DB
+    here) lifts prompts on the unsandboxed profile only. Neither ever covers
+    `destructive`/`denied`. Learned ``approval_overrides`` remain ignored for
+    ``run_command`` — no mined preference can auto-run shell.
     """
     from orchestration.shell.classifier import classify_command
 
@@ -280,29 +281,33 @@ def _run_command_risk_info(
     else:
         tier = raw_tier
 
-    tainted = bool(isinstance(user_preferences, dict) and user_preferences.get("_shell_tainted"))
-    needs_egress = bool(classification.get("needs_network") or classification.get("needs_root"))
-    granted = False
-    autopilot = False
-    if isinstance(user_preferences, dict):
-        autopilot = bool(user_preferences.get("_shell_autopilot"))
-        grants = user_preferences.get("_shell_grants") or {}
-        if grants:
-            from orchestration.shell.grants import fingerprint
+    from orchestration.shell.profiles import get_profile
 
-            fp = fingerprint(command, profile_name=profile)
-            granted = bool(fp and fp in grants)
+    prefs = user_preferences if isinstance(user_preferences, dict) else {}
+    sandboxed = get_profile(profile).backend == "docker"
+    needs_network = bool(classification.get("needs_network"))
+    # Egress = the command can reach the outside world. Sandboxed, that is only
+    # a bridge request (the connector sends network=none otherwise); on the
+    # unsandboxed profile every command can.
+    egress = needs_network or not sandboxed
+    tainted = bool(prefs.get("_shell_tainted"))
+    armed = bool(prefs.get("_shell_autopilot")) and not sandboxed
 
-    if tainted and needs_egress and tier != "denied":
-        # Rule of Two: untrusted content + egress/sensitive = always ask.
+    basis = ""
+    if tier in ("destructive", "denied"):
+        requires_confirmation = True
+    elif armed:
+        requires_confirmation = False
+        basis = "armed_window"
+    elif tainted and egress:
+        # Rule of Two: untrusted content + a way out = always ask.
         requires_confirmation = True
     elif tier == "safe":
         requires_confirmation = False
-    elif tier == "bounded":
-        # An unallowlisted network command still asks even under autopilot or a
-        # grant: egress is the exfil leg. An allowlisted network command already
-        # downgraded to `safe` above, so needs_network here means "not allowlisted".
-        requires_confirmation = bool(classification.get("needs_network")) or not (granted or autopilot)
+        if not sandboxed:
+            basis = "open_profile"
+        else:
+            basis = "allowlist" if needs_network else "sandbox"
     else:
         requires_confirmation = True
 
@@ -313,6 +318,8 @@ def _run_command_risk_info(
         "tier": tier,
         "shell_tier": raw_tier,
         "shell_reason": classification["reason"],
+        "egress": egress,
+        "approval_basis": basis,
     }
 
 

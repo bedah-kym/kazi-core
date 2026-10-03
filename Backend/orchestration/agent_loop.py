@@ -156,7 +156,10 @@ def clear_loop_state(room_id: int, user_id: int) -> None:
     cache.delete(_state_key(room_id, user_id))
 
 
-_UNTRUSTED_TOOL_NAMES = {"run_command", "run_shell", "shell_command", "web_search"}
+# delegate_task is included because a sub-agent's summary can carry text from
+# anything the sub-agent read.
+_UNTRUSTED_TOOL_NAMES = {"run_command", "run_shell", "shell_command", "web_search", "delegate_task"}
+_SHELL_TOOL_NAMES = {"run_command", "run_shell", "shell_command"}
 
 
 def _untrusted_source(tool_name: str) -> bool:
@@ -202,12 +205,7 @@ def _bucket_tool_calls(
     auto: List[Dict[str, Any]] = []
     pause: List[Tuple[Dict[str, Any], Optional[str]]] = []
     denied: List[Tuple[Dict[str, Any], str]] = []
-    # A tainted run is never auto-run past an egress/sensitive gate, even with a
-    # standing grant or autopilot armed. Surface the flag to the pure risk fn.
-    risk_preferences = preferences
-    if tainted and isinstance(preferences, dict):
-        risk_preferences = dict(preferences)
-        risk_preferences["_shell_tainted"] = True
+    risk_preferences = _taint_preferences(preferences, tainted)
     for tc in tool_calls:
         risk = get_tool_risk_info(tc["name"], risk_preferences, tc.get("input"))
         if persona is not None:
@@ -223,8 +221,10 @@ def _bucket_tool_calls(
         tier = risk.get("shell_tier")
         if tier == "denied":
             denied.append((tc, "Refused: this command is not allowed under the active shell profile."))
-        elif tainted and _taint_gated(tc["name"]):
+        elif tainted and tc["name"] not in _SHELL_TOOL_NAMES and _taint_gated(tc["name"]):
             # One tier up: a tainted run never lets a stored rule skip the ask.
+            # Shell is excluded: its risk fn already gates a tainted egress
+            # step, and a command with no way out of the sandbox cannot leak.
             pause.append((tc, tier))
         elif risk.get("requires_confirmation"):
             pause.append((tc, tier))
@@ -233,7 +233,23 @@ def _bucket_tool_calls(
     return auto, pause, denied
 
 
-_SHELL_TOOL_NAMES = {"run_command", "run_shell", "shell_command"}
+def _taint_preferences(preferences: Optional[Dict[str, Any]], tainted: bool) -> Optional[Dict[str, Any]]:
+    """Surface the run's taint to the pure shell risk fn. Only the loop sets it."""
+    if not tainted:
+        if isinstance(preferences, dict) and "_shell_tainted" in preferences:
+            return {k: v for k, v in preferences.items() if k != "_shell_tainted"}
+        return preferences
+    marked = dict(preferences) if isinstance(preferences, dict) else {}
+    marked["_shell_tainted"] = True
+    return marked
+
+
+def _shell_approval_basis(tc: Dict[str, Any], preferences: Optional[Dict[str, Any]], tainted: bool) -> str:
+    """Why an auto-run shell command needed no prompt (recorded on its receipt)."""
+    if tc.get("name") not in _SHELL_TOOL_NAMES:
+        return ""
+    risk = get_tool_risk_info(tc["name"], _taint_preferences(preferences, tainted), tc.get("input"))
+    return str(risk.get("approval_basis") or "")
 
 
 def _session_tool_call_cap(state: LoopState, caps_enforced: bool) -> int:
@@ -677,8 +693,14 @@ async def _record_receipt(
     tool_input: Dict[str, Any],
     result: Dict[str, Any],
     context: Dict[str, Any],
+    basis: str = "",
 ) -> None:
-    """Record an action receipt for audit trail (best-effort)."""
+    """Record an action receipt for audit trail (best-effort).
+
+    ``basis`` says why a shell command ran: ``human`` (confirmed), or the
+    rule that let it auto-run (``sandbox``, ``allowlist``, ``armed_window``,
+    ``open_profile``).
+    """
     try:
         from orchestration.action_receipts import record_action_receipt, should_record_receipt
         from orchestration.action_catalog import get_action_definition
@@ -688,13 +710,16 @@ async def _record_receipt(
         status = "success" if result.get("status") == "success" else "error"
         reason = result.get("message") or result.get("error") or ""
         data_payload = result.get("data") if isinstance(result.get("data"), dict) else {}
+        data_payload = dict(data_payload or {"message": reason})
+        if basis:
+            data_payload["approval_basis"] = basis
         await record_action_receipt(
             user_id=context.get("user_id"),
             room_id=context.get("room_id"),
             action=tool_name,
             service=action_def.get("service", ""),
             params=tool_input,
-            result=data_payload or {"message": reason},
+            result=data_payload,
             status=status,
             reason=reason,
         )
@@ -941,13 +966,20 @@ async def _execute_scoped_tool_calls(
     result_blocks = []
     caps_enforced = context.get("caps_enforced", True)
     effective_cap = tool_call_cap or (SUB_AGENT_MAX_TOOL_CALLS if caps_enforced else HARD_CAP_TOOL_CALLS)
+    # A sub-agent inherits the parent's taint and taints itself the same way,
+    # so delegation can never be a way around the tainted-egress gate.
+    tainted = bool(isinstance(preferences, dict) and preferences.get("_shell_tainted")) or any(
+        _untrusted_source(entry.get("name")) for entry in sub_tool_log
+    )
     for tc in tool_calls:
         if len(sub_tool_log) >= effective_cap:
             return result_blocks, True
 
-        # Sub-agents cannot pause for confirmation; block high-risk actions.
-        risk = get_tool_risk_info(tc["name"], preferences, tc.get("input"))
-        if risk.get("requires_confirmation"):
+        # Sub-agents cannot pause for confirmation; block anything that would.
+        auto, _pause, _denied = _bucket_tool_calls([tc], preferences, tainted=tainted)
+        if _untrusted_source(tc["name"]):
+            tainted = True
+        if not auto:
             result = {
                 "status": "error",
                 "message": (
@@ -1285,7 +1317,7 @@ async def run_agent_loop(
             )
         except Exception:
             pass
-        await _record_receipt(pending["name"], pending["input"], result, context)
+        await _record_receipt(pending["name"], pending["input"], result, context, basis="human")
 
         # Append tool result to messages
         state.messages.append({
@@ -1446,11 +1478,13 @@ async def run_agent_loop(
             if callable(_refresher):
                 preferences = await _refresher(preferences)
 
-            # Separate into auto-execute, needs-confirmation, and refused.
+            # Separate into auto-execute, needs-confirmation, and refused. The
+            # taint is snapshotted: this batch was decided on it.
+            run_tainted = state.tainted
             safe_calls, pause_calls, denied_calls = _bucket_tool_calls(
                 tool_calls, preferences,
                 persona=await _resolve_persona(room_id, user_id),
-                tainted=state.tainted,
+                tainted=run_tainted,
             )
 
             # ---- Execute safe calls (possibly in parallel) ----------- #
@@ -1496,7 +1530,7 @@ async def run_agent_loop(
                         if tc["name"] in _META_TOOL_NAMES:
                             result = await _execute_meta_tool(
                                 tc["name"], tc["input"], context,
-                                preferences, system, tools,
+                                _taint_preferences(preferences, run_tainted), system, tools,
                             )
                         else:
                             result = await _execute_with_timeout(tc["name"], tc["input"], context)
@@ -1543,7 +1577,10 @@ async def run_agent_loop(
                         )
                     except Exception:
                         pass
-                    await _record_receipt(tc["name"], tc["input"], result, context)
+                    await _record_receipt(
+                        tc["name"], tc["input"], result, context,
+                        basis=_shell_approval_basis(tc, preferences, run_tainted),
+                    )
 
             # ---- Build tool_result blocks (auto + refused) ------------ #
             tool_result_blocks = []

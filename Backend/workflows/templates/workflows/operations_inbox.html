@@ -277,10 +277,11 @@
         </div>
         <div class="app-card">
             <p class="app-meta" style="margin: 0 0 12px;">
-                Human-armed autopilot and exact-command grants for the chat shell.
-                Destructive commands, unallowlisted network calls, and any step driven
-                by untrusted content always ask. Autopilot also stops when you send a
-                new chat message.
+                Sandboxed rooms need nothing here: commands that stay inside the
+                sandbox run without asking, and only a network step asks. A room on
+                the unsandboxed <code>open</code> profile has no such boundary, so you
+                can arm a time-boxed autopilot window for it. Destructive commands
+                always ask. Say <strong>autopilot off</strong> or cancel in chat to stop it.
             </p>
             {% for room in shell_rooms %}
             <div class="exec-row">
@@ -295,22 +296,7 @@
                         {% if room.autopilot_expires_at %}&middot; expires {{ room.autopilot_expires_at }}{% endif %}
                     </div>
                     {% endif %}
-                    {% for grant in room.grants %}
-                    <div class="app-meta" style="margin-top: 4px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
-                        <code>{{ grant.command }}</code>
-                        {% if grant.expires_at %}<span>expires {{ grant.expires_at }}</span>{% endif %}
-                        {% if room.room_id is not None %}
-                        <form method="post" action="{% url 'workflows:shell_grant_revoke' %}" style="display: inline;">
-                            {% csrf_token %}
-                            <input type="hidden" name="room_id" value="{{ room.room_id }}">
-                            <input type="hidden" name="fingerprint" value="{{ grant.fingerprint }}">
-                            <button class="app-btn app-btn-outline app-btn-sm" type="submit">Revoke</button>
-                        </form>
-                        {% endif %}
-                    </div>
-                    {% endfor %}
                 </div>
-                {% if room.room_id is not None %}
                 <div class="exec-actions">
                     {% if room.autopilot_armed %}
                     <form method="post" action="{% url 'workflows:shell_autopilot_disarm' %}" style="display: inline;">
@@ -329,14 +315,11 @@
                     </form>
                     {% endif %}
                 </div>
-                {% endif %}
             </div>
             {% empty %}
             <div class="app-empty">
                 <p class="app-empty-text">
-                    No shell autonomy configured. Reply <strong>always allow</strong> or
-                    <strong>autopilot</strong> to a shell confirmation in chat, or use
-                    <code>manage.py shell_autonomy</code>.
+                    None of your rooms use the unsandboxed profile, so there is nothing to arm.
                 </p>
             </div>
             {% endfor %}

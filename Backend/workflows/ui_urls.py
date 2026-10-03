@@ -22,5 +22,4 @@ urlpatterns = [
     path("suggestions/<int:suggestion_id>/dismiss/", ui_views.dismiss_suggestion_ui, name="dismiss_suggestion"),
     path("shell/autopilot/arm/", ui_views.shell_autopilot_arm, name="shell_autopilot_arm"),
     path("shell/autopilot/disarm/", ui_views.shell_autopilot_disarm, name="shell_autopilot_disarm"),
-    path("shell/grants/revoke/", ui_views.shell_grant_revoke, name="shell_grant_revoke"),
 ]

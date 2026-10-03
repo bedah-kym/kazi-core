@@ -1,8 +1,8 @@
 # Plan: agent-loop shell autonomy — grants + armed autopilot
 
-Status: approved + built (2026-10-03). Storage shipped as profile JSON (no
-migration); autopilot window + exact-command grants are live in the chat loop.
-Remaining follow-up: ops UI / chat "Always allow" button.
+Status: **superseded by `2026-10-shell-auto-mode.md`** (2026-10-03). Exact-command
+grants were removed and the autopilot window now applies to the `open` profile
+only. Kept for history.
 
 ## Goal
 

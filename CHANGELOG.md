@@ -59,7 +59,7 @@ unreachable, plus the hermetic test recipe for contributors.
 
 - Manual workflow runs queue when Temporal is down or disabled, with atomic run
   reservation and a dedupe window.
-- Fresh-database rooms are AI-ready (`mathia` provisioned; botless rooms
+- Fresh-database rooms are AI-ready (`KAZI` provisioned; botless rooms
   self-heal).
 - Idle WebSockets no longer flap on redis-py 8.x (channel-layer socket timeout).
 - WhatsApp mock debug logging redacts phone number and body.
@@ -107,7 +107,7 @@ per-room model selector landed without adding a single vertical connector.
   reads every turn (`Auto` = smart routing).
 
 **OrchestrationCoordinator** (`orchestration/coordinator.py`) — the routing facade that
-owns everything after `@mathia` routing: directives, pending confirmations, the agent
+owns everything after `@KAZI` routing: directives, pending confirmations, the agent
 loop, planner, intent dispatch, and general chat. `chatbot/consumers.py` delegates to
 it, shrinking the WebSocket consumer by ~900 lines.
 
@@ -160,7 +160,7 @@ enabled (opt-out), trimming the oldest turns to fit the context budget.
 - `HISTORY_COMPACTION_ENABLED` default changed from `False` to `True`.
 - Workflow step execution unified through the connector registry (workflow handoff
   routes through `execute_adhoc_workflow`).
-- `chatbot/consumers.py` slimmed down; post-`@mathia` routing moved to
+- `chatbot/consumers.py` slimmed down; post-`@KAZI` routing moved to
   `OrchestrationCoordinator`.
 - Minor dependency minimums bumped to match the compiled lock.
 
@@ -563,7 +563,7 @@ The full orchestration core was opened.
 - README rewritten with concrete value proposition and usage examples.
 
 ### Changed
-- Project rebranded from Mathia.OS to **Kazi** (Swahili for "work").
+- Project rebranded from KAZI.OS to **Kazi** (Swahili for "work").
   Agent identity is configurable via `KAZI_AGENT_NAME` (default `Kazi`).
 
 [Unreleased]: https://github.com/bedah-kym/kazi-core/compare/v0.6.0...HEAD

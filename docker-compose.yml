@@ -21,21 +21,21 @@ services:
     environment:
       - TZ=${TZ:-Africa/Nairobi}
       - PGTZ=${TZ:-Africa/Nairobi}
-      - POSTGRES_USER=${POSTGRES_USER:-mathia_user}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-mathia_password}
-      - POSTGRES_DB=${POSTGRES_DB:-mathia_db}
+      - POSTGRES_USER=${POSTGRES_USER:-KAZI_user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-KAZI_password}
+      - POSTGRES_DB=${POSTGRES_DB:-KAZI_db}
       - CELERY_BROKER_URL=${REDIS_URL:-redis://redis:6379/0}
       - CELERY_RESULT_BACKEND=${REDIS_URL:-redis://redis:6379/0}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -h db -p 5432 -U ${POSTGRES_USER:-mathia_user} -d ${POSTGRES_DB:-mathia_db}" ]
+      test: [ "CMD-SHELL", "pg_isready -h db -p 5432 -U ${POSTGRES_USER:-KAZI_user} -d ${POSTGRES_DB:-KAZI_db}" ]
       interval: 5s
       timeout: 5s
       retries: 30
 
   web:
     build: .
-    image: mathia-web:latest
+    image: KAZI-web:latest
     command: sh -c "gunicorn Backend.asgi:application -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --workers 4"
     volumes:
       - .:/app
@@ -60,7 +60,7 @@ services:
         condition: service_healthy
 
   celery_worker:
-    image: mathia-web:latest
+    image: KAZI-web:latest
     command: sh -c "python /app/wait_for_db.py && sh /app/scripts/railway/celery_worker.sh"
     volumes:
       - .:/app
@@ -78,7 +78,7 @@ services:
         condition: service_healthy
 
   celery_beat:
-    image: mathia-web:latest
+    image: KAZI-web:latest
     command: sh -c "python /app/wait_for_db.py && celery -A Backend beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler"
     volumes:
       - .:/app
@@ -96,7 +96,7 @@ services:
         condition: service_healthy
 
   temporal_worker:
-    image: mathia-web:latest
+    image: KAZI-web:latest
     command: sh -c "python /app/wait_for_db.py && python /app/Backend/manage.py start_temporal_worker"
     volumes:
       - .:/app

@@ -11,6 +11,9 @@ services:
     environment:
       - TZ=${TZ:-Africa/Nairobi}
       - PGTZ=${TZ:-Africa/Nairobi}
+      # Rename note: the defaults are kazi_* now. An existing postgres_data
+      # volume keeps its original role/database, so pin POSTGRES_* and
+      # DATABASE_URL in .env when upgrading an existing deployment.
       - POSTGRES_USER=${POSTGRES_USER:-kazi_user}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-kazi_password}
       - POSTGRES_DB=${POSTGRES_DB:-kazi_db}

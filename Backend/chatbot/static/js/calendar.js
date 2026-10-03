@@ -267,7 +267,7 @@
                 if (e.key === 'Enter' && !e.shiftKey) {
                     const value = chatInput.value.trim()
 
-                    if (value.startsWith('@mathia')) {
+                    if (value.startsWith('@kazi')) {
                         return
                     }
                     // /schedule @username

@@ -1,4 +1,4 @@
-# Quick Start
+﻿# Quick Start
 
 The shortest path from a fresh clone to a working conversation with
 **Kazi**, Kazi's built-in AI assistant. You'll end with a self-hosted stack
@@ -200,7 +200,7 @@ these to prove the loop works end-to-end:
 | Room won't load; browser console shows a `403` on `/ws/chat/...` | `ENCRYPTION_KEY` (or `Backend/.encryption.key`) changed/lost after rooms were created. | Restore the original key, or wipe the DB volume (`docker compose down -v`) and start over. |
 | `web` container exits immediately | Postgres/Redis health check still failing. | Wait ~30s and retry; check `docker compose logs db`. |
 | `set: Illegal option -` in container logs | Scripts have `CRLF` line endings. | Re-clone (`.gitattributes` fixes this on checkout). |
-| "Kazi user not found" warning in logs | You created a user *before* the web container finished seeding. | Run `docker compose exec web python Backend/manage.py seed_Kazi`. |
+| "Kazi user not found" warning in logs | You created a user *before* the web container finished seeding. | Run `docker compose exec web python Backend/manage.py seed_kazi`. |
 | Changed `POSTGRES_*` but can't connect | `DATABASE_URL` still points at the old creds. | Update `DATABASE_URL` in `.env` to match `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB`. |
 
 !!! success "The two most common mistakes"
@@ -222,7 +222,7 @@ Prefer the host? You'll need Postgres and Redis running locally, plus Python
     pip install -r requirements.lock
     # export the .env vars into your shell, then:
     python Backend/manage.py migrate
-    python Backend/manage.py seed_Kazi
+    python Backend/manage.py seed_kazi
     python Backend/manage.py runserver
     ```
 
@@ -234,7 +234,7 @@ Prefer the host? You'll need Postgres and Redis running locally, plus Python
     pip install -r requirements.lock
     # set the .env vars in your session, then:
     python Backend/manage.py migrate
-    python Backend/manage.py seed_Kazi
+    python Backend/manage.py seed_kazi
     python Backend/manage.py runserver
     ```
 

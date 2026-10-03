@@ -474,7 +474,7 @@ class ContextPanel {
         if (!receipts || receipts.length === 0) {
             return `
                 <div class="receipts-empty">
-                    No action receipts yet. Use Mathia to run tasks.
+                    No action receipts yet. Use Kazi to run tasks.
                     <div class="receipts-hint">Tip: say "show actions" for a fuller log.</div>
                 </div>
             `;

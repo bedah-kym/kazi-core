@@ -239,7 +239,7 @@ Examples:
 
 ## 9. What NOT to do (common agent failure modes)
 
-- **Don't recreate or commit content under `frontend/` or `docs/`** without first checking `.gitignore` and confirming with a maintainer. These paths intentionally hold private Mathia-OS content that is not part of this OSS repo.
+- **Don't recreate or commit content under `frontend/` or `docs/`** without first checking `.gitignore` and confirming with a maintainer. These paths intentionally hold private KAZI-OS content that is not part of this OSS repo.
 - **Don't bypass safety checks** (`--no-verify`, `bandit --skip` beyond `B101,B110`) to make CI green. Fix the root cause.
 - **Don't route around the guardrails**: never edit protected paths behind the hook's back (e.g. `Set-Content` instead of Edit), and never run `check_boundaries.py --update-baseline` to hide a violation you just introduced — the script refuses to grow the baseline anyway, and the baseline may only shrink.
 - **Don't add backwards-compatibility shims** for code you just changed. If a caller is internal, update the caller.

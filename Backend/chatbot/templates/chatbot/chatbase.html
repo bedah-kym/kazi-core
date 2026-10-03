@@ -932,7 +932,7 @@
             // Expose helpers for the message renderers (per-selected-model avatar)
             window.modelAvatarHtml = modelAvatarHtml;
             window.getRoomModel = currentModel;
-            window.KaziBadgeHtml = function () {
+            window.kaziBadgeHtml = function () {
                 var m = currentModel();
                 return '<div class="Kazi-badge">'
                     + (m ? modelAvatarHtml(m) : '<i class="fas fa-robot"></i>')

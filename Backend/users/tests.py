@@ -142,3 +142,30 @@ class DashboardApiTests(TestCase):
         self.assertEqual(payload["wallet"]["balance"], "1200.00")
         self.assertEqual(payload["workflows"]["total"], 0)
         self.assertTrue(any(item["kind"] == "reminder" for item in payload["activity"]))
+
+class ReservedUsernameTests(TestCase):
+    """The kazi identity can never be claimed by registration."""
+
+    def test_is_reserved_username(self):
+        from .naming import is_reserved_username
+
+        self.assertTrue(is_reserved_username("kazi"))
+        self.assertTrue(is_reserved_username("  Kazi "))
+        self.assertFalse(is_reserved_username("kasuku"))
+
+    @patch("users.auth_views._resolve_invite_token", return_value=(object(), "invite"))
+    def test_register_rejects_reserved_username(self, _mock_invite):
+        response = self.client.post(
+            reverse("users:register"),
+            {
+                "full_name": "Kazi Wannabe",
+                "email": "wannabe@example.com",
+                "username": "kazi",
+                "password1": "Str0ng!Pass99",
+                "password2": "Str0ng!Pass99",
+                "invite_token": "fake-token",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "reserved")
+        self.assertFalse(User.objects.filter(username__iexact="kazi").exists())

@@ -194,7 +194,7 @@
         if (!container) return;
 
         if (!activity || activity.length === 0) {
-            container.innerHTML = '<div class="dash-empty"><i class="fas fa-inbox"></i><p>No recent activity. Start chatting with Mathia!</p></div>';
+            container.innerHTML = '<div class="dash-empty"><i class="fas fa-inbox"></i><p>No recent activity. Start chatting with Kazi!</p></div>';
             return;
         }
 

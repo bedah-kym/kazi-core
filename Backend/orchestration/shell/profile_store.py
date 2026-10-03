@@ -37,12 +37,9 @@ def locked_profile(user_id: Optional[int]):
 
     User = get_user_model()
     with transaction.atomic():
-        user = (
-            User.objects.select_for_update()
-            .select_related("profile")
-            .filter(id=user_id)
-            .first()
-        )
+        # Lock only the user row: `select_for_update` cannot target the nullable
+        # side of an outer join, so the profile is loaded separately below.
+        user = User.objects.select_for_update().filter(id=user_id).first()
         yield getattr(user, "profile", None) if user else None
 
 

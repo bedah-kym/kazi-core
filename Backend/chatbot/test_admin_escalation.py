@@ -1,7 +1,6 @@
 """Tests for @admin chat escalation (Workstream C)."""
 from __future__ import annotations
 
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from asgiref.sync import async_to_sync

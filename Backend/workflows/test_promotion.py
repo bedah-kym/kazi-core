@@ -140,6 +140,15 @@ class StagedSkillTests(SimpleTestCase):
                     skills_root_override=Path(tmp),
                 )
 
+    def test_skill_name_cannot_escape_the_skills_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_staged_skill(
+                "../../etc/passwd", "traversal attempt", [], {},
+                skills_root_override=Path(tmp),
+            )
+            root = Path(tmp).resolve()
+            self.assertEqual(root, path.resolve().parent.parent)
+
 
 class PromotionDraftTests(TestCase):
     def setUp(self):

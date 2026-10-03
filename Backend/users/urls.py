@@ -9,6 +9,7 @@ from . import auth_views as custom_auth
 from . import integrations_views
 from . import avatar_views
 from . import dashboard_api
+from . import personas_views
 
 app_name = 'users'
 urlpatterns = [
@@ -27,6 +28,11 @@ urlpatterns = [
     path('settings/profile/', RedirectView.as_view(url='/accounts/settings/#profile', permanent=False), name='profile_settings'),
     path('settings/goals/', RedirectView.as_view(url='/accounts/settings/#ai', permanent=False), name='goals_settings'),
     path('rooms/list/', dashboard_views.list_rooms, name='list_rooms'),
+
+    # Personas & skills
+    path('personas/', personas_views.personas, name='personas'),
+    path('personas/<int:persona_id>/edit/', personas_views.persona_edit, name='persona_edit'),
+    path('skills/', personas_views.skills, name='skills'),
 
     # Integrations
     path('integrations/whatsapp/connect/', integrations_views.connect_whatsapp, name='connect_whatsapp'),

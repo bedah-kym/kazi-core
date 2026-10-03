@@ -203,6 +203,59 @@ def build_health_digest(user_id: int) -> Dict[str, Any]:
     return {"lines": lines, "states": states, "empty": not lines}
 
 
+SCHEDULE_HEALTH_CACHE_KEY = "workflow_schedule_health:{trigger_id}"
+
+
+def check_schedule_health() -> Dict[str, int]:
+    """Alert when Temporal schedules skip fires (worker down, silent gaps).
+
+    Pausing is NOT the response — pausing does not fix skips. The alert names
+    the workflow and the skip delta so the operator can check the worker.
+    """
+    from asgiref.sync import async_to_sync
+    from django.core.cache import cache
+
+    from .models import WorkflowTrigger
+    from .temporal_integration import fetch_schedule_health
+
+    checked = 0
+    alerts = 0
+    triggers = WorkflowTrigger.objects.filter(
+        trigger_type="schedule",
+        is_active=True,
+        temporal_schedule_id__isnull=False,
+    ).select_related("workflow", "workflow__user")
+
+    for trigger in triggers:
+        try:
+            health = async_to_sync(fetch_schedule_health)(trigger)
+        except Exception as exc:
+            logger.warning("Schedule health fetch failed for trigger %s: %s", trigger.id, exc)
+            continue
+        if not health:
+            continue
+        checked += 1
+        cache_key = SCHEDULE_HEALTH_CACHE_KEY.format(trigger_id=trigger.id)
+        previous = cache.get(cache_key) or {}
+        previous_skipped = previous.get("skipped_overlap")
+        if previous_skipped is not None and health["skipped_overlap"] > int(previous_skipped):
+            delta = health["skipped_overlap"] - int(previous_skipped)
+            alerts += 1
+            _notify_health(
+                trigger.workflow.user,
+                "workflow.health",
+                f"Schedule '{trigger.workflow.name}' skipped {delta} fire(s)",
+                (
+                    "Skipped fires usually mean the worker was down while the "
+                    "schedule kept firing. Check the Temporal worker and "
+                    "re-activate the routine if it looks stale."
+                ),
+            )
+        cache.set(cache_key, health, 7 * 24 * 3600)
+
+    return {"checked": checked, "skipped_alerts": alerts}
+
+
 def send_workflow_health_digest() -> Dict[str, int]:
     from django.contrib.auth import get_user_model
 

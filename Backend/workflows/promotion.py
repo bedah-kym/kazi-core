@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -248,6 +249,20 @@ def render_skill_markdown(
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _contained_skill_folder(root: Path, skill_name: str) -> Path:
+    """Resolve a skill folder and prove it stays under the skills root.
+
+    Two layers: ``os.path.basename`` drops any path structure from the slug,
+    and the resolved candidate must sit directly under the resolved root.
+    """
+    root_resolved = Path(root).resolve()
+    safe_name = os.path.basename(slugify_skill_name(skill_name))
+    candidate = Path(os.path.abspath(os.path.join(str(root_resolved), safe_name)))  # codeql[py/path-injection]
+    if candidate.parent != root_resolved:
+        raise PromotionError("Invalid skill folder name.")
+    return candidate
+
+
 def write_staged_skill(
     skill_name: str,
     description: str,
@@ -263,18 +278,17 @@ def write_staged_skill(
     if root is None:
         raise PromotionError("No skills directory is configured; cannot stage a skill.")
 
-    slug = slugify_skill_name(skill_name)
-    folder = Path(root) / slug
+    folder = _contained_skill_folder(root, skill_name)
     skill_md = folder / "SKILL.md"
-    if skill_md.exists():
+    if skill_md.exists():  # codeql[py/path-injection] — folder is contained under the resolved skills root
         stage = _read_stage(skill_md)
         if stage != "staging":
             raise PromotionError(
-                f"Skill '{slug}' is already at stage '{stage}'; editing a promoted skill needs a human."
+                f"Skill '{folder.name}' is already at stage '{stage}'; editing a promoted skill needs a human."
             )
 
-    folder.mkdir(parents=True, exist_ok=True)
-    skill_md.write_text(
+    folder.mkdir(parents=True, exist_ok=True)  # codeql[py/path-injection] — contained folder
+    skill_md.write_text(  # codeql[py/path-injection] — contained folder
         render_skill_markdown(skill_name, description, tools, contract),
         encoding="utf-8",
     )
@@ -283,7 +297,7 @@ def write_staged_skill(
 
 def _read_stage(skill_md: Path) -> str:
     try:
-        raw = skill_md.read_text(encoding="utf-8")
+        raw = skill_md.read_text(encoding="utf-8")  # codeql[py/path-injection] — contained folder
     except OSError:
         return "unknown"
     match = re.search(r"^stage:\s*(\w+)\s*$", raw, re.MULTILINE)
@@ -400,6 +414,53 @@ async def save_session_as_skill(
         status="awaiting_confirmation",
         skills_root_override=skills_root_override,
     )
+
+
+def create_skill_from_text(
+    *,
+    name: str,
+    description: str = "",
+    tools: Optional[Iterable[str]] = None,
+    contract: Optional[Dict[str, Any]] = None,
+    user_id: int,
+    room_id: Optional[int] = None,
+):
+    """Chat-authored skill -> staged skill folder + reviewable draft.
+
+    Never active: a human promotes it from the Skills dashboard (or via
+    ``skill_registry.transition_skill``). This is the write path behind the
+    agent's ``save_skill`` meta-tool.
+    """
+    normalized = {
+        section: str((contract or {}).get(section) or "")
+        for section in CONTRACT_SECTIONS
+    }
+    path = write_staged_skill(
+        name,
+        description,
+        [str(tool).strip() for tool in (tools or []) if str(tool).strip()],
+        normalized,
+    )
+
+    resolved_room_id = None
+    if room_id:
+        try:
+            from chatbot.models import Chatroom
+
+            resolved_room_id = room_id if Chatroom.objects.filter(id=room_id).exists() else None
+        except Exception:
+            resolved_room_id = None
+
+    draft = WorkflowDraft.objects.create(
+        user_id=user_id,
+        room_id=resolved_room_id,
+        definition=None,
+        status="draft",
+        source="explicit_save",
+        skill_name=slugify_skill_name(name),
+        skill_contract=normalized,
+    )
+    return path, draft
 
 
 def queue_candidates(

@@ -1156,6 +1156,21 @@ async def refresh_workflow_schedules(workflow_obj) -> int:
     return len(triggers)
 
 
+async def fetch_schedule_health(trigger_obj) -> Dict[str, int]:
+    """Read a Temporal schedule's action counters (skips, missed catch-up)."""
+    if trigger_obj.trigger_type != "schedule" or not trigger_obj.temporal_schedule_id:
+        return {}
+    client = await get_temporal_client()
+    handle = client.get_schedule_handle(trigger_obj.temporal_schedule_id)
+    description = await handle.describe()
+    info = description.info
+    return {
+        "num_actions": int(getattr(info, "num_actions", 0) or 0),
+        "skipped_overlap": int(getattr(info, "num_actions_skipped_overlap", 0) or 0),
+        "missed_catchup": int(getattr(info, "num_actions_missed_catchup_window", 0) or 0),
+    }
+
+
 async def pause_trigger_schedule(trigger_obj) -> None:
     if trigger_obj.trigger_type != "schedule":
         return

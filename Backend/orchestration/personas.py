@@ -44,6 +44,7 @@ def create_persona(
     tool_scope: Optional[List[str]] = None,
     risk_ceiling: str = "medium",
     approval_boundary: Optional[List[str]] = None,
+    skills: Optional[List[str]] = None,
     room=None,
 ) -> Any:
     from workflows.models import Persona
@@ -55,6 +56,7 @@ def create_persona(
         tool_scope=sorted({str(item) for item in (tool_scope or []) if item}),
         risk_ceiling=risk_ceiling if risk_ceiling in RISK_RANK else "medium",
         approval_boundary=sorted({str(item) for item in (approval_boundary or []) if item}),
+        skills=sorted({str(item) for item in (skills or []) if item}),
         room=room,
         status="draft",
     )
@@ -84,6 +86,7 @@ def duplicate_persona(persona, *, new_name: str) -> Any:
         tool_scope=list(persona.tool_scope or []),
         risk_ceiling=persona.risk_ceiling,
         approval_boundary=list(persona.approval_boundary or []),
+        skills=list(persona.skills or []),
         status="draft",
         created_from=persona,
     )
@@ -97,6 +100,34 @@ def persona_bounds(persona) -> Dict[str, Any]:
         "boundary": boundary,
         "ceiling_rank": RISK_RANK.get(persona.risk_ceiling, 1),
     }
+
+
+def persona_identity_prompt(persona) -> str:
+    """System-prompt block so the agent knows who it is and what it may do."""
+    from orchestration.skill_registry import get_skill
+
+    parts = [f"You are Kazi, operating as the named persona \"{persona.name}\"."]
+    if persona.description:
+        parts.append(persona.description.strip())
+    if persona.tool_scope:
+        parts.append("Your tool scope: " + ", ".join(persona.tool_scope) + ".")
+        parts.append("Anything outside that scope is refused, not attempted.")
+    parts.append(
+        f"Your risk ceiling is '{persona.risk_ceiling}'; anything above it, or on "
+        "your approval boundary, must be confirmed with the human first."
+    )
+    if persona.approval_boundary:
+        parts.append("Always ask before: " + ", ".join(persona.approval_boundary) + ".")
+
+    skill_blocks = []
+    for name in list(persona.skills or [])[:5]:
+        skill = get_skill(name)
+        if skill:
+            skill_blocks.append(f"[Skill: {skill['name']}]\n{skill['body'][:2000]}")
+    if skill_blocks:
+        parts.append("Your assigned skills:\n" + "\n\n".join(skill_blocks))
+
+    return "\n".join(parts)
 
 
 def apply_persona_bounds(

@@ -406,6 +406,10 @@ class Persona(models.Model):
     tool_scope = models.JSONField(default=list, blank=True)
     risk_ceiling = models.CharField(max_length=20, choices=RISK_CEILING_CHOICES, default='medium')
     approval_boundary = models.JSONField(default=list, blank=True)
+    # v0.7 dashboard UX: uploaded avatar (falls back to generated initials) and
+    # assigned skills (names from the filesystem skill registry).
+    avatar = models.FileField(upload_to='persona_avatars/', blank=True, null=True)
+    skills = models.JSONField(default=list, blank=True)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='personas')
     room = models.OneToOneField(
         'chatbot.Chatroom',
@@ -433,6 +437,48 @@ class Persona(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.status})"
+
+
+class PersonaRequest(models.Model):
+    """A user's proposal for a new persona, routed to the super admin (v0.7 C).
+
+    Requests never self-authorize: they are proposals. An admin approves in
+    the admin UI, which creates a draft Persona owned by the requester for
+    them to customize and activate.
+    """
+
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='persona_requests')
+    room = models.ForeignKey(
+        'chatbot.Chatroom',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='persona_requests',
+    )
+    name = models.CharField(max_length=100)
+    description = models.TextField(blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    reviewed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='reviewed_persona_requests',
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"PersonaRequest {self.id} ({self.name} - {self.status})"
 
 
 class Handoff(models.Model):

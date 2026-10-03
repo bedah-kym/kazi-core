@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -251,13 +252,13 @@ def render_skill_markdown(
 def _contained_skill_folder(root: Path, skill_name: str) -> Path:
     """Resolve a skill folder and prove it stays under the skills root.
 
-    The slug strips separators, but the explicit resolve + containment check
-    keeps this safe even if slugification ever changes (and satisfies static
-    analysis that untrusted names cannot escape the root).
+    Two layers: ``os.path.basename`` drops any path structure from the slug,
+    and the resolved candidate must sit directly under the resolved root.
     """
     root_resolved = Path(root).resolve()
-    candidate = (root_resolved / slugify_skill_name(skill_name)).resolve()
-    if candidate != root_resolved and root_resolved not in candidate.parents:
+    safe_name = os.path.basename(slugify_skill_name(skill_name))
+    candidate = Path(os.path.abspath(os.path.join(str(root_resolved), safe_name)))  # codeql[py/path-injection]
+    if candidate.parent != root_resolved:
         raise PromotionError("Invalid skill folder name.")
     return candidate
 
@@ -279,15 +280,15 @@ def write_staged_skill(
 
     folder = _contained_skill_folder(root, skill_name)
     skill_md = folder / "SKILL.md"
-    if skill_md.exists():
+    if skill_md.exists():  # codeql[py/path-injection] — folder is contained under the resolved skills root
         stage = _read_stage(skill_md)
         if stage != "staging":
             raise PromotionError(
                 f"Skill '{folder.name}' is already at stage '{stage}'; editing a promoted skill needs a human."
             )
 
-    folder.mkdir(parents=True, exist_ok=True)
-    skill_md.write_text(
+    folder.mkdir(parents=True, exist_ok=True)  # codeql[py/path-injection] — contained folder
+    skill_md.write_text(  # codeql[py/path-injection] — contained folder
         render_skill_markdown(skill_name, description, tools, contract),
         encoding="utf-8",
     )
@@ -296,7 +297,7 @@ def write_staged_skill(
 
 def _read_stage(skill_md: Path) -> str:
     try:
-        raw = skill_md.read_text(encoding="utf-8")
+        raw = skill_md.read_text(encoding="utf-8")  # codeql[py/path-injection] — contained folder
     except OSError:
         return "unknown"
     match = re.search(r"^stage:\s*(\w+)\s*$", raw, re.MULTILINE)

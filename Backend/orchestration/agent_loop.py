@@ -202,8 +202,14 @@ def _bucket_tool_calls(
     auto: List[Dict[str, Any]] = []
     pause: List[Tuple[Dict[str, Any], Optional[str]]] = []
     denied: List[Tuple[Dict[str, Any], str]] = []
+    # A tainted run is never auto-run past an egress/sensitive gate, even with a
+    # standing grant or autopilot armed. Surface the flag to the pure risk fn.
+    risk_preferences = preferences
+    if tainted and isinstance(preferences, dict):
+        risk_preferences = dict(preferences)
+        risk_preferences["_shell_tainted"] = True
     for tc in tool_calls:
-        risk = get_tool_risk_info(tc["name"], preferences, tc.get("input"))
+        risk = get_tool_risk_info(tc["name"], risk_preferences, tc.get("input"))
         if persona is not None:
             from orchestration.action_catalog import resolve_action_alias
             from orchestration.personas import apply_persona_bounds, persona_bounds

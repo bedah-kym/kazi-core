@@ -1,0 +1,137 @@
+{% extends "users/base_app.html" %}
+{% load static %}
+
+{% block title %}Skills - Kazi{% endblock %}
+
+{% block breadcrumb %}
+<a href="{% url 'users:dashboard' %}">Dashboard</a><span class="crumb-sep">&#8250;</span><a href="{% url 'users:personas' %}">Personas</a><span class="crumb-sep">&#8250;</span><span class="crumb-current">Skills</span>
+{% endblock %}
+
+{% block content %}
+<div class="app-header">
+    <div>
+        <div class="app-eyebrow">Learning</div>
+        <h1 class="app-title">Skills</h1>
+        <p class="app-subtitle">
+            Instruction packs the agent can load. New skills are staged until you promote
+            them; the weekly curator only demotes, and never archives pinned skills.
+        </p>
+    </div>
+</div>
+
+<section class="app-card">
+    <h2 class="wf-name">Your skills</h2>
+    <div class="exec-grid">
+        {% for skill in skills %}
+        <div class="exec-card">
+            <span class="exec-id">{{ skill.name }}</span>
+            <div class="exec-cells">
+                <div class="cell">
+                    <span class="cell-label">Stage</span>
+                    <span class="app-pill {% if skill.stage == 'active' %}app-pill-success{% elif skill.stage == 'staging' %}app-pill-warning{% else %}app-pill-muted{% endif %}">{{ skill.stage }}</span>
+                </div>
+                <div class="cell">
+                    <span class="cell-label">Pinned</span>
+                    <span class="cell-value">{% if skill.pinned %}yes{% else %}no{% endif %}</span>
+                </div>
+                <div class="cell">
+                    <span class="cell-label">Tools</span>
+                    <span class="cell-value">{{ skill.tools|join:", "|default:"-" }}</span>
+                </div>
+            </div>
+            <div class="exec-actions" style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px;">
+                <form method="post" style="display: inline;">{% csrf_token %}
+                    <input type="hidden" name="action" value="transition">
+                    <input type="hidden" name="skill" value="{{ skill.name }}">
+                    <input type="hidden" name="target" value="review">
+                    <button class="app-btn app-btn-ghost app-btn-sm" type="submit">review</button>
+                </form>
+                <form method="post" style="display: inline;">{% csrf_token %}
+                    <input type="hidden" name="action" value="transition">
+                    <input type="hidden" name="skill" value="{{ skill.name }}">
+                    <input type="hidden" name="target" value="active">
+                    <button class="app-btn app-btn-primary app-btn-sm" type="submit">activate</button>
+                </form>
+                <form method="post" style="display: inline;">{% csrf_token %}
+                    <input type="hidden" name="action" value="transition">
+                    <input type="hidden" name="skill" value="{{ skill.name }}">
+                    <input type="hidden" name="target" value="stale">
+                    <button class="app-btn app-btn-ghost app-btn-sm" type="submit">stale</button>
+                </form>
+                <form method="post" style="display: inline;">{% csrf_token %}
+                    <input type="hidden" name="action" value="transition">
+                    <input type="hidden" name="skill" value="{{ skill.name }}">
+                    <input type="hidden" name="target" value="archived">
+                    <button class="app-btn app-btn-ghost app-btn-sm" type="submit">archive</button>
+                </form>
+                <form method="post" style="display: inline;">{% csrf_token %}
+                    <input type="hidden" name="action" value="pin">
+                    <input type="hidden" name="skill" value="{{ skill.name }}">
+                    <input type="hidden" name="pinned" value="{% if skill.pinned %}0{% else %}1{% endif %}">
+                    <button class="app-btn app-btn-outline app-btn-sm" type="submit">{% if skill.pinned %}unpin{% else %}pin{% endif %}</button>
+                </form>
+            </div>
+        </div>
+        {% empty %}
+        <p class="app-meta">No skills yet — create one below or say "save this as a skill" in chat.</p>
+        {% endfor %}
+    </div>
+</section>
+
+<section class="app-card" style="margin-top: 16px;">
+    <h2 class="wf-name">Create a staged skill</h2>
+    <form method="post">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="create">
+        <div style="display: grid; gap: 12px;">
+            <label>
+                <span class="cell-label">Name</span>
+                <input class="app-input" type="text" name="name" required maxlength="80">
+            </label>
+            <label>
+                <span class="cell-label">Description</span>
+                <input class="app-input" type="text" name="description" maxlength="200">
+            </label>
+            <label>
+                <span class="cell-label">Tools (comma-separated)</span>
+                <input class="app-input" type="text" name="tools">
+            </label>
+            <label>
+                <span class="cell-label">When to use it</span>
+                <input class="app-input" type="text" name="when_to_use">
+            </label>
+            <label>
+                <span class="cell-label">Required inputs and access</span>
+                <input class="app-input" type="text" name="inputs">
+            </label>
+            <label>
+                <span class="cell-label">The sequence of work</span>
+                <textarea class="app-input" name="sequence" rows="3"></textarea>
+            </label>
+            <label>
+                <span class="cell-label">How to validate the result</span>
+                <input class="app-input" type="text" name="validation">
+            </label>
+            <label>
+                <span class="cell-label">What to return</span>
+                <input class="app-input" type="text" name="returns">
+            </label>
+            <label>
+                <span class="cell-label">What requires approval</span>
+                <input class="app-input" type="text" name="approval">
+            </label>
+            <div>
+                <button class="app-btn app-btn-primary" type="submit"><i class="fas fa-plus"></i> Stage skill</button>
+            </div>
+        </div>
+    </form>
+</section>
+
+{% if messages %}
+<div class="toast-stack">
+    {% for message in messages %}
+    <div class="app-toast show" role="status" data-auto-dismiss>{{ message }}</div>
+    {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,79 @@
+{% extends "users/base_app.html" %}
+{% load static %}
+
+{% block title %}Edit {{ persona.name }} - Kazi{% endblock %}
+
+{% block breadcrumb %}
+<a href="{% url 'users:dashboard' %}">Dashboard</a><span class="crumb-sep">&#8250;</span><a href="{% url 'users:personas' %}">Personas</a><span class="crumb-sep">&#8250;</span><span class="crumb-current">{{ persona.name }}</span>
+{% endblock %}
+
+{% block content %}
+<div class="app-header">
+    <div>
+        <div class="app-eyebrow">Persona</div>
+        <h1 class="app-title">Customize {{ persona.name }}</h1>
+        <p class="app-subtitle">Scope, ceiling and boundary are enforced in the tool gate — not by prompt.</p>
+    </div>
+</div>
+
+<section class="app-card">
+    <form method="post" enctype="multipart/form-data">
+        {% csrf_token %}
+        <div style="display: grid; gap: 12px;">
+            <label>
+                <span class="cell-label">Name</span>
+                <input class="app-input" type="text" name="name" value="{{ persona.name }}" required maxlength="100">
+            </label>
+            <label>
+                <span class="cell-label">Description / standing rules</span>
+                <textarea class="app-input" name="description" rows="3">{{ persona.description }}</textarea>
+            </label>
+            <label>
+                <span class="cell-label">Tool scope (comma-separated action names; empty = persona default deny list off)</span>
+                <input class="app-input" type="text" name="tool_scope" value="{{ persona.tool_scope|join:', ' }}">
+            </label>
+            <label>
+                <span class="cell-label">Risk ceiling</span>
+                <select class="app-input" name="risk_ceiling">
+                    <option value="low" {% if persona.risk_ceiling == "low" %}selected{% endif %}>low</option>
+                    <option value="medium" {% if persona.risk_ceiling == "medium" %}selected{% endif %}>medium</option>
+                    <option value="high" {% if persona.risk_ceiling == "high" %}selected{% endif %}>high</option>
+                </select>
+            </label>
+            <label>
+                <span class="cell-label">Always ask before (comma-separated actions)</span>
+                <input class="app-input" type="text" name="approval_boundary" value="{{ persona.approval_boundary|join:', ' }}">
+            </label>
+            <label>
+                <span class="cell-label">Avatar (upload; falls back to initials)</span>
+                <input class="app-input" type="file" name="avatar" accept="image/*">
+            </label>
+            <div>
+                <span class="cell-label">Assigned skills (active skills load into this persona's context)</span>
+                <div style="display: flex; gap: 12px; flex-wrap: wrap; margin-top: 6px;">
+                    {% for skill in active_skills %}
+                    <label style="display: flex; align-items: center; gap: 6px;">
+                        <input type="checkbox" name="skills" value="{{ skill }}" {% if skill in persona.skills %}checked{% endif %}>
+                        {{ skill }}
+                    </label>
+                    {% empty %}
+                    <span class="app-meta">No active skills yet — create some on the Skills page.</span>
+                    {% endfor %}
+                </div>
+            </div>
+            <div style="display: flex; gap: 10px;">
+                <button class="app-btn app-btn-primary" type="submit"><i class="fas fa-check"></i> Save</button>
+                <a class="app-btn app-btn-outline" href="{% url 'users:personas' %}">Back</a>
+            </div>
+        </div>
+    </form>
+</section>
+
+{% if messages %}
+<div class="toast-stack">
+    {% for message in messages %}
+    <div class="app-toast show" role="status" data-auto-dismiss>{{ message }}</div>
+    {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

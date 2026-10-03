@@ -411,6 +411,18 @@ class OrchestrationCoordinator:
                 messages = messages[1:]
             return messages if messages else None
 
+        async def _with_persona_identity(room_id, user_id, ctx_prompt: str) -> str:
+            """Prepend the room persona's identity + skills to the loop context."""
+            try:
+                from orchestration.personas import persona_identity_prompt, resolve_room_persona
+
+                persona = await sync_to_async(resolve_room_persona)(room_id, user_id)
+                if persona:
+                    return "\n\n".join([persona_identity_prompt(persona), ctx_prompt or ""]).strip()
+            except Exception as exc:
+                logger.debug("Persona identity injection skipped: %s", exc)
+            return ctx_prompt
+
         async def _handle_agent_loop(query_text: str, history: str, ctx_prompt: str, mem_summary: str):
             """Run the agentic loop and map AgentEvents to WebSocket frames."""
             await emit_progress("planning", "started", "Thinking…")
@@ -635,6 +647,7 @@ class OrchestrationCoordinator:
                         ctx_prompt = await get_context_prompt() or ""
                     except Exception:
                         pass
+                    ctx_prompt = await _with_persona_identity(room_id, user_id, ctx_prompt)
                     mem_sum = await load_memory_summary(adaptive_context) or ""
                     await _handle_agent_resume(ctx_prompt, mem_sum)
                     pending_handled = True
@@ -784,6 +797,7 @@ class OrchestrationCoordinator:
                 ctx_prompt = await get_context_prompt() or ""
             except Exception:
                 pass
+            ctx_prompt = await _with_persona_identity(room_id, user_id, ctx_prompt)
             mem_sum = await load_memory_summary(adaptive_context) or ""
             try:
                 await _handle_agent_loop(

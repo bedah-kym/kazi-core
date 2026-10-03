@@ -207,6 +207,22 @@ class OrchestrationCoordinator:
             user_preferences["shell_profile"] = resolved.name
         except Exception as e:
             logger.debug("Shell profile resolution skipped: %s", e)
+        # 2026-10 autonomy: a human-armed autopilot window and exact-command
+        # grants for this room. Fail closed: no lookup -> ask as before.
+        try:
+            from orchestration.shell.autopilot import is_armed
+            user_preferences["_shell_autopilot"] = bool(
+                await sync_to_async(is_armed)(user_id, room_id)
+            )
+        except Exception as e:
+            logger.debug("Shell autopilot lookup skipped: %s", e)
+            user_preferences["_shell_autopilot"] = False
+        try:
+            from orchestration.shell.grants import active_grants
+            user_preferences["_shell_grants"] = await sync_to_async(active_grants)(user_id, room_id)
+        except Exception as e:
+            logger.debug("Shell grant lookup skipped: %s", e)
+            user_preferences["_shell_grants"] = {}
         style_prompt = format_style_prompt(user_preferences)
         conversation_mode = await get_conversation_mode(adaptive_context)
         mode_handled = False
@@ -423,6 +439,38 @@ class OrchestrationCoordinator:
                 logger.debug("Persona identity injection skipped: %s", exc)
             return ctx_prompt
 
+        async def _refresh_shell_autonomy(prefs):
+            """Re-read room autonomy so a mid-run arm/revoke/expiry takes effect."""
+            from orchestration.shell import autopilot as autopilot_mod
+            from orchestration.shell import grants as grants_mod
+
+            refreshed = dict(prefs) if isinstance(prefs, dict) else {}
+            try:
+                refreshed["_shell_autopilot"] = bool(
+                    await sync_to_async(autopilot_mod.is_armed)(user_id, room_id)
+                )
+            except Exception as exc:
+                logger.debug("Autopilot refresh skipped: %s", exc)
+                refreshed["_shell_autopilot"] = False
+            try:
+                refreshed["_shell_grants"] = await sync_to_async(grants_mod.active_grants)(user_id, room_id)
+            except Exception as exc:
+                logger.debug("Grant refresh skipped: %s", exc)
+                refreshed["_shell_grants"] = {}
+            return refreshed
+
+        def _pending_shell_command():
+            """The pending shell command for this room/user, or None."""
+            from orchestration.agent_loop import load_loop_state
+
+            state = load_loop_state(room_id, user_id)
+            pending = getattr(state, "pending_tool", None) if state else None
+            if not isinstance(pending, dict):
+                return None
+            if str(pending.get("name") or "") not in {"run_command", "run_shell", "shell_command"}:
+                return None
+            return str((pending.get("input") or {}).get("command") or "")
+
         async def _handle_agent_loop(query_text: str, history: str, ctx_prompt: str, mem_summary: str):
             """Run the agentic loop and map AgentEvents to WebSocket frames."""
             await emit_progress("planning", "started", "Thinking…")
@@ -434,6 +482,7 @@ class OrchestrationCoordinator:
                     "room_id": room_id,
                     "username": username,
                     "preferences": user_preferences,
+                    "refresh_shell_autonomy": _refresh_shell_autonomy,
                     "raw_query": query_text,
                     "user_message": query_text,
                 },
@@ -474,6 +523,7 @@ class OrchestrationCoordinator:
                     "room_id": room_id,
                     "username": username,
                     "preferences": user_preferences,
+                    "refresh_shell_autonomy": _refresh_shell_autonomy,
                 },
                 preferences=user_preferences,
                 context_prompt=ctx_prompt,
@@ -500,6 +550,51 @@ class OrchestrationCoordinator:
                     await broadcast_chunk(event.data.get("message", "Something went wrong."))
                 elif event.kind == "done":
                     await emit_progress("done", "completed", "Request complete.")
+
+        async def _apply_shell_autonomy_choice(
+            *, always_allow: bool, autopilot_requested: bool,
+        ) -> str:
+            """Turn a shell confirmation into a grant/autopilot. Returns a message."""
+            from orchestration.agent_loop import load_loop_state
+            from orchestration.shell import autopilot as autopilot_mod
+            from orchestration.shell import grants as grants_mod
+
+            state = load_loop_state(room_id, user_id)
+            pending = getattr(state, "pending_tool", None) if state else None
+            tool_name = ""
+            command = ""
+            if isinstance(pending, dict):
+                tool_name = str(pending.get("name") or "")
+                command = str((pending.get("input") or {}).get("command") or "")
+            profile = "standard"
+            if isinstance(user_preferences, dict):
+                profile = str(user_preferences.get("shell_profile") or "standard")
+
+            if autopilot_requested:
+                armed = await sync_to_async(autopilot_mod.arm)(user_id, room_id, armed_by=user_id)
+                if armed:
+                    if isinstance(user_preferences, dict):
+                        user_preferences["_shell_autopilot"] = True
+                    return (
+                        "Autopilot armed for this room — safe and bounded (local) shell "
+                        "commands run without asking until the window expires or your next "
+                        "message. Destructive, denied, and unallowlisted network commands, "
+                        "and anything driven by untrusted content, still ask."
+                    )
+                return "I couldn't arm autopilot just now, so I'll run this one after your yes."
+            if always_allow:
+                if tool_name in {"run_command", "run_shell", "shell_command"} and command:
+                    fp = await sync_to_async(grants_mod.create_grant)(
+                        user_id, room_id, command, profile_name=profile,
+                    )
+                    if fp:
+                        if isinstance(user_preferences, dict):
+                            current = dict(user_preferences.get("_shell_grants") or {})
+                            current[fp] = "always_allow"
+                            user_preferences["_shell_grants"] = current
+                        return f"Got it — I'll auto-run `{command}` in this room without asking until it expires."
+                return "I can't blanket-allow that action, so I'll just run it this once."
+            return ""
 
         async def _stream_general_chat(query_text: str, history: str):
             from orchestration.llm_client import get_llm_client
@@ -637,7 +732,35 @@ class OrchestrationCoordinator:
         # --- Agent loop confirmation resume ---
         if not pending_handled and AGENT_LOOP_ENABLED:
             if await has_pending_agent_state(room_id, user_id):
-                if is_cancel_request(query):
+                from orchestration.shell.chat_intents import (
+                    is_always_allow_request,
+                    is_autopilot_request,
+                )
+                always_allow = is_always_allow_request(query)
+                autopilot_requested = is_autopilot_request(query)
+                # Only an eligible shell confirmation may become a shell choice;
+                # an autonomy word must never confirm an unrelated action.
+                autonomy_choice = (
+                    (always_allow or autopilot_requested)
+                    and _pending_shell_command() is not None
+                )
+                if autonomy_choice:
+                    status = await _apply_shell_autonomy_choice(
+                        always_allow=always_allow,
+                        autopilot_requested=autopilot_requested,
+                    )
+                    if status:
+                        await broadcast_chunk(status)
+                    ctx_prompt = ""
+                    try:
+                        ctx_prompt = await get_context_prompt() or ""
+                    except Exception:
+                        pass
+                    ctx_prompt = await _with_persona_identity(room_id, user_id, ctx_prompt)
+                    mem_sum = await load_memory_summary(adaptive_context) or ""
+                    await _handle_agent_resume(ctx_prompt, mem_sum)
+                    pending_handled = True
+                elif is_cancel_request(query):
                     cancel_msg = await cancel_pending_action(room_id, user_id)
                     await broadcast_chunk(cancel_msg or "Okay, cancelled.")
                     pending_handled = True
@@ -654,6 +777,18 @@ class OrchestrationCoordinator:
                 else:
                     # User said something other than yes/no — clear the pending state
                     await dismiss_pending_confirmation(room_id, user_id)
+
+        # Autopilot kill switch: a fresh human message (not the one that armed it,
+        # which is handled above and sets pending_handled) disarms the window
+        # before the agent can auto-run anything.
+        if not pending_handled and user_preferences.get("_shell_autopilot"):
+            try:
+                from orchestration.shell import autopilot as autopilot_mod
+                if await sync_to_async(autopilot_mod.disarm)(user_id, room_id):
+                    user_preferences["_shell_autopilot"] = False
+                    await broadcast_chunk("Autopilot disarmed for this room.")
+            except Exception as exc:
+                logger.debug("Autopilot kill switch skipped: %s", exc)
 
         if not pending_handled:
             adaptive_state = await load_task_state(adaptive_context)

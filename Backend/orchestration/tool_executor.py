@@ -245,9 +245,15 @@ def _run_command_risk_info(
     `bounded` pauses inline, `destructive` pauses durably, `denied` is refused
     by the loop. A `bounded` command whose hosts are all allowlisted (#134) runs
     without a prompt. A request may ask for network explicitly (`network:
-    "bridge"`) so a script that pings internally still gets egress. User
-    approval overrides are still ignored for run_command so no learned
-    preference can auto-run a shell command.
+    "bridge"`) so a script that pings internally still gets egress.
+
+    Two 2026-10 autonomy inputs (injected by the coordinator, never read from
+    the DB here) can lower a `bounded` prompt to auto-run:
+      - ``_shell_autopilot``: a human-armed, time-boxed window for the room.
+      - ``_shell_grants``: ``{exact-command-fingerprint: decision}`` the human
+        approved. Both are ignored for `destructive`/`denied` and for a tainted
+        run's egress/sensitive step. Learned ``approval_overrides`` remain
+        ignored for ``run_command`` — no mined preference can auto-run shell.
     """
     from orchestration.shell.classifier import classify_command
 
@@ -273,10 +279,37 @@ def _run_command_risk_info(
         tier = "safe"
     else:
         tier = raw_tier
+
+    tainted = bool(isinstance(user_preferences, dict) and user_preferences.get("_shell_tainted"))
+    needs_egress = bool(classification.get("needs_network") or classification.get("needs_root"))
+    granted = False
+    autopilot = False
+    if isinstance(user_preferences, dict):
+        autopilot = bool(user_preferences.get("_shell_autopilot"))
+        grants = user_preferences.get("_shell_grants") or {}
+        if grants:
+            from orchestration.shell.grants import fingerprint
+
+            fp = fingerprint(command, profile_name=profile)
+            granted = bool(fp and fp in grants)
+
+    if tainted and needs_egress and tier != "denied":
+        # Rule of Two: untrusted content + egress/sensitive = always ask.
+        requires_confirmation = True
+    elif tier == "safe":
+        requires_confirmation = False
+    elif tier == "bounded":
+        # An unallowlisted network command still asks even under autopilot or a
+        # grant: egress is the exfil leg. An allowlisted network command already
+        # downgraded to `safe` above, so needs_network here means "not allowlisted".
+        requires_confirmation = bool(classification.get("needs_network")) or not (granted or autopilot)
+    else:
+        requires_confirmation = True
+
     return {
         "is_high_risk": tier in ("destructive", "denied"),
         "risk_level": {"destructive": "high", "denied": "high", "bounded": "medium"}.get(tier, "low"),
-        "requires_confirmation": tier != "safe",
+        "requires_confirmation": requires_confirmation,
         "tier": tier,
         "shell_tier": raw_tier,
         "shell_reason": classification["reason"],

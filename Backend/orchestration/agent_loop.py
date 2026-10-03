@@ -202,8 +202,14 @@ def _bucket_tool_calls(
     auto: List[Dict[str, Any]] = []
     pause: List[Tuple[Dict[str, Any], Optional[str]]] = []
     denied: List[Tuple[Dict[str, Any], str]] = []
+    # A tainted run is never auto-run past an egress/sensitive gate, even with a
+    # standing grant or autopilot armed. Surface the flag to the pure risk fn.
+    risk_preferences = preferences
+    if tainted and isinstance(preferences, dict):
+        risk_preferences = dict(preferences)
+        risk_preferences["_shell_tainted"] = True
     for tc in tool_calls:
-        risk = get_tool_risk_info(tc["name"], preferences, tc.get("input"))
+        risk = get_tool_risk_info(tc["name"], risk_preferences, tc.get("input"))
         if persona is not None:
             from orchestration.action_catalog import resolve_action_alias
             from orchestration.personas import apply_persona_bounds, persona_bounds
@@ -1433,6 +1439,12 @@ async def run_agent_loop(
         # ---- Handle tool calls --------------------------------------- #
         if stop_reason == "tool_use":
             tool_calls = _extract_tool_calls(content_blocks)
+
+            # Re-read room autonomy each iteration so a mid-run arm/revoke/expiry
+            # is honored (the coordinator injects this refresher).
+            _refresher = context.get("refresh_shell_autonomy")
+            if callable(_refresher):
+                preferences = await _refresher(preferences)
 
             # Separate into auto-execute, needs-confirmation, and refused.
             safe_calls, pause_calls, denied_calls = _bucket_tool_calls(

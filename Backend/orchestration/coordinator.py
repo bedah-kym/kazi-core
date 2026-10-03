@@ -400,7 +400,7 @@ class OrchestrationCoordinator:
                 content = content.strip()
                 if not content:
                     continue
-                role = "assistant" if speaker.lower() == "Kazi" else "user"
+                role = "assistant" if speaker.lower() == "kazi" else "user"
                 # Merge consecutive same-role messages
                 if messages and messages[-1]["role"] == role:
                     messages[-1]["content"] += "\n" + content

@@ -1,5 +1,5 @@
 /**
- * Mathia Onboarding Tour
+ * Kazi Onboarding Tour
  * Value-driven, user-centric tour for non-tech users.
  * Expanded with Wallet, Dashboard, Settings, Reminders, and Create Room.
  */
@@ -8,7 +8,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const driver = window.driver.js.driver;
     const mentionHint = window.isAiOnlyRoom
         ? 'Just type like you\'re talking to a friend. Ask for advice, a summary, or a joke!'
-        : 'Start with @mathia then just type like you\'re talking to a friend, e.g. @mathia how is the weather in Nairobi.';
+        : 'Start with @kazi then just type like you\'re talking to a friend, e.g. @kazi how is the weather in Nairobi.';
 
     const driverObj = driver({
         showProgress: true,
@@ -21,8 +21,8 @@ document.addEventListener('DOMContentLoaded', () => {
         steps: [
             {
                 popover: {
-                    title: 'Welcome to Mathia! 👋',
-                    description: 'We\'re thrilled to have you here. Mathia is designed to be your "Smarter Sidekick"—helping you stay organized without the technical headaches.',
+                    title: 'Welcome to Kazi! 👋',
+                    description: 'We\'re thrilled to have you here. Kazi is designed to be your "Smarter Sidekick"—helping you stay organized without the technical headaches.',
                     side: "center",
                     align: 'start'
                 }
@@ -67,7 +67,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 element: 'a[title="Reminders"]',
                 popover: {
                     title: 'Never Miss a Beat 🔔',
-                    description: 'Set and view your personal reminders. Mathia makes sure you\'re always on top of your schedule.',
+                    description: 'Set and view your personal reminders. Kazi makes sure you\'re always on top of your schedule.',
                     side: "bottom",
                     align: 'center'
                 }
@@ -76,7 +76,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 element: 'a[title="Settings"]',
                 popover: {
                     title: 'Make it Yours ⚙️',
-                    description: 'Adjust your preferences and profile to tailor the Mathia experience exactly how you like it.',
+                    description: 'Adjust your preferences and profile to tailor the Kazi experience exactly how you like it.',
                     side: "bottom",
                     align: 'center'
                 }
@@ -85,7 +85,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 element: '#contextPanelToggle',
                 popover: {
                     title: 'The "Vault" of Knowledge 🧠',
-                    description: 'Mathia remembers important details so you don\'t have to. Click this brain icon to see what your assistant has saved for you.',
+                    description: 'Kazi remembers important details so you don\'t have to. Click this brain icon to see what your assistant has saved for you.',
                     side: "left",
                     align: 'start'
                 }
@@ -94,7 +94,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 element: '.btn-calendar',
                 popover: {
                     title: 'Scheduling Magic ✨',
-                    description: 'Click the calendar to sync your schedule. Say goodbye to messy booking emails—Mathia handles it for you.',
+                    description: 'Click the calendar to sync your schedule. Say goodbye to messy booking emails—Kazi handles it for you.',
                     side: "right",
                     align: 'end'
                 }
@@ -111,7 +111,7 @@ document.addEventListener('DOMContentLoaded', () => {
             {
                 popover: {
                     title: 'You\'re All Set! 🎉',
-                    description: 'You\'ve got the keys to the castle. Feel free to explore, and remember—Mathia is always here to help. Have fun!',
+                    description: 'You\'ve got the keys to the castle. Feel free to explore, and remember—Kazi is always here to help. Have fun!',
                     side: "center",
                     align: 'center'
                 }
@@ -129,10 +129,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Auto-start for first-time users
-    if (!localStorage.getItem('mathia_tour_seen')) {
+    if (!localStorage.getItem('kazi_tour_seen')) {
         setTimeout(() => {
             driverObj.drive();
-            localStorage.setItem('mathia_tour_seen', 'true');
+            localStorage.setItem('kazi_tour_seen', 'true');
         }, 1500);
     }
 });

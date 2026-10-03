@@ -29,7 +29,7 @@ async def test_orchestration():
         print(f"TESTING: {query}")
         print("=" * 60)
 
-        ai_query = query[7:].strip() if query.startswith('@Kazi') else query
+        ai_query = query[len('@Kazi'):].strip() if query.startswith('@Kazi') else query
 
         try:
             # Step 1: Parse Intent

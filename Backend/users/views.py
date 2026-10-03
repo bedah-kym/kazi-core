@@ -1,4 +1,4 @@
-﻿from django.contrib.auth.views import LoginView
+from django.contrib.auth.views import LoginView
 from django.contrib import messages
 from django.core.cache import cache
 from django.shortcuts import render, redirect, get_object_or_404

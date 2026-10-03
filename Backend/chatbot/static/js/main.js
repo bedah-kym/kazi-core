@@ -266,15 +266,15 @@ function connectToChat(roomId) {
         if (data.command === 'new_message') {
             createMessage(data.message, rId);
             scrollToLastMessage(rId);
-            if (window.mathiaAssistant) {
-                window.mathiaAssistant.checkForTrigger(data);
+            if (window.kaziAssistant) {
+                window.kaziAssistant.checkForTrigger(data);
             }
             return;
         }
         // AI Integration
         if (data.command === 'ai_stream' || data.command === 'ai_message' || data.command === 'ai_message_saved' || data.command === 'ai_voice_ready' || data.command === 'orchestration_step') {
-            if (window.mathiaAssistant) {
-                window.mathiaAssistant.handleMessage(data);
+            if (window.kaziAssistant) {
+                window.kaziAssistant.handleMessage(data);
             }
             return;
         }
@@ -472,18 +472,18 @@ function createMessage(data, roomId, prepend = false) {
         msgTextTag.classList.add('sentimage');
     }
 
-    // SPECIAL STYLING FOR MATHIA
-    const isMathia = data.member && (
-        data.member.toLowerCase().includes('mathia')
+    // SPECIAL STYLING FOR KAZI
+    const isKazi = data.member && (
+        data.member.toLowerCase().includes('kazi')
     );
 
-    if (isMathia) {
-        msgTextTag.classList.add('mathia-message');
+    if (isKazi) {
+        msgTextTag.classList.add('kazi-message');
         // Add Badge to the bubble — reflects the selected model's own avatar
         const badge = document.createElement('div');
-        badge.className = 'mathia-badge';
-        badge.innerHTML = (window.mathiaBadgeHtml && window.mathiaBadgeHtml())
-            || '<i class="fas fa-robot"></i> <span>Mathia AI</span>';
+        badge.className = 'kazi-badge';
+        badge.innerHTML = (window.kaziBadgeHtml && window.kaziBadgeHtml())
+            || '<i class="fas fa-robot"></i> <span>Kazi AI</span>';
         msgTextTag.insertBefore(badge, msgTextTag.firstChild);
     }
 
@@ -720,7 +720,7 @@ function createMessage(data, roomId, prepend = false) {
 
     // Add dropdown menu to AI messages
     if (window.messageActions && data.id) {
-        const isAIMessage = data.member && (data.member.toLowerCase() === 'mathia' || data.member.toLowerCase() === '@mathia');
+        const isAIMessage = data.member && (data.member.toLowerCase() === 'kazi' || data.member.toLowerCase() === '@kazi');
         const isFailed = data.status === 'failed' || data.error === true;
 
         if (isAIMessage) {
@@ -993,8 +993,8 @@ if (chatSubmit) {
             const socket = getCurrentSocket();
             if (socket && socket.readyState === WebSocket.OPEN) {
                 // INSTANT THINKING: Disabled to prevent ordering race condition (Bubble appearing before User Msg)
-                // if (message.toLowerCase().includes('@mathia') && window.mathiaAssistant) {
-                //     window.mathiaAssistant.showAIThinking();
+                // if (message.toLowerCase().includes('@kazi') && window.kaziAssistant) {
+                //     window.kaziAssistant.showAIThinking();
                 // }
 
                 socket.send(JSON.stringify({

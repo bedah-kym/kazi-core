@@ -121,14 +121,14 @@ docker compose up --build -d    # 2. boots db, redis, web, celery — auto-migra
 docker compose exec web python Backend/manage.py createsuperuser   # 3. make your login
 ```
 
-Open `http://localhost:8000`, log in, and say hi to **Mathia** — your General
+Open `http://localhost:8000`, log in, and say hi to **KAZI** — your General
 room routes messages to the AI automatically.
 
 > **No keys handy?** `bash scripts/demo.sh` boots a demo instead → [run-locally](docs/run-locally.md).
 > **Stuck, or want the full walkthrough** (troubleshooting, non-Docker setup, Temporal)?
 > → [Quick Start guide](docs/quickstart.md).
 
-> **Note:** "Mathia" appears in docker images, database defaults, and the bot
+> **Note:** "KAZI" appears in docker images, database defaults, and the bot
 > username. It's the AI assistant built into Kazi Core — same system, just the
 > name we gave the bot.
 

@@ -1,4 +1,4 @@
-// Search functionality for MATHIA chat
+// Search functionality for KAZI chat
 (function () {
     'use strict';
 

@@ -86,6 +86,12 @@ def register(request):
             messages.error(request, 'Username already exists')
             return render(request, 'users/register.html', ctx)
 
+        from .naming import RESERVED_USERNAME_MESSAGE, is_reserved_username
+
+        if is_reserved_username(username):
+            messages.error(request, RESERVED_USERNAME_MESSAGE)
+            return render(request, 'users/register.html', ctx)
+
         if User.objects.filter(email__iexact=email).exists():
             messages.error(request, 'Email already registered')
             return render(request, 'users/register.html', ctx)

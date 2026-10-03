@@ -1,8 +1,8 @@
-# Plan: Bot identity, persona UX, chat skill creation, admin escalation, schedule health (2026-10)
+﻿# Plan: Bot identity, persona UX, chat skill creation, admin escalation, schedule health (2026-10)
 
 Status: draft for maintainer approval
 
-Covers five workstreams from the 2026-10-03 direction: (A) kill the `Kazi`
+Covers five workstreams from the 2026-10-03 direction: (A) kill the `Mathia`
 name, (B) persona program with dashboard UX + avatars, (C) `@admin` chat
 escalation, (D) skills in the dashboard + chat skill creation, (E) the
 schedule silent-skip gap. **Boot persistence is explicitly out of scope** for
@@ -10,22 +10,23 @@ now.
 
 ---
 
-## A. Kazi → Kazi identity sweep
+## A. Mathia → Kazi identity sweep
 
-**Goal:** the bot is named Kazi everywhere; `Kazi` appears nowhere in code,
-prompts, templates, or the bot user.
+**Goal:** the bot is named Kazi everywhere; `Mathia` appears nowhere in code,
+prompts, templates, or the bot user (historical migrations excepted).
 
 **Touches:**
-- `Backend/chatbot/consumers.py` — the `@Kazi` wake trigger (line ~819) becomes `@kazi`.
+- `Backend/chatbot/consumers.py` — the `@mathia` wake trigger (line ~819) becomes `@kazi`.
 - `KAZI_AGENT_NAME` in `.env` (manual, one line) and any settings default.
 - Prompt/template/string sweep (~130 refs): `agent_prompts.py`, templates
-  (`Automations - Kazi`, etc.), docstrings, help texts.
-- Bot user rename `Kazi` → `kazi` via a one-off data migration (users app —
-  **protected**); room membership/history FKs unchanged (same row).
-- Static asset: `Kazi-avatar.svg` → `kazi-avatar.svg` + references in
+  (`Automations - Mathia`, etc.), docstrings, help texts.
+- Bot user rename `mathia` → `kazi` via a one-off data migration (users app —
+  **protected**); a collision with an existing `kazi` account merges room
+  memberships into it before retiring the old row.
+- Static asset: `mathia-avatar.svg` → `kazi-avatar.svg` + references in
   `chatbot/views.py`.
 
-**Verification:** grep for `Kazi` returns zero in `Backend/` and templates;
+**Verification:** grep for `Mathia` returns zero in `Backend/` and templates;
 chat wake works with `@kazi`; existing rooms still resolve their bot member.
 
 **Open questions:** none — hard cut, no backwards alias.
@@ -76,7 +77,7 @@ persona not selectable.
 request a persona the same way.
 
 **Feasibility (asked): yes — Django is irrelevant here, this is pure routing.**
-Mentions are already parsed (the `@Kazi` trigger). Plan:
+Mentions are already parsed (the `@mathia` trigger). Plan:
 
 - In `chatbot/consumers.py` (not protected): before bot dispatch, detect
   `@admin` (configurable handle via settings). The message persists in the

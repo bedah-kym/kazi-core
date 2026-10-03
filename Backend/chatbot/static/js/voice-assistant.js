@@ -1,5 +1,5 @@
 /**
- * Mathia AI Voice Assistant
+ * Kazi AI Voice Assistant
  * Handles recording, visualization, and uploading of voice notes.
  */
 

@@ -5,7 +5,7 @@ import sys
 
 # Setup Django environment
 # Add the directory containing 'Backend' (package) to sys.path
-sys.path.append(r'c:\Users\user\Desktop\Dev2\MATHIA-PROJECT\Backend')
+sys.path.append(r'c:\Users\user\Desktop\Dev2\Kazi-PROJECT\Backend')
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'Backend.settings')
 os.environ['DJANGO_SECRET_KEY'] = 'django-insecure-test-key-12345'  # nosec B105 — test fixture — fake credential
 django.setup()

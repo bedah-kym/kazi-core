@@ -1,8 +1,8 @@
-from .serializers import MathiaReplySerializer
+from .serializers import KaziReplySerializer
 from chatbot.models import Chatroom
 from chatbot.serializers import ChatroomSerializer
 from rest_framework import generics
-from .models import MathiaReply
+from .models import KaziReply
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
@@ -265,8 +265,8 @@ def calendly_disconnect(request):
 
 
 class CreateReply(generics.ListCreateAPIView):
-    queryset = MathiaReply.objects.all()
-    serializer_class = MathiaReplySerializer
+    queryset = KaziReply.objects.all()
+    serializer_class = KaziReplySerializer
     # permission_classes =[IsStaffEditorPermissions]
 
 

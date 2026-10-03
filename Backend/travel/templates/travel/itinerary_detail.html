@@ -1,7 +1,7 @@
 {% extends "users/base_app.html" %}
 {% load static %}
 
-{% block title %}{{ itinerary.title }} | Mathia{% endblock %}
+{% block title %}{{ itinerary.title }} | Kazi{% endblock %}
 
 {% block breadcrumb %}
 <a href="{% url 'users:dashboard' %}">Dashboard</a><span class="crumb-sep">&#8250;</span><a href="{% url 'travel:itinerary_list' %}">My Trips</a><span class="crumb-sep">&#8250;</span><span class="crumb-current">{{ itinerary.title }}</span>
@@ -74,7 +74,7 @@
             <div id="map"></div>
         </div>
         <div style="margin-top:16px; font-size:14px; color: var(--ink-soft);">
-            Ask Mathia to add flights, hotels, or activities for this trip.
+            Ask Kazi to add flights, hotels, or activities for this trip.
         </div>
         <a class="travel-btn travel-btn-ghost" style="margin-top:12px;" href="{% url 'chatbot:redirect_to_home' %}">Go to Chat</a>
     </div>

@@ -333,7 +333,7 @@ class TrialApplicationForm(forms.ModelForm):
             'success_metric', 'budget_readiness', 'go_live_timeframe', 'heard_from'
         ]
         widgets = {
-            'primary_use_case': forms.Textarea(attrs={'rows': 3, 'placeholder': 'What do you want Mathia to handle first?'}),
+            'primary_use_case': forms.Textarea(attrs={'rows': 3, 'placeholder': 'What do you want Kazi to handle first?'}),
             'pain_points': forms.Textarea(attrs={'rows': 3, 'placeholder': 'Where are you stuck today?'}),
             'success_metric': forms.TextInput(attrs={'placeholder': 'E.g., ship 3 workflows/week, reduce follow-ups missed'}),
             'budget_readiness': forms.TextInput(attrs={'placeholder': 'Ready now / this quarter / exploring'}),

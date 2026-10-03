@@ -5,7 +5,7 @@ connect, command dispatch in receive, and sender/room validation in
 new_message — so the OrchestrationCoordinator extraction (Phase 1) cannot
 silently change the WebSocket contract.
 
-The TransactionTestCase class locks the handoff boundary: a routed `@mathia`
+The TransactionTestCase class locks the handoff boundary: a routed `@Kazi`
 message must delegate to the coordinator and persist the returned response.
 """
 import json
@@ -157,7 +157,7 @@ class ChatConsumerRoutingTests(TransactionTestCase):
         consumer.get_history_as_text = AsyncMock(return_value="")
 
         async_to_sync(consumer.new_message)(
-            {"from": "alice", "message": "@mathia hello", "chatid": str(chatroom.id)}
+            {"from": "alice", "message": "@kazi hello", "chatid": str(chatroom.id)}
         )
 
         handle.assert_awaited_once()
@@ -166,12 +166,12 @@ class ChatConsumerRoutingTests(TransactionTestCase):
         self.assertEqual(kwargs["user_id"], alice.id)
         self.assertEqual(kwargs["room_id"], str(chatroom.id))
 
-        # The coordinator result was persisted as a Mathia message.
+        # The coordinator result was persisted as a Kazi message.
         from .models import Message
 
         self.assertTrue(
             Message.objects.filter(
-                member__User__username="mathia", content__contains="enc"
+                member__User__username="kazi", content__contains="enc"
             ).exists()
         )
 
@@ -194,7 +194,7 @@ class ChatConsumerRoutingTests(TransactionTestCase):
 
         consumer = self._make_consumer(alice, member, chatroom)
         async_to_sync(consumer.new_message)(
-            {"from": "alice_lock", "message": "@mathia hello", "chatid": str(chatroom.id)}
+            {"from": "alice_lock", "message": "@Kazi hello", "chatid": str(chatroom.id)}
         )
 
         self.assertTrue(observed.get("called"), "handle never called")

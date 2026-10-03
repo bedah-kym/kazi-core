@@ -24,7 +24,11 @@ Protected paths are listed in `.claude/protected_paths.txt` and `.github/CODEOWN
 - **What it is:** A self-hostable Django + Channels backend that runs an agent loop, plans multi-step workflows, executes tool calls through a pluggable connector registry, and persists conversation memory.
 - **Language / runtime:** Python 3.11–3.12 (see §6), Django 5.x (ASGI). Postgres + Redis required in production; SQLite works for unit tests.
 - **Async model:** ASGI (Daphne / Uvicorn) for HTTP + WebSockets via Django Channels. Celery + Beat for background work. Optional Temporal for durable workflows.
-- **Open vs in-house:** This repo (`kazi-core`) ships the **agent core**. The maintainer also runs an in-house SaaS called **Mathia OS** built on top of this core. Anything Mathia-specific is held back from this branch. If you find a path that is intentionally `.gitignore`d (e.g. `frontend/`, parts of `docs/`), assume it belongs to Mathia and is not yours to recreate.
+- **Open vs in-house:** This repo (`kazi-core`) ships the **agent core**. The
+  maintainer also runs an in-house SaaS built on top of this core. Anything
+  SaaS-specific is held back from this branch. If you find a path that is
+  intentionally `.gitignore`d (e.g. `frontend/`, parts of `docs/`), assume it
+  belongs to the SaaS and is not yours to recreate.
 
 ## 2. Repo map (where to look first)
 

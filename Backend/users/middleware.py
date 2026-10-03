@@ -22,7 +22,7 @@ class TrialExpiryMiddleware:
                     workspace.trial_active = False
                     workspace.plan = 'free'
                     workspace.save(update_fields=['trial_active', 'plan'])
-                    messages.error(request, "Your 30-day trial ended. Upgrade to keep using Mathia.")
+                    messages.error(request, "Your 30-day trial ended. Upgrade to keep using Kazi.")
                     pricing_path = reverse('users:pricing')
                     if request.path != pricing_path:
                         return redirect('users:pricing')

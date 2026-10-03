@@ -385,7 +385,7 @@ class ExportService:
         ical_lines = [
             "BEGIN:VCALENDAR",
             "VERSION:2.0",
-            "PRODID:-//Mathia Travel//EN",
+            "PRODID:-//Kazi Travel//EN",
             "CALSCALE:GREGORIAN",
             f"X-WR-CALNAME:{itinerary.title}",
             "X-WR-TIMEZONE:Africa/Nairobi",
@@ -493,7 +493,7 @@ class BookingOrchestrator:
 
         if provider == 'booking':
             # Add Booking.com affiliate ID
-            affiliate_id = 'MATHIA-TRAVEL-2025'  # Placeholder
+            affiliate_id = 'Kazi-TRAVEL-2025'  # Placeholder
             if '?' in booking_url:
                 booking_url += f"&aid={affiliate_id}"
             else:
@@ -502,9 +502,9 @@ class BookingOrchestrator:
         elif provider == 'buupass':
             # Add Buupass referral code
             if '?' in booking_url:
-                booking_url += "&ref=MATHIA"
+                booking_url += "&ref=Kazi"
             else:
-                booking_url += "?ref=MATHIA"
+                booking_url += "?ref=Kazi"
 
         logger.info(f"Generated booking URL for item {item_id}: {booking_url}")
         return booking_url

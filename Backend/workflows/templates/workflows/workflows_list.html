@@ -2,9 +2,9 @@
 {% load static %}
 {% load humanize %}
 
-{% block title %}Automations - Mathia{% endblock %}
+{% block title %}Automations - Kazi{% endblock %}
 
-{% block meta_description %}Your Mathia automations - workflows, schedules and triggers.{% endblock %}
+{% block meta_description %}Your Kazi automations - workflows, schedules and triggers.{% endblock %}
 
 {% block breadcrumb %}
 <a href="{% url 'users:dashboard' %}">Dashboard</a><span class="crumb-sep">&#8250;</span><span class="crumb-current">Automations</span>
@@ -19,7 +19,7 @@
     <div>
         <div class="app-eyebrow">Operations</div>
         <h1 class="app-title">Automations</h1>
-        <p class="app-subtitle">Workflows Mathia runs for you - scheduled, triggered or on demand.</p>
+        <p class="app-subtitle">Workflows Kazi runs for you - scheduled, triggered or on demand.</p>
     </div>
     <div class="app-header-actions">
         <a class="app-btn app-btn-outline" href="{% url 'workflows:operations_inbox' %}">
@@ -142,7 +142,7 @@
         <div class="app-empty-icon"><i class="fas fa-diagram-project"></i></div>
         <h2 class="app-empty-title">No automations yet</h2>
         <p class="app-empty-text">
-            Describe what you want automated in a chat with Mathia - it will draft
+            Describe what you want automated in a chat with Kazi - it will draft
             the workflow, and you can review and run it here.
         </p>
         <a class="app-btn app-btn-primary app-btn-sm" href="{% url 'chatbot:redirect_to_home' %}">

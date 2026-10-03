@@ -52,7 +52,7 @@ def register(request):
         if token:
             messages.error(request, 'This invite link is invalid or has expired.')
         else:
-            messages.info(request, 'Mathia is invite-only. Request access below.')
+            messages.info(request, 'Kazi is invite-only. Request access below.')
         return redirect('users:trial_apply')
 
     # Store token in session for social auth adapter
@@ -251,7 +251,7 @@ def onboarding(request):
             workspace.onboarding_completed = True
             workspace.save()
 
-            messages.success(request, 'Welcome to Mathia! Your workspace is ready.')
+            messages.success(request, 'Welcome to Kazi! Your workspace is ready.')
             return redirect('users:dashboard')
 
     return render(request, 'users/onboarding.html', {

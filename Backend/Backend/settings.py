@@ -786,10 +786,10 @@ if not DEBUG:
 # ==========================================
 
 JAZZMIN_SETTINGS = {
-    "site_header": "MATHIA Admin",
-    "site_title": "MATHIA Administration",
-    "welcome_sign": "Welcome to MATHIA Administration",
-    "copyright": "MATHIA Platform",
+    "site_header": "Kazi Admin",
+    "site_title": "Kazi Administration",
+    "welcome_sign": "Welcome to Kazi Administration",
+    "copyright": "Kazi Platform",
 
     # Dashboard and display settings
     "show_ui_builder": False,

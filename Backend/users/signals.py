@@ -13,11 +13,11 @@ User = get_user_model()
 def create_user_profile(sender, instance, created, **kwargs):
     """Auto-create UserProfile when User is created"""
     if created:
-        # Set default values for Mathia bot
-        if instance.username == 'mathia':
+        # Set default values for Kazi bot
+        if instance.username == 'Kazi':
             UserProfile.objects.create(
                 user=instance,
-                bio="I'm Mathia, your AI assistant. I can help you with scheduling, payments, WhatsApp messages, and more! Just mention me with @mathia.",
+                bio="I'm Kazi, your AI assistant. I can help you with scheduling, payments, WhatsApp messages, and more! Just mention me with @Kazi.",
                 location="Cloud ☁️",
                 user_type='personal'
             )
@@ -35,33 +35,33 @@ def create_user_profile(sender, instance, created, **kwargs):
             general_room = Chatroom.objects.create()
             general_room.participants.add(user_member)
 
-            # Ensure the Mathia bot exists, then add it so the General room is
+            # Ensure the Kazi bot exists, then add it so the General room is
             # AI-ready even on a fresh database (bot created before first user).
             try:
-                mathia_user, _ = User.objects.get_or_create(
-                    username='mathia',
+                Kazi_user, _ = User.objects.get_or_create(
+                    username='Kazi',
                     defaults={
-                        'first_name': 'Mathia',
+                        'first_name': 'Kazi',
                         'last_name': 'AI',
                         'is_active': True,
-                        'email': 'mathia@kwikchat.ai',
+                        'email': 'Kazi@kwikchat.ai',
                     },
                 )
-                mathia_member, _ = Member.objects.get_or_create(User=mathia_user)
+                Kazi_member, _ = Member.objects.get_or_create(User=Kazi_user)
 
-                general_room.participants.add(mathia_member)
+                general_room.participants.add(Kazi_member)
 
                 # Add a welcome message
                 welcome_msg = Message.objects.create(
-                    member=mathia_member,
-                    content="Hello! I'm Mathia, your AI assistant. This is your General room where you can ask me anything.",
+                    member=Kazi_member,
+                    content="Hello! I'm Kazi, your AI assistant. This is your General room where you can ask me anything.",
                     timestamp=django.utils.timezone.now()
                 )
                 general_room.chats.add(welcome_msg)
 
             except Exception as e:
                 # Log error but don't fail user creation
-                print(f"Error adding Mathia to room: {e}")
+                print(f"Error adding Kazi to room: {e}")
 
 
 @receiver(post_save, sender=User)

@@ -1,4 +1,4 @@
-from django.contrib.auth.views import LoginView
+﻿from django.contrib.auth.views import LoginView
 from django.contrib import messages
 from django.core.cache import cache
 from django.shortcuts import render, redirect, get_object_or_404
@@ -117,7 +117,7 @@ def send_trial_invite(request, pk):
         reverse('users:register') + f'?invite={invite.token}'
     )
     email_body = (
-        "You're invited to join Mathia.\n\n"
+        "You're invited to join Kazi.\n\n"
         f"Name: {app.name}\nCompany: {app.company}\nUse case: {app.primary_use_case}\n\n"
         f"Create your account: {register_url}\n\n"
         "This link is unique to you and valid for one activation.\n"
@@ -125,7 +125,7 @@ def send_trial_invite(request, pk):
     )
     try:
         send_mail(
-            subject="Your Mathia invite",
+            subject="Your Kazi invite",
             message=email_body,
             from_email=None,
             recipient_list=[app.email],
@@ -196,8 +196,8 @@ def activate_trial(request, token):
 
 
 # Marketing pages (value-focused, non-technical)
-def why_mathia(request):
-    return render(request, 'users/why-mathia.html')
+def why_Kazi(request):
+    return render(request, 'users/why-kazi.html')
 
 
 def playbooks(request):
@@ -272,9 +272,9 @@ def send_platform_invite(request):
     )
     try:
         send_mail(
-            subject=f"{request.user.get_full_name() or request.user.username} invited you to Mathia",
+            subject=f"{request.user.get_full_name() or request.user.username} invited you to Kazi",
             message=(
-                f"You've been invited to join Mathia by {request.user.get_full_name() or request.user.username}.\n\n"
+                f"You've been invited to join Kazi by {request.user.get_full_name() or request.user.username}.\n\n"
                 f"Create your account: {invite_url}\n\n"
                 "This link expires in 7 days."
             ),

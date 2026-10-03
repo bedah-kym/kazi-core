@@ -1,5 +1,5 @@
 """
-Invoice connector that lets Mathia create an invoice (IntaSend sandbox) and optionally email it.
+Invoice connector that lets Kazi create an invoice (IntaSend sandbox) and optionally email it.
 """
 import logging
 import re

@@ -47,7 +47,7 @@ record that survives Redis eviction and shows up in the ops inbox.
 
 ### 🧭 One routing brain
 
-`OrchestrationCoordinator` owns everything after `@mathia` routing — directives,
+`OrchestrationCoordinator` owns everything after `@Kazi` routing — directives,
 pending confirmations, the agent loop, planner, intent dispatch, and general
 chat. The WebSocket consumer is thin: it validates, encrypts, persists, and
 hands off.
@@ -120,7 +120,7 @@ auto-discovers it on restart.
 | Telemetry | JSONL event log for every loop, tool call, and memory update |
 | Payments | Wallet, invoices, and transactions with M-Pesa and card support via IntaSend |
 | Travel | Flight, hotel, bus, transfer, and event search via Amadeus |
-| Orchestration coordinator | One routing facade that owns post-`@mathia` decisions |
+| Orchestration coordinator | One routing facade that owns post-`@Kazi` decisions |
 | Retry backoff + circuit breaker | Exponential backoff and per-service degrade for flapping integrations |
 | Dependency cycle detection | Kahn's-algorithm check that rejects circular workflow plans |
 | History compaction | Trims oldest turns to the context budget — on by default |

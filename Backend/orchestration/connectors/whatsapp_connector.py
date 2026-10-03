@@ -51,7 +51,7 @@ class WhatsAppConnector(BaseConnector):
             message = temp_client.messages.create(
                 from_=from_number,
                 to=to_number,
-                body="Hello from Mathia! Your WhatsApp integration is now connected."
+                body="Hello from Kazi! Your WhatsApp integration is now connected."
             )
             return {"status": "sent", "sid": message.sid}
         except Exception:

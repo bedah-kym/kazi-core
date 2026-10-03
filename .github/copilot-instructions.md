@@ -1,4 +1,4 @@
-% Mathia project — guidance for AI coding agents
+% Kazi project — guidance for AI coding agents
 
 This file gives concise, actionable guidance so an AI coding agent can be productive in this repository.
 

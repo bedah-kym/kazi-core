@@ -1,4 +1,5 @@
 import json
+import re
 import traceback
 from asgiref.sync import sync_to_async
 from django.utils import timezone
@@ -25,6 +26,15 @@ from django.conf import settings
 from django.utils.text import get_valid_filename
 logger = logging.getLogger(__name__)
 User = get_user_model()
+
+# v0.7 @admin escalation: messages mentioning @admin go to superusers instead
+# of the bot. "@admin request persona "Name" - "description"" opens a
+# PersonaRequest for the admin to approve in the admin UI.
+ADMIN_MENTION_RE = re.compile(r'@admin\b', re.IGNORECASE)
+ADMIN_PERSONA_REQUEST_RE = re.compile(
+    r'@admin\s+request\s+persona\s+"([^"]+)"(?:\s*[-–—]\s*"?([^"]*)"?)?',
+    re.IGNORECASE,
+)
 
 # Per-(room, user) locks so concurrent messages from the same user in the
 # same room cannot race on paused agent-loop confirmations (the pause state is
@@ -636,6 +646,70 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
         return False
 
+    async def _send_plain_ai_message(self, room_id, text: str) -> None:
+        """Send a short bot message (used for @admin acknowledgements)."""
+        def _create():
+            kazi_user, _ = User.objects.get_or_create(
+                username='kazi',
+                defaults={
+                    'first_name': 'Kazi',
+                    'last_name': 'AI',
+                    'is_active': True,
+                    'email': 'kazi@kwikchat.ai',
+                },
+            )
+            kazi_member, _ = Member.objects.get_or_create(User=kazi_user)
+            message = Message.objects.create(
+                member=kazi_member, content=text, timestamp=timezone.now(),
+            )
+            room = Chatroom.objects.filter(id=room_id).first()
+            if room:
+                room.chats.add(message)
+                room.save()
+            return message
+
+        message = await sync_to_async(_create)()
+        await self.send_chat_message({
+            "command": "new_message",
+            "message": await self.message_to_json(message),
+        })
+
+    async def _handle_admin_escalation(self, room_id, message_content: str, member_user) -> None:
+        """Route @admin mentions to superusers; never to the bot."""
+        def _notify():
+            from django.contrib.auth import get_user_model as _get_user_model
+
+            from notifications.services import NotificationService
+            from workflows.models import PersonaRequest
+
+            room = Chatroom.objects.filter(id=room_id).first()
+            persona_match = ADMIN_PERSONA_REQUEST_RE.search(message_content)
+            if persona_match:
+                request_row = PersonaRequest.objects.create(
+                    user=member_user,
+                    room=room,
+                    name=persona_match.group(1).strip()[:100],
+                    description=(persona_match.group(2) or "").strip()[:1000],
+                )
+                logger.info("@admin persona request %s created in room %s", request_row.id, room_id)
+
+            for admin_user in _get_user_model().objects.filter(is_superuser=True, is_active=True):
+                NotificationService.notify(
+                    user=admin_user,
+                    event_type="message.mention",
+                    title=f"@admin from {member_user.username}",
+                    body=message_content[:500],
+                    related_room=room,
+                    metadata={"room_id": room_id, "from_user_id": member_user.id},
+                )
+
+        await sync_to_async(_notify)()
+        if ADMIN_PERSONA_REQUEST_RE.search(message_content):
+            ack = "Persona request sent to the admin. You'll see it on your Personas page once reviewed."
+        else:
+            ack = "Message sent to the admin. They'll see it in their inbox."
+        await self._send_plain_ai_message(room_id, ack)
+
     async def new_message(self, data):
         try:
             logger.info(f"=== NEW MESSAGE START === Data: {data}")
@@ -812,6 +886,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     await self.schedule_idle_nudge_if_needed(room_id, member_user.id)
                 except Exception as e:
                     logger.warning(f"Idle nudge schedule skipped: {e}")
+
+                # === ADMIN ESCALATION (@admin) ===
+                # @admin messages go to superusers and are never routed to the
+                # bot (persona requests open a PersonaRequest for approval).
+                if ADMIN_MENTION_RE.search(message_content):
+                    await self._handle_admin_escalation(room_id, message_content, member_user)
+                    return
 
                 # === ORCHESTRATION: Full pipeline ===
                 should_route_ai = False

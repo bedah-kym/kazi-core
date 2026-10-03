@@ -788,6 +788,30 @@ META_TOOL_DEFINITIONS = [
             "required": ["name"],
         },
     },
+    {
+        "name": "save_skill",
+        "description": (
+            "Save a new skill — a reusable instruction pack — from this conversation. "
+            "Use when the user says 'save this as a skill' or describes a procedure "
+            "worth keeping. The skill is staged, never active: the user promotes it "
+            "later from the Skills dashboard."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Short skill name"},
+                "description": {"type": "string", "description": "One-line description"},
+                "tools": {"type": "string", "description": "Comma-separated tool names it uses"},
+                "when_to_use": {"type": "string", "description": "When to use the skill"},
+                "inputs": {"type": "string", "description": "Required inputs and access"},
+                "sequence": {"type": "string", "description": "The sequence of work"},
+                "validation": {"type": "string", "description": "How to validate the result"},
+                "returns": {"type": "string", "description": "What the skill returns"},
+                "approval": {"type": "string", "description": "What requires approval"},
+            },
+            "required": ["name", "description", "sequence"],
+        },
+    },
 ]
 
 # Sub-agent limits (tighter than parent)
@@ -816,6 +840,8 @@ async def _execute_meta_tool(
         return _list_skills()
     elif tool_name == "load_skill":
         return _load_skill(tool_input, context)
+    elif tool_name == "save_skill":
+        return await _save_skill(tool_input, context)
     else:
         return {"status": "error", "message": f"Unknown meta-tool: {tool_name}"}
 
@@ -833,6 +859,42 @@ def _list_skills() -> Dict[str, Any]:
         "skills": skills,
         "message": (
             f"{len(skills)} skill(s) available." if skills else "No active skills."
+        ),
+    }
+
+
+async def _save_skill(tool_input: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+    """Save a chat-authored skill as a staged folder + reviewable draft."""
+    name = (tool_input.get("name") or "").strip()
+    if not name:
+        return {"status": "error", "message": "Skill name is required."}
+
+    contract = {
+        section: (tool_input.get(section) or "").strip()
+        for section in ("when_to_use", "inputs", "sequence", "validation", "returns", "approval")
+    }
+    tools = [item.strip() for item in (tool_input.get("tools") or "").split(",") if item.strip()]
+    try:
+        from workflows.promotion import create_skill_from_text
+
+        path, draft = await sync_to_async(create_skill_from_text)(
+            name=name,
+            description=(tool_input.get("description") or "").strip(),
+            tools=tools,
+            contract=contract,
+            user_id=context.get("user_id"),
+            room_id=context.get("room_id"),
+        )
+    except Exception as exc:
+        logger.error("save_skill failed: %s", exc)
+        return {"status": "error", "message": f"Could not save the skill: {exc}"}
+
+    return {
+        "status": "success",
+        "skill": draft.skill_name,
+        "message": (
+            f"Saved '{draft.skill_name}' as a staged skill. It is not active yet — "
+            "promote it from the Skills dashboard when you're ready."
         ),
     }
 

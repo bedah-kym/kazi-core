@@ -402,6 +402,53 @@ async def save_session_as_skill(
     )
 
 
+def create_skill_from_text(
+    *,
+    name: str,
+    description: str = "",
+    tools: Optional[Iterable[str]] = None,
+    contract: Optional[Dict[str, Any]] = None,
+    user_id: int,
+    room_id: Optional[int] = None,
+):
+    """Chat-authored skill -> staged skill folder + reviewable draft.
+
+    Never active: a human promotes it from the Skills dashboard (or via
+    ``skill_registry.transition_skill``). This is the write path behind the
+    agent's ``save_skill`` meta-tool.
+    """
+    normalized = {
+        section: str((contract or {}).get(section) or "")
+        for section in CONTRACT_SECTIONS
+    }
+    path = write_staged_skill(
+        name,
+        description,
+        [str(tool).strip() for tool in (tools or []) if str(tool).strip()],
+        normalized,
+    )
+
+    resolved_room_id = None
+    if room_id:
+        try:
+            from chatbot.models import Chatroom
+
+            resolved_room_id = room_id if Chatroom.objects.filter(id=room_id).exists() else None
+        except Exception:
+            resolved_room_id = None
+
+    draft = WorkflowDraft.objects.create(
+        user_id=user_id,
+        room_id=resolved_room_id,
+        definition=None,
+        status="draft",
+        source="explicit_save",
+        skill_name=slugify_skill_name(name),
+        skill_contract=normalized,
+    )
+    return path, draft
+
+
 def queue_candidates(
     candidates: Iterable[Dict[str, Any]],
 ) -> Dict[str, int]:

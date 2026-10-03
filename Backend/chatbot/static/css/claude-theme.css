@@ -359,7 +359,7 @@ body.dark-mode .chat-header .dropdown-menu .dropdown-header {
     border: 1px solid var(--line);
 }
 
-.mathia-message {
+.kazi-message {
     background: var(--surface) !important;
     border: 1px solid rgba(217, 119, 87, 0.25);
     box-shadow: 0 4px 16px rgba(217, 119, 87, 0.10);
@@ -367,11 +367,11 @@ body.dark-mode .chat-header .dropdown-menu .dropdown-header {
     backdrop-filter: none;
 }
 
-.mathia-message .mathia-content {
+.kazi-message .kazi-content {
     text-shadow: none;
 }
 
-.mathia-badge {
+.kazi-badge {
     background: transparent;
     color: #a14e2e;
     font-weight: 600;
@@ -381,7 +381,7 @@ body.dark-mode .chat-header .dropdown-menu .dropdown-header {
     font-size: 0.8rem;
 }
 
-.mathia-badge i {
+.kazi-badge i {
     color: var(--clay);
     animation: none;
 }
@@ -398,19 +398,19 @@ body.dark-mode .chat-header .dropdown-menu .dropdown-header {
     border-color: #3e3d38;
 }
 
-[data-theme="dark"] .mathia-message {
+[data-theme="dark"] .kazi-message {
     background: #30302d !important;
     border-color: rgba(217, 119, 87, 0.30);
     color: #edeae2;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
 }
 
-[data-theme="dark"] .mathia-badge {
+[data-theme="dark"] .kazi-badge {
     background: transparent;
     color: #b8b3a6;
 }
 
-[data-theme="dark"] .mathia-badge i {
+[data-theme="dark"] .kazi-badge i {
     color: #e08a68;
 }
 
@@ -569,43 +569,43 @@ body.dark-mode .chat-header .dropdown-menu .dropdown-header {
 }
 
 /* ---------- Agentic timeline & streaming steps ---------- */
-.mathia-tool-timeline::before {
+.kazi-tool-timeline::before {
     background: linear-gradient(180deg, rgba(217, 119, 87, 0.35), rgba(217, 119, 87, 0.08));
 }
 
-.mathia-step-icon.running,
-.mathia-step-icon.thinking {
+.kazi-step-icon.running,
+.kazi-step-icon.thinking {
     background: rgba(217, 119, 87, 0.14);
     color: var(--clay-strong);
 }
 
-.mathia-step-icon.success {
+.kazi-step-icon.success {
     background: rgba(72, 150, 101, 0.14);
     color: #2f855a;
 }
 
-.mathia-step-icon.error {
+.kazi-step-icon.error {
     background: rgba(200, 92, 63, 0.14);
     color: #c05621;
 }
 
-.mathia-step-label {
+.kazi-step-label {
     color: var(--ink);
 }
 
-.mathia-step-detail {
+.kazi-step-detail {
     color: #8a8578;
 }
 
-.mathia-step.running {
+.kazi-step.running {
     background: linear-gradient(90deg, transparent 0%, rgba(217, 119, 87, 0.06) 50%, transparent 100%);
 }
 
-[data-theme="dark"] .mathia-step-label {
+[data-theme="dark"] .kazi-step-label {
     color: #edeae2;
 }
 
-[data-theme="dark"] .mathia-step-detail {
+[data-theme="dark"] .kazi-step-detail {
     color: #a5a098;
 }
 
@@ -988,7 +988,7 @@ body.dark-mode .search-panel .search-position {
 }
 
 /* ---------- Dark mode: autocomplete & quick prompts ---------- */
-body.dark-mode .mathia-autocomplete {
+body.dark-mode .kazi-autocomplete {
     background: #2f2f2c;
     border-color: rgba(217, 119, 87, 0.4);
 }
@@ -1006,7 +1006,7 @@ body.dark-mode .autocomplete-item strong {
     color: #e08a68;
 }
 
-body.dark-mode .mathia-quick-prompts {
+body.dark-mode .kazi-quick-prompts {
     background: rgba(38, 38, 36, 0.9);
     border-color: rgba(237, 234, 226, 0.12);
 }
@@ -1144,13 +1144,13 @@ body.dark-mode .model-avatar-auto {
     flex: 1;
 }
 
-.mathia-badge {
+.kazi-badge {
     display: inline-flex;
     align-items: center;
     gap: 7px;
 }
 
-.mathia-badge .model-avatar {
+.kazi-badge .model-avatar {
     width: 26px;
     height: 26px;
     border-radius: 7px;
@@ -1169,7 +1169,7 @@ body.dark-mode .model-avatar-auto {
     background: rgba(61, 57, 41, 0.18);
 }
 
-.mathia-badge .model-avatar-img {
+.kazi-badge .model-avatar-img {
     width: 26px;
     height: 26px;
     border-radius: 7px;

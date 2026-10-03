@@ -1,7 +1,7 @@
-# Quick Start
+﻿# Quick Start
 
 The shortest path from a fresh clone to a working conversation with
-**Mathia**, Kazi's built-in AI assistant. You'll end with a self-hosted stack
+**Kazi**, Kazi's built-in AI assistant. You'll end with a self-hosted stack
 running in Docker and a chat room where your messages are answered by your own
 LLM key.
 
@@ -13,8 +13,8 @@ LLM key.
 
 ```
   git clone ──► cp .env.example .env ──► docker compose up ──► createsuperuser ──► say hi
-                 (add your LLM key)       (migrate + seed       (your login)       (Mathia replies)
-                                          the Mathia bot)
+                 (add your LLM key)       (migrate + seed       (your login)       (Kazi replies)
+                                          the Kazi bot)
 ```
 
 **Time to first reply:** ~5 minutes on a warm Docker cache, ~15 on a cold one.
@@ -111,7 +111,7 @@ docker compose up --build -d
 
 This one command builds the image and starts five services. The `web` service's
 entrypoint waits for Postgres, then **automatically** runs migrations, seeds the
-Mathia bot user, and collects static files — no manual `migrate` step.
+Kazi bot user, and collects static files — no manual `migrate` step.
 
 | Service | Role | Key detail |
 |---|---|---|
@@ -152,9 +152,9 @@ Follow the prompts (username, email, password).
 
     1. Creates a `UserProfile` for you.
     2. Creates a **General Room**.
-    3. Adds the **Mathia** bot as a participant (it already exists — step 2
+    3. Adds the **Kazi** bot as a participant (it already exists — step 2
        seeded it).
-    4. Drops a welcome message from Mathia into the room.
+    4. Drops a welcome message from Kazi into the room.
 
     So you land in a room that's already wired for AI — no extra setup.
 
@@ -168,7 +168,7 @@ Follow the prompts (username, email, password).
    first room).
 3. Type a message and send it.
 
-Because your General Room contains Mathia plus exactly one human, **every
+Because your General Room contains Kazi plus exactly one human, **every
 message routes to the AI automatically** — no special prefix needed. Try one of
 these to prove the loop works end-to-end:
 
@@ -176,16 +176,16 @@ these to prove the loop works end-to-end:
 - `what's the weather in Nairobi?`
 - `remind me to call John tomorrow at 9am`
 
-!!! tip "Prefix with `@mathia` anywhere else"
-    In a room with multiple humans (or one you create without Mathia), only
-    messages starting with `@mathia` trigger the AI. The General Room is the
-    exception because it's a 1-human + Mathia room.
+!!! tip "Prefix with `@Kazi` anywhere else"
+    In a room with multiple humans (or one you create without Kazi), only
+    messages starting with `@Kazi` trigger the AI. The General Room is the
+    exception because it's a 1-human + Kazi room.
 
 ---
 
 ## Verify it actually works
 
-- **Mathia replies** → your LLM key is good and the agent loop ran.
+- **Kazi replies** → your LLM key is good and the agent loop ran.
 - **Message echoed, no reply** → see the "no AI reply" pitfall below.
 - **Room never loads (spinner forever)** → see the `403` / encryption pitfall.
 
@@ -200,7 +200,7 @@ these to prove the loop works end-to-end:
 | Room won't load; browser console shows a `403` on `/ws/chat/...` | `ENCRYPTION_KEY` (or `Backend/.encryption.key`) changed/lost after rooms were created. | Restore the original key, or wipe the DB volume (`docker compose down -v`) and start over. |
 | `web` container exits immediately | Postgres/Redis health check still failing. | Wait ~30s and retry; check `docker compose logs db`. |
 | `set: Illegal option -` in container logs | Scripts have `CRLF` line endings. | Re-clone (`.gitattributes` fixes this on checkout). |
-| "Mathia user not found" warning in logs | You created a user *before* the web container finished seeding. | Run `docker compose exec web python Backend/manage.py seed_mathia`. |
+| "Kazi user not found" warning in logs | You created a user *before* the web container finished seeding. | Run `docker compose exec web python Backend/manage.py seed_kazi`. |
 | Changed `POSTGRES_*` but can't connect | `DATABASE_URL` still points at the old creds. | Update `DATABASE_URL` in `.env` to match `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB`. |
 
 !!! success "The two most common mistakes"
@@ -222,7 +222,7 @@ Prefer the host? You'll need Postgres and Redis running locally, plus Python
     pip install -r requirements.lock
     # export the .env vars into your shell, then:
     python Backend/manage.py migrate
-    python Backend/manage.py seed_mathia
+    python Backend/manage.py seed_kazi
     python Backend/manage.py runserver
     ```
 
@@ -234,7 +234,7 @@ Prefer the host? You'll need Postgres and Redis running locally, plus Python
     pip install -r requirements.lock
     # set the .env vars in your session, then:
     python Backend/manage.py migrate
-    python Backend/manage.py seed_mathia
+    python Backend/manage.py seed_kazi
     python Backend/manage.py runserver
     ```
 

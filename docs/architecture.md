@@ -13,7 +13,7 @@ Client (WebSocket / HTTP)
 ChatConsumer (Django Channels)
   |
   v
-OrchestrationCoordinator (post-@mathia routing)
+OrchestrationCoordinator (post-@Kazi routing)
   |
   v
 ContextManager (memory assembly)
@@ -48,7 +48,7 @@ Safety limits:
 
 ### OrchestrationCoordinator (`orchestration/coordinator.py`)
 
-The routing facade that owns everything after `@mathia` routing: directives,
+The routing facade that owns everything after `@Kazi` routing: directives,
 pending confirmations (durable agent-loop approvals), the agent loop, planner,
 intent dispatch, and general chat. The WebSocket consumer delegates to it via
 injected async callbacks, so it has no Channels dependency of its own.

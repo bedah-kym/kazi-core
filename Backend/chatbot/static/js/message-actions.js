@@ -480,7 +480,7 @@ class MessageActions {
             const data = await response.json();
 
             if (response.ok) {
-                this.showToast('Document uploaded! Mathia is indexing it now.', 'success');
+                this.showToast('Document uploaded! Kazi is indexing it now.', 'success');
                 setTimeout(() => {
                     this.closeUploadModal();
                 }, 1500);

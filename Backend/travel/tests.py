@@ -552,7 +552,7 @@ class BookingOrchestratorTests(TestCase):
 
     def test_get_booking_url_affiliate(self):
         url = async_to_sync(self.orchestrator.get_booking_url)(self.item.id, self.user.id)
-        self.assertIn('aid=MATHIA-TRAVEL-2025', url)
+        self.assertIn('aid=Kazi-TRAVEL-2025', url)
 
     def test_record_booking_and_status(self):
         booking = async_to_sync(self.orchestrator.record_booking)(self.item.id, 'CONF123', 'REF456')

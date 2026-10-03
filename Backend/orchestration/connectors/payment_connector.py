@@ -1,5 +1,5 @@
 """
-Read-Only Payment Connector for AI (Mathia)
+Read-Only Payment Connector for AI (Kazi)
 Strict permissions: Can only READ payment data, cannot initiate transactions
 """
 import logging

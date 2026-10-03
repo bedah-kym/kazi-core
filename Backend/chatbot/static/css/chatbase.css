@@ -2048,7 +2048,7 @@ body[data-message-density="compact"] .message {
    ============================================ */
 
 /* Container for tool steps inside the stream message */
-.mathia-tool-timeline {
+.kazi-tool-timeline {
     display: flex;
     flex-direction: column;
     gap: 0;
@@ -2058,7 +2058,7 @@ body[data-message-density="compact"] .message {
 }
 
 /* Vertical connector line */
-.mathia-tool-timeline::before {
+.kazi-tool-timeline::before {
     content: '';
     position: absolute;
     left: 13px;
@@ -2070,7 +2070,7 @@ body[data-message-density="compact"] .message {
 }
 
 /* Individual step card */
-.mathia-step {
+.kazi-step {
     display: flex;
     align-items: flex-start;
     gap: 10px;
@@ -2088,7 +2088,7 @@ body[data-message-density="compact"] .message {
 }
 
 /* Step status icon */
-.mathia-step-icon {
+.kazi-step-icon {
     width: 28px;
     height: 28px;
     border-radius: 50%;
@@ -2100,23 +2100,23 @@ body[data-message-density="compact"] .message {
     transition: all 0.3s ease;
 }
 
-.mathia-step-icon.running {
+.kazi-step-icon.running {
     background: rgba(102,126,234,0.15);
     color: #667eea;
     animation: iconPulse 1.5s ease-in-out infinite;
 }
 
-.mathia-step-icon.success {
+.kazi-step-icon.success {
     background: rgba(46,204,113,0.15);
     color: #2ecc71;
 }
 
-.mathia-step-icon.error {
+.kazi-step-icon.error {
     background: rgba(231,76,60,0.15);
     color: #e74c3c;
 }
 
-.mathia-step-icon.thinking {
+.kazi-step-icon.thinking {
     background: rgba(102,126,234,0.1);
     color: #667eea;
     animation: iconPulse 2s ease-in-out infinite;
@@ -2128,23 +2128,23 @@ body[data-message-density="compact"] .message {
 }
 
 /* Step content */
-.mathia-step-body {
+.kazi-step-body {
     flex: 1;
     min-width: 0;
 }
 
-.mathia-step-label {
+.kazi-step-label {
     font-size: 0.82rem;
     font-weight: 600;
     color: #334155;
     line-height: 1.3;
 }
 
-[data-theme="dark"] .mathia-step-label {
+[data-theme="dark"] .kazi-step-label {
     color: #e2e8f0;
 }
 
-.mathia-step-detail {
+.kazi-step-detail {
     font-size: 0.72rem;
     color: #94a3b8;
     margin-top: 1px;
@@ -2152,7 +2152,7 @@ body[data-message-density="compact"] .message {
 }
 
 /* Shimmer effect for running steps */
-.mathia-step.running {
+.kazi-step.running {
     background: linear-gradient(90deg, transparent 0%, rgba(102,126,234,0.05) 50%, transparent 100%);
     background-size: 200% 100%;
     animation: stepSlideIn 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards,
@@ -2164,12 +2164,12 @@ body[data-message-density="compact"] .message {
     100% { background-position: -200% 0; }
 }
 
-.mathia-step.completed {
+.kazi-step.completed {
     opacity: 0.85;
 }
 
 /* Spinner icon for running state */
-.mathia-step-icon.running i.fa-spinner {
+.kazi-step-icon.running i.fa-spinner {
     animation: spin 1s linear infinite;
 }
 
@@ -2179,7 +2179,7 @@ body[data-message-density="compact"] .message {
 }
 
 /* Old progress status — kept for backward compat, restyled */
-.mathia-progress-status {
+.kazi-progress-status {
     display: none;
     align-items: center;
     gap: 8px;
@@ -2191,20 +2191,20 @@ body[data-message-density="compact"] .message {
     font-size: 0.78rem;
 }
 
-.mathia-progress-status.active {
+.kazi-progress-status.active {
     display: flex;
 }
 
-.mathia-progress-status.done {
+.kazi-progress-status.done {
     opacity: 0.5;
     transition: opacity 0.4s ease;
 }
 
-.mathia-progress-badge {
+.kazi-progress-badge {
     display: none; /* Hidden — timeline cards replace this */
 }
 
-.mathia-progress-text {
+.kazi-progress-text {
     font-weight: 500;
 }
 
@@ -2221,7 +2221,7 @@ body[data-message-density="compact"] .message {
     to   { opacity: 0; transform: scale(0.98); }
 }
 
-.mathia-message-item.morph-in {
+.kazi-message-item.morph-in {
     animation: morphIn 0.35s ease forwards;
 }
 
@@ -2235,30 +2235,30 @@ body[data-message-density="compact"] .message {
    ============================================ */
 
 @media (max-width: 768px) {
-    .mathia-tool-timeline {
+    .kazi-tool-timeline {
         margin: 6px 0 8px;
     }
 
-    .mathia-tool-timeline::before {
+    .kazi-tool-timeline::before {
         left: 11px;
     }
 
-    .mathia-step {
+    .kazi-step {
         padding: 6px 8px;
         gap: 8px;
     }
 
-    .mathia-step-icon {
+    .kazi-step-icon {
         width: 22px;
         height: 22px;
         font-size: 10px;
     }
 
-    .mathia-step-label {
+    .kazi-step-label {
         font-size: 0.78rem;
     }
 
-    .mathia-step-detail {
+    .kazi-step-detail {
         font-size: 0.68rem;
     }
 
@@ -2281,7 +2281,7 @@ body[data-message-density="compact"] .message {
     }
 
     /* Tables in messages should scroll horizontally */
-    .mathia-content table {
+    .kazi-content table {
         display: block;
         overflow-x: auto;
         -webkit-overflow-scrolling: touch;
@@ -2290,7 +2290,7 @@ body[data-message-density="compact"] .message {
     }
 
     /* Code blocks shouldn't blow out width */
-    .mathia-content pre {
+    .kazi-content pre {
         overflow-x: auto;
         max-width: calc(100vw - 80px);
         font-size: 0.8rem;
@@ -2307,13 +2307,13 @@ body[data-message-density="compact"] .message {
     }
 
     /* Progress status compact on mobile */
-    .mathia-progress-status {
+    .kazi-progress-status {
         font-size: 0.72rem;
         padding: 4px 8px;
     }
 
     /* Thinking indicator should stay visible above mobile keyboard */
-    .mathia-thinking {
+    .kazi-thinking {
         position: relative;
         z-index: 10;
     }
@@ -2327,16 +2327,16 @@ body[data-message-density="compact"] .message {
 
 /* Extra small screens (iPhone SE, etc.) */
 @media (max-width: 375px) {
-    .mathia-badge {
+    .kazi-badge {
         font-size: 0.7em !important;
         padding: 3px 7px !important;
     }
 
-    .mathia-step-label {
+    .kazi-step-label {
         font-size: 0.74rem;
     }
 
-    .mathia-step-icon {
+    .kazi-step-icon {
         width: 20px;
         height: 20px;
         font-size: 9px;
@@ -2359,20 +2359,20 @@ body[data-message-density="compact"] .message {
 }
 
 /* Dark mode for tool timeline */
-[data-theme="dark"] .mathia-tool-timeline::before {
+[data-theme="dark"] .kazi-tool-timeline::before {
     background: linear-gradient(180deg, rgba(138,159,245,0.3) 0%, rgba(138,159,245,0.05) 100%);
 }
 
-[data-theme="dark"] .mathia-step.running {
+[data-theme="dark"] .kazi-step.running {
     background: linear-gradient(90deg, transparent 0%, rgba(138,159,245,0.08) 50%, transparent 100%);
     background-size: 200% 100%;
 }
 
-[data-theme="dark"] .mathia-step-detail {
+[data-theme="dark"] .kazi-step-detail {
     color: #64748b;
 }
 
-[data-theme="dark"] .mathia-progress-status {
+[data-theme="dark"] .kazi-progress-status {
     color: #94a3b8;
 }
 

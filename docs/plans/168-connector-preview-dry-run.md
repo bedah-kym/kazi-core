@@ -15,7 +15,7 @@ Approval cards include predicted effects computed by an optional connector
   just has no `effects` key value.
 - No preview wiring for internal contact/memory tools (they have no
   connector); those cards stay as-is.
-- No frontend/card renderer changes (Mathia UI is held back from this repo);
+- No frontend/card renderer changes (Kazi UI is held back from this repo);
   the payload change is additive.
 - `preview()` never commits anything — it is a read-only description of
   effects.

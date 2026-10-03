@@ -766,9 +766,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
             logger.info("Step 12: Getting room members...")
             room_members = await self.get_chatroom_participants(current_chat)
-            mathia_member = next((m for m in room_members if m.User.username == 'mathia'), None)
-            human_members = [m for m in room_members if m.User.username != 'mathia']
-            is_ai_room = bool(mathia_member) and len(human_members) == 1
+            kazi_member = next((m for m in room_members if m.User.username == 'kazi'), None)
+            human_members = [m for m in room_members if m.User.username != 'kazi']
+            is_ai_room = bool(kazi_member) and len(human_members) == 1
 
             if member in room_members:
                 logger.info("Step 13: Adding message to chatroom...")
@@ -816,15 +816,15 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 # === ORCHESTRATION: Full pipeline ===
                 should_route_ai = False
                 ai_query = None
-                if message_content.lower().startswith('@mathia'):
-                    ai_query = message_content[7:].strip()
+                if message_content.lower().startswith('@kazi'):
+                    ai_query = message_content[5:].strip()
                     should_route_ai = True
                 elif is_ai_room:
                     ai_query = message_content.strip()
                     should_route_ai = True
 
                 if should_route_ai:
-                    logger.info("Step 16: @mathia detected! Starting orchestration...")
+                    logger.info("Step 16: @kazi detected! Starting orchestration...")
 
                     if ai_query:
                         # Fetch history for conversation context (bounded)
@@ -899,15 +899,15 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             })
 
                             if encrypted_message:
-                                # Create Mathia user/member if not exists
+                                # Create Kazi user/member if not exists
                                 def _create_ai_message():
                                     ai_user, _ = User.objects.get_or_create(
-                                        username='mathia',
+                                        username='kazi',
                                         defaults={
-                                            'first_name': 'Mathia',
+                                            'first_name': 'Kazi',
                                             'last_name': 'AI',
                                             'is_active': True,
-                                            'email': 'mathia@kwikchat.ai'
+                                            'email': 'kazi@kwikchat.ai'
                                         }
                                     )
                                     # Use filter().first() to handle duplicate Members
@@ -935,7 +935,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                     await sync_to_async(current_chat.save)()
                                     logger.info(f"AI message saved with ID: {ai_message.id}")
 
-                                    # Trigger Mathia Voice Response (TTS) only in voice mode
+                                    # Trigger Kazi Voice Response (TTS) only in voice mode
                                     voice_enabled = False
                                     try:
                                         prefs = await sync_to_async(get_user_preferences)(member_user.id)
@@ -1303,7 +1303,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         }))
 
     async def ai_voice_ready(self, event):
-        """Mathia voice response is ready"""
+        """Kazi voice response is ready"""
         await self.send_message({
             "command": "ai_voice_ready",
             "message_id": event["message_id"],
@@ -1348,12 +1348,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
             # Create message from AI bot
             def _create_ai_message():
                 ai_user, created = User.objects.get_or_create(
-                    username='mathia',
+                    username='kazi',
                     defaults={
-                        'first_name': 'Mathia',
+                        'first_name': 'Kazi',
                         'last_name': 'AI',
                         'is_active': True,  # Activate so profile is visible
-                        'email': 'mathia@kwikchat.ai'
+                        'email': 'kazi@kwikchat.ai'
                     }
                 )
                 # Use filter().first() to handle duplicate Members

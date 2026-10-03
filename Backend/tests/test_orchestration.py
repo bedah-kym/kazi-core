@@ -19,9 +19,9 @@ async def test_orchestration():
 
     # Test queries
     test_queries = [
-        "@mathia Say hello",
-        "@mathia What's the weather in Nairobi?",
-        "@mathia Plan a trip to Mombasa",
+        "@Kazi Say hello",
+        "@Kazi What's the weather in Nairobi?",
+        "@Kazi Plan a trip to Mombasa",
     ]
 
     for query in test_queries:
@@ -29,7 +29,7 @@ async def test_orchestration():
         print(f"TESTING: {query}")
         print("=" * 60)
 
-        ai_query = query[7:].strip() if query.startswith('@mathia') else query
+        ai_query = query[len('@Kazi'):].strip() if query.startswith('@Kazi') else query
 
         try:
             # Step 1: Parse Intent
@@ -80,7 +80,7 @@ async def test_orchestration():
 
                 full_response = []
                 async for chunk in llm.stream_text(
-                    system_prompt="You are Mathia, a helpful AI assistant.",
+                    system_prompt="You are Kazi, a helpful AI assistant.",
                     user_prompt=ai_query,
                     temperature=0.7,
                     max_tokens=200

@@ -25,10 +25,10 @@ def _room_display_name(room, members, current_user):
     Generate a safe display name for the room list.
     Mirrors the sidebar logic used in chatbot.views.home.
     """
-    mathia_member = next((m for m in members if m.User.username == 'mathia'), None)
+    kazi_member = next((m for m in members if m.User.username == 'kazi'), None)
     other_members = [m for m in members if m.User != current_user]
 
-    if mathia_member and len(members) <= 2:
+    if kazi_member and len(members) <= 2:
         return "General (AI)"
     if len(other_members) == 0:
         return "Private Room (You)"
@@ -77,7 +77,7 @@ def list_rooms(request):
                 "url": request.build_absolute_uri(
                     reverse('chatbot:bot-home', kwargs={"room_name": room.id})
                 ),
-                "has_ai": any(m.User.username == 'mathia' for m in members),
+                "has_ai": any(m.User.username == 'kazi' for m in members),
             })
 
         cache.set(cache_key, rooms_payload, 60)  # 1 minute cache to reduce DB hits

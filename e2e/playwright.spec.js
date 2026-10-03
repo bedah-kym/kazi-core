@@ -90,20 +90,20 @@ test.describe('Chatroom responsive smoke', () => {
     });
 
     test('message actions dropdowns open for each AI message', async ({ page }) => {
-        // After scripts run, message-actions should inject dropdowns on mathia-message
+        // After scripts run, message-actions should inject dropdowns on kazi-message
         // Wait briefly for initialization
         await page.waitForTimeout(200);
         // Ensure dropdowns are attached to each message by calling the helper
         await page.evaluate(() => {
             if (window.messageActions && typeof window.messageActions.addDropdownToMessage === 'function') {
-                document.querySelectorAll('.mathia-message').forEach(el => {
+                document.querySelectorAll('.kazi-message').forEach(el => {
                     const id = el.dataset.id || ('msg-' + Math.random().toString(36).slice(2, 6));
                     window.messageActions.addDropdownToMessage(el, id, el.textContent || '', true, false);
                 });
             }
         });
 
-        const messages = await page.$$('.mathia-message');
+        const messages = await page.$$('.kazi-message');
         expect(messages.length).toBeGreaterThan(0);
 
         for (const m of messages) {

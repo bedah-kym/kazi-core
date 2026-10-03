@@ -280,7 +280,7 @@ def generate_ai_response(self, room_id, user_id, user_message):
             {
                 "role": "system",
                 "content": (
-                    "You are Mathia, an assistant within kwikchat which is part of the TaskShare freelancing platform. "
+                    "You are Kazi, an assistant within kwikchat which is part of the TaskShare freelancing platform. "
                     "short responses are preferred. "
                     " kiwkchat helps freelancers manage tasks and projects collaboratively, so your responses should focus on that context. "
                     "offer knowlege about task management, project planning, and effective communication, but avoid going off-topic."
@@ -730,12 +730,12 @@ def _deliver_reminder_to_chat(reminder: Reminder) -> bool:
             return False
 
         ai_user, _ = User.objects.get_or_create(
-            username='mathia',
+            username='kazi',
             defaults={
-                'first_name': 'Mathia',
+                'first_name': 'Kazi',
                 'last_name': 'AI',
                 'is_active': True,
-                'email': 'mathia@kwikchat.ai'
+                'email': 'kazi@kwikchat.ai'
             }
         )
         ai_member = Member.objects.filter(User=ai_user).first()
@@ -760,7 +760,7 @@ def _deliver_reminder_to_chat(reminder: Reminder) -> bool:
                 "type": "ai_message_saved",
                 "message": {
                     "id": ai_message.id,
-                    "member": "mathia",
+                    "member": "kazi",
                     "content": f"Reminder: {reminder.content}",
                     "timestamp": str(ai_message.timestamp),
                     "parent_id": None,
@@ -1829,12 +1829,12 @@ def send_idle_nudge(self, room_id: int, user_id: int, scheduled_at_iso: str):
 
         def _create_ai_message():
             ai_user, _ = User.objects.get_or_create(
-                username='mathia',
+                username='kazi',
                 defaults={
-                    'first_name': 'Mathia',
+                    'first_name': 'Kazi',
                     'last_name': 'AI',
                     'is_active': True,
-                    'email': 'mathia@kwikchat.ai'
+                    'email': 'kazi@kwikchat.ai'
                 }
             )
             ai_member = Member.objects.filter(User=ai_user).first()
@@ -1862,7 +1862,7 @@ def send_idle_nudge(self, room_id: int, user_id: int, scheduled_at_iso: str):
                 "type": "ai_message_saved",
                 "message": {
                     "id": ai_message.id,
-                    "member": "mathia",
+                    "member": "kazi",
                     "content": message_text,
                     "timestamp": str(ai_message.timestamp),
                     "parent_id": ai_message.parent_id,

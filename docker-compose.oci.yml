@@ -1,6 +1,6 @@
 version: "3.9"
 
-# OCI deployment (ARM/AMD). Push mathia-web image to OCIR, then set WEB_IMAGE below.
+# OCI deployment (ARM/AMD). Push kazi-web image to OCIR, then set WEB_IMAGE below.
 # Environment comes from .env (copy a production-safe variant to the server).
 
 services:
@@ -11,13 +11,16 @@ services:
     environment:
       - TZ=${TZ:-Africa/Nairobi}
       - PGTZ=${TZ:-Africa/Nairobi}
-      - POSTGRES_USER=${POSTGRES_USER:-mathia_user}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-mathia_password}
-      - POSTGRES_DB=${POSTGRES_DB:-mathia_db}
+      # Rename note: the defaults are kazi_* now. An existing postgres_data
+      # volume keeps its original role/database, so pin POSTGRES_* and
+      # DATABASE_URL in .env when upgrading an existing deployment.
+      - POSTGRES_USER=${POSTGRES_USER:-kazi_user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-kazi_password}
+      - POSTGRES_DB=${POSTGRES_DB:-kazi_db}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -h db -p 5432 -U ${POSTGRES_USER:-mathia_user} -d ${POSTGRES_DB:-mathia_db}"]
+      test: ["CMD-SHELL", "pg_isready -h db -p 5432 -U ${POSTGRES_USER:-kazi_user} -d ${POSTGRES_DB:-kazi_db}"]
       interval: 5s
       timeout: 5s
       retries: 30
@@ -44,7 +47,7 @@ services:
       - CELERY_BROKER_URL=${REDIS_URL:-redis://redis:6379/0}
       - CELERY_RESULT_BACKEND=${REDIS_URL:-redis://redis:6379/0}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
-      - DATABASE_URL=${DATABASE_URL:-postgres://mathia_user:mathia_password@db:5432/mathia_db}
+      - DATABASE_URL=${DATABASE_URL:-postgres://kazi_user:kazi_password@db:5432/kazi_db}
     ports:
       - "8000:8000"
     depends_on:
@@ -65,7 +68,7 @@ services:
       - CELERY_BROKER_URL=${REDIS_URL:-redis://redis:6379/0}
       - CELERY_RESULT_BACKEND=${REDIS_URL:-redis://redis:6379/0}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
-      - DATABASE_URL=${DATABASE_URL:-postgres://mathia_user:mathia_password@db:5432/mathia_db}
+      - DATABASE_URL=${DATABASE_URL:-postgres://kazi_user:kazi_password@db:5432/kazi_db}
     depends_on:
       db:
         condition: service_healthy
@@ -84,7 +87,7 @@ services:
       - CELERY_BROKER_URL=${REDIS_URL:-redis://redis:6379/0}
       - CELERY_RESULT_BACKEND=${REDIS_URL:-redis://redis:6379/0}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
-      - DATABASE_URL=${DATABASE_URL:-postgres://mathia_user:mathia_password@db:5432/mathia_db}
+      - DATABASE_URL=${DATABASE_URL:-postgres://kazi_user:kazi_password@db:5432/kazi_db}
     depends_on:
       db:
         condition: service_healthy
@@ -103,7 +106,7 @@ services:
       - CELERY_BROKER_URL=${REDIS_URL:-redis://redis:6379/0}
       - CELERY_RESULT_BACKEND=${REDIS_URL:-redis://redis:6379/0}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
-      - DATABASE_URL=${DATABASE_URL:-postgres://mathia_user:mathia_password@db:5432/mathia_db}
+      - DATABASE_URL=${DATABASE_URL:-postgres://kazi_user:kazi_password@db:5432/kazi_db}
     depends_on:
       db:
         condition: service_healthy

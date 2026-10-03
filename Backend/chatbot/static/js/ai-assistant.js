@@ -1,8 +1,8 @@
 // ============================================
-// MATHIA AI ASSISTANT - Frontend Integration
+// KAZI AI ASSISTANT - Frontend Integration
 // ============================================
 
-class MathiaAssistant {
+class KaziAssistant {
     constructor(username) {
         this.username = username;
         this.isThinking = false;
@@ -13,14 +13,14 @@ class MathiaAssistant {
     }
 
     init() {
-        console.log('Mathia AI Assistant initialized');
+        console.log('Kazi AI Assistant initialized');
         this.setupAutocomplete();
         this.setupQuickPrompts();
         // this.listenForAIMessages(); // Handled via main.js handleMessage callback
     }
 
     // ============================================
-    // AUTOCOMPLETE @mathia
+    // AUTOCOMPLETE @kazi
     // ============================================
     setupAutocomplete() {
         if (!this.messageInput) return;
@@ -41,7 +41,7 @@ class MathiaAssistant {
         this.messageInput.addEventListener('keydown', (e) => {
             if (e.key === 'Tab' && this.isAutocompleteVisible()) {
                 e.preventDefault();
-                this.completeWithMathia();
+                this.completeWithKazi();
             }
         });
     }
@@ -51,43 +51,43 @@ class MathiaAssistant {
         this.hideAutocomplete();
 
         const suggestion = document.createElement('div');
-        suggestion.className = 'mathia-autocomplete';
+        suggestion.className = 'kazi-autocomplete';
         suggestion.innerHTML = `
             <div class="autocomplete-item">
                 <i class="fas fa-robot"></i>
-                <span><strong>@mathia</strong> - Ask AI assistant</span>
+                <span><strong>@kazi</strong> - Ask AI assistant</span>
             </div>
         `;
 
         suggestion.addEventListener('click', () => {
-            this.completeWithMathia();
+            this.completeWithKazi();
         });
 
         this.messageInput.parentElement.appendChild(suggestion);
     }
 
     hideAutocomplete() {
-        const existing = document.querySelector('.mathia-autocomplete');
+        const existing = document.querySelector('.kazi-autocomplete');
         if (existing) existing.remove();
     }
 
     isAutocompleteVisible() {
-        return !!document.querySelector('.mathia-autocomplete');
+        return !!document.querySelector('.kazi-autocomplete');
     }
 
-    completeWithMathia() {
+    completeWithKazi() {
         const value = this.messageInput.value;
         const words = value.split(' ');
-        words[words.length - 1] = '@mathia ';
+        words[words.length - 1] = '@kazi ';
         this.messageInput.value = words.join(' ');
         this.messageInput.focus();
         this.hideAutocomplete();
     }
 
-    getMathiaTriggerState(value) {
+    getKaziTriggerState(value) {
         if (!value) return { hasMention: false, show: false };
         const lower = value.toLowerCase();
-        const pattern = /(?:^|\s)@mathia(?:\s|$)/g;
+        const pattern = /(?:^|\s)@kazi(?:\s|$)/g;
         let match = null;
         let lastEnd = -1;
         while ((match = pattern.exec(lower)) !== null) {
@@ -102,7 +102,7 @@ class MathiaAssistant {
     // QUICK PROMPTS
     // ============================================
     setupQuickPrompts() {
-        if (document.querySelector('.mathia-quick-prompts')) return;
+        if (document.querySelector('.kazi-quick-prompts')) return;
 
         const ACTIONS = [
             {
@@ -114,14 +114,14 @@ class MathiaAssistant {
                     { name: 'payer', label: 'Payer Email', type: 'email', placeholder: 'payer@example.com', required: false },
                     { name: 'desc', label: 'Description', type: 'text', placeholder: 'Design work', required: true },
                 ],
-                buildPrompt: (v) => `@mathia create an invoice for ${v.amount || '0'} KES ${v.payer ? 'to ' + v.payer : ''} for ${v.desc || 'services'} and email it`
+                buildPrompt: (v) => `@kazi create an invoice for ${v.amount || '0'} KES ${v.payer ? 'to ' + v.payer : ''} for ${v.desc || 'services'} and email it`
             },
             {
                 id: 'balance',
                 label: 'Balance & Txns',
                 icon: 'fas fa-wallet',
                 fields: [],
-                buildPrompt: () => `@mathia show my balance and last 3 transactions`
+                buildPrompt: () => `@kazi show my balance and last 3 transactions`
             },
             {
                 id: 'reminder',
@@ -132,7 +132,7 @@ class MathiaAssistant {
                     { name: 'time', label: 'When', type: 'text', placeholder: 'today 5pm', required: true },
                     { name: 'channel', label: 'Channel', type: 'select', options: ['email', 'whatsapp', 'both'], required: true, default: 'email' },
                 ],
-                buildPrompt: (v) => `@mathia set a reminder to "${v.content}" at ${v.time} via ${v.channel || 'email'}`
+                buildPrompt: (v) => `@kazi set a reminder to "${v.content}" at ${v.time} via ${v.channel || 'email'}`
             },
             {
                 id: 'flights',
@@ -144,7 +144,7 @@ class MathiaAssistant {
                     { name: 'date', label: 'Date', type: 'date', placeholder: '', required: true },
                     { name: 'pax', label: 'Passengers', type: 'number', placeholder: '1', required: false },
                 ],
-                buildPrompt: (v) => `@mathia find flights from ${v.origin} to ${v.dest} on ${v.date} for ${v.pax || 1} passenger${(v.pax || 1) > 1 ? 's' : ''}`
+                buildPrompt: (v) => `@kazi find flights from ${v.origin} to ${v.dest} on ${v.date} for ${v.pax || 1} passenger${(v.pax || 1) > 1 ? 's' : ''}`
             },
             {
                 id: 'email',
@@ -155,7 +155,7 @@ class MathiaAssistant {
                     { name: 'subject', label: 'Subject', type: 'text', placeholder: 'Project Update', required: true },
                     { name: 'body', label: 'Body', type: 'textarea', placeholder: 'Here is the latest status...', required: true },
                 ],
-                buildPrompt: (v) => `@mathia send an email to ${v.to} subject ${v.subject} body ${v.body}`
+                buildPrompt: (v) => `@kazi send an email to ${v.to} subject ${v.subject} body ${v.body}`
             },
             {
                 id: 'withdraw_check',
@@ -165,7 +165,7 @@ class MathiaAssistant {
                     { name: 'phone', label: 'Phone', type: 'text', placeholder: '+254700000000', required: true },
                     { name: 'amount', label: 'Amount', type: 'number', placeholder: '3000', required: true },
                 ],
-                buildPrompt: (v) => `@mathia check withdraw policy for ${v.phone} amount ${v.amount}`
+                buildPrompt: (v) => `@kazi check withdraw policy for ${v.phone} amount ${v.amount}`
             },
             {
                 id: 'whatsapp',
@@ -175,12 +175,12 @@ class MathiaAssistant {
                     { name: 'phone', label: 'Phone', type: 'text', placeholder: 'whatsapp:+2547...', required: true },
                     { name: 'message', label: 'Message', type: 'textarea', placeholder: 'Hello, quick update...', required: true },
                 ],
-                buildPrompt: (v) => `@mathia send a whatsapp to ${v.phone} saying ${v.message}`
+                buildPrompt: (v) => `@kazi send a whatsapp to ${v.phone} saying ${v.message}`
             },
         ];
 
         const promptsContainer = document.createElement('div');
-        promptsContainer.className = 'mathia-quick-prompts';
+        promptsContainer.className = 'kazi-quick-prompts';
         promptsContainer.innerHTML = `
             <div class="quick-prompts-header">
                 <i class="fas fa-robot"></i>
@@ -211,7 +211,7 @@ class MathiaAssistant {
         promptsContainer.classList.remove('active');
 
         this.messageInput.addEventListener('input', (e) => {
-            const state = this.getMathiaTriggerState(e.target.value);
+            const state = this.getKaziTriggerState(e.target.value);
             if (state.show) {
                 promptsContainer.classList.add('active');
                 return;
@@ -221,19 +221,19 @@ class MathiaAssistant {
 
         promptsContainer.querySelector('.btn-close-prompts').addEventListener('click', () => {
             promptsContainer.classList.remove('active');
-            // Also clear @mathia from input so the input listener doesn't re-open it
-            if (this.messageInput && this.messageInput.value.toLowerCase().includes('@mathia')) {
-                this.messageInput.value = this.messageInput.value.replace(/@mathia/gi, '').trim();
+            // Also clear @kazi from input so the input listener doesn't re-open it
+            if (this.messageInput && this.messageInput.value.toLowerCase().includes('@kazi')) {
+                this.messageInput.value = this.messageInput.value.replace(/@kazi/gi, '').trim();
             }
         });
     }
 
     openActionForm(action, container) {
-        const existing = document.querySelector('.mathia-action-modal');
+        const existing = document.querySelector('.kazi-action-modal');
         if (existing) existing.remove();
 
         const modal = document.createElement('div');
-        modal.className = 'mathia-action-modal';
+        modal.className = 'kazi-action-modal';
         const fieldsHtml = (action.fields || []).map(f => {
             const required = f.required ? 'required' : '';
             if (f.type === 'select') {
@@ -247,12 +247,12 @@ class MathiaAssistant {
         }).join('');
 
         modal.innerHTML = `
-            <div class="mathia-action-modal-content">
+            <div class="kazi-action-modal-content">
                 <div class="modal-header">
                     <span>${action.label}</span>
                     <button class="close-modal">&times;</button>
                 </div>
-                <form class="mathia-action-form">
+                <form class="kazi-action-form">
                     ${fieldsHtml || '<p>No inputs needed.</p>'}
                     <div class="modal-actions">
                         <button type="submit" class="btn-primary">Run</button>
@@ -265,7 +265,7 @@ class MathiaAssistant {
         // Close modal when clicking X or Cancel buttons
         modal.querySelectorAll('.close-modal').forEach(btn => btn.addEventListener('click', () => modal.remove()));
 
-        // Close modal when clicking the backdrop (outside .mathia-action-modal-content)
+        // Close modal when clicking the backdrop (outside .kazi-action-modal-content)
         modal.addEventListener('click', (e) => {
             if (e.target === modal) {
                 modal.remove();
@@ -278,7 +278,7 @@ class MathiaAssistant {
             const values = {};
             formData.forEach((v, k) => values[k] = v.toString().trim());
             const prompt = action.buildPrompt(values);
-            this.sendToMathia(prompt);
+            this.sendToKazi(prompt);
             modal.remove();
             container.classList.remove('active');
         });
@@ -286,14 +286,14 @@ class MathiaAssistant {
         document.body.appendChild(modal);
     }
 
-    sendToMathia(message) {
+    sendToKazi(message) {
         const trimmed = (message || '').trim();
         const isAiOnlyRoom = !!window.isAiOnlyRoom;
         let fullMessage = trimmed;
         if (isAiOnlyRoom) {
-            fullMessage = trimmed.replace(/^@mathia\s*/i, '');
-        } else if (trimmed && !trimmed.toLowerCase().startsWith('@mathia')) {
-            fullMessage = `@mathia ${trimmed}`.trim();
+            fullMessage = trimmed.replace(/^@kazi\s*/i, '');
+        } else if (trimmed && !trimmed.toLowerCase().startsWith('@kazi')) {
+            fullMessage = `@kazi ${trimmed}`.trim();
         }
         this.messageInput.value = fullMessage;
 
@@ -313,19 +313,19 @@ class MathiaAssistant {
     // AI TYPING INDICATOR
     // ============================================
     showAIThinking() {
-        if (this.isThinking || document.querySelector('.mathia-thinking')) return;
+        if (this.isThinking || document.querySelector('.kazi-thinking')) return;
         this.isThinking = true;
 
         const thinkingIndicator = document.createElement('li');
-        thinkingIndicator.className = 'clearfix mathia-thinking';
+        thinkingIndicator.className = 'clearfix kazi-thinking';
         thinkingIndicator.innerHTML = `
             <div class="message-data">
                 <div class="time-label">${new Date().toLocaleTimeString()}</div>
             </div>
-            <div class="message other-message mathia-message">
+            <div class="message other-message kazi-message">
                 <div class="ai-thinking-animation">
                     <i class="fas fa-robot"></i>
-                    <span class="thinking-text">Mathia is thinking</span>
+                    <span class="thinking-text">Kazi is thinking</span>
                     <div class="thinking-dots">
                         <span></span><span></span><span></span>
                     </div>
@@ -342,7 +342,7 @@ class MathiaAssistant {
 
     hideAIThinking() {
         this.isThinking = false;
-        const thinkingElement = document.querySelector('.mathia-thinking');
+        const thinkingElement = document.querySelector('.kazi-thinking');
         if (thinkingElement) {
             thinkingElement.remove();
         }
@@ -376,7 +376,7 @@ class MathiaAssistant {
             if (!chatList) return;
 
             // Remove thinking indicators
-            chatList.querySelectorAll('.mathia-thinking').forEach(el => el.remove());
+            chatList.querySelectorAll('.kazi-thinking').forEach(el => el.remove());
 
             // Morph stream container → saved message with crossfade
             const streamEl = chatList.querySelector('.ai-stream-container');
@@ -403,17 +403,17 @@ class MathiaAssistant {
             return;
         }
 
-        // Handle Mathia voice ready
+        // Handle Kazi voice ready
         if (data.command === 'ai_voice_ready') {
             console.log('AI voice response ready');
             const roomId = window.currentRoomId || (typeof roomName !== 'undefined' ? roomName : null);
-            const msgContainer = document.querySelector(`[data-message-id="${data.message_id}"] .mathia-message`);
+            const msgContainer = document.querySelector(`[data-message-id="${data.message_id}"] .kazi-message`);
             if (msgContainer && typeof renderVoiceBubble === 'function') {
                 renderVoiceBubble(msgContainer, {
                     id: data.message_id,
                     audio_url: data.audio_url,
                     has_ai_voice: true,
-                    member: 'mathia'
+                    member: 'kazi'
                 });
             }
             return;
@@ -459,13 +459,13 @@ class MathiaAssistant {
         const streamContainer = document.querySelector('.ai-stream-container');
         if (!streamContainer) return null;
 
-        let timeline = streamContainer.querySelector('.mathia-tool-timeline');
+        let timeline = streamContainer.querySelector('.kazi-tool-timeline');
         if (!timeline) {
-            const msgDiv = streamContainer.querySelector('.message.mathia-message');
+            const msgDiv = streamContainer.querySelector('.message.kazi-message');
             if (!msgDiv) return null;
             const contentDiv = msgDiv.querySelector('.stream-content');
             timeline = document.createElement('div');
-            timeline.className = 'mathia-tool-timeline';
+            timeline.className = 'kazi-tool-timeline';
             msgDiv.insertBefore(timeline, contentDiv);
         }
         return timeline;
@@ -486,11 +486,11 @@ class MathiaAssistant {
         if (status !== 'thinking') {
             const timeline = this._getOrCreateTimeline();
             if (timeline) {
-                const thinkingStep = timeline.querySelector('.mathia-step.thinking-step');
+                const thinkingStep = timeline.querySelector('.kazi-step.thinking-step');
                 if (thinkingStep && thinkingStep.classList.contains('running')) {
-                    const icon = thinkingStep.querySelector('.mathia-step-icon');
+                    const icon = thinkingStep.querySelector('.kazi-step-icon');
                     if (icon) {
-                        icon.className = 'mathia-step-icon success';
+                        icon.className = 'kazi-step-icon success';
                         icon.innerHTML = this._getStepIcon('success');
                     }
                     thinkingStep.classList.remove('running');
@@ -505,16 +505,16 @@ class MathiaAssistant {
         this._stepCount = (this._stepCount || 0) + 1;
 
         const step = document.createElement('div');
-        step.className = `mathia-step ${status === 'running' || status === 'thinking' ? 'running' : ''}`;
+        step.className = `kazi-step ${status === 'running' || status === 'thinking' ? 'running' : ''}`;
         if (status === 'thinking') step.classList.add('thinking-step');
         step.style.animationDelay = `${(this._stepCount - 1) * 0.08}s`;
         step.innerHTML = `
-            <div class="mathia-step-icon ${status}">
+            <div class="kazi-step-icon ${status}">
                 ${this._getStepIcon(status)}
             </div>
-            <div class="mathia-step-body">
-                <div class="mathia-step-label">${label || 'Processing'}</div>
-                <div class="mathia-step-detail">${status === 'running' ? 'In progress…' : status === 'thinking' ? 'Analyzing…' : ''}</div>
+            <div class="kazi-step-body">
+                <div class="kazi-step-label">${label || 'Processing'}</div>
+                <div class="kazi-step-detail">${status === 'running' ? 'In progress…' : status === 'thinking' ? 'Analyzing…' : ''}</div>
             </div>
         `;
 
@@ -526,20 +526,20 @@ class MathiaAssistant {
         const timeline = this._getOrCreateTimeline();
         if (!timeline) return;
 
-        const steps = timeline.querySelectorAll('.mathia-step.running');
+        const steps = timeline.querySelectorAll('.kazi-step.running');
         const lastStep = steps[steps.length - 1];
         if (!lastStep) return;
 
         lastStep.classList.remove('running');
         lastStep.classList.add('completed');
 
-        const icon = lastStep.querySelector('.mathia-step-icon');
+        const icon = lastStep.querySelector('.kazi-step-icon');
         if (icon) {
-            icon.className = `mathia-step-icon ${status}`;
+            icon.className = `kazi-step-icon ${status}`;
             icon.innerHTML = this._getStepIcon(status);
         }
 
-        const detailEl = lastStep.querySelector('.mathia-step-detail');
+        const detailEl = lastStep.querySelector('.kazi-step-detail');
         if (detailEl && detail) {
             detailEl.textContent = detail;
         }
@@ -550,12 +550,12 @@ class MathiaAssistant {
         const timeline = this._getOrCreateTimeline();
         if (!timeline) return;
 
-        timeline.querySelectorAll('.mathia-step.running').forEach(step => {
+        timeline.querySelectorAll('.kazi-step.running').forEach(step => {
             step.classList.remove('running');
             step.classList.add('completed');
-            const icon = step.querySelector('.mathia-step-icon');
+            const icon = step.querySelector('.kazi-step-icon');
             if (icon) {
-                icon.className = 'mathia-step-icon success';
+                icon.className = 'kazi-step-icon success';
                 icon.innerHTML = this._getStepIcon('success');
             }
         });
@@ -582,7 +582,7 @@ class MathiaAssistant {
             this.showAIThinking();
             return;
         }
-        if (data.message?.content?.toLowerCase().includes('@mathia')) {
+        if (data.message?.content?.toLowerCase().includes('@kazi')) {
             this.showAIThinking();
         }
     }
@@ -598,15 +598,15 @@ class MathiaAssistant {
             if (!chatList) return;
 
             const msgListTag = document.createElement('li');
-            msgListTag.className = 'clearfix mathia-message-item ai-stream-container';
+            msgListTag.className = 'clearfix kazi-message-item ai-stream-container';
 
             msgListTag.innerHTML = `
             <div class="message-data">
                 <div class="time-label">${new Date().toLocaleTimeString()}</div>
             </div>
-            <div class="message other-message mathia-message">
-                ${window.mathiaBadgeHtml ? window.mathiaBadgeHtml() : '<div class="mathia-badge"><i class="fas fa-robot"></i><span>Mathia AI</span></div>'}
-                <div class="mathia-content stream-content"></div>
+            <div class="message other-message kazi-message">
+                ${window.kaziBadgeHtml ? window.kaziBadgeHtml() : '<div class="kazi-badge"><i class="fas fa-robot"></i><span>Kazi AI</span></div>'}
+                <div class="kazi-content stream-content"></div>
             </div>
         `;
 
@@ -659,15 +659,15 @@ class MathiaAssistant {
         const formattedTime = new Date(messageData.timestamp).toLocaleTimeString();
 
         const msgListTag = document.createElement('li');
-        msgListTag.className = 'clearfix mathia-message-item';
+        msgListTag.className = 'clearfix kazi-message-item';
 
         msgListTag.innerHTML = `
             <div class="message-data">
                 <div class="time-label">${formattedTime}</div>
             </div>
-            <div class="message other-message mathia-message">
-                ${window.mathiaBadgeHtml ? window.mathiaBadgeHtml() : '<div class="mathia-badge"><i class="fas fa-robot"></i><span>Mathia AI</span></div>'}
-                <div class="mathia-content">${messageData.content}</div>
+            <div class="message other-message kazi-message">
+                ${window.kaziBadgeHtml ? window.kaziBadgeHtml() : '<div class="kazi-badge"><i class="fas fa-robot"></i><span>Kazi AI</span></div>'}
+                <div class="kazi-content">${messageData.content}</div>
             </div>
         `;
 
@@ -687,7 +687,7 @@ class MathiaAssistant {
         this.hideAIThinking();
 
         const errorMsg = {
-            member: 'mathia',
+            member: 'kazi',
             content: `<div class="ai-error"><i class="fas fa-exclamation-triangle"></i> ${errorMessage}</div>`,
             timestamp: new Date().toISOString()
         };
@@ -700,15 +700,15 @@ class MathiaAssistant {
 // INITIALIZE ON PAGE LOAD
 // ============================================
 document.addEventListener('DOMContentLoaded', function () {
-    const initMathia = setInterval(() => {
+    const initKazi = setInterval(() => {
         const uName = window.usernameGlobal || (typeof username !== 'undefined' ? username : null);
         if (uName) {
-            clearInterval(initMathia);
-            window.mathiaAssistant = new MathiaAssistant(uName);
-            console.log('Mathia AI Assistant ready');
+            clearInterval(initKazi);
+            window.kaziAssistant = new KaziAssistant(uName);
+            console.log('Kazi AI Assistant ready');
         }
     }, 100);
 });
 
 // Expose for debugging
-window.MathiaAssistant = MathiaAssistant;
+window.KaziAssistant = KaziAssistant;

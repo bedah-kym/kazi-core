@@ -1,5 +1,5 @@
 """
-Unit tests for the Mathia agentic system (Phases 1-7).
+Unit tests for the Kazi agentic system (Phases 1-7).
 
 Covers: tool_schemas, tool_executor, agent_prompts, agent_loop mechanics,
 confirmation pause/resume, error recovery, iteration/token limits, dedup,

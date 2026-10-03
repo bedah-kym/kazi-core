@@ -206,6 +206,8 @@ commands. Before a **destructive** command the sidecar tars it to
 | `SHELL_EXEC_TIMEOUT_DEFAULT` | `120` | Default per-command timeout (seconds). |
 | `SHELL_EXEC_TIMEOUT_MAX` | `600` | Hard per-command timeout ceiling (seconds). |
 | `SHELL_EXEC_OUTPUT_BYTES_MAX` | `65536` | Truncate returned stdout/stderr beyond this many bytes. |
+| `SHELL_AUTOPILOT_MINUTES` | `30` | Default length of the human-armed autopilot window. Only the unsandboxed `open` profile has one; sandboxed profiles auto-run anything that stays inside the sandbox and ask only for network. |
+| `SHELL_AUTOPILOT_MAX_MINUTES` | `120` | Hard ceiling on an autopilot window, however it is armed (chat, ops inbox, `manage.py shell_autonomy`). |
 | `SHELL_EXEC_NETWORK_ALLOWLIST` | empty | Comma-separated hosts whose network commands run **without a prompt** (e.g. your ISP/gateway). A UX shortlist, **not** a firewall — the sandbox still runs the command non-root, read-only, on the Docker bridge. |
 
 ## Eval

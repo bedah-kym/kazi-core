@@ -245,9 +245,16 @@ def _run_command_risk_info(
     `bounded` pauses inline, `destructive` pauses durably, `denied` is refused
     by the loop. A `bounded` command whose hosts are all allowlisted (#134) runs
     without a prompt. A request may ask for network explicitly (`network:
-    "bridge"`) so a script that pings internally still gets egress. User
-    approval overrides are still ignored for run_command so no learned
-    preference can auto-run a shell command.
+    "bridge"`) so a script that pings internally still gets egress.
+
+    The prompt follows the sandbox boundary, not the command (2026-10 auto
+    mode). A tainted run (``_shell_tainted``, set by the loop) asks only for a
+    command with ``egress``: sandboxed, that is a bridge request; on the
+    unsandboxed profile it is every command. ``_shell_autopilot`` (a
+    human-armed window injected by the coordinator, never read from the DB
+    here) lifts prompts on the unsandboxed profile only. Neither ever covers
+    `destructive`/`denied`. Learned ``approval_overrides`` remain ignored for
+    ``run_command`` — no mined preference can auto-run shell.
     """
     from orchestration.shell.classifier import classify_command
 
@@ -273,13 +280,46 @@ def _run_command_risk_info(
         tier = "safe"
     else:
         tier = raw_tier
+
+    from orchestration.shell.profiles import get_profile
+
+    prefs = user_preferences if isinstance(user_preferences, dict) else {}
+    sandboxed = get_profile(profile).backend == "docker"
+    needs_network = bool(classification.get("needs_network"))
+    # Egress = the command can reach the outside world. Sandboxed, that is only
+    # a bridge request (the connector sends network=none otherwise); on the
+    # unsandboxed profile every command can.
+    egress = needs_network or not sandboxed
+    tainted = bool(prefs.get("_shell_tainted"))
+    armed = bool(prefs.get("_shell_autopilot")) and not sandboxed
+
+    basis = ""
+    if tier in ("destructive", "denied"):
+        requires_confirmation = True
+    elif armed:
+        requires_confirmation = False
+        basis = "armed_window"
+    elif tainted and egress:
+        # Rule of Two: untrusted content + a way out = always ask.
+        requires_confirmation = True
+    elif tier == "safe":
+        requires_confirmation = False
+        if not sandboxed:
+            basis = "open_profile"
+        else:
+            basis = "allowlist" if needs_network else "sandbox"
+    else:
+        requires_confirmation = True
+
     return {
         "is_high_risk": tier in ("destructive", "denied"),
         "risk_level": {"destructive": "high", "denied": "high", "bounded": "medium"}.get(tier, "low"),
-        "requires_confirmation": tier != "safe",
+        "requires_confirmation": requires_confirmation,
         "tier": tier,
         "shell_tier": raw_tier,
         "shell_reason": classification["reason"],
+        "egress": egress,
+        "approval_basis": basis,
     }
 
 

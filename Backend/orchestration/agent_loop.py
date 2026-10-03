@@ -167,6 +167,52 @@ def _untrusted_source(tool_name: str) -> bool:
     return str(tool_name or "").strip().lower() in _UNTRUSTED_TOOL_NAMES
 
 
+# Room-wide, not per user: chat history is shared by every member of a room,
+# so untrusted text one member's run pulled in reaches everyone's next run.
+AGENT_TAINT_KEY = "agent_loop_taint:{room_id}"
+_DEFAULT_TAINT_TTL = 900
+
+
+def _taint_ttl() -> int:
+    """Seconds a room stays tainted. 0 turns persistence off; junk means default."""
+    try:
+        value = int(getattr(settings, "AGENT_TAINT_TTL_SECONDS", _DEFAULT_TAINT_TTL))
+    except (TypeError, ValueError):
+        return _DEFAULT_TAINT_TTL
+    return value if value >= 0 else _DEFAULT_TAINT_TTL
+
+
+def _conversation_tainted(room_id: Optional[int]) -> bool:
+    """Whether an earlier turn in this room left untrusted text behind.
+
+    Taint outlives the run that picked it up: the text is still in the chat
+    history, so a new message must not reset the gate. Fail closed.
+    """
+    if not room_id or not _taint_ttl():
+        return False
+    try:
+        return bool(cache.get(AGENT_TAINT_KEY.format(room_id=room_id)))
+    except Exception:
+        return True
+
+
+def _taint_run(state: "LoopState", room_id: Optional[int]) -> None:
+    """Taint this run and the room. The window restarts on each new taint."""
+    state.tainted = True
+    ttl = _taint_ttl()
+    if not room_id or not ttl:
+        return
+    try:
+        cache.set(AGENT_TAINT_KEY.format(room_id=room_id), 1, ttl)
+    except Exception as exc:
+        # The next turn would start untainted. Make that loud, not silent.
+        logger.error("Could not persist room taint for room %s: %s", room_id, exc)
+        try:
+            record_event("taint_persist_failed", {"room_id": room_id})
+        except Exception:
+            pass
+
+
 def _taint_gated(action: str) -> bool:
     """External-write / credential-scoped actions that a tainted run escalates."""
     from orchestration.action_catalog import is_high_risk_action, resolve_action_alias
@@ -1287,6 +1333,8 @@ async def run_agent_loop(
         state = resumed_state
         state.start_time = time.monotonic()
         state.paused_for_confirmation = False
+        # Another member may have tainted the room while this run was paused.
+        state.tainted = state.tainted or await sync_to_async(_conversation_tainted)(room_id)
 
         # Execute the previously paused tool
         pending = state.pending_tool
@@ -1302,7 +1350,7 @@ async def run_agent_loop(
             "iteration": state.iteration,
         })
         if _untrusted_source(pending["name"]):
-            state.tainted = True
+            _taint_run(state, room_id)
 
         yield AgentEvent("tool_result", {
             "name": pending["name"],
@@ -1356,6 +1404,7 @@ async def run_agent_loop(
         state = LoopState(
             messages=messages,
             start_time=time.monotonic(),
+            tainted=await sync_to_async(_conversation_tainted)(room_id),
         )
 
     # Track seen tool calls for dedup
@@ -1444,7 +1493,7 @@ async def run_agent_loop(
                 "searches": search_count,
                 "remaining": get_remaining_searches(user_id),
             })
-            state.tainted = True
+            _taint_run(state, room_id)
 
         # Append the assistant message to the conversation
         state.messages.append({"role": "assistant", "content": content_blocks})
@@ -1565,7 +1614,7 @@ async def run_agent_loop(
                         "iteration": state.iteration,
                     })
                     if _untrusted_source(tc["name"]):
-                        state.tainted = True
+                        _taint_run(state, room_id)
                     yield AgentEvent("tool_start", {"name": tc["name"], "input": tc["input"]})
                     yield AgentEvent("tool_result", {"name": tc["name"], "result": result})
 

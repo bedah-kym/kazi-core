@@ -1,0 +1,121 @@
+{% extends "users/base_app.html" %}
+{% load static %}
+
+{% block title %}Personas - Kazi{% endblock %}
+
+{% block breadcrumb %}
+<a href="{% url 'users:dashboard' %}">Dashboard</a><span class="crumb-sep">&#8250;</span><span class="crumb-current">Personas</span>
+{% endblock %}
+
+{% block content %}
+<div class="app-header">
+    <div>
+        <div class="app-eyebrow">Team</div>
+        <h1 class="app-title">Personas</h1>
+        <p class="app-subtitle">
+            Named specialists for your AI rooms. Customize what each one may do —
+            creation is admin-side; ask in chat with <code>@admin request persona "..."</code>.
+        </p>
+    </div>
+    <div class="app-header-actions">
+        <a class="app-btn app-btn-outline" href="{% url 'users:skills' %}">
+            <i class="fas fa-book"></i> Skills
+        </a>
+    </div>
+</div>
+
+{% if personas %}
+<div class="wf-grid">
+    {% for persona in personas %}
+    <section class="app-card wf-card">
+        <div class="wf-card-top">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                {% if persona.avatar %}
+                <img src="{{ persona.avatar.url }}" alt="{{ persona.name }}" style="width: 40px; height: 40px; border-radius: 50%; object-fit: cover;">
+                {% else %}
+                <span style="width: 40px; height: 40px; border-radius: 50%; background: #4f8cff; color: #fff; display: inline-flex; align-items: center; justify-content: center; font-weight: 700;">
+                    {{ persona.name|slice:":2" }}
+                </span>
+                {% endif %}
+                <div>
+                    <h2 class="wf-name">{{ persona.name }}</h2>
+                    {% if persona.status == "active" %}
+                    <span class="app-pill app-pill-success">Active</span>
+                    {% elif persona.status == "draft" %}
+                    <span class="app-pill app-pill-warning">Draft</span>
+                    {% else %}
+                    <span class="app-pill app-pill-muted">{{ persona.get_status_display }}</span>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        <p class="wf-desc">{{ persona.description|default:"No description"|truncatechars:140 }}</p>
+        <div class="wf-triggers">
+            <span class="trigger-chip">ceiling: {{ persona.risk_ceiling }}</span>
+            {% for item in persona.tool_scope %}
+            <span class="trigger-chip">{{ item }}</span>
+            {% endfor %}
+            {% for item in persona.approval_boundary %}
+            <span class="trigger-chip off">ask: {{ item }}</span>
+            {% endfor %}
+        </div>
+        {% if persona.skills %}
+        <div class="wf-meta">
+            <span><i class="fas fa-book me-1"></i>{{ persona.skills|join:", " }}</span>
+        </div>
+        {% endif %}
+        <div class="wf-actions">
+            <a class="app-btn app-btn-outline" href="{% url 'users:persona_edit' persona.id %}">
+                <i class="fas fa-pen"></i> Customize
+            </a>
+        </div>
+        <form method="post" action="{% url 'users:personas' %}" style="margin-top: 10px; display: flex; gap: 8px; align-items: center;">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="bind_room">
+            <input type="hidden" name="persona_id" value="{{ persona.id }}">
+            <select name="room_id" class="app-input">
+                <option value="">No room</option>
+                {% for room in rooms %}
+                <option value="{{ room.id }}" {% if persona.room_id == room.id %}selected{% endif %}>Room #{{ room.id }}</option>
+                {% endfor %}
+            </select>
+            <button class="app-btn app-btn-ghost app-btn-sm" type="submit">Bind</button>
+        </form>
+    </section>
+    {% endfor %}
+</div>
+{% else %}
+<section class="app-card">
+    <div class="app-empty">
+        <div class="app-empty-icon"><i class="fas fa-user-robot"></i></div>
+        <h2 class="app-empty-title">No personas yet</h2>
+        <p class="app-empty-text">
+            Ask the admin to create one for you: type
+            <code>@admin request persona "Night Hawk" - overnight custodian</code> in any room.
+        </p>
+    </div>
+</section>
+{% endif %}
+
+{% if requests %}
+<section class="app-card" style="margin-top: 16px;">
+    <h2 class="wf-name">Your persona requests</h2>
+    {% for item in requests %}
+    <div class="exec-row">
+        <div class="exec-main">
+            <div class="exec-title">{{ item.name }}</div>
+            <span class="app-pill {% if item.status == 'approved' %}app-pill-success{% elif item.status == 'rejected' %}app-pill-destructive{% else %}app-pill-warning{% endif %}">{{ item.get_status_display }}</span>
+        </div>
+    </div>
+    {% endfor %}
+</section>
+{% endif %}
+
+{% if messages %}
+<div class="toast-stack">
+    {% for message in messages %}
+    <div class="app-toast show" role="status" data-auto-dismiss>{{ message }}</div>
+    {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

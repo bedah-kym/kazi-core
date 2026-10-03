@@ -47,6 +47,26 @@ class V07AdminRegistrationTests(TestCase):
         persona.refresh_from_db()
         self.assertEqual(persona.status, "active")
 
+    def test_persona_request_approval_creates_draft_persona(self):
+        from workflows.models import Persona, PersonaRequest
+
+        request_row = PersonaRequest.objects.create(
+            user=self.staff, name="Requested bot", description="From chat",
+        )
+        response = self.client.post(
+            "/admin/workflows/personarequest/",
+            {"action": "approve_requests", "_selected_action": [str(request_row.id)]},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        request_row.refresh_from_db()
+        self.assertEqual(request_row.status, "approved")
+        self.assertTrue(
+            Persona.objects.filter(
+                user=self.staff, name="Requested bot", status="draft",
+            ).exists()
+        )
+
     def test_standing_grant_revoke_action(self):
         from workflows.grants import create_grant_from_approval
         from workflows.models import (

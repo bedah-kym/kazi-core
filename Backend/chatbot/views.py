@@ -87,7 +87,7 @@ def home(request, room_name):
     # OPTIMIZATION: Use prefetch_related to fetch participants and their users in one go
     chatrooms = Chatroom.objects.filter(
         participants__User=request.user
-    ).prefetch_related('participants', 'participants__User')
+    ).select_related('persona').prefetch_related('participants', 'participants__User')
 
     # Pre-process chatrooms to get the correct display name for the sidebar
     chatrooms_data = []
@@ -99,11 +99,18 @@ def home(request, room_name):
         display_name = "Unknown Room"
         avatar_url = "https://ui-avatars.com/api/?name=U&background=4f8cff&color=fff&size=128"
 
-        # Check if it's a "General" room with Kazi
+        # A room bound to an active persona takes the persona's name + avatar
+        persona = getattr(room, 'persona', None)
         kazi_member = next((m for m in members if m.User.username == 'kazi'), None)
         other_members = [m for m in members if m.User != request.user]
 
-        if kazi_member and len(members) <= 2:
+        if persona and persona.status == 'active':
+            import urllib.parse
+            display_name = persona.name
+            avatar_url = persona.avatar.url if persona.avatar else (
+                f"https://ui-avatars.com/api/?name={urllib.parse.quote(persona.name[:2])}&background=4f8cff&color=fff&size=128"
+            )
+        elif kazi_member and len(members) <= 2:
             display_name = "General (AI)"
             avatar_url = "/static/img/kazi-avatar.svg"
         elif len(other_members) == 0:
@@ -135,15 +142,23 @@ def home(request, room_name):
     other_member = next((m for m in room_members if m.User != request.user), None)
     current_room_name = other_member.User.username if other_member else "Unknown User"
 
-    # Override current room name if it's Kazi
-    if other_member and other_member.User.username == 'kazi':
+    # A room bound to an active persona is displayed under the persona's name.
+    current_persona = getattr(room, 'persona', None)
+    if current_persona and current_persona.status == 'active':
+        current_room_name = current_persona.name
+    elif other_member and other_member.User.username == 'kazi':
         current_room_name = "General (AI)"
     is_ai_room = _is_ai_only_room_members(room_members)
     # Invites allowed in private/group rooms — not in AI-only rooms
     can_invite = not is_ai_room
 
     # Current room avatar
-    if other_member and other_member.User.username == 'kazi':
+    if current_persona and current_persona.status == 'active':
+        import urllib.parse
+        current_room_avatar = current_persona.avatar.url if current_persona.avatar else (
+            f"https://ui-avatars.com/api/?name={urllib.parse.quote(current_persona.name[:2])}&background=4f8cff&color=fff&size=128"
+        )
+    elif other_member and other_member.User.username == 'kazi':
         current_room_avatar = "/static/img/kazi-avatar.svg"
     elif other_member:
         try:
@@ -278,6 +293,7 @@ def create_room(request):
     Types: 'general' (with Kazi), 'private' (just user for now)
     """
     room_type = request.POST.get('room_type') or request.GET.get('room_type') or 'general'
+    persona_id = request.POST.get('persona_id')
 
     User = get_user_model()
     user_member, _ = Member.objects.get_or_create(User=request.user)
@@ -291,6 +307,16 @@ def create_room(request):
     with transaction.atomic():
         new_room = Chatroom.objects.create()
         new_room.participants.add(user_member)
+
+        if persona_id:
+            from workflows.models import Persona
+
+            persona = Persona.objects.filter(
+                id=persona_id, user=request.user, status='active',
+            ).first()
+            if persona:
+                new_room.persona = persona
+                new_room.save(update_fields=['persona'])
 
         if room_type == 'general':
             # Add Kazi

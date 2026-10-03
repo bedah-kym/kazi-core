@@ -1,4 +1,4 @@
-from django.contrib import admin
+from django.contrib import admin, messages
 from django.utils.html import format_html
 from import_export import resources
 from import_export.admin import ImportExportModelAdmin
@@ -7,6 +7,7 @@ from .grants import revoke_grant
 from .models import (
     Handoff,
     Persona,
+    PersonaRequest,
     RoutineCheckIn,
     StandingGrant,
     WorkflowApprovalRecord,
@@ -325,6 +326,53 @@ class PersonaAdmin(admin.ModelAdmin):
             obj.get_status_display(),
         )
     status_badge.short_description = 'Status'
+
+
+@admin.register(PersonaRequest)
+class PersonaRequestAdmin(admin.ModelAdmin):
+    list_display = ['id', 'name', 'user', 'status', 'created_at']
+    list_filter = ['status', 'created_at']
+    search_fields = ['name', 'user__username', 'description']
+    readonly_fields = ['reviewed_by', 'reviewed_at', 'created_at']
+    autocomplete_fields = ['user', 'room']
+    actions = ['approve_requests', 'reject_requests']
+
+    @admin.action(description="Approve: create a draft persona for the requester")
+    def approve_requests(self, request, queryset):
+        from django.utils import timezone
+
+        from orchestration.personas import create_persona
+
+        created = 0
+        for persona_request in queryset.filter(status='pending'):
+            try:
+                create_persona(
+                    persona_request.user,
+                    name=persona_request.name[:100],
+                    description=persona_request.description,
+                )
+            except Exception as exc:
+                self.message_user(
+                    request,
+                    f"Could not create persona for {persona_request.user}: {exc}",
+                    level=messages.ERROR,
+                )
+                continue
+            persona_request.status = 'approved'
+            persona_request.reviewed_by = request.user
+            persona_request.reviewed_at = timezone.now()
+            persona_request.save(update_fields=['status', 'reviewed_by', 'reviewed_at'])
+            created += 1
+        self.message_user(request, f"Created {created} draft persona(s) for the requester(s).")
+
+    @admin.action(description="Reject selected persona requests")
+    def reject_requests(self, request, queryset):
+        from django.utils import timezone
+
+        updated = queryset.filter(status='pending').update(
+            status='rejected', reviewed_by=request.user, reviewed_at=timezone.now(),
+        )
+        self.message_user(request, f"Rejected {updated} persona request(s).")
 
 
 @admin.register(Handoff)

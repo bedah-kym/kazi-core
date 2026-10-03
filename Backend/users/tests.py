@@ -143,6 +143,7 @@ class DashboardApiTests(TestCase):
         self.assertEqual(payload["workflows"]["total"], 0)
         self.assertTrue(any(item["kind"] == "reminder" for item in payload["activity"]))
 
+
 class ReservedUsernameTests(TestCase):
     """The kazi identity can never be claimed by registration."""
 

@@ -14,7 +14,7 @@ def create_user_profile(sender, instance, created, **kwargs):
     """Auto-create UserProfile when User is created"""
     if created:
         # Set default values for Kazi bot
-        if instance.username == 'Kazi':
+        if instance.username == 'kazi':
             UserProfile.objects.create(
                 user=instance,
                 bio="I'm Kazi, your AI assistant. I can help you with scheduling, payments, WhatsApp messages, and more! Just mention me with @Kazi.",
@@ -38,22 +38,22 @@ def create_user_profile(sender, instance, created, **kwargs):
             # Ensure the Kazi bot exists, then add it so the General room is
             # AI-ready even on a fresh database (bot created before first user).
             try:
-                Kazi_user, _ = User.objects.get_or_create(
-                    username='Kazi',
+                kazi_user, _ = User.objects.get_or_create(
+                    username='kazi',
                     defaults={
                         'first_name': 'Kazi',
                         'last_name': 'AI',
                         'is_active': True,
-                        'email': 'Kazi@kwikchat.ai',
+                        'email': 'kazi@kwikchat.ai',
                     },
                 )
-                Kazi_member, _ = Member.objects.get_or_create(User=Kazi_user)
+                kazi_member, _ = Member.objects.get_or_create(User=kazi_user)
 
-                general_room.participants.add(Kazi_member)
+                general_room.participants.add(kazi_member)
 
                 # Add a welcome message
                 welcome_msg = Message.objects.create(
-                    member=Kazi_member,
+                    member=kazi_member,
                     content="Hello! I'm Kazi, your AI assistant. This is your General room where you can ask me anything.",
                     timestamp=django.utils.timezone.now()
                 )

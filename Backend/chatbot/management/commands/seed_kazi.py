@@ -22,13 +22,13 @@ class Command(BaseCommand):
     help = "Seed the Kazi AI bot and ensure all users have an AI-ready room."
 
     def handle(self, *args, **options):
-        Kazi_user, created = User.objects.get_or_create(
-            username="Kazi",
+        kazi_user, created = User.objects.get_or_create(
+            username="kazi",
             defaults={
                 "first_name": "Kazi",
                 "last_name": "AI",
                 "is_active": True,
-                "email": "Kazi@kwikchat.ai",
+                "email": "kazi@kwikchat.ai",
             },
         )
         if created:
@@ -36,18 +36,18 @@ class Command(BaseCommand):
         else:
             self.stdout.write("Kazi user already exists")
 
-        Kazi_member, _ = Member.objects.get_or_create(User=Kazi_user)
+        kazi_member, _ = Member.objects.get_or_create(User=kazi_user)
 
         with transaction.atomic():
             users = list(
                 User.objects.filter(is_active=True)
-                .exclude(username="Kazi")
+                .exclude(username="kazi")
                 .select_for_update()
             )
             for user in users:
                 has_room = (
                     Chatroom.objects.filter(participants__User=user)
-                    .filter(participants=Kazi_member)
+                    .filter(participants=kazi_member)
                     .exists()
                 )
                 if has_room:
@@ -55,10 +55,10 @@ class Command(BaseCommand):
 
                 room = Chatroom.objects.create()
                 user_member, _ = Member.objects.get_or_create(User=user)
-                room.participants.add(user_member, Kazi_member)
+                room.participants.add(user_member, kazi_member)
 
                 welcome_msg = Message.objects.create(
-                    member=Kazi_member,
+                    member=kazi_member,
                     content="Hello! I'm Kazi, your AI assistant. Ask me anything!",
                     timestamp=timezone.now(),
                 )

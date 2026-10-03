@@ -339,30 +339,36 @@ class PersonaRequestAdmin(admin.ModelAdmin):
 
     @admin.action(description="Approve: create a draft persona for the requester")
     def approve_requests(self, request, queryset):
+        from django.db import transaction
         from django.utils import timezone
 
         from orchestration.personas import create_persona
 
         created = 0
-        for persona_request in queryset.filter(status='pending'):
+        for pk in queryset.filter(status='pending').values_list('pk', flat=True):
             try:
-                create_persona(
-                    persona_request.user,
-                    name=persona_request.name[:100],
-                    description=persona_request.description,
-                )
+                with transaction.atomic():
+                    persona_request = PersonaRequest.objects.select_for_update().get(
+                        pk=pk, status='pending',
+                    )
+                    create_persona(
+                        persona_request.user,
+                        name=persona_request.name[:100],
+                        description=persona_request.description,
+                    )
+                    persona_request.status = 'approved'
+                    persona_request.reviewed_by = request.user
+                    persona_request.reviewed_at = timezone.now()
+                    persona_request.save(update_fields=['status', 'reviewed_by', 'reviewed_at'])
+                created += 1
+            except PersonaRequest.DoesNotExist:
+                continue
             except Exception as exc:
                 self.message_user(
                     request,
-                    f"Could not create persona for {persona_request.user}: {exc}",
+                    f"Could not approve persona request {pk}: {exc}",
                     level=messages.ERROR,
                 )
-                continue
-            persona_request.status = 'approved'
-            persona_request.reviewed_by = request.user
-            persona_request.reviewed_at = timezone.now()
-            persona_request.save(update_fields=['status', 'reviewed_by', 'reviewed_at'])
-            created += 1
         self.message_user(request, f"Created {created} draft persona(s) for the requester(s).")
 
     @admin.action(description="Reject selected persona requests")

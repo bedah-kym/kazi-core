@@ -676,6 +676,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     async def _handle_admin_escalation(self, room_id, message_content: str, member_user) -> None:
         """Route @admin mentions to superusers; never to the bot."""
+        cooldown_key = f"admin_escalation:{member_user.id}"
+        if not cache.add(cooldown_key, 1, timeout=300):
+            await self._send_plain_ai_message(
+                room_id,
+                "You recently contacted the admin. Please wait a few minutes before sending another request.",
+            )
+            return
+
         def _notify():
             from django.contrib.auth import get_user_model as _get_user_model
 
@@ -685,13 +693,18 @@ class ChatConsumer(AsyncWebsocketConsumer):
             room = Chatroom.objects.filter(id=room_id).first()
             persona_match = ADMIN_PERSONA_REQUEST_RE.search(message_content)
             if persona_match:
-                request_row = PersonaRequest.objects.create(
-                    user=member_user,
-                    room=room,
-                    name=persona_match.group(1).strip()[:100],
-                    description=(persona_match.group(2) or "").strip()[:1000],
-                )
-                logger.info("@admin persona request %s created in room %s", request_row.id, room_id)
+                name = persona_match.group(1).strip()[:100]
+                already_pending = PersonaRequest.objects.filter(
+                    user=member_user, name=name, status='pending',
+                ).exists()
+                if not already_pending:
+                    request_row = PersonaRequest.objects.create(
+                        user=member_user,
+                        room=room,
+                        name=name,
+                        description=(persona_match.group(2) or "").strip()[:1000],
+                    )
+                    logger.info("@admin persona request %s created in room %s", request_row.id, room_id)
 
             for admin_user in _get_user_model().objects.filter(is_superuser=True, is_active=True):
                 NotificationService.notify(

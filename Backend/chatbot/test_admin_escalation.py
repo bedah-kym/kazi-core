@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.test import TransactionTestCase
 
 from chatbot.consumers import ChatConsumer
@@ -14,6 +15,10 @@ User = get_user_model()
 
 
 class AdminEscalationTests(TransactionTestCase):
+    def setUp(self):
+        cache.clear()
+        self.addCleanup(cache.clear)
+
     def _make_consumer(self, alice, member, chatroom):
         consumer = ChatConsumer()
         consumer.scope = {"user": alice}
@@ -88,3 +93,28 @@ class AdminEscalationTests(TransactionTestCase):
         self.assertEqual(request_row.name, "Night Owl")
         self.assertIn("overnight custodian", request_row.description)
         self.assertEqual(request_row.status, "pending")
+
+    def test_admin_escalation_has_a_per_user_cooldown(self):
+        from notifications.models import Notification
+
+        alice = User.objects.create_user(
+            username="alice_cooldown", password="fake-token",  # nosec B106 — test fixture — fake credential
+        )
+        User.objects.create_user(
+            username="rootadmin3", password="fake-token",  # nosec B106 — test fixture — fake credential
+            is_superuser=True, is_staff=True,
+        )
+        member = Member.objects.select_related("User").get(User=alice)
+        chatroom = Chatroom.objects.get(participants=member)
+        consumer = self._make_consumer(alice, member, chatroom)
+
+        async_to_sync(consumer.new_message)({
+            "from": "alice_cooldown", "message": "@admin first", "chatid": str(chatroom.id),
+        })
+        async_to_sync(consumer.new_message)({
+            "from": "alice_cooldown", "message": "@admin second", "chatid": str(chatroom.id),
+        })
+
+        self.assertEqual(
+            Notification.objects.filter(user__is_superuser=True).count(), 1,
+        )

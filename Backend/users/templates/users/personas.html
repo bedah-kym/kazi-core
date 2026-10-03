@@ -18,9 +18,11 @@
         </p>
     </div>
     <div class="app-header-actions">
+        {% if request.user.is_staff %}
         <a class="app-btn app-btn-outline" href="{% url 'users:skills' %}">
             <i class="fas fa-book"></i> Skills
         </a>
+        {% endif %}
     </div>
 </div>
 

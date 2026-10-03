@@ -11,6 +11,7 @@ import logging
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.core.exceptions import PermissionDenied
 from django.shortcuts import get_object_or_404, redirect, render
 
 from chatbot.models import Chatroom
@@ -103,6 +104,12 @@ def persona_edit(request, persona_id):
 
 @login_required
 def skills(request):
+    # The skill library is shared across every install user: promotion,
+    # pinning and creation are staff-only. Per-user customization lives in
+    # persona.skills on the persona edit page (and chat's staged save_skill).
+    if not request.user.is_staff:
+        raise PermissionDenied("Skill management is staff-only.")
+
     if request.method == 'POST':
         action = request.POST.get('action')
         if action == 'create':

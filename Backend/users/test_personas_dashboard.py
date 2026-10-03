@@ -58,11 +58,21 @@ class PersonaDashboardTests(TestCase):
         self.user = User.objects.create_user(
             username="dash-owner", email="example@example.com",
             password="fake-token",  # nosec B106 — test fixture — fake credential
+            is_staff=True,
         )
         self.client.force_login(self.user)
         self.room = Chatroom.objects.create()
         member, _ = Member.objects.get_or_create(User=self.user)
         self.room.participants.add(member)
+
+    def test_non_staff_cannot_manage_skills(self):
+        regular = User.objects.create_user(
+            username="regular-user", email="regular@example.com",
+            password="fake-token",  # nosec B106 — test fixture — fake credential
+        )
+        self.client.force_login(regular)
+        response = self.client.get(reverse('users:skills'))
+        self.assertEqual(response.status_code, 403)
 
     def test_pages_load(self):
         self.assertEqual(self.client.get(reverse('users:personas')).status_code, 200)

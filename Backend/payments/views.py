@@ -396,7 +396,7 @@ def invoice_detail(request, reference_id):
     return render(request, 'payments/invoice_detail.html', context)
 
 
-# API Endpoints for read-only access (for AI/Mathia)
+# API Endpoints for read-only access (for AI/Kazi)
 
 @login_required
 def get_balance_api(request):

@@ -18,31 +18,31 @@ from django.views.decorators.http import require_GET, require_POST, require_http
 from .notification_utils import get_unread_room_count
 
 
-def _ensure_mathia_in_room(room):
-    """Add Mathia to a single-human room so it is AI-ready (idempotent)."""
+def _ensure_Kazi_in_room(room):
+    """Add Kazi to a single-human room so it is AI-ready (idempotent)."""
     participants = list(room.participants.all())
-    humans = [p for p in participants if p.User.username != 'mathia']
-    has_mathia = any(p.User.username == 'mathia' for p in participants)
-    if has_mathia or len(humans) != 1:
+    humans = [p for p in participants if p.User.username != 'Kazi']
+    has_Kazi = any(p.User.username == 'Kazi' for p in participants)
+    if has_Kazi or len(humans) != 1:
         return
     User = get_user_model()
-    mathia_user = User.objects.filter(username='mathia').first()
-    if not mathia_user:
+    Kazi_user = User.objects.filter(username='Kazi').first()
+    if not Kazi_user:
         return
-    mathia_member, _ = Member.objects.get_or_create(User=mathia_user)
-    room.participants.add(mathia_member)
+    Kazi_member, _ = Member.objects.get_or_create(User=Kazi_user)
+    room.participants.add(Kazi_member)
 
 
 def _ensure_default_room(user):
     """
     Create a default general room for the user if none exists.
-    Adds Mathia when available and seeds a welcome message.
+    Adds Kazi when available and seeds a welcome message.
     """
     User = get_user_model()
     with transaction.atomic():
         existing = Chatroom.objects.filter(participants__User=user).first()
         if existing:
-            _ensure_mathia_in_room(existing)
+            _ensure_Kazi_in_room(existing)
             return existing
 
         user_member, _ = Member.objects.get_or_create(User=user)
@@ -50,12 +50,12 @@ def _ensure_default_room(user):
         new_room.participants.add(user_member)
 
         try:
-            mathia_user = User.objects.get(username='mathia')
-            mathia_member, _ = Member.objects.get_or_create(User=mathia_user)
-            new_room.participants.add(mathia_member)
+            Kazi_user = User.objects.get(username='Kazi')
+            Kazi_member, _ = Member.objects.get_or_create(User=Kazi_user)
+            new_room.participants.add(Kazi_member)
 
             msg = Message.objects.create(
-                member=mathia_member,
+                member=Kazi_member,
                 content="Welcome to your new General room! I'm here to help.",
                 timestamp=timezone.now()
             )
@@ -69,9 +69,9 @@ def _ensure_default_room(user):
 
 
 def _is_ai_only_room_members(members):
-    has_mathia = any(m.User.username == 'mathia' for m in members)
-    human_members = [m for m in members if m.User.username != 'mathia']
-    return has_mathia and len(human_members) == 1
+    has_Kazi = any(m.User.username == 'Kazi' for m in members)
+    human_members = [m for m in members if m.User.username != 'Kazi']
+    return has_Kazi and len(human_members) == 1
 
 
 def _json_for_script(value):
@@ -99,13 +99,13 @@ def home(request, room_name):
         display_name = "Unknown Room"
         avatar_url = "https://ui-avatars.com/api/?name=U&background=4f8cff&color=fff&size=128"
 
-        # Check if it's a "General" room with Mathia
-        mathia_member = next((m for m in members if m.User.username == 'mathia'), None)
+        # Check if it's a "General" room with Kazi
+        Kazi_member = next((m for m in members if m.User.username == 'Kazi'), None)
         other_members = [m for m in members if m.User != request.user]
 
-        if mathia_member and len(members) <= 2:
+        if Kazi_member and len(members) <= 2:
             display_name = "General (AI)"
-            avatar_url = "/static/img/mathia-avatar.svg"
+            avatar_url = "/static/img/Kazi-avatar.svg"
         elif len(other_members) == 0:
             display_name = "Private Room (You)"
         elif len(other_members) == 1:
@@ -135,16 +135,16 @@ def home(request, room_name):
     other_member = next((m for m in room_members if m.User != request.user), None)
     current_room_name = other_member.User.username if other_member else "Unknown User"
 
-    # Override current room name if it's Mathia
-    if other_member and other_member.User.username == 'mathia':
+    # Override current room name if it's Kazi
+    if other_member and other_member.User.username == 'Kazi':
         current_room_name = "General (AI)"
     is_ai_room = _is_ai_only_room_members(room_members)
     # Invites allowed in private/group rooms — not in AI-only rooms
     can_invite = not is_ai_room
 
     # Current room avatar
-    if other_member and other_member.User.username == 'mathia':
-        current_room_avatar = "/static/img/mathia-avatar.svg"
+    if other_member and other_member.User.username == 'Kazi':
+        current_room_avatar = "/static/img/Kazi-avatar.svg"
     elif other_member:
         try:
             current_room_avatar = other_member.User.profile.get_avatar_url()
@@ -275,7 +275,7 @@ def create_room(request):
     """
     API/View to create a new room.
     Support POST for creation, GET for showing a form if needed (we'll use modal/API mainly).
-    Types: 'general' (with Mathia), 'private' (just user for now)
+    Types: 'general' (with Kazi), 'private' (just user for now)
     """
     room_type = request.POST.get('room_type') or request.GET.get('room_type') or 'general'
 
@@ -293,15 +293,15 @@ def create_room(request):
         new_room.participants.add(user_member)
 
         if room_type == 'general':
-            # Add Mathia
+            # Add Kazi
             try:
-                mathia_user = User.objects.get(username='mathia')
-                mathia_member, _ = Member.objects.get_or_create(User=mathia_user)
-                new_room.participants.add(mathia_member)
+                Kazi_user = User.objects.get(username='Kazi')
+                Kazi_member, _ = Member.objects.get_or_create(User=Kazi_user)
+                new_room.participants.add(Kazi_member)
 
                 # Welcome message
                 msg = Message.objects.create(
-                    member=mathia_member,
+                    member=Kazi_member,
                     content="Welcome to your new General room! I'm here to help.",
                     timestamp=timezone.now()
                 )

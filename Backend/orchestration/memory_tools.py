@@ -1,5 +1,5 @@
 """
-Memory lifecycle tools for the Mathia agentic loop.
+Memory lifecycle tools for the Kazi agentic loop.
 
 Provides create/complete/update/archive/search operations on RoomNote,
 executed as internal tools (no external connector needed).

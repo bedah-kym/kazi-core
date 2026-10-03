@@ -1,10 +1,10 @@
 from rest_framework import serializers
-from .models import MathiaReply
+from .models import KaziReply
 
 
-class MathiaReplySerializer(serializers.ModelSerializer):
+class KaziReplySerializer(serializers.ModelSerializer):
     class Meta:
-        model = MathiaReply
+        model = KaziReply
         fields = [
             'message',
             'sender',

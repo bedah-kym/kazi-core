@@ -1,5 +1,5 @@
 """
-Data Synthesizer for Mathia Orchestration
+Data Synthesizer for Kazi Orchestration
 Converts structured data from connectors into natural language responses
 """
 import json
@@ -161,7 +161,7 @@ class DataSynthesizer:
     async def _enhance_with_llm(self, intent: Dict, result: Dict, basic_response: str) -> str:
         """Use LLM to make the response conversational"""
         try:
-            system_prompt = """You are Mathia, a helpful personal assistant.
+            system_prompt = """You are Kazi, a helpful personal assistant.
 Convert the provided structured data into a natural, friendly response.
 Keep it concise but informative.
 Do not make up facts not present in the data.
@@ -193,7 +193,7 @@ Please generate a natural response for the user.
     async def _enhance_with_llm_stream(self, intent: Dict, result: Dict, basic_response: str):
         """Use LLM to make the response conversational (streaming)"""
         try:
-            system_prompt = """You are Mathia, a helpful personal assistant.
+            system_prompt = """You are Kazi, a helpful personal assistant.
 Convert the provided structured data into a natural, friendly response.
 Keep it concise but informative.
 Do not make up facts not present in the data.

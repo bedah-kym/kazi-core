@@ -1,5 +1,5 @@
 """
-Intent Parser for Mathia Orchestration System
+Intent Parser for Kazi Orchestration System
 Converts natural language commands into structured JSON intents
 """
 import json
@@ -40,7 +40,7 @@ class IntentParser:
         "create_workflow",
     ]))
 
-    SYSTEM_PROMPT = """You are an intent classifier for Mathia, a personal assistant with travel planning.
+    SYSTEM_PROMPT = """You are an intent classifier for Kazi, a personal assistant with travel planning.
 
 Your job: Parse user messages into structured JSON.
 

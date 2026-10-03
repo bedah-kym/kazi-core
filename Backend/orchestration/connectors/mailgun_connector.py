@@ -60,7 +60,7 @@ class MailgunConnector(BaseConnector):
             return None
         sender = parameters.get("from")
         if not sender:
-            sender = f"Mathia <mailgun@{self.domain}>" if self.domain else "Mathia"
+            sender = f"Kazi <mailgun@{self.domain}>" if self.domain else "Kazi"
         return {
             "effects": [
                 f"Send an email to {to} from {sender}",
@@ -85,7 +85,7 @@ class MailgunConnector(BaseConnector):
             }
 
         if not from_email:
-            from_email = f"Mathia <mailgun@{self.domain}>"
+            from_email = f"Kazi <mailgun@{self.domain}>"
 
         try:
             url = f"{self.base_url}/messages"

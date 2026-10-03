@@ -1,10 +1,10 @@
 from django.contrib import admin
 from django.utils.html import format_html
-from .models import MathiaReply
+from .models import KaziReply
 
 
-@admin.register(MathiaReply)
-class MathiaReplyAdmin(admin.ModelAdmin):
+@admin.register(KaziReply)
+class KaziReplyAdmin(admin.ModelAdmin):
     list_display = ['id', 'sender', 'chatid', 'message_preview']
     list_filter = ['sender']
     search_fields = ['sender', 'message', 'command', 'chatid']

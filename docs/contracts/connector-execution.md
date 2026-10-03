@@ -89,7 +89,7 @@ async def preview(self, parameters, context) -> Optional[Dict[str, Any]]:
     """Describe effects without committing anything. Read-only."""
     return {
         "effects": [
-            "Send an email to ops@example.com from Mathia",
+            "Send an email to ops@example.com from Kazi",
             "Subject: Daily report",
         ],
     }

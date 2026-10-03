@@ -1,5 +1,5 @@
 """
-Contact tools for the Mathia agentic loop.
+Contact tools for the Kazi agentic loop.
 
 Provides lookup and save operations on the Contact model,
 executed as internal tools (no external connector needed).

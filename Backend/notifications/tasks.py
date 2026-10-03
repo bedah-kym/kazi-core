@@ -37,7 +37,7 @@ def deliver_notification_email(self, notification_id, user_id, event_type, title
             logger.info("No email address for user %s — skipping email notification", user_id)
             return
 
-        subject = f"[Mathia] {title}"
+        subject = f"[Kazi] {title}"
         text_body = body or title
 
         sent = False

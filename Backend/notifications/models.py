@@ -1,4 +1,4 @@
-"""Unified notification model for all Mathia event types."""
+"""Unified notification model for all Kazi event types."""
 from django.conf import settings
 from django.db import models
 

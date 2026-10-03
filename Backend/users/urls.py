@@ -41,7 +41,7 @@ urlpatterns = [
     path('avatar/upload/', avatar_views.avatar_upload, name='avatar_upload'),
 
     # Marketing / value pages
-    path('why/', views.why_mathia, name='why_mathia'),
+    path('why/', views.why_Kazi, name='why_Kazi'),
     path('playbooks/', views.playbooks, name='playbooks'),
     path('pricing/', views.pricing, name='pricing'),
     path('trust/', views.trust, name='trust'),

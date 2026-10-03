@@ -2,7 +2,7 @@
 
 `ChatConsumer.new_message` validates the WebSocket input surface (sender,
 room, mute, rate-limit, encryption) and then delegates every decision
-*after* `@mathia` routing to this class. The coordinator owns the routing
+*after* `@Kazi` routing to this class. The coordinator owns the routing
 pipeline (directives, pending confirmations, agent loop, planner, intent
 dispatch, general chat) and talks back to the consumer through a small set
 of injected async callbacks so it has no Channels dependency of its own.
@@ -400,7 +400,7 @@ class OrchestrationCoordinator:
                 content = content.strip()
                 if not content:
                     continue
-                role = "assistant" if speaker.lower() == "mathia" else "user"
+                role = "assistant" if speaker.lower() == "Kazi" else "user"
                 # Merge consecutive same-role messages
                 if messages and messages[-1]["role"] == role:
                     messages[-1]["content"] += "\n" + content
@@ -495,7 +495,7 @@ class OrchestrationCoordinator:
             full_query = query_text
             if history:
                 full_query = f"CONVERSATION HISTORY:\n{history}\n\nUSER message: {query_text}"
-            system_prompt = "You are Mathia, a helpful AI assistant."
+            system_prompt = "You are Kazi, a helpful AI assistant."
             if style_prompt:
                 system_prompt = f"{system_prompt}\n{style_prompt}"
             system_prompt = (

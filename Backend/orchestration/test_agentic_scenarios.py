@@ -1,5 +1,5 @@
 """
-Scenario tests for the Mathia agentic system.
+Scenario tests for the Kazi agentic system.
 
 These test the agent loop end-to-end with mocked LLM and tool execution,
 verifying multi-tool chaining, error recovery, confirmation flows, safety,

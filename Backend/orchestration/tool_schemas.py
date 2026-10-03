@@ -1,7 +1,7 @@
 """
 Generate Claude-compatible tool definitions from ACTION_CATALOG.
 
-This is the bridge between Mathia's action catalog (single source of truth)
+This is the bridge between Kazi's action catalog (single source of truth)
 and the Anthropic tool_use API format. The agent loop sends these definitions
 to the LLM so it can natively call tools.
 """

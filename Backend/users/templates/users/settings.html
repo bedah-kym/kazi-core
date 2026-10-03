@@ -1,7 +1,7 @@
 {% extends "users/base_app.html" %}
 {% load static %}
 
-{% block title %}Settings - Mathia{% endblock %}
+{% block title %}Settings - Kazi{% endblock %}
 
 {% block breadcrumb %}
 <a href="{% url 'users:dashboard' %}">Dashboard</a><span class="crumb-sep">&#8250;</span><span class="crumb-current">Settings</span>
@@ -128,7 +128,7 @@
                     <div>
                         <div class="hint-title">How this helps</div>
                         <div class="text-muted">
-                            These settings tune how Mathia speaks, interprets dates, and formats times/currency.
+                            These settings tune how Kazi speaks, interprets dates, and formats times/currency.
                             Leave blank to auto-detect.
                         </div>
                     </div>
@@ -193,7 +193,7 @@
             <form method="post">
                 {% csrf_token %}
                 <input type="hidden" name="section" value="ai">
-                <p class="text-muted mb-3">When enabled, Mathia uses your profile data (role, industry, preferences) to give more relevant suggestions.</p>
+                <p class="text-muted mb-3">When enabled, Kazi uses your profile data (role, industry, preferences) to give more relevant suggestions.</p>
                 <div class="form-check form-switch mb-3">
                     <input class="form-check-input" type="checkbox" id="aiPersonalizationToggle"
                         name="ai_personalization_enabled"
@@ -544,7 +544,7 @@
         {% if can_send_invites %}
         <div id="invites" class="settings-section">
             <h3 class="mb-4">Invite People</h3>
-            <p class="text-muted mb-3">You can invite up to 3 people to join Mathia. They'll be able to collaborate in rooms but won't be able to send their own platform invites.</p>
+            <p class="text-muted mb-3">You can invite up to 3 people to join Kazi. They'll be able to collaborate in rooms but won't be able to send their own platform invites.</p>
 
             <div class="mb-4">
                 <span class="plan-badge" style="background: var(--clay-tint); color: var(--clay-strong);">

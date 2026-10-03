@@ -1,5 +1,5 @@
 """
-ReAct-style Agent Loop for Mathia.
+ReAct-style Agent Loop for Kazi.
 
 Replaces the linear parse → route → done pipeline with an autonomous
 think → act → observe loop. The LLM decides which tools to call,

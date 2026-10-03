@@ -1,5 +1,5 @@
 """
-Agent system prompt builder for the Mathia agentic loop.
+Agent system prompt builder for the Kazi agentic loop.
 
 Assembles the system prompt that tells the LLM who it is, what tools it has,
 how to behave, and injects user-specific context (preferences, memory, history).

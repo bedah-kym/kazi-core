@@ -1,4 +1,4 @@
-"""Workflow chat agent for @mathia workflow creation."""
+"""Workflow chat agent for @Kazi workflow creation."""
 import json
 import logging
 from typing import Dict, Any, Optional

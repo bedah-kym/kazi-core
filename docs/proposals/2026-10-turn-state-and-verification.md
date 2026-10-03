@@ -158,7 +158,7 @@ authoritative over any preview.
   channel-layer failure mid-stream yields `turn.failed`, not a hung turn.
 
 **T-A3 — Adversarial stream/reconnect tests + client contract doc** `[Literature]`
-- Context: pathrule pattern; frontend is Mathia-private and needs a written contract.
+- Context: pathrule pattern; frontend is Kazi-private and needs a written contract.
 - Build: deterministic fixtures; inject duplicate, missing, delayed, out-of-order events and
   disconnect before/after tool commit and final persistence; race cancellation against
   completion; reconnect from every cursor. Write `docs/contracts/turn-stream.md` (protected:
@@ -261,7 +261,7 @@ authoritative over any preview.
 
 ## 8. Risks and open questions
 
-- **Frontend coordination.** Protocol v2 needs the Mathia frontend; the contract doc (T-A3)
+- **Frontend coordination.** Protocol v2 needs the Kazi frontend; the contract doc (T-A3)
   is the interface. Should we ship v2 behind a capability flag per room?
 - **Protected paths.** T-B1/T-B2/T-B3 touch `contracts.py`, `base_connector.py`,
   `action_catalog.py`, `agent_loop.py`; each needs a plan (`docs/plans/`) and human OK.

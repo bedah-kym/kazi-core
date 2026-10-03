@@ -635,7 +635,7 @@ class OrchestrationCoordinator:
             except Exception as exc:
                 logger.warning("Autopilot disarm failed: %s", exc)
             if disarmed:
-                await broadcast_chunk("Autopilot disarmed for this room.")
+                await broadcast_chunk("Autopilot disarmed for this room.\n\n")
             elif disarmed is None and (was_armed or explicit_disarm):
                 await broadcast_chunk(
                     "I couldn't confirm autopilot was disarmed. It is off for this message; "

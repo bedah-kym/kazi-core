@@ -8,7 +8,10 @@ from orchestration.shell.chat_intents import is_autopilot_disarm_request, is_aut
 
 class AutopilotIntentTests(SimpleTestCase):
     def test_exact_replies_arm(self):
-        for phrase in ("autopilot", "Autopilot.", "  auto pilot ", "autopilot on", "arm autopilot!"):
+        for phrase in (
+            "autopilot", "Autopilot.", "  auto pilot ", "autopilot on", "arm autopilot!",
+            "sure, autopilot", "yes autopilot", "ok, autopilot please", "autopilot please",
+        ):
             self.assertTrue(is_autopilot_request(phrase), phrase)
 
     def test_anything_longer_does_not_arm(self):
@@ -16,6 +19,10 @@ class AutopilotIntentTests(SimpleTestCase):
             "what does autopilot do?",
             "no thanks. autopilot sounds scary",
             "no autopilot",
+            "please no autopilot",
+            "yes but not autopilot",
+            "sure, what is autopilot",
+            "ok autopilot off",
             "don't take over",
             "I'll take over from here, cancel",
             "no, stop asking me",

@@ -167,6 +167,11 @@ SHELL_EXEC_NETWORK_ALLOWLIST = [
     for host in os.environ.get('SHELL_EXEC_NETWORK_ALLOWLIST', '').split(',')
     if host.strip()
 ]
+# Human-armed autopilot window for the unsandboxed `open` shell profile.
+SHELL_AUTOPILOT_MINUTES = int(os.environ.get('SHELL_AUTOPILOT_MINUTES', '30'))
+SHELL_AUTOPILOT_MAX_MINUTES = int(os.environ.get('SHELL_AUTOPILOT_MAX_MINUTES', '120'))
+# How long a room stays tainted after untrusted text enters it (0 = this run only).
+AGENT_TAINT_TTL_SECONDS = int(os.environ.get('AGENT_TAINT_TTL_SECONDS', '900'))
 
 # Eval scenario packs (#171): each capability pack in the golden harness must
 # ship at least this many scenarios. Guarded by test_scenario_packs.

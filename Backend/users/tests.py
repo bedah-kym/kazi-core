@@ -143,6 +143,7 @@ class DashboardApiTests(TestCase):
         self.assertEqual(payload["workflows"]["total"], 0)
         self.assertTrue(any(item["kind"] == "reminder" for item in payload["activity"]))
 
+
 class ReservedUsernameTests(TestCase):
     """The kazi identity can never be claimed by registration."""
 
@@ -161,9 +162,9 @@ class ReservedUsernameTests(TestCase):
                 "full_name": "Kazi Wannabe",
                 "email": "wannabe@example.com",
                 "username": "kazi",
-                "password1": "Str0ng!Pass99",
-                "password2": "Str0ng!Pass99",
-                "invite_token": "fake-token",
+                "password1": "Str0ng!Pass99",  # nosec B105 — test fixture — fake credential
+                "password2": "Str0ng!Pass99",  # nosec B105 — test fixture — fake credential
+                "invite_token": "fake-token",  # nosec B105 — test fixture — fake credential
             },
         )
         self.assertEqual(response.status_code, 200)

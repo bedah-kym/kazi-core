@@ -489,6 +489,10 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'workflows.tasks.check_workflow_health',
         'schedule': crontab(minute=0),  # Hourly: failure spikes -> auto-pause
     },
+    'check-schedule-health': {
+        'task': 'workflows.tasks.check_schedule_health',
+        'schedule': crontab(minute=5),  # Hourly: skipped schedule fires -> alert
+    },
     'send-workflow-health-digest': {
         'task': 'workflows.tasks.send_workflow_health_digest',
         'schedule': crontab(day_of_week=1, hour=8, minute=0),  # Weekly: healthy/degraded/paused

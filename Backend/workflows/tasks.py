@@ -213,6 +213,14 @@ def check_workflow_health() -> Dict[str, int]:
 
 
 @shared_task(ignore_result=True)
+def check_schedule_health() -> Dict[str, int]:
+    """Alert on skipped Temporal schedule fires — the silent-skip gap."""
+    from .health import check_schedule_health as _check
+
+    return _check()
+
+
+@shared_task(ignore_result=True)
 def send_workflow_health_digest() -> Dict[str, int]:
     """Weekly healthy/degraded/paused digest (W-C, #157)."""
     from .health import send_workflow_health_digest as _send

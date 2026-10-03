@@ -20,9 +20,17 @@ class IntentDetectionTests(SimpleTestCase):
             self.assertFalse(is_always_allow_request(phrase), phrase)
             self.assertFalse(is_autopilot_request(phrase), phrase)
 
-    def test_negated_phrases_do_not_match(self):
-        self.assertFalse(is_always_allow_request("no don't always allow"))
-        self.assertFalse(is_autopilot_request("no autopilot"))
+    def test_negated_always_allow_phrases_do_not_match(self):
+        for phrase in ("no don't always allow", "do not always run", "never auto-approve"):
+            self.assertFalse(is_always_allow_request(phrase), phrase)
+
+    def test_negated_autopilot_phrases_do_not_match(self):
+        for phrase in ("no autopilot", "don't take over", "do not go autonomous", "never auto-run", "disable autopilot"):
+            self.assertFalse(is_autopilot_request(phrase), phrase)
+
+    def test_positive_autopilot_phrases_still_match(self):
+        for phrase in ("autopilot", "take over", "go autonomous", "handle it yourself"):
+            self.assertTrue(is_autopilot_request(phrase), phrase)
 
 
 class ConfirmationPromptHintTests(SimpleTestCase):

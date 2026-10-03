@@ -278,7 +278,9 @@
         <div class="app-card">
             <p class="app-meta" style="margin: 0 0 12px;">
                 Human-armed autopilot and exact-command grants for the chat shell.
-                Destructive commands and any step driven by untrusted content always ask.
+                Destructive commands, unallowlisted network calls, and any step driven
+                by untrusted content always ask. Autopilot also stops when you send a
+                new chat message.
             </p>
             {% for room in shell_rooms %}
             <div class="exec-row">

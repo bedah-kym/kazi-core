@@ -290,7 +290,7 @@ def _run_command_risk_info(
         if grants:
             from orchestration.shell.grants import fingerprint
 
-            fp = fingerprint(command, profile=profile)
+            fp = fingerprint(command, profile_name=profile)
             granted = bool(fp and fp in grants)
 
     if tainted and needs_egress and tier != "denied":
@@ -299,7 +299,10 @@ def _run_command_risk_info(
     elif tier == "safe":
         requires_confirmation = False
     elif tier == "bounded":
-        requires_confirmation = not (granted or autopilot)
+        # An unallowlisted network command still asks even under autopilot or a
+        # grant: egress is the exfil leg. An allowlisted network command already
+        # downgraded to `safe` above, so needs_network here means "not allowlisted".
+        requires_confirmation = bool(classification.get("needs_network")) or not (granted or autopilot)
     else:
         requires_confirmation = True
 

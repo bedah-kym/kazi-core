@@ -66,10 +66,11 @@ Everything else — including all local build commands — is auto under autopil
 - Protected paths? yes — `agent_loop.py`, `tool_executor.py`.
 - Contracts/migrations/payments/secrets? **No migration** — shipped as profile
   JSON, mirroring #152. No payments, no secrets, no contract change.
-- Built: **chat triggers** (`always allow` / `autopilot`) and an **ops UI panel**
-  on the operations inbox (`/workflows/inbox/`) to arm/disarm autopilot and
-  revoke grants, plus `manage.py shell_autonomy`. Remaining follow-up: wiring
-  `grants.sweep_expired_grants()` into the nightly sweep.
+- Built: **chat triggers** (`always allow` / `autopilot`), an **ops UI panel**
+  (`/workflows/inbox/`), and `manage.py shell_autonomy`. Autopilot is
+  **disarmed by the next human message** (kill switch) and its state is
+  **re-read each loop iteration**, so a mid-run revoke/expiry takes effect.
+  Remaining follow-up: wiring `grants.sweep_expired_grants()` into the sweep.
 
 ## Risk class of any new action
 
@@ -138,13 +139,26 @@ them returns shell to prompt-on-every-command. Autopilot defaults **off**.
 5. Network: unchanged — #134 allowlist still applies; a tainted egress step
    always asks regardless of autopilot/grant.
 
+## Post-review hardening (CodeRabbit)
+
+- **Kill switch**: next human message disarms autopilot.
+- **Per-iteration refresh**: the coordinator injects `refresh_shell_autonomy`;
+  the loop re-reads arm/grant state before each shell decision.
+- **Autonomy word never confirms a non-shell action**: the chat choice applies
+  only when the pending tool is a shell command.
+- **Unallowlisted network still asks** under autopilot/grant (egress carve-out).
+- **Opaque wrappers path-qualified** (`/bin/sh -c`, `/usr/bin/python3 -c`) and
+  all negated phrase forms are rejected; grant keys preserve case so distinct
+  args don't collide.
+- **Atomic store**: profile read-modify-writes lock the row (`profile_store`).
+
 ## Verification (recorded)
 
-- `manage.py test` full suite: **1033 tests, OK (skipped=1)**.
+- `manage.py test` full suite: **1039 tests, OK (skipped=1)**.
 - `flake8 Backend ... --max-complexity=10`: 0 issues.
 - `bandit -r Backend --skip B101,B110`: no issues.
 - `scripts/check_boundaries.py`: clean.
-- New coverage: `orchestration.test_shell_autonomy` (fingerprint, risk rule,
-  store, autopilot), `test_shell_chat_intents` (phrase + negation detection,
-  prompt hint), `workflows.test_shell_autonomy_ui` (panel + POST actions) +
+- New coverage: `orchestration.test_shell_autonomy` (fingerprint/case/opaque,
+  risk rule, network gating, store, autopilot), `test_shell_chat_intents`
+  (phrase + negation), `workflows.test_shell_autonomy_ui` (panel + POST) +
   existing shell/coordinator suites green.

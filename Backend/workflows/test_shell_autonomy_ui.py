@@ -32,7 +32,7 @@ class ShellAutonomyUiTests(TestCase):
         self.assertFalse(autopilot.is_armed(self.user.id, 5))
 
     def test_revoke_grant_via_ui(self):
-        fp = grants.create_grant(self.user.id, 5, "dir /b", profile="standard")
+        fp = grants.create_grant(self.user.id, 5, "dir /b", profile_name="standard")
         self.assertIsNotNone(fp)
 
         response = self.client.post(

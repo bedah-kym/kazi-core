@@ -15,17 +15,22 @@ _ALWAYS_ALLOW = re.compile(
     r"never ask(?: me)?(?: again)?|auto[- ]?approve)\b",
     re.IGNORECASE,
 )
+_NEGATORS = (
+    r"(?:no|not|never|don'?t|do not|doesn'?t|won'?t|disable[d]?|"
+    r"stop|turn(?:ed)?\s+off|without)"
+)
+_ALWAYS_ALLOW_PHRASES = r"(?:always allow|always yes|always run|auto[- ]?approve)"
+_AUTOPILOT_PHRASES = (
+    r"(?:auto[- ]?pilot|take over|go autonomous|auto[- ]?run|"
+    r"run on your own|handle it yourself)"
+)
 _ALWAYS_ALLOW_NEGATED = re.compile(
-    r"\b(?:no|not|don'?t|do not|never)\s+(?:always allow|always yes|always run|auto[- ]?approve)\b",
+    rf"\b{_NEGATORS}\b[^.!?;]{{0,24}}?\b{_ALWAYS_ALLOW_PHRASES}\b",
     re.IGNORECASE,
 )
-_AUTOPILOT = re.compile(
-    r"\b(?:auto[- ]?pilot|take over|go autonomous|auto[- ]?run|"
-    r"run on your own|handle it yourself)\b",
-    re.IGNORECASE,
-)
+_AUTOPILOT = re.compile(rf"\b{_AUTOPILOT_PHRASES}\b", re.IGNORECASE)
 _AUTOPILOT_NEGATED = re.compile(
-    r"\b(?:no|not|disable|turn off|stop)\s+(?:the\s+)?auto[- ]?pilot\b",
+    rf"\b{_NEGATORS}\b[^.!?;]{{0,24}}?\b{_AUTOPILOT_PHRASES}\b",
     re.IGNORECASE,
 )
 

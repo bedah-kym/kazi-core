@@ -10,7 +10,7 @@ from orchestration.tool_executor import get_tool_risk_info
 class FingerprintTests(SimpleTestCase):
     @override_settings(SHELL_EXEC_PROFILE="standard")
     def test_plain_command_is_grantable(self):
-        self.assertEqual(grants.fingerprint("Dir /b tools", profile="standard"), "dir /b tools")
+        self.assertEqual(grants.fingerprint("Dir /b tools", profile_name="standard"), "Dir /b tools")
 
     def test_metacharacter_command_is_not_grantable(self):
         self.assertIsNone(grants.fingerprint("dir tools && rm -rf /"))
@@ -19,9 +19,20 @@ class FingerprintTests(SimpleTestCase):
         self.assertIsNone(grants.fingerprint('python -c "print(1)"'))
         self.assertIsNone(grants.fingerprint("cmd /c dir"))
 
+    def test_path_qualified_interpreter_is_not_grantable(self):
+        self.assertIsNone(grants.fingerprint("/bin/sh -c id"))
+        self.assertIsNone(grants.fingerprint("/usr/bin/python3 -c pass"))
+
+    @override_settings(SHELL_EXEC_PROFILE="standard")
+    def test_case_is_preserved_so_args_do_not_collide(self):
+        upper = grants.fingerprint("dir /Private", profile_name="standard")
+        lower = grants.fingerprint("dir /private", profile_name="standard")
+        self.assertEqual(upper, "dir /Private")
+        self.assertNotEqual(upper, lower)
+
     @override_settings(SHELL_EXEC_PROFILE="standard")
     def test_destructive_command_is_not_grantable(self):
-        self.assertIsNone(grants.fingerprint("rm -rf /", profile="standard"))
+        self.assertIsNone(grants.fingerprint("rm -rf /", profile_name="standard"))
 
 
 class RiskRuleTests(SimpleTestCase):
@@ -36,21 +47,38 @@ class RiskRuleTests(SimpleTestCase):
         info = get_tool_risk_info("run_command", None, {"command": "dir /b"})
         self.assertFalse(info["requires_confirmation"])
 
-    @override_settings(SHELL_EXEC_PROFILE="standard")
-    def test_autopilot_makes_bounded_auto(self):
+    @override_settings(SHELL_EXEC_PROFILE="open")
+    def test_autopilot_auto_runs_local_bounded(self):
         info = get_tool_risk_info(
-            "run_command", {"_shell_autopilot": True}, {"command": "ping 1.1.1.1"},
+            "run_command", {"_shell_autopilot": True}, {"command": "sudo ls"},
+        )
+        self.assertFalse(info["requires_confirmation"])
+        self.assertEqual(info["shell_tier"], "bounded")
+
+    @override_settings(SHELL_EXEC_PROFILE="open")
+    def test_grant_auto_runs_local_bounded(self):
+        info = get_tool_risk_info(
+            "run_command",
+            {"_shell_grants": {"sudo ls": "always_allow"}},
+            {"command": "sudo ls"},
         )
         self.assertFalse(info["requires_confirmation"])
 
     @override_settings(SHELL_EXEC_PROFILE="standard")
-    def test_grant_makes_bounded_auto(self):
+    def test_autopilot_keeps_prompt_for_unallowlisted_network(self):
+        info = get_tool_risk_info(
+            "run_command", {"_shell_autopilot": True}, {"command": "curl http://example.test"},
+        )
+        self.assertTrue(info["requires_confirmation"])
+
+    @override_settings(SHELL_EXEC_PROFILE="standard")
+    def test_grant_keeps_prompt_for_unallowlisted_network(self):
         info = get_tool_risk_info(
             "run_command",
-            {"_shell_grants": {"ping 1.1.1.1": "always_allow"}},
-            {"command": "ping 1.1.1.1"},
+            {"_shell_grants": {"curl http://example.test": "always_allow"}},
+            {"command": "curl http://example.test"},
         )
-        self.assertFalse(info["requires_confirmation"])
+        self.assertTrue(info["requires_confirmation"])
 
     @override_settings(SHELL_EXEC_PROFILE="standard")
     def test_autopilot_never_runs_destructive(self):
@@ -75,21 +103,21 @@ class GrantStoreTests(TestCase):
         self.user = get_user_model().objects.create_user(username="shelluser")
 
     def test_create_and_read_roundtrip(self):
-        fp = grants.create_grant(self.user.id, 7, "dir /b", profile="standard")
+        fp = grants.create_grant(self.user.id, 7, "dir /b", profile_name="standard")
         self.assertEqual(fp, "dir /b")
         self.assertIn(fp, grants.active_grants(self.user.id, 7))
 
     def test_revoke_removes_grant(self):
-        grants.create_grant(self.user.id, 7, "dir /b", profile="standard")
-        self.assertTrue(grants.revoke_grant(self.user.id, 7, "DIR /b"))
+        grants.create_grant(self.user.id, 7, "dir /b", profile_name="standard")
+        self.assertTrue(grants.revoke_grant(self.user.id, 7, "dir /b"))
         self.assertEqual(grants.active_grants(self.user.id, 7), {})
 
     def test_room_scoped(self):
-        grants.create_grant(self.user.id, 7, "dir /b", profile="standard")
+        grants.create_grant(self.user.id, 7, "dir /b", profile_name="standard")
         self.assertEqual(grants.active_grants(self.user.id, 8), {})
 
     def test_expired_grant_is_inactive(self):
-        grants.create_grant(self.user.id, 7, "dir /b", days=1, profile="standard")
+        grants.create_grant(self.user.id, 7, "dir /b", days=1, profile_name="standard")
         profile = get_user_model().objects.get(pk=self.user.id).profile
         prefs = dict(profile.notification_preferences)
         prefs[grants.GRANTS_KEY]["7"]["dir /b"]["expires_at"] = "2000-01-01T00:00:00+00:00"
@@ -98,7 +126,7 @@ class GrantStoreTests(TestCase):
         self.assertEqual(grants.active_grants(self.user.id, 7), {})
 
     def test_non_grantable_command_creates_nothing(self):
-        self.assertIsNone(grants.create_grant(self.user.id, 7, "rm -rf /", profile="standard"))
+        self.assertIsNone(grants.create_grant(self.user.id, 7, "rm -rf /", profile_name="standard"))
         self.assertEqual(grants.active_grants(self.user.id, 7), {})
 
 

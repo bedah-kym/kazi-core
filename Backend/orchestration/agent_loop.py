@@ -1440,6 +1440,12 @@ async def run_agent_loop(
         if stop_reason == "tool_use":
             tool_calls = _extract_tool_calls(content_blocks)
 
+            # Re-read room autonomy each iteration so a mid-run arm/revoke/expiry
+            # is honored (the coordinator injects this refresher).
+            _refresher = context.get("refresh_shell_autonomy")
+            if callable(_refresher):
+                preferences = await _refresher(preferences)
+
             # Separate into auto-execute, needs-confirmation, and refused.
             safe_calls, pause_calls, denied_calls = _bucket_tool_calls(
                 tool_calls, preferences,

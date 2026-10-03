@@ -221,8 +221,9 @@ def build_confirmation_prompt(
     if str(tool_name or "").strip().lower() in {"run_command", "run_shell", "shell_command"}:
         hint = (
             "\n\nTip: reply **always allow** to auto-run this exact command in this "
-            "room, or **autopilot** to auto-run safe and bundled commands until the "
-            "window expires. Destructive commands still ask."
+            "room, or **autopilot** to auto-run safe and bounded (local) commands "
+            "until the window expires. Destructive, denied, and unallowlisted "
+            "network commands still ask."
         )
 
     return (

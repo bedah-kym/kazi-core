@@ -248,6 +248,20 @@ def render_skill_markdown(
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _contained_skill_folder(root: Path, skill_name: str) -> Path:
+    """Resolve a skill folder and prove it stays under the skills root.
+
+    The slug strips separators, but the explicit resolve + containment check
+    keeps this safe even if slugification ever changes (and satisfies static
+    analysis that untrusted names cannot escape the root).
+    """
+    root_resolved = Path(root).resolve()
+    candidate = (root_resolved / slugify_skill_name(skill_name)).resolve()
+    if candidate != root_resolved and root_resolved not in candidate.parents:
+        raise PromotionError("Invalid skill folder name.")
+    return candidate
+
+
 def write_staged_skill(
     skill_name: str,
     description: str,
@@ -263,14 +277,13 @@ def write_staged_skill(
     if root is None:
         raise PromotionError("No skills directory is configured; cannot stage a skill.")
 
-    slug = slugify_skill_name(skill_name)
-    folder = Path(root) / slug
+    folder = _contained_skill_folder(root, skill_name)
     skill_md = folder / "SKILL.md"
     if skill_md.exists():
         stage = _read_stage(skill_md)
         if stage != "staging":
             raise PromotionError(
-                f"Skill '{slug}' is already at stage '{stage}'; editing a promoted skill needs a human."
+                f"Skill '{folder.name}' is already at stage '{stage}'; editing a promoted skill needs a human."
             )
 
     folder.mkdir(parents=True, exist_ok=True)

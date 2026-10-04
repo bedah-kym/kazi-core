@@ -42,9 +42,8 @@ class ShellConnector(BaseConnector):
                 "aliases": ["run_shell", "shell_command"],
                 "service": "shell",
                 "description": (
-                    "Run a shell command on the shell-exec host inside a sandboxed "
-                    "container (non-root, read-only, network off by default). Use for "
-                    "diagnostics and system tasks: ping, dig, nslookup, ps, df, cat, etc."
+                    "Run a shell command in this room's workspace. The system prompt "
+                    "states the operating system, shell and sandbox profile in use."
                 ),
                 "params": {
                     "command": {
@@ -55,7 +54,7 @@ class ShellConnector(BaseConnector):
                     "cwd": {
                         "type": "string",
                         "required": False,
-                        "description": "Working directory relative to /workspace.",
+                        "description": "Working directory, relative to the workspace root.",
                     },
                     "timeout_s": {
                         "type": "integer",

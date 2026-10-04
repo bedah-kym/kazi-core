@@ -71,6 +71,8 @@ class DaemonTests(unittest.TestCase):
         status, payload = asyncio.run(_call(self.app, "GET", "/health"))
         self.assertEqual(status, 200)
         self.assertEqual(payload["status"], "ok")
+        self.assertIn("platform", payload["host"])
+        self.assertIn("shell", payload["host"])
 
     def test_exec_requires_token(self):
         status, _ = asyncio.run(_call(self.app, "POST", "/exec", body={"command": "echo hi"}))

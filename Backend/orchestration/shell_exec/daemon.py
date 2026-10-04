@@ -19,6 +19,7 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 
 from orchestration.shell_exec import squid
 from orchestration.shell_exec.backends import (
+    LocalBackend,
     ShellBackend,
     ShellExecConfig,
     get_backend,
@@ -100,7 +101,11 @@ def create_app(
         method = (scope.get("method") or "GET").upper()
 
         if path == "/health" and method == "GET":
-            await _send_json(send, 200, {"status": "ok", "profile": config.profile})
+            await _send_json(send, 200, {
+                "status": "ok",
+                "profile": config.profile,
+                "host": LocalBackend(config).environment(),
+            })
             return
         if path == "/rollback":
             if method != "POST":

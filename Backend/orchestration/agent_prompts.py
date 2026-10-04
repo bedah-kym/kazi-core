@@ -18,16 +18,15 @@ logger = logging.getLogger(__name__)
 # --------------------------------------------------------------------------- #
 
 _IDENTITY = """\
-You are {agent_name}, an AI assistant built into the Kazi platform. \
-You help users manage communication, payments, travel, scheduling, and more \
-by calling tools on their behalf.
+You are {agent_name}, an assistant running inside the user's own Kazi install. \
+You get things done by calling tools. The shell tool is the general-purpose one; \
+the others are shortcuts for specific services.
 """
 
 _TOOL_RULES = """\
 ## How to use tools
 
 - You have access to a set of tools. Use them to take actions for the user.
-- Always explain briefly what you are about to do before calling a tool.
 - Never fabricate data — always rely on tool results.
 - You may call multiple tools in parallel when the tasks are independent \
 (e.g., checking weather in two cities simultaneously).
@@ -52,7 +51,6 @@ or ask the user for the missing information.
 - You can chain tools to complete complex requests step by step.
 - Example: "Email me the cheapest flight to Mombasa" → search_flights → \
 pick cheapest → send_email (with confirmation).
-- Give brief progress updates between steps so the user knows what's happening.
 - If you cannot complete all steps, explain what you accomplished and what remains.
 """
 
@@ -75,7 +73,6 @@ _RESPONSE_RULES = """\
 - Be concise but helpful. Match the user's communication style.
 - When presenting search results (flights, hotels, etc.), format them clearly \
 with the most important details (price, time, rating) highlighted.
-- When chaining multiple tools, give brief progress updates between steps.
 - If you cannot complete a task, explain what you accomplished and what remains.
 """
 
@@ -154,6 +151,47 @@ _MODALITY_RULES = """\
 When the user asks you to sing, speak, or play something aloud, prefer a voice
 tool (generate_speech) so they get a voice note rather than lyrics as text.
 """
+
+
+def build_environment_block(env: Optional[Dict[str, Any]]) -> str:
+    """Tell the model where its commands run. ``env`` comes from the shell layer."""
+    lines = ["## Where you are running"]
+    if not env:
+        lines.append(
+            "- The shell is not reachable right now, so do not assume an operating system or shell."
+        )
+        return "\n".join(lines)
+
+    sandboxed = bool(env.get("sandboxed"))
+    locked = env.get("profile") == "locked"
+    if not sandboxed:
+        boundary = (
+            "This room's shell is not sandboxed: commands run directly on the host. Once a "
+            "turn has read tool output, the harness asks the user before each further command "
+            "unless they armed autopilot; destructive commands always ask."
+        )
+    elif locked:
+        boundary = "Each command runs in a fresh, read-only container with no network."
+    else:
+        boundary = (
+            "Each command runs in a fresh container with no network; a step that needs the "
+            "network asks the user first."
+        )
+    lines.append(f"- Commands run on {env.get('platform')} through {env.get('shell')}. {boundary}")
+    if env.get("writable") == "none":
+        lines.append("- They start in this room's workspace folder, which is read-only here.")
+    else:
+        lines.append(
+            "- They start in this room's workspace folder. Files you create there are still "
+            "there next turn."
+        )
+    replies = "`yes` or `no` to a pending action"
+    if not sandboxed:
+        replies += "; `autopilot` / `autopilot off` to stop or resume being asked"
+    elif not locked:
+        replies += "; `allow host <name>` / `revoke host <name>` to manage network approvals"
+    lines.append(f"- The user can answer the harness directly: {replies}.")
+    return "\n".join(lines)
 
 
 def build_system_prompt(

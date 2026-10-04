@@ -922,14 +922,15 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
                     if ai_query:
                         # Fetch history for conversation context (bounded)
-                        history_text = await self.get_history_as_text(room_id, limit=8)
-                        try:
-                            from .context_manager import ContextManager
-                            context_prompt = await sync_to_async(ContextManager.get_context_prompt)(room_id)
-                            if context_prompt:
-                                history_text = "\n\n".join([history_text, context_prompt]).strip()
-                        except Exception as e:
-                            logger.warning(f"Context prompt load failed: {e}")
+                        history_rows = await self.get_history_rows(room_id, limit=8)
+                        history_text = '\n'.join(f'{name}: {text}' for _, name, text in history_rows)
+                        from .context_manager import ContextManager
+                        from .transcript import build_history_messages
+                        history_messages = build_history_messages(
+                            history_rows,
+                            exclude_message_id=message.id,
+                            multi_user=len(human_members) > 1,
+                        )
 
                         from orchestration.coordinator import OrchestrationCoordinator
 
@@ -972,6 +973,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                 username=member_username,
                                 message_id=message.id,
                                 history_text=history_text,
+                                history_messages=history_messages,
                                 send_chunk=send_chunk,
                                 send_step_event=send_step_event,
                                 get_context_prompt=get_context_prompt,
@@ -1623,8 +1625,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 'timestamp': str(timezone.now())
             }
 
-    async def get_history_as_text(self, room_id, limit=5):
-        "Fetches last N messages and formats them as plain text history."
+    async def get_history_rows(self, room_id, limit=5):
+        "Last N messages, oldest first, as (message_id, username, content)."
         try:
             from .models import Chatroom
             get_room = sync_to_async(Chatroom.objects.get)
@@ -1636,15 +1638,15 @@ class ChatConsumer(AsyncWebsocketConsumer):
             messages = await sync_to_async(_get_msgs)()
             messages.reverse()
 
-            history_lines = []
+            rows = []
             for msg in messages:
                 msg_json = await self.message_to_json(msg)
                 content = msg_json.get('content', '')
                 member = msg_json.get('member', 'Unknown')
                 if content and not content.startswith('Error:'):
-                    history_lines.append(f'{member}: {content}')
+                    rows.append((msg.id, member, content))
 
-            return '\n'.join(history_lines)
+            return rows
         except Exception as e:
             logger.error(f'Error getting history: {e}')
-            return ''
+            return []

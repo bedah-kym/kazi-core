@@ -118,7 +118,7 @@ class ChatConsumerRoutingTests(TransactionTestCase):
         consumer.message_to_json = AsyncMock(return_value={})
         consumer.schedule_context_summary = AsyncMock()
         consumer.schedule_idle_nudge_if_needed = AsyncMock()
-        consumer.get_history_as_text = AsyncMock(return_value="")
+        consumer.get_history_rows = AsyncMock(return_value=[])
         return consumer
 
     @patch("orchestration.coordinator.OrchestrationCoordinator")
@@ -154,7 +154,7 @@ class ChatConsumerRoutingTests(TransactionTestCase):
         consumer.message_to_json = AsyncMock(return_value={})
         consumer.schedule_context_summary = AsyncMock()
         consumer.schedule_idle_nudge_if_needed = AsyncMock()
-        consumer.get_history_as_text = AsyncMock(return_value="")
+        consumer.get_history_rows = AsyncMock(return_value=[])
 
         async_to_sync(consumer.new_message)(
             {"from": "alice", "message": "@kazi hello", "chatid": str(chatroom.id)}
@@ -165,6 +165,7 @@ class ChatConsumerRoutingTests(TransactionTestCase):
         self.assertEqual(kwargs["query"], "hello")
         self.assertEqual(kwargs["user_id"], alice.id)
         self.assertEqual(kwargs["room_id"], str(chatroom.id))
+        self.assertEqual(kwargs["history_messages"], [])
 
         # The coordinator result was persisted as a Kazi message.
         from .models import Message

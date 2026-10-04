@@ -38,7 +38,7 @@ class AdminEscalationTests(TransactionTestCase):
         consumer.message_to_json = AsyncMock(return_value={})
         consumer.schedule_context_summary = AsyncMock()
         consumer.schedule_idle_nudge_if_needed = AsyncMock()
-        consumer.get_history_as_text = AsyncMock(return_value="")
+        consumer.get_history_rows = AsyncMock(return_value=[])
         return consumer
 
     @patch("orchestration.coordinator.OrchestrationCoordinator")

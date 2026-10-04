@@ -17,6 +17,7 @@ import json
 import logging
 from typing import Any, Awaitable, Callable, Dict, Optional
 
+from orchestration.shell_exec import squid
 from orchestration.shell_exec.backends import (
     ShellBackend,
     ShellExecConfig,
@@ -33,6 +34,7 @@ Receive = Callable[[], Awaitable[Message]]
 Send = Callable[[Message], Awaitable[None]]
 
 _MAX_BODY_BYTES = 1_000_000
+_MAX_ALLOWED_HOSTS = 200
 _TOKEN_HEADER = "x-shell-exec-token"  # nosec B105 - HTTP header name, not a credential
 
 
@@ -166,9 +168,23 @@ def create_app(
 
         # Network is off unless Kazi's gate explicitly enabled it per command.
         network = str(payload.get("network") or "none")
-        if network not in ("none", "bridge"):
+        if network not in ("none", "bridge", "proxy"):
             await _send_json(send, 400, {"error": f"unsupported network mode {network!r}"})
             return
+        extra: Dict[str, Any] = {}
+        if network == "proxy":
+            if not config.egress_proxy:
+                await _send_json(send, 400, {"error": "the egress proxy is not enabled on this sidecar"})
+                return
+            hosts = payload.get("allowed_hosts") or []
+            if (
+                not isinstance(hosts, list)
+                or len(hosts) > _MAX_ALLOWED_HOSTS
+                or not all(squid.valid_host_entry(host) for host in hosts)
+            ):
+                await _send_json(send, 400, {"error": "allowed_hosts must be a list of host names"})
+                return
+            extra["allowed_hosts"] = hosts
 
         # Snapshot the workspace before a destructive command (Kazi decides when).
         snapshot_id = None
@@ -185,6 +201,7 @@ def create_app(
                 cwd=payload.get("cwd"),
                 timeout_s=payload.get("timeout_s"),
                 network=network,
+                **extra,
             )
         except ValueError as exc:
             await _send_json(send, 400, {"error": str(exc)})

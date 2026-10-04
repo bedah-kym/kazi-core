@@ -23,6 +23,18 @@ class Command(BaseCommand):
                 "SHELL_EXEC_TOKEN is not set; refusing to start an unauthenticated sidecar."
             )
 
+        if config.egress_proxy:
+            # Check the engine, build the proxy image and sweep leftovers now,
+            # so no request ever waits on a build or inherits a leaked network.
+            import asyncio
+
+            from orchestration.shell_exec.backends import prepare_egress
+
+            error = asyncio.run(prepare_egress(config))
+            if error:
+                raise CommandError(f"SHELL_EGRESS_PROXY is on but the egress proxy cannot be used: {error}")
+            self.stdout.write("Egress proxy ready (stock Squid, one per sandboxed network command).")
+
         host = options.get("host") or config.host
         port = options.get("port") or config.port
         app = create_app(config)

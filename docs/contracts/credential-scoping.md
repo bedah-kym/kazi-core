@@ -1,6 +1,6 @@
 # Credential Scoping — Shell & Delegate
 
-Version: 1.0
+Version: 1.1
 Status: stable (documented only)
 
 Defines what the shell-exec sidecar (#130) and any future delegated runtime
@@ -8,6 +8,9 @@ Defines what the shell-exec sidecar (#130) and any future delegated runtime
 command classifier is UX plus a tripwire, never the boundary (v0.6 brief §3,
 roadmap §4.3). This contract constrains the execution environment itself, so
 every shell/delegate PR has a fixed target to check against.
+
+Changes in 1.1: Rule 2 describes the enforced egress proxy
+(`SHELL_EGRESS_PROXY`); Rule 1 states what the proxy container may mount.
 
 ## Rule 1 — Filesystem
 
@@ -18,23 +21,45 @@ every shell/delegate PR has a fixed target to check against.
   `.env`, `~/.ssh`, `~/.aws`, the Docker socket, or anything outside
   `<SHELL_EXEC_ROOT>`.
 - The container runs as a non-root user with `--cap-drop=ALL`.
+- The egress proxy container (Rule 2) is infrastructure, not the sandbox. It is
+  also read-only, non-root and `--cap-drop=ALL`, and mounts only that command's
+  generated files under `<SHELL_EXEC_ROOT>/egress/<exec_id>/`: its config and
+  host list read-only, and a log directory. That directory is never mounted
+  into an exec container.
 
-**Checkable:** a shell PR is wrong if it mounts anything other than the room
-workspace, or omits `--read-only`, `--cap-drop=ALL`, or the non-root user.
+**Checkable:** a shell PR is wrong if an exec container mounts anything other
+than the room workspace, or omits `--read-only`, `--cap-drop=ALL`, or the
+non-root user.
 
 ## Rule 2 — Network egress
 
-- Default is `--network=none`. Network is enabled per command **only** through
-  the profile/escalation path (roadmap §4.5).
-- `SHELL_EXEC_NETWORK_ALLOWLIST` is a UX shortlist of hosts that skip the
-  inline prompt — it is not a packet filter.
+- Default is `--network=none`. A command gets network only when the classifier
+  or the model asks for it, and then in one of two ways:
+  - **Proxied** (`SHELL_EGRESS_PROXY=true`, `standard` profile, HTTPS-capable
+    command): the container joins a per-command internal network whose only
+    exit is a stock Squid that tunnels HTTPS to approved hosts and nothing
+    else. Here the allowlist **is** enforced, by the network and the proxy.
+  - **Open bridge** (everything else that needs network): only after a human
+    approved that command, or when the operator's
+    `SHELL_EXEC_NETWORK_ALLOWLIST` names every host in it. On the bridge that
+    list is a UX shortlist that skips the inline prompt — nothing enforces it.
+- An approved host is still a place data can be sent. On the sandboxed
+  profiles a prompt is therefore never skipped for a network command on a run
+  tainted by untrusted content. On the proxied path, plain publish / push /
+  upload commands also always ask; that check is a tripwire for the plain
+  forms, not a boundary.
+- No credential for an approved host may exist inside the sandbox.
 - By policy the environment must never reach: Kazi Postgres / Redis / broker,
   any credential store or secret manager, production hosts, or the Docker
-  socket.
+  socket. The proxied network is created in isolated gateway mode so services
+  the Docker host binds on `0.0.0.0` are unreachable, and the proxy refuses
+  private, loopback, link-local and metadata addresses.
 
-**Checkable:** every networking command runs with `--network=none` unless a
-human or profile path enabled it; no Kazi DSN or credential-store host ever
-appears in the allowlist.
+**Checkable:** every networking command runs with `--network=none`, or on a
+per-command `--internal` network with an isolated gateway, unless a human
+approved that command for the open bridge or the operator allowlisted its
+hosts; no Kazi DSN or credential-store host ever appears in an allowlist;
+`scripts/verify_shell_egress.py` passes on the sidecar host.
 
 ## Rule 3 — API keys
 

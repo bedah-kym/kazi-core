@@ -644,7 +644,36 @@ class OrchestrationCoordinator:
             elif explicit_disarm:
                 await broadcast_chunk("Autopilot was not armed for this room.")
 
-        handled_directive = mode_handled or explicit_disarm
+        # Host grants for the sandboxed shell's egress proxy: exact replies only.
+        from orchestration.shell.chat_intents import host_grant_request
+        host_request = host_grant_request(query)
+        if host_request:
+            from orchestration.shell import host_grants as host_grants_mod
+            from orchestration.shell.egress import proxy_enabled
+
+            verb, raw_host = host_request
+            try:
+                if verb == "allow":
+                    granted = await sync_to_async(host_grants_mod.grant)(user_id, room_id, raw_host)
+                    if granted:
+                        reply = (
+                            f"Approved `{granted}` for this room's sandboxed shell. It expires on its "
+                            f"own; reply **revoke host {granted}** to remove it sooner."
+                        )
+                        if not proxy_enabled():
+                            reply += " The egress proxy is off on this install, so it has no effect yet."
+                    else:
+                        why = await sync_to_async(host_grants_mod.denial_reason)(user_id, room_id, raw_host)
+                        reply = "I couldn't approve that host. " + (why or "Nothing was changed.")
+                else:
+                    revoked = await sync_to_async(host_grants_mod.revoke)(user_id, room_id, raw_host)
+                    reply = "Host approval revoked." if revoked else "That host was not approved for this room."
+            except Exception as exc:
+                logger.warning("Host grant request failed: %s", exc)
+                reply = "I couldn't change the host approvals just now. Nothing was changed."
+            await broadcast_chunk(reply)
+
+        handled_directive = mode_handled or explicit_disarm or bool(host_request)
         if not handled_directive and _is_dismiss_request(query):
             last_reason_key = f"proactive:last_reason:{room_id}:{user_id}"
             dismissed_key = f"proactive:dismissed:{room_id}:{user_id}"

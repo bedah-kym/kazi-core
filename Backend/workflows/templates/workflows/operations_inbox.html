@@ -325,6 +325,45 @@
             {% endfor %}
         </div>
     </section>
+
+    <section aria-labelledby="shell-hosts-title">
+        <div class="inbox-section-header">
+            <h2 class="inbox-section-title" id="shell-hosts-title">
+                <i class="fas fa-globe me-1"></i> Shell host approvals
+            </h2>
+            {% if shell_host_grants %}<span class="count-badge">{{ shell_host_grants|length }}</span>{% endif %}
+        </div>
+        <div class="app-card">
+            <p class="app-meta" style="margin: 0 0 12px;">
+                Hosts a room's sandboxed shell may reach through the egress proxy, beyond the
+                built-in package registries. Approve one by replying
+                <strong>allow host example.com</strong> in the room. An approved host can
+                receive data as well as serve it, so approve only hosts you trust.
+            </p>
+            {% for grant in shell_host_grants %}
+            <div class="exec-row">
+                <div class="exec-main">
+                    <div class="exec-title"><code>{{ grant.host }}</code> <span class="app-meta">Room #{{ grant.room_id }}</span></div>
+                    <div class="app-meta" style="margin-top: 4px;">
+                        approved by {{ grant.created_by.username|default:"unknown" }} &middot; expires {{ grant.expires_at|date:"Y-m-d H:i" }}
+                    </div>
+                </div>
+                <div class="exec-actions">
+                    <form method="post" action="{% url 'workflows:shell_host_revoke' %}" style="display: inline;">
+                        {% csrf_token %}
+                        <input type="hidden" name="room_id" value="{{ grant.room_id }}">
+                        <input type="hidden" name="host" value="{{ grant.host }}">
+                        <button class="app-btn app-btn-outline app-btn-sm" type="submit">Revoke</button>
+                    </form>
+                </div>
+            </div>
+            {% empty %}
+            <div class="app-empty">
+                <p class="app-empty-text">No extra hosts are approved in your rooms.</p>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
 </div>
 
 {% if messages %}

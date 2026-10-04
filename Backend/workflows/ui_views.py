@@ -118,6 +118,7 @@ def operations_inbox(request):
             "suggestions": suggestions,
             "grants": grants,
             "shell_rooms": _shell_rooms_for(request.user),
+            "shell_host_grants": _shell_host_grants_for(request.user),
             "needs_attention": bool(
                 approvals or attention_executions or deferred or suggestions
             ),
@@ -151,6 +152,35 @@ def _shell_rooms_for(user):
             "autopilot_expires_at": (auto or {}).get("expires_at") if armed else None,
         })
     return rooms
+
+
+def _shell_host_grants_for(user):
+    """Active egress host approvals in the rooms this user belongs to."""
+    from orchestration.models import ShellHostGrant
+    from django.utils import timezone
+
+    return list(
+        ShellHostGrant.objects.filter(
+            room__participants__User_id=user.id,
+            revoked_at__isnull=True,
+            expires_at__gt=timezone.now(),
+        ).select_related("created_by").order_by("room_id", "host")[:200]
+    )
+
+
+@login_required
+@require_POST
+def shell_host_revoke(request):
+    from orchestration.shell import host_grants
+
+    room_id = _post_room_id(request)
+    host = str(request.POST.get("host") or "").strip()
+    # revoke() checks room membership and writes the receipt.
+    if room_id is not None and host_grants.revoke(request.user.id, room_id, host):
+        messages.success(request, f"Host approval for {host} revoked.")
+    else:
+        messages.info(request, "That host approval was not active.")
+    return redirect("workflows:operations_inbox")
 
 
 def _post_room_id(request):

@@ -13,6 +13,7 @@ import httpx
 
 from orchestration.base_connector import BaseConnector
 from orchestration.shell.classifier import classify_command
+from orchestration.shell.egress import NETWORK_PROXY, approved_hosts, network_mode
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +105,8 @@ class ShellConnector(BaseConnector):
                 "message": f"This command is not allowed under the {profile} profile.",
             }
         # Network is on only for a command that needs it and passed the gate.
-        network = "bridge" if classification.get("needs_network") else "none"
+        # Same function the risk gate uses, so the two cannot disagree.
+        network = network_mode(classification, profile)
 
         host = str(_setting("SHELL_EXEC_HOST", "127.0.0.1") or "127.0.0.1")
         port = int(_setting("SHELL_EXEC_PORT", 8765) or 8765)
@@ -116,6 +118,10 @@ class ShellConnector(BaseConnector):
             "profile": profile,
             "network": network,
         }
+        if network == NETWORK_PROXY:
+            from asgiref.sync import sync_to_async
+
+            payload["allowed_hosts"] = await sync_to_async(approved_hosts)(context.get("room_id"))
         # Snapshot the workspace before a destructive command so it can be rolled back.
         if classification["tier"] == "destructive":
             payload["snapshot"] = True
@@ -153,8 +159,25 @@ class ShellConnector(BaseConnector):
         except ValueError:
             return {"status": "error", "message": "The shell sidecar returned an invalid response."}
 
+        message = f"Command exited with code {data.get('exit_code')}."
+        from orchestration.shell_exec.squid import MAX_REPORTED_HOSTS, valid_host_entry
+
+        blocked = [
+            str(host) for host in (data.get("blocked_hosts") or [])
+            if valid_host_entry(host) and len(str(host)) <= 100
+        ][:MAX_REPORTED_HOSTS]
+        data["blocked_hosts"] = blocked
+        if blocked:
+            # Only the human can widen the allowlist. These names were chosen
+            # by the command itself, so present them as that, not as advice.
+            message += (
+                " The sandbox refused connections to hosts that are not approved for this room. "
+                "The command tried to reach: " + ", ".join(blocked)
+                + ". Do not retry. If the user wants one of them, only they can approve it, by "
+                "replying exactly: allow host <name>"
+            )
         return {
             "status": "success",
-            "message": f"Command exited with code {data.get('exit_code')}.",
+            "message": message,
             "data": data,
         }

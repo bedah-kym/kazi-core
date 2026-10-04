@@ -16,8 +16,19 @@ class Command(BaseCommand):
             if name == "arm":
                 p.add_argument("--minutes", type=int, default=None)
 
+        for name in ("allow-host", "revoke-host"):
+            p = sub.add_parser(name)
+            p.add_argument("user_id", type=int)
+            p.add_argument("room_id", type=int)
+            p.add_argument("host")
+            if name == "allow-host":
+                p.add_argument("--days", type=int, default=None)
+        p = sub.add_parser("hosts")
+        p.add_argument("user_id", type=int)
+        p.add_argument("room_id", type=int)
+
     def handle(self, *args, **options):
-        from orchestration.shell import autopilot
+        from orchestration.shell import autopilot, egress, host_grants
 
         action = options["action"]
         user_id = options["user_id"]
@@ -33,6 +44,21 @@ class Command(BaseCommand):
                 ))
         elif action == "disarm":
             self.stdout.write(f"autopilot disarmed={autopilot.disarm(user_id, room_id, reason='cli')}")
+        elif action == "allow-host":
+            host = host_grants.grant(user_id, room_id, options["host"], days=options.get("days"))
+            if host:
+                self.stdout.write(self.style.SUCCESS(f"approved {host} for room {room_id}"))
+            else:
+                self.stdout.write(self.style.ERROR(
+                    "not approved: needs a plain host name and a user who is a member of the room"
+                ))
+        elif action == "revoke-host":
+            self.stdout.write(f"revoked={host_grants.revoke(user_id, room_id, options['host'])}")
+        elif action == "hosts":
+            self.stdout.write(str({
+                "proxy_enabled": egress.proxy_enabled(),
+                "approved": egress.approved_hosts(room_id),
+            }))
         elif action == "status":
             self.stdout.write(str({
                 "armed": autopilot.is_armed(user_id, room_id),

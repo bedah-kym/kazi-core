@@ -37,4 +37,27 @@ class ActionReceipt(models.Model):
     def __str__(self):
         return f"ActionReceipt({self.user_id}, {self.action}, {self.status})"
 
+
+class ShellHostGrant(models.Model):
+    """A human's approval for one room's sandboxed shell to reach one host.
+
+    Rows are never edited to widen access: a re-approval revokes the old row
+    and adds a new one, so the table is the history.
+    """
+
+    room = models.ForeignKey("chatbot.Chatroom", on_delete=models.CASCADE, related_name="shell_host_grants")
+    host = models.CharField(max_length=253)
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    revoked_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
+
+    class Meta:
+        ordering = ["host"]
+        indexes = [models.Index(fields=["room", "host"])]
+
+    def __str__(self):
+        return f"ShellHostGrant({self.room_id}, {self.host})"
+
 # Create your models here.

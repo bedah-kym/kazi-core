@@ -61,6 +61,35 @@ class ShellAutonomyUiTests(TestCase):
         entry = autopilot.status(self.user.id, self.room.id)
         self.assertTrue(autopilot.entry_is_armed(entry))
 
+    def test_host_approval_is_listed_and_can_be_revoked(self):
+        from orchestration.shell import host_grants
+
+        # A host that does not appear in the template's own help text.
+        self.assertEqual(host_grants.grant(self.user.id, self.room.id, "mirror.acme.org"), "mirror.acme.org")
+        response = self.client.get(reverse("workflows:operations_inbox"))
+        self.assertContains(response, "Shell host approvals")
+        self.assertEqual([grant.host for grant in response.context["shell_host_grants"]], ["mirror.acme.org"])
+        self.assertContains(response, "mirror.acme.org")
+
+        response = self.client.post(
+            reverse("workflows:shell_host_revoke"), {"room_id": self.room.id, "host": "mirror.acme.org"},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(host_grants.active_hosts(self.room.id), [])
+
+    def test_cannot_revoke_a_host_in_someone_elses_room(self):
+        from orchestration.shell import host_grants
+
+        owner = get_user_model().objects.create_user(username="roomowner")
+        other = Chatroom.objects.create()
+        other.participants.add(Member.objects.create(User=owner))
+        host_grants.grant(owner.id, other.id, "mirror.acme.org")
+        self.client.post(reverse("workflows:shell_host_revoke"), {"room_id": other.id, "host": "mirror.acme.org"})
+        self.assertEqual(host_grants.active_hosts(other.id), ["mirror.acme.org"])
+        response = self.client.get(reverse("workflows:operations_inbox"))
+        self.assertEqual(list(response.context["shell_host_grants"]), [])
+        self.assertNotContains(response, "mirror.acme.org")
+
     def test_post_requires_login(self):
         self.client.logout()
         response = self._arm()

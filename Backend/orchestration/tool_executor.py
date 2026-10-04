@@ -255,6 +255,12 @@ def _run_command_risk_info(
     here) lifts prompts on the unsandboxed profile only. Neither ever covers
     `destructive`/`denied`. Learned ``approval_overrides`` remain ignored for
     ``run_command`` — no mined preference can auto-run shell.
+
+    With the egress proxy on (``SHELL_EGRESS_PROXY``), an HTTPS-capable network
+    command on `standard` runs behind an allowlisting proxy. On an untainted
+    run it needs no prompt unless it publishes/pushes/uploads. A tainted run
+    still asks — an approved host is still an exfiltration path — but the
+    approved command is then confined to approved hosts.
     """
     from orchestration.shell.classifier import classify_command
 
@@ -286,9 +292,15 @@ def _run_command_risk_info(
     prefs = user_preferences if isinstance(user_preferences, dict) else {}
     sandboxed = get_profile(profile).backend == "docker"
     needs_network = bool(classification.get("needs_network"))
-    # Egress = the command can reach the outside world. Sandboxed, that is only
-    # a bridge request (the connector sends network=none otherwise); on the
-    # unsandboxed profile every command can.
+    # The connector calls the same function, so a command this gate lets
+    # through as "proxied" is the command the sidecar runs behind the proxy.
+    from orchestration.shell.egress import NETWORK_PROXY, network_mode
+
+    mode = network_mode(classification, profile)
+    proxied = mode == NETWORK_PROXY
+    # Egress = the command can reach the outside world. Sandboxed, that is any
+    # network request — proxied ones included: an approved host is still a
+    # place data can be sent. On the unsandboxed profile every command can.
     egress = needs_network or not sandboxed
     tainted = bool(prefs.get("_shell_tainted"))
     armed = bool(prefs.get("_shell_autopilot")) and not sandboxed
@@ -302,6 +314,11 @@ def _run_command_risk_info(
     elif tainted and egress:
         # Rule of Two: untrusted content + a way out = always ask.
         requires_confirmation = True
+    elif proxied:
+        # Untainted and bounded to approved hosts: no prompt, unless the
+        # command itself publishes, pushes or uploads.
+        requires_confirmation = bool(classification.get("outside_write"))
+        basis = "" if requires_confirmation else "egress_proxy"
     elif tier == "safe":
         requires_confirmation = False
         if not sandboxed:
@@ -319,6 +336,7 @@ def _run_command_risk_info(
         "shell_tier": raw_tier,
         "shell_reason": classification["reason"],
         "egress": egress,
+        "network_mode": mode,
         "approval_basis": basis,
     }
 

@@ -1,7 +1,7 @@
 """History handed to the model keeps real roles and whole messages."""
 from django.test import SimpleTestCase
 
-from chatbot.transcript import build_history_messages
+from chatbot.transcript import build_history_messages, has_several_speakers, strip_wake_word
 
 ASSISTANT_REPLY = (
     "I'll create the folder and file.\n"
@@ -71,3 +71,41 @@ class BuildHistoryMessagesTests(SimpleTestCase):
         messages = build_history_messages([(1, "admin", "  "), (2, "admin", "@kazi"), (3, "admin", "real")])
 
         self.assertEqual(messages, [{"role": "user", "content": "real"}])
+
+    def test_history_over_the_budget_drops_the_oldest_and_still_starts_with_a_user(self):
+        rows = [
+            (1, "admin", "a" * 50),
+            (2, "kazi", "b" * 50),
+            (3, "admin", "c" * 50),
+            (4, "kazi", "d" * 50),
+        ]
+
+        messages = build_history_messages(rows, max_chars=120)
+
+        self.assertEqual([m["role"] for m in messages], ["user", "assistant"])
+        self.assertEqual(messages[0]["content"], "c" * 50)
+
+    def test_one_oversized_message_is_kept_rather_than_sending_nothing(self):
+        messages = build_history_messages([(1, "admin", "x" * 500)], max_chars=100)
+
+        self.assertEqual(len(messages), 1)
+
+
+class WakeWordTests(SimpleTestCase):
+    def test_addressed_messages_lose_the_wake_word(self):
+        self.assertEqual(strip_wake_word("@kazi list the files"), "list the files")
+        self.assertEqual(strip_wake_word("@Kazi, yes"), "yes")
+        self.assertEqual(strip_wake_word("@kazi: run it"), "run it")
+        self.assertEqual(strip_wake_word("@kazi"), "")
+
+    def test_other_words_that_start_the_same_are_not_the_wake_word(self):
+        self.assertIsNone(strip_wake_word("@kazimir are you joining?"))
+        self.assertIsNone(strip_wake_word("@Kazi's last answer was wrong"))
+        self.assertIsNone(strip_wake_word("ask @kazi about it"))
+        self.assertIsNone(strip_wake_word("hello"))
+
+
+class SpeakerTests(SimpleTestCase):
+    def test_several_speakers_are_detected_from_who_wrote_the_rows(self):
+        self.assertTrue(has_several_speakers([(1, "amina", "a"), (2, "kazi", "b"), (3, "jon", "c")]))
+        self.assertFalse(has_several_speakers([(1, "amina", "a"), (2, "kazi", "b"), (3, "Amina", "c")]))

@@ -20,6 +20,7 @@ import asyncio
 from typing import Dict, Tuple
 from .models import Message, Member, Chatroom, UserModerationStatus, ModerationBatch, RoomReadState
 from .tasks import moderate_message_batch, generate_voice_response
+from .transcript import build_history_messages, has_several_speakers, strip_wake_word
 from orchestration.user_preferences import get_user_preferences
 from orchestration.adaptive_task import load_task_state
 from django.conf import settings
@@ -63,6 +64,9 @@ def _release_agent_loop_lock(user_id: int, room_id) -> None:
         _agent_loop_lock_refs.pop(key, None)
     else:
         _agent_loop_lock_refs[key] = refs
+
+
+DECRYPT_FAILED = "Error: Could not decrypt message."
 
 
 class ChatConsumer(AsyncWebsocketConsumer):
@@ -910,8 +914,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 # === ORCHESTRATION: Full pipeline ===
                 should_route_ai = False
                 ai_query = None
-                if message_content.lower().startswith('@kazi'):
-                    ai_query = message_content[5:].strip()
+                addressed = strip_wake_word(message_content)
+                if addressed is not None:
+                    ai_query = addressed
                     should_route_ai = True
                 elif is_ai_room:
                     ai_query = message_content.strip()
@@ -921,17 +926,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     logger.info("Step 16: @kazi detected! Starting orchestration...")
 
                     if ai_query:
-                        # Fetch history for conversation context (bounded)
-                        history_rows = await self.get_history_rows(room_id, limit=8)
-                        history_text = '\n'.join(f'{name}: {text}' for _, name, text in history_rows)
                         from .context_manager import ContextManager
-                        from .transcript import build_history_messages
-                        history_messages = build_history_messages(
-                            history_rows,
-                            exclude_message_id=message.id,
-                            multi_user=len(human_members) > 1,
-                        )
-
                         from orchestration.coordinator import OrchestrationCoordinator
 
                         async def send_chunk(correlation_id, chunk_text, is_final):
@@ -955,8 +950,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                 },
                             )
 
+                        speaker_note = ""
+
                         async def get_context_prompt():
-                            return await sync_to_async(ContextManager.get_context_prompt)(room_id) or ""
+                            base = await sync_to_async(ContextManager.get_context_prompt)(room_id) or ""
+                            return "\n\n".join(part for part in (speaker_note, base) if part)
 
                         def bump_signals(actions):
                             from .tasks import update_proactive_signals
@@ -966,6 +964,22 @@ class ChatConsumer(AsyncWebsocketConsumer):
                         agent_lock = _get_agent_loop_lock(member_user.id, room_id)
                         try:
                             await agent_lock.acquire()
+                            # Read history under the lock, so a message queued behind a
+                            # running turn sees that turn's reply.
+                            history_rows = await self.get_history_rows(room_id, limit=8)
+                            history_text = '\n'.join(f'{name}: {text}' for _, name, text in history_rows)
+                            multi_user = len(human_members) > 1 or has_several_speakers(history_rows)
+                            history_messages = build_history_messages(
+                                history_rows,
+                                exclude_message_id=message.id,
+                                multi_user=multi_user,
+                                max_chars=int(getattr(settings, "HISTORY_MAX_CHARS", 60000)),
+                            )
+                            if multi_user:
+                                speaker_note = (
+                                    "Several people share this room. Earlier user turns are prefixed with "
+                                    f"the speaker's name. The message you are answering is from {member_username}."
+                                )
                             result = await OrchestrationCoordinator().handle_message(
                                 query=ai_query,
                                 user_id=member_user.id,
@@ -1591,7 +1605,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         """Decrypts message content before sending to the client."""
         try:
             username = await sync_to_async(lambda: message.member.User.username)()
-            final_content = "Error: Could not decrypt message."  # default error message
+            final_content = DECRYPT_FAILED
 
             db_content = message.content
             try:
@@ -1643,7 +1657,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 msg_json = await self.message_to_json(msg)
                 content = msg_json.get('content', '')
                 member = msg_json.get('member', 'Unknown')
-                if content and not content.startswith('Error:'):
+                if content and content != DECRYPT_FAILED and member != 'system':
                     rows.append((msg.id, member, content))
 
             return rows

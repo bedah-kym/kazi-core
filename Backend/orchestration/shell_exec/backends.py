@@ -301,9 +301,6 @@ class DockerBackend(ShellBackend):
 
     name = "docker"
 
-    def environment(self) -> Dict[str, str]:
-        return {"platform": f"Linux (container image {self.config.image})", "shell": "sh"}
-
     def _container_cwd(self, workspace: Path, cwd: Optional[str]) -> str:
         if not cwd:
             return "/workspace"

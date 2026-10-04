@@ -18,9 +18,8 @@ logger = logging.getLogger(__name__)
 # --------------------------------------------------------------------------- #
 
 _IDENTITY = """\
-You are {agent_name}, an assistant running inside the user's own Kazi install. \
-You get things done by calling tools. The shell tool is the general-purpose one; \
-the others are shortcuts for specific services.
+You are {agent_name}, an assistant that gets things done by calling tools. \
+Prefer the specific tool when one fits the job; use the shell for the rest.
 """
 
 _TOOL_RULES = """\
@@ -156,41 +155,75 @@ tool (generate_speech) so they get a voice note rather than lyrics as text.
 def build_environment_block(env: Optional[Dict[str, Any]]) -> str:
     """Tell the model where its commands run. ``env`` comes from the shell layer."""
     lines = ["## Where you are running"]
-    if not env:
+    env = env or {}
+    if env.get("platform") and env.get("shell"):
+        lines.append(f"- Shell commands run on {env['platform']} through {env['shell']}.")
+    else:
         lines.append(
-            "- The shell is not reachable right now, so do not assume an operating system or shell."
+            "- The operating system and shell that commands run on could not be determined. "
+            "Check with a harmless command before assuming either."
         )
-        return "\n".join(lines)
 
-    sandboxed = bool(env.get("sandboxed"))
-    locked = env.get("profile") == "locked"
-    if not sandboxed:
-        boundary = (
-            "This room's shell is not sandboxed: commands run directly on the host. Once a "
-            "turn has read tool output, the harness asks the user before each further command "
-            "unless they armed autopilot; destructive commands always ask."
+    profile = env.get("profile")
+    image = env.get("image") or "a minimal image"
+    if profile == "open":
+        taint_minutes = int(env.get("taint_minutes") or 0)
+        recently = (
+            f"for about {taint_minutes} minutes after the room sees tool output "
+            "(shell, web search or delegated work)"
+            if taint_minutes else "once the current turn has read tool output"
         )
-    elif locked:
-        boundary = "Each command runs in a fresh, read-only container with no network."
-    else:
-        boundary = (
-            "Each command runs in a fresh container with no network; a step that needs the "
-            "network asks the user first."
-        )
-    lines.append(f"- Commands run on {env.get('platform')} through {env.get('shell')}. {boundary}")
-    if env.get("writable") == "none":
-        lines.append("- They start in this room's workspace folder, which is read-only here.")
-    else:
         lines.append(
-            "- They start in this room's workspace folder. Files you create there are still "
+            "- This room's shell is not sandboxed: commands run directly on the host, as the "
+            "account that runs Kazi."
+        )
+        lines.append(
+            f"- The harness asks the user before a command {recently}, when the command needs "
+            "root, or when it is on the harness's short destructive list. Otherwise the command "
+            "runs at once. While the user has autopilot armed, only the destructive list asks."
+        )
+        lines.append(
+            "- That list is short and does not cover every delete, overwrite or move. Before "
+            "doing any of those to something the user did not ask you to change, ask them yourself."
+        )
+        lines.append(
+            "- Commands start in this room's workspace folder. Files you create there are still "
             "there next turn."
         )
-    replies = "`yes` or `no` to a pending action"
-    if not sandboxed:
-        replies += "; `autopilot` / `autopilot off` to stop or resume being asked"
-    elif not locked:
-        replies += "; `allow host <name>` / `revoke host <name>` to manage network approvals"
-    lines.append(f"- The user can answer the harness directly: {replies}.")
+        lines.append(
+            "- Replies the harness handles itself: `yes` or `no` to a pending action; `autopilot` "
+            "as the reply to a shell prompt stops the asking for a limited window, and "
+            "`autopilot off` ends it."
+        )
+    elif profile == "standard":
+        lines.append(
+            f"- Each command runs in a fresh, non-root container ({image}) with a read-only root "
+            "filesystem and no network. Do not assume bash, Python or a package manager is "
+            "installed. Commands that need root are refused."
+        )
+        lines.append(
+            "- A command the harness recognises as a network tool can run with network access, "
+            "usually after asking the user. Any other command that needs the network just fails."
+        )
+        lines.append(
+            "- Commands start in this room's workspace folder. Files you create there are still "
+            "there next turn."
+        )
+        replies = "- Replies the harness handles itself: `yes` or `no` to a pending action"
+        if env.get("egress_proxy"):
+            replies += (
+                "; `allow host <name>` and `revoke host <name>` change which hosts the sandbox "
+                "may reach"
+            )
+        lines.append(replies + ".")
+    elif profile == "locked":
+        lines.append(
+            f"- Each command runs in a fresh, non-root container ({image}) with no network. "
+            "Commands that need the network or root are refused. Do not assume bash, Python or "
+            "a package manager is installed."
+        )
+        lines.append("- Commands start in this room's workspace folder.")
+        lines.append("- Replies the harness handles itself: `yes` or `no` to a pending action.")
     return "\n".join(lines)
 
 

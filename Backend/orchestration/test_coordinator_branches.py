@@ -137,7 +137,6 @@ class CoordinatorBranchTests(SimpleTestCase):
                 "user_message": "send it",
             },
             patches={
-                "orchestration.coordinator.looks_like_confirmation": lambda q: True,
                 "orchestration.coordinator.execute_adhoc_workflow": AsyncMock(
                     return_value={"status": "completed", "result": {}}
                 ),
@@ -154,7 +153,6 @@ class CoordinatorBranchTests(SimpleTestCase):
                 "intent": {"action": "get_weather", "parameters": {"city": "Nairobi"}, "confidence": 0.9},
             },
             patches={
-                "orchestration.coordinator.looks_like_confirmation": lambda q: True,
                 "orchestration.coordinator.needs_option_context": AsyncMock(return_value=None),
                 "orchestration.coordinator.requires_confirmation": lambda a: False,
                 "orchestration.coordinator.route_intent": AsyncMock(return_value={"status": "success", "data": {}}),
@@ -173,12 +171,96 @@ class CoordinatorBranchTests(SimpleTestCase):
         result, mocks, send_chunk = self._run(
             "yes",
             patches={
-                "orchestration.coordinator.looks_like_confirmation": lambda q: True,
                 "orchestration.coordinator.has_pending_agent_state": AsyncMock(return_value=True),
                 "orchestration.coordinator.resume_after_confirmation": _event_stream,
             },
         )
         self.assertTrue(any(c.args[1] == "ok" for c in send_chunk.await_args_list))
+
+    def _pending_reply(self, query):
+        resume = MagicMock(side_effect=AssertionError("must not resume"))
+        return self._run(
+            query,
+            mode="auto",
+            patches={
+                "orchestration.coordinator.has_pending_agent_state": AsyncMock(return_value=True),
+                "orchestration.coordinator.resume_after_confirmation": resume,
+                "orchestration.coordinator.dismiss_pending_confirmation": AsyncMock(),
+                "orchestration.coordinator.cancel_pending_action": AsyncMock(return_value="Cancelled."),
+                "orchestration.coordinator.run_agent_loop": _event_stream,
+            },
+        )
+
+    def test_approval_word_followed_by_more_does_not_run_the_pending_action(self):
+        for query in (
+            "ok but use a different folder",
+            "yes, but only the first part",
+            "ok what does that command do?",
+        ):
+            result, mocks, send_chunk = self._pending_reply(query)
+            mocks["resume_after_confirmation"].assert_not_called()
+            mocks["dismiss_pending_confirmation"].assert_awaited_once()
+            sent = "".join(c.args[1] for c in send_chunk.await_args_list)
+            self.assertIn("did not run the pending action", sent, query)
+
+    def test_cancel_is_checked_before_approval(self):
+        # Force both matchers true: only the order of the checks decides.
+        resume = MagicMock(side_effect=AssertionError("must not resume"))
+        result, mocks, send_chunk = self._run(
+            "cancel",
+            mode="auto",
+            patches={
+                "orchestration.coordinator.is_approval_reply": lambda q: True,
+                "orchestration.coordinator.has_pending_agent_state": AsyncMock(return_value=True),
+                "orchestration.coordinator.resume_after_confirmation": resume,
+                "orchestration.coordinator.cancel_pending_action": AsyncMock(return_value="Cancelled."),
+            },
+        )
+        mocks["resume_after_confirmation"].assert_not_called()
+        mocks["cancel_pending_action"].assert_awaited_once()
+
+    def test_a_plain_no_cancels_the_pending_action(self):
+        result, mocks, send_chunk = self._pending_reply("no")
+        mocks["resume_after_confirmation"].assert_not_called()
+        mocks["cancel_pending_action"].assert_awaited_once()
+        mocks["dismiss_pending_confirmation"].assert_not_called()
+
+    def test_a_directive_reply_does_not_leave_the_pending_action_armed(self):
+        for query in ("stop for now", "what can you do", "show me the receipts"):
+            patches = {
+                "orchestration.coordinator.has_pending_agent_state": AsyncMock(return_value=True),
+                "orchestration.coordinator.resume_after_confirmation": MagicMock(
+                    side_effect=AssertionError("must not resume")
+                ),
+                "orchestration.coordinator.dismiss_pending_confirmation": AsyncMock(),
+                "orchestration.coordinator.set_conversation_mode": AsyncMock(),
+                "orchestration.coordinator.fetch_recent_receipts": AsyncMock(return_value=[]),
+                "orchestration.coordinator.format_receipt_list": lambda r: "No receipts.",
+            }
+            result, mocks, send_chunk = self._run(query, mode="auto", patches=patches)
+            mocks["dismiss_pending_confirmation"].assert_awaited_once()
+            sent = "".join(c.args[1] for c in send_chunk.await_args_list)
+            self.assertIn("did not run the pending action", sent, query)
+
+    def test_legacy_pending_is_not_run_by_an_approval_word_followed_by_more(self):
+        for kind, runner in (("workflow", "execute_adhoc_workflow"), ("intent", "route_intent")):
+            result, mocks, send_chunk = self._run(
+                "ok but use a different folder",
+                mode="auto",
+                cache_get={
+                    "kind": kind,
+                    "workflow_definition": {"steps": [{"action": "send_email"}]},
+                    "intent": {"action": "get_weather", "parameters": {}, "confidence": 0.9},
+                    "user_message": "send it",
+                },
+                patches={
+                    "orchestration.coordinator.execute_adhoc_workflow": AsyncMock(),
+                    "orchestration.coordinator.route_intent": AsyncMock(),
+                    "orchestration.coordinator.run_agent_loop": _event_stream,
+                },
+            )
+            mocks[runner].assert_not_awaited()
+            mocks["cache"].delete.assert_called()
 
     def test_agent_loop_start_in_focus_mode(self):
         result, mocks, send_chunk = self._run(

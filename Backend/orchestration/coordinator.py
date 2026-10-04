@@ -64,6 +64,7 @@ from orchestration.adaptive_task import (
 )
 from orchestration.memory_state import load_memory_summary, clear_memory
 from orchestration.security_policy import should_refuse_sensitive_request, sensitive_refusal_message
+from orchestration.shell.chat_intents import is_approval_reply, is_decline_reply
 from orchestration.agent_loop import (
     run_agent_loop,
     has_pending_agent_state,
@@ -77,7 +78,6 @@ from orchestration.workflow_planner import (
     plan_user_request,
     execute_adhoc_workflow,
     synthesize_workflow_response_stream,
-    looks_like_confirmation,
     LLM_CONFIDENCE_EXECUTE,
     LLM_CONFIDENCE_CONFIRM,
 )
@@ -732,11 +732,11 @@ class OrchestrationCoordinator:
         pending = cache.get(pending_key)
         pending_handled = handled_directive
         if pending and not pending_handled:
-            if is_cancel_request(query):
+            if is_cancel_request(query) or is_decline_reply(query):
                 cache.delete(pending_key)
                 await broadcast_chunk("Okay, I cancelled the pending request.")
                 pending_handled = True
-            elif looks_like_confirmation(query):
+            elif is_approval_reply(query):
                 pending_kind = pending.get("kind")
                 cache.delete(pending_key)
                 if pending_kind == "workflow":
@@ -783,6 +783,17 @@ class OrchestrationCoordinator:
             else:
                 cache.delete(pending_key)
 
+        # A directive answered this message without touching the pending action.
+        # That was not consent, so the action must not stay armed for a later
+        # "ok". Replies to the approval machinery itself (autopilot off, allow
+        # host) leave it pending.
+        keeps_pending = explicit_disarm or bool(host_request)
+        if pending_handled and not keeps_pending and AGENT_LOOP_ENABLED:
+            if await _has_pending_confirmation():
+                cache.delete(pending_key)
+                await dismiss_pending_confirmation(room_id, user_id)
+                await broadcast_chunk("\n\nI did not run the pending action; it is cancelled.")
+
         # --- Agent loop confirmation resume ---
         if not pending_handled and AGENT_LOOP_ENABLED:
             if await _has_pending_confirmation():
@@ -799,7 +810,7 @@ class OrchestrationCoordinator:
                     await _handle_agent_resume(ctx_prompt, mem_sum)
 
                 # Cancel is checked first: a refusal must never be read as consent.
-                if is_cancel_request(query):
+                if is_cancel_request(query) or is_decline_reply(query):
                     cancel_msg = await cancel_pending_action(room_id, user_id)
                     await broadcast_chunk(cancel_msg or "Okay, cancelled.")
                     pending_handled = True
@@ -809,12 +820,14 @@ class OrchestrationCoordinator:
                     if await _arm_autopilot_from_chat():
                         await _resume_confirmed()
                     pending_handled = True
-                elif looks_like_confirmation(query):
+                elif is_approval_reply(query):
                     await _resume_confirmed()
                     pending_handled = True
                 else:
-                    # User said something other than yes/no — clear the pending state
+                    # Anything else is not consent: drop the pending action, say so,
+                    # and handle the message as a new turn.
                     await dismiss_pending_confirmation(room_id, user_id)
+                    await broadcast_chunk("I did not run the pending action; it is cancelled.\n\n")
 
         if not pending_handled:
             adaptive_state = await load_task_state(adaptive_context)

@@ -580,6 +580,8 @@ LLM_PLANNER_PROVIDER = os.environ.get('LLM_PLANNER_PROVIDER', 'anthropic')
 LLM_EXECUTOR_PROVIDER = os.environ.get('LLM_EXECUTOR_PROVIDER', 'huggingface')
 LLM_PLANNER_MODEL = os.environ.get('LLM_PLANNER_MODEL', '')
 LLM_EXECUTOR_MODEL = os.environ.get('LLM_EXECUTOR_MODEL', '')
+LLM_REVIEWER_PROVIDER = os.environ.get('LLM_REVIEWER_PROVIDER', 'anthropic')
+LLM_REVIEWER_MODEL = os.environ.get('LLM_REVIEWER_MODEL', '')
 
 # LLM token quota
 LLM_TOKEN_QUOTA_ENABLED = os.environ.get('LLM_TOKEN_QUOTA_ENABLED', 'True').lower() in ('1', 'true', 'yes')

@@ -253,3 +253,11 @@ class ReviewerTests(TestCase):
 
         self.assertTrue(result.get("enabled", True))
         self.assertIn("reviewed", result)
+
+
+class ReviewerSettingsTests(TestCase):
+    def test_reviewer_provider_and_model_are_defined_in_settings(self):
+        from django.conf import settings
+
+        self.assertTrue(hasattr(settings, "LLM_REVIEWER_PROVIDER"))
+        self.assertTrue(hasattr(settings, "LLM_REVIEWER_MODEL"))

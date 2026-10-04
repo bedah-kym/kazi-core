@@ -731,11 +731,13 @@ class OrchestrationCoordinator:
 
         pending = cache.get(pending_key)
         pending_handled = handled_directive
+        cached_request_declined = False
         if pending and not pending_handled:
             if is_cancel_request(query) or is_decline_reply(query):
                 cache.delete(pending_key)
                 await broadcast_chunk("Okay, I cancelled the pending request.")
                 pending_handled = True
+                cached_request_declined = True
             elif is_approval_reply(query):
                 pending_kind = pending.get("kind")
                 cache.delete(pending_key)
@@ -783,12 +785,14 @@ class OrchestrationCoordinator:
             else:
                 cache.delete(pending_key)
 
-        # A directive answered this message without touching the pending action.
-        # That was not consent, so the action must not stay armed for a later
-        # "ok". Replies to the approval machinery itself (autopilot off, allow
-        # host) leave it pending.
+        # A directive, or a refusal of a cached request, answered this message
+        # without touching the agent's pending action. That was not consent, so
+        # the action must not stay armed for a later "ok". Replies to the
+        # approval machinery itself (autopilot off, allow host) leave it pending,
+        # and so does approving a cached request.
         keeps_pending = explicit_disarm or bool(host_request)
-        if pending_handled and not keeps_pending and AGENT_LOOP_ENABLED:
+        answered_without_consent = handled_directive or cached_request_declined
+        if answered_without_consent and not keeps_pending and AGENT_LOOP_ENABLED:
             if await _has_pending_confirmation():
                 cache.delete(pending_key)
                 await dismiss_pending_confirmation(room_id, user_id)

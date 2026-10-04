@@ -242,6 +242,28 @@ class CoordinatorBranchTests(SimpleTestCase):
             sent = "".join(c.args[1] for c in send_chunk.await_args_list)
             self.assertIn("did not run the pending action", sent, query)
 
+    def test_approving_a_cached_request_leaves_the_agent_action_pending(self):
+        result, mocks, send_chunk = self._run(
+            "yes",
+            cache_get={
+                "kind": "workflow",
+                "workflow_definition": {"steps": [{"action": "send_email"}]},
+                "user_message": "send it",
+            },
+            patches={
+                "orchestration.coordinator.has_pending_agent_state": AsyncMock(return_value=True),
+                "orchestration.coordinator.dismiss_pending_confirmation": AsyncMock(),
+                "orchestration.coordinator.execute_adhoc_workflow": AsyncMock(
+                    return_value={"status": "completed", "result": {}}
+                ),
+                "orchestration.coordinator.synthesize_workflow_response_stream": _chunk_stream,
+            },
+        )
+        mocks["execute_adhoc_workflow"].assert_awaited_once()
+        mocks["dismiss_pending_confirmation"].assert_not_called()
+        sent = "".join(c.args[1] for c in send_chunk.await_args_list)
+        self.assertNotIn("did not run the pending action", sent)
+
     def test_legacy_pending_is_not_run_by_an_approval_word_followed_by_more(self):
         for kind, runner in (("workflow", "execute_adhoc_workflow"), ("intent", "route_intent")):
             result, mocks, send_chunk = self._run(

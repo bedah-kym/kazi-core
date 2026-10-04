@@ -7,7 +7,7 @@ or confirm a pending command.
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Optional, Tuple
 
 _ARM = {"autopilot", "auto pilot", "auto-pilot", "autopilot on", "arm autopilot"}
 _DISARM = {"autopilot off", "disarm autopilot", "stop autopilot"}
@@ -21,6 +21,22 @@ _TAIL = re.compile(r"[\s,]+(?:please|pls|thanks)$")
 def _normalized(text: Any) -> str:
     value = _TRIM.sub("", " ".join(str(text or "").lower().split()))
     return _TAIL.sub("", _LEAD.sub("", value))
+
+
+_HOST_COMMAND = re.compile(r"^(allow|approve|revoke|block) host (\S+)$")
+
+
+def host_grant_request(text: Any) -> Optional[Tuple[str, str]]:
+    """``("allow" | "revoke", host)`` for an exact ``allow host <name>`` reply.
+
+    Whole-message only, like the autopilot replies: a sentence that merely
+    mentions a host never changes the allowlist.
+    """
+    match = _HOST_COMMAND.match(_normalized(text))
+    if not match:
+        return None
+    verb = "allow" if match.group(1) in ("allow", "approve") else "revoke"
+    return verb, match.group(2).strip("`'")
 
 
 def is_autopilot_request(text: Any) -> bool:

@@ -206,10 +206,16 @@ commands. Before a **destructive** command the sidecar tars it to
 | `SHELL_EXEC_TIMEOUT_DEFAULT` | `120` | Default per-command timeout (seconds). |
 | `SHELL_EXEC_TIMEOUT_MAX` | `600` | Hard per-command timeout ceiling (seconds). |
 | `SHELL_EXEC_OUTPUT_BYTES_MAX` | `65536` | Truncate returned stdout/stderr beyond this many bytes. |
+| `SHELL_EGRESS_PROXY` | `false` | Enforced egress for the `standard` profile. Each network command gets its own internal network and its own stock Squid, and can only open HTTPS tunnels to approved hosts. On an untainted run, HTTPS-capable commands (`pip`, `npm`, `git` over https, `curl`) then run **without a prompt**; a tainted run, and any publish/push/upload command, still asks. Needs Docker Engine 28+. Run `python scripts/verify_shell_egress.py` on the sidecar host first. |
+| `SHELL_EGRESS_DEFAULT_HOSTS` | built-in registry list | Comma-separated hosts every room may reach through the proxy. Unset = the built-in list of package registries and their CDNs (`orchestration/shell/egress.py`). Set it, even to an empty value, to replace that list. A leading dot matches subdomains (`.example.com`). An approved host is trusted for upload as well as download. |
+| `SHELL_EGRESS_PROXY_IMAGE` | `kazi-egress-squid:1` | Image that runs Squid. Built on first use from `Backend/orchestration/shell_exec/egress/Dockerfile` (Debian `squid-openssl`). |
+| `SHELL_HOST_GRANT_DAYS` | `30` | Lifetime of a room's host approval (the chat reply `allow host <name>`). |
+| `SHELL_HOST_GRANT_MAX_DAYS` | `365` | Upper bound on a host approval's lifetime, however it is created. |
+| `SHELL_HOST_GRANT_APPROVERS` | `members` | Who may approve a new host for a room: `members` (any member of the room) or `staff` (a staff user who is a member). Any member may revoke. Unrecognised values mean `staff`. |
 | `AGENT_TAINT_TTL_SECONDS` | `900` | How long a room stays tainted, for every member, after untrusted text (shell or web-search output) enters it. While tainted, egress shell commands (including allowlisted hosts) and stored "auto" rules for sensitive actions ask again. The window restarts when new untrusted output arrives; `0` limits taint to the run that picked it up. |
 | `SHELL_AUTOPILOT_MINUTES` | `30` | Default length of the human-armed autopilot window. Only the unsandboxed `open` profile has one; sandboxed profiles auto-run anything that stays inside the sandbox and ask only for network. |
 | `SHELL_AUTOPILOT_MAX_MINUTES` | `120` | Hard ceiling on an autopilot window, however it is armed (chat, ops inbox, `manage.py shell_autonomy`). |
-| `SHELL_EXEC_NETWORK_ALLOWLIST` | empty | Comma-separated hosts whose network commands run **without a prompt** (e.g. your ISP/gateway). A UX shortlist, **not** a firewall — the sandbox still runs the command non-root, read-only, on the Docker bridge. |
+| `SHELL_EXEC_NETWORK_ALLOWLIST` | empty | Comma-separated hosts whose network commands run **without a prompt** (e.g. your ISP/gateway). A UX shortlist, **not** a firewall — the sandbox still runs the command non-root, read-only, on the Docker bridge. With `SHELL_EGRESS_PROXY` on, host names here are also added to every room's enforced proxy allowlist (IP entries are ignored there). |
 
 ## Eval
 

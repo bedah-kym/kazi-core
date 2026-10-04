@@ -167,6 +167,21 @@ SHELL_EXEC_NETWORK_ALLOWLIST = [
     for host in os.environ.get('SHELL_EXEC_NETWORK_ALLOWLIST', '').split(',')
     if host.strip()
 ]
+# Enforced egress for the `standard` profile: a stock Squid proxy is the only
+# way out of the sandbox. Off until verified on your Docker host
+# (scripts/verify_shell_egress.py).
+SHELL_EGRESS_PROXY = os.environ.get('SHELL_EGRESS_PROXY', 'False').lower() in ('1', 'true', 'yes')
+SHELL_EGRESS_PROXY_IMAGE = os.environ.get('SHELL_EGRESS_PROXY_IMAGE', 'kazi-egress-squid:1')
+# Unset = the built-in registry list (orchestration/shell/egress.py). Set it,
+# even to an empty value, to replace that list.
+_egress_default_hosts = os.environ.get('SHELL_EGRESS_DEFAULT_HOSTS')
+SHELL_EGRESS_DEFAULT_HOSTS = None if _egress_default_hosts is None else [
+    host.strip() for host in _egress_default_hosts.split(',') if host.strip()
+]
+SHELL_HOST_GRANT_DAYS = int(os.environ.get('SHELL_HOST_GRANT_DAYS', '30'))
+SHELL_HOST_GRANT_MAX_DAYS = int(os.environ.get('SHELL_HOST_GRANT_MAX_DAYS', '365'))
+# Who may approve a new host for a room: `members` (any member) or `staff`.
+SHELL_HOST_GRANT_APPROVERS = os.environ.get('SHELL_HOST_GRANT_APPROVERS', 'members')
 # Human-armed autopilot window for the unsandboxed `open` shell profile.
 SHELL_AUTOPILOT_MINUTES = int(os.environ.get('SHELL_AUTOPILOT_MINUTES', '30'))
 SHELL_AUTOPILOT_MAX_MINUTES = int(os.environ.get('SHELL_AUTOPILOT_MAX_MINUTES', '120'))

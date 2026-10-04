@@ -1,6 +1,18 @@
 from django.db import migrations
 
 
+def _has_owner(user):
+    # The assistant's account has no password and never logs in. An account
+    # named 'kazi' that does predates the reservation of that username.
+    password = user.password or ''
+    return bool(
+        (password and not password.startswith('!'))
+        or user.last_login
+        or user.is_staff
+        or user.is_superuser
+    )
+
+
 def rename_bot_user(apps, schema_editor):
     User = apps.get_model('auth', 'User')
     Member = apps.get_model('chatbot', 'Member')
@@ -11,6 +23,14 @@ def rename_bot_user(apps, schema_editor):
     if mathia is None:
         return
     if kazi is not None and kazi.id != mathia.id:
+        if _has_owner(kazi):
+            raise RuntimeError(
+                "An account named 'kazi' looks like a person: it has a password, a "
+                "login history or staff rights. That username is reserved for the "
+                "assistant, and merging the old bot into it would add that account "
+                "to other users' rooms. Rename the account, then run migrate again. "
+                "Nothing was changed."
+            )
         # Both identities exist: merge the legacy bot into the existing kazi
         # account. Move room memberships so those rooms stay recognised as AI
         # rooms, then retire the old account. Message history stays attached

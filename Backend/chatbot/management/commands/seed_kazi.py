@@ -9,11 +9,12 @@ Usage:
     python manage.py seed_kazi
 """
 from django.contrib.auth import get_user_model
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.utils import timezone
 
 from chatbot.models import Chatroom, Member, Message
+from users.naming import account_has_owner
 
 User = get_user_model()
 
@@ -22,6 +23,15 @@ class Command(BaseCommand):
     help = "Seed the Kazi AI bot and ensure all users have an AI-ready room."
 
     def handle(self, *args, **options):
+        existing = User.objects.filter(username="kazi").first()
+        if existing is not None and account_has_owner(existing):
+            raise CommandError(
+                "An account named 'kazi' looks like a person: it has a password, a login "
+                "history or staff rights. That username is reserved for the assistant, and "
+                "adopting the account would add it to other users' rooms. Rename the "
+                "account, then run seed_kazi again. Nothing was changed."
+            )
+
         kazi_user, created = User.objects.get_or_create(
             username="kazi",
             defaults={

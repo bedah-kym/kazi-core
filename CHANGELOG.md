@@ -90,12 +90,17 @@ and sub-agents inherit and acquire it.
 - Staged skill paths are basename-enforced and checked to stay inside the skills
   root.
 - Grants lapse on failure spikes and are re-gated after a workflow is reactivated.
+- The rename to Kazi cannot bind the assistant's identity to a person: the
+  migration and `seed_kazi` stop if an existing `kazi` account has an owner.
 
 ### Upgrade notes
 
-- **Before migrating, rename any human account whose username is `kazi`.**
-  Migration `users.0018` treats that username as the bot: it moves the old bot's
-  room memberships to it, and `seed_kazi` then adds it to a room with every user.
+- **If a person's account is named `kazi`, the upgrade stops until it is
+  renamed.** That username now belongs to the assistant. Migration `users.0018`
+  and `seed_kazi` refuse to adopt an account that has a password, a login
+  history or staff rights, because doing so would add that person to other
+  users' rooms. Rename the account (start the container with
+  `SKIP_MIGRATIONS=1` to get a shell), then run `migrate` again.
 - Run `python Backend/manage.py migrate`. Twelve migrations are new
   (`workflows` 0007–0015, `orchestration` 0003, `users` 0018, `Api` 0002);
   `users.0018` and `Api.0002` rename the Mathia bot user and records to Kazi.

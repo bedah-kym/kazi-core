@@ -142,6 +142,11 @@ class Verifier:
         )
         self.backend = DockerBackend(self.config)
 
+    @staticmethod
+    def reported(result, host: str) -> bool:
+        """Whether the sidecar reported exactly this host name as blocked."""
+        return any(name == host for name in result.blocked_hosts)
+
     def report(self, ok: bool, label: str, detail: str = "") -> None:
         if not ok:
             self.failed = True
@@ -212,7 +217,7 @@ class Verifier:
 
         words, result, detail = await self.run(FETCH.format(url="https://example.com/"), ["pypi.org"])
         self.report(
-            words[:1] == ["fail"] and "example.com" in result.blocked_hosts,
+            words[:1] == ["fail"] and self.reported(result, "example.com"),
             "unapproved host is refused, and reported for the user to approve",
             f"{detail} blocked_hosts={result.blocked_hosts}",
         )
@@ -229,7 +234,7 @@ class Verifier:
         )
         self.report(words[:1] == ["tunnelled"], "TLS to an approved host with a matching name is tunnelled", detail)
         self.report(
-            words[1:2] in (["dropped"], ["refused"]) and "example.org" in result.blocked_hosts,
+            words[1:2] in (["dropped"], ["refused"]) and self.reported(result, "example.org"),
             "TLS asking for another site (SNI) through an approved host is cut and reported",
             f"{detail} blocked_hosts={result.blocked_hosts}",
         )
@@ -265,7 +270,7 @@ class Verifier:
                     f"{detail} stderr={result.stderr.strip()[-200:]}")
         words, result, detail = await self.shell(pip.replace("verify_pkg", "verify_pkg2"), ["pypi.org"])
         self.report(
-            words[:1] == ["fail"] and "files.pythonhosted.org" in result.blocked_hosts,
+            words[:1] == ["fail"] and self.reported(result, "files.pythonhosted.org"),
             "the same install fails, naming the missing host, when the download CDN is not approved",
             f"{detail} blocked_hosts={result.blocked_hosts}",
         )

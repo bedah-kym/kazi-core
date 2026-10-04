@@ -114,6 +114,25 @@ class OrchestrationCoordinator:
         get_context_prompt: Callable[[], Awaitable[str]],
         bump_signals: Callable[[List[Optional[str]]], None],
     ) -> OrchestrationResult:
+        """Route a chat turn, stream its response, and update room/user task state.
+
+        Pending confirmations are handled before new requests and may execute
+        actions; plain approval replies must match the whole message.
+        ``history_text`` contains conversation lines in ``speaker: message`` form.
+        ``send_chunk`` receives (correlation_id, text, is_final), while
+        ``send_step_event`` receives (correlation_id, event_payload).
+        ``get_context_prompt`` supplies extra agent context; ``bump_signals``
+        receives action names after successful intent or workflow execution.
+
+        Return the accumulated response with ``persist=False`` for resets and
+        sensitive-request refusals, otherwise ``True``. The caller saves it.
+        Resets and refusals return without sending a final stream chunk.
+
+        Context-prompt and signal-update failures are ignored. Exceptions from
+        a fresh agent run trigger classic routing; errors during confirmation
+        resume or classic routing propagate, as do cache and callback errors
+        outside that fallback.
+        """
         stream_state = {"buffer": [], "last_send": 0, "first_token_sent": False, "full_response": []}  # nosec B105 — state keys, not a credential
         turn_step_id = f"turn_{message_id}"
         correlation_id = uuid.uuid4().hex

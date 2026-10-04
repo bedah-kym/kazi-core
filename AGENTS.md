@@ -91,7 +91,7 @@ scripts/
 
 When in doubt, read `Backend/orchestration/agent_loop.py` first — that's where the ReAct loop lives. Tool dispatch is handled by `Backend/orchestration/connector_registry.py` (the single source of truth — collapsed in v0.4 M2-1) and routed by `Backend/orchestration/tool_router.py` (renamed from `mcp_router.py` in v0.5; the old name remains as a deprecation shim).
 
-For a "what is in this repo right now?" overview, read `docs/v0.7-brief.md` — it describes the current cycle (skills, routines, standing grants, internal specialist handoffs) and how it builds on the shipped v0.6 shell (`docs/v0.6-brief.md`, `docs/v0.6-roadmap.md`). The v0.6 epic was #139 (shipped in 0.6.0); the current epic is #160.
+For a "what is in this repo right now?" overview, read `docs/v0.7-brief.md` — it describes the cycle shipped in 0.7.0 (skills, routines, standing grants, internal specialist handoffs) and how it builds on the v0.6 shell (`docs/v0.6-brief.md`, `docs/v0.6-roadmap.md`). The v0.6 epic was #139 (shipped in 0.6.0) and the v0.7 epic was #160 (shipped in 0.7.0); the current cycle is v0.8, "turns that own the truth" (`docs/proposals/2026-10-turn-state-and-verification.md`, epic #227).
 
 ## 3. Setup commands
 

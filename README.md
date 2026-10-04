@@ -8,7 +8,7 @@
     <img src="https://github.com/bedah-kym/kazi-core/actions/workflows/main.yml/badge.svg" alt="CI" />
     <a href="https://codecov.io/gh/bedah-kym/kazi-core"><img src="https://codecov.io/gh/bedah-kym/kazi-core/branch/main/graph/badge.svg" alt="codecov" /></a>
     <a href="https://kazi-core.readthedocs.io/"><img src="https://readthedocs.org/projects/kazi-core/badge/?version=latest" alt="Docs" /></a>
-    <img src="https://img.shields.io/badge/status-v0.6.0-informational" alt="Status" />
+    <img src="https://img.shields.io/badge/status-v0.7.0-informational" alt="Status" />
   </p>
 
   <p><strong>Your own AI agent. Your own server. Your own data.</strong></p>
@@ -65,6 +65,22 @@ This is the line between an assistant you babysit and one you can leave alone.
 - **Teach it a routine** — walk it through a job once, save it as a skill, and let it run on a schedule you approve once.
 - **Do research and get an artifact** — a finished, formatted report instead of a wall of links.
 
+## What's new in v0.7 — the teammate you can name
+
+- **Skills and routines.** Repeated work is promoted into staged skill drafts;
+  routines have an owner and pause when nobody is around.
+- **Versioned workflows with standing grants.** Every run is bound to a
+  definition version, and a grant is scoped to version, trigger and capability,
+  so it lapses when the workflow drifts or starts failing.
+- **Personas.** Named specialists with deterministic scope and a risk ceiling,
+  managed from a dashboard. The handoff runtime between them ships too; a way
+  to start one from chat comes next.
+- **A shell that asks at the boundary.** Sandboxed commands with no network run
+  without a prompt; leaving the sandbox asks. Untrusted output taints the room
+  and raises the approval tier.
+
+Read the [v0.7 brief](docs/v0.7-brief.md) and the [changelog](CHANGELOG.md).
+
 ## What's new in v0.6 — the governed shell
 
 Kazi grew hands, and they're on a leash:
@@ -87,10 +103,6 @@ Read the [v0.6 brief](docs/v0.6-brief.md) for the story behind it.
 
 ## Where it's going
 
-- **v0.7 — the teammate you can name.** Skills with a six-part contract,
-  routines with owners and test runs, per-rule standing grants that lapse on
-  drift, named specialists that hand work to each other. →
-  [v0.7 brief](docs/v0.7-brief.md) · [epic #160](https://github.com/bedah-kym/kazi-core/issues/160)
 - **v0.8 — turns that own the truth.** A persisted turn state machine, a typed
   stream protocol, and a verification layer so "done" is decided by the record,
   not the narration. →
@@ -121,16 +133,16 @@ docker compose up --build -d    # 2. boots db, redis, web, celery — auto-migra
 docker compose exec web python Backend/manage.py createsuperuser   # 3. make your login
 ```
 
-Open `http://localhost:8000`, log in, and say hi to **KAZI** — your General
+Open `http://localhost:8000`, log in, and say hi to **Kazi** — your General
 room routes messages to the AI automatically.
 
 > **No keys handy?** `bash scripts/demo.sh` boots a demo instead → [run-locally](docs/run-locally.md).
 > **Stuck, or want the full walkthrough** (troubleshooting, non-Docker setup, Temporal)?
 > → [Quick Start guide](docs/quickstart.md).
 
-> **Note:** "KAZI" appears in docker images, database defaults, and the bot
-> username. It's the AI assistant built into Kazi Core — same system, just the
-> name we gave the bot.
+> **Note:** the bot's username is `kazi` (lowercase), and the same name appears
+> in the docker image and database defaults. It's the AI assistant built into
+> Kazi Core — same system, just the name we gave the bot.
 
 ## Add a tool in one file
 
@@ -173,7 +185,7 @@ Everything else — [architecture](docs/architecture.md), [contracts](docs/contr
 ## Status
 
 Early access — breaking changes possible before v1.0. Current release:
-**v0.6.0 (the governed shell)**. Container releases are cosign-signed with SBOM +
+**v0.7.0 (the teammate you can name)**. Container releases are cosign-signed with SBOM +
 SLSA provenance. See [CHANGELOG](CHANGELOG.md) for history and
 [roadmap](docs/roadmap.md) for what's next.
 

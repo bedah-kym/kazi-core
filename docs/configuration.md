@@ -46,6 +46,8 @@ a Compose `DATABASE_URL` with SQLite; with no `DATABASE_URL`, debug mode does
 | `LLM_PLANNER_PROVIDER` | `anthropic` | Provider for the planner. |
 | `LLM_EXECUTOR_PROVIDER` | `huggingface` | Provider for tool execution. |
 | `LLM_PLANNER_MODEL` / `LLM_EXECUTOR_MODEL` | empty | Override the model per role. |
+| `LLM_REVIEWER_PROVIDER` | `anthropic` | Provider for the workflow reviewer. |
+| `LLM_REVIEWER_MODEL` | empty | Reviewer model. The scheduled reviewer runs only when this names a model different from the authoring models; empty keeps it off. |
 | `LLM_MAX_TOKENS` | `700` | Hard per-call token ceiling. |
 | `LLM_PROMPT_CHAR_LIMIT` | `4000` | User prompt truncation cap. |
 | `LLM_CACHE_ENABLED` | `True` | Response caching toggle. |
@@ -163,6 +165,30 @@ any compatible endpoint all work. Pick a provider and (for self-hosted) point
 | `WORKFLOW_APPROVAL_SWEEP_BATCH_LIMIT` | `100` | Max approvals the sweeper handles per pass. |
 | `WORKFLOW_APPROVAL_MAX_PENDING_AGE_SECONDS` | `86400` | Age after which a pending approval is dead-lettered. |
 | `TRAVEL_ALLOW_FALLBACK` | `DEBUG` | Allow fallback travel search results. |
+
+### Skills, routines, grants and health (v0.7)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `PROMOTION_MIN_OCCURRENCES` | `3` | Times a tool sequence must repeat before it is mined as a skill candidate. |
+| `PROMOTION_MIN_SUCCESS_RATE` | `0.8` | Minimum success rate of those runs. |
+| `ROUTINE_ABSENCE_IDLE_DAYS` | `14` | Owner idle time before the keep-running prompt for schedule and webhook workflows. |
+| `ROUTINE_ABSENCE_PROMPT_WINDOW_DAYS` | `3` | Days to answer that prompt before the workflows are paused. |
+| `ROUTINE_HISTORY_LIMIT` | `20` | Routine history entries kept. |
+| `SKILL_STALE_AFTER_DAYS` | `90` | Unused days before the curator marks a skill stale. |
+| `SKILL_ARCHIVE_AFTER_DAYS` | `180` | Unused days before the curator archives it. |
+| `STANDING_GRANT_LIFETIME_DAYS` | `30` | Lifetime of a standing grant before it lapses. |
+| `APPROVAL_TELEMETRY_WINDOW_DAYS` | `1` | Window for the nightly approval telemetry rollup. |
+| `APPROVAL_PROMOTE_THRESHOLD_RATE` | `0.95` | Approval rate at which a rule becomes a promotion candidate. |
+| `APPROVAL_PROMOTE_THRESHOLD_COUNT` | `50` | Minimum decisions before a rule can be a candidate. |
+| `WORKFLOW_HEALTH_WINDOW_HOURS` | `24` | Window the hourly health check looks at. |
+| `WORKFLOW_HEALTH_FAILURE_SPIKE` | `3` | Failed runs in the window that auto-pause a workflow. |
+| `WORKFLOW_HEALTH_DEGRADED_RATE` | `0.3` | Failure rate at which a workflow is reported degraded. |
+| `SHADOW_REPLAY_WINDOW` | `10` | Recorded runs a shadow replay uses, unless the definition sets its own. |
+| `WORKFLOW_REVIEWER_ENABLED` | `true` | Master switch for the weekly reviewer. It still needs `LLM_REVIEWER_MODEL`. |
+| `WORKFLOW_REVIEWER_WINDOW_DAYS` | `30` | Execution history window the reviewer reads. |
+| `HANDOFF_DEFAULT_BUDGET` | `20` | Default tool-call budget for a handoff. |
+| `HANDOFF_MAX_BUDGET` | `50` | Upper bound on a handoff's budget. |
 
 ## Governed shell (v0.6)
 

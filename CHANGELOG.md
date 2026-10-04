@@ -7,6 +7,121 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-04
+
+The **teammate you can name** release. Workflows become versioned artifacts with
+skills, routines and standing grants built on them; rooms get named personas; and
+shell approvals follow the sandbox boundary, with untrusted output raising the bar.
+
+### Added
+
+**Versioned workflows** — definitions are versioned and every execution is bound
+to the version it ran (#155), with a capability manifest and a code-computed
+`capability_delta` between versions (#167).
+
+**Skills and routines** — a promotion pipeline from repeated sessions to staged
+skill drafts (#156), the routine contract with pause-on-absence (#204), a skill
+lifecycle with a demote-only curator (#138), and a `save_skill` chat meta-tool
+that writes staged skills and drafts. The routine test run ships as a Python API
+(see `docs/add-a-workflow.md`); it has no chat or UI entry point yet.
+
+**Standing grants, health and review** — standing grants scoped to version +
+trigger + capability that lapse on drift and on failure spikes (#159), approval
+telemetry rollups with rule-promotion candidates (#166), workflow health watches
+with spike auto-pause and a weekly digest (#157), an alert when a Temporal
+schedule silently skips fires, shadow replay over recorded inputs with
+regression detection (#169), and a metric-citing reviewer agent gated by shadow
+replay (#158). The reviewer is off by default: it runs only when
+`LLM_REVIEWER_MODEL` names a model different from the authoring models.
+
+**Personas** — agent personas with deterministic scope and ceiling bounds
+(#203), managed from a dashboard with avatars, identity injection and admin
+requests; `@admin` mentions that reach superusers and can open a persona request.
+
+**Handoff runtime** — the record, budget caps and access re-check for internal
+specialist handoffs (#137). Nothing in chat or the UI starts a handoff yet.
+
+**Shell approvals at the sandbox boundary** — on the sandboxed profiles a
+command with no network runs without asking, even in a tainted run, and only an
+egress step asks. On the unsandboxed `open` profile every command asks once the
+room is tainted, unless a human has armed a time-boxed, receipted autopilot
+window by replying `autopilot`. Destructive commands always ask. Shell receipts
+record why each command ran (`approval_basis`).
+
+**Enforced shell egress** — behind `SHELL_EGRESS_PROXY` (default off), a network
+command on the `standard` profile runs on its own isolated Docker network whose
+only exit is a stock Squid that tunnels HTTPS to approved hosts and nothing
+else. Hosts come from a built-in list, the operator allowlist, and per-room
+grants created by the exact reply `allow host <name>` (expiring, receipted).
+
+**Untrusted-context taint** — a run that has read untrusted output (shell, web
+search, delegated work) moves external-write and credential-scoped actions up
+one approval tier (#170). The taint holds for the whole room across turns for
+`AGENT_TAINT_TTL_SECONDS` (default 900); a cache read error counts as tainted,
+and sub-agents inherit and acquire it.
+
+### Changed
+
+- The assistant is renamed from Mathia to Kazi everywhere: the bot username and
+  email, asset paths, and the chat wake word, which is now `@kazi`. The bot
+  username is reserved.
+- The `seed_mathia` management command is now `seed_kazi`.
+- Compose database defaults are `kazi_user` / `kazi_db` (were `mathia_*`).
+- New schedule- and webhook-triggered workflows must carry a `routine` block.
+- Nine scheduled jobs are added and on by default: workflow candidate mining,
+  the routine absence check, the skill curator, the grant expiry sweep, the
+  approval telemetry rollup, the workflow and schedule health checks, the
+  weekly health digest, and the weekly reviewer.
+- The destructive-command tripwire covers Windows forms (`rmdir /s`, `del /s`,
+  `format X:`, `Remove-Item -Recurse/-Force`).
+- Credential-scoping contract 1.1 describes the enforced egress proxy.
+- The v0.7 models are registered in the Django admin.
+
+### Fixed
+
+- A yes/no reply to an inline shell prompt is recognised; the command used to be
+  proposed again indefinitely.
+- Workflow reruns get fresh run ids.
+
+### Security
+
+- Skill management is staff-only, `@admin` has a cooldown, and persona approvals
+  are atomic.
+- Staged skill paths are basename-enforced and checked to stay inside the skills
+  root.
+- Grants lapse on failure spikes and are re-gated after a workflow is reactivated.
+
+### Upgrade notes
+
+- **Before migrating, rename any human account whose username is `kazi`.**
+  Migration `users.0018` treats that username as the bot: it moves the old bot's
+  room memberships to it, and `seed_kazi` then adds it to a room with every user.
+- Run `python Backend/manage.py migrate`. Twelve migrations are new
+  (`workflows` 0007–0015, `orchestration` 0003, `users` 0018, `Api` 0002);
+  `users.0018` and `Api.0002` rename the Mathia bot user and records to Kazi.
+- Address the assistant as `@kazi`; `@mathia` no longer wakes it.
+- Custom entrypoints and scripts must call `seed_kazi` instead of `seed_mathia`.
+- On an existing database volume, pin `POSTGRES_USER`, `POSTGRES_DB` and
+  `DATABASE_URL` to your current values; the compose defaults changed.
+- Expect more shell prompts on the `open` profile: command output taints the
+  room for 15 minutes, and every command asks during that time unless autopilot
+  is armed. An allowlisted host no longer skips the prompt in a tainted run.
+- Two of the new jobs can pause workflows. The hourly health check pauses an
+  active workflow after `WORKFLOW_HEALTH_FAILURE_SPIKE` (3) failed runs within
+  `WORKFLOW_HEALTH_WINDOW_HOURS` (24). The daily absence check asks an owner idle
+  for `ROUTINE_ABSENCE_IDLE_DAYS` (14) whether schedule and webhook workflows
+  should keep running, and pauses them after `ROUTINE_ABSENCE_PROMPT_WINDOW_DAYS`
+  (3) without an answer.
+- Enforced egress needs Docker Engine 28+. Run
+  `python scripts/verify_shell_egress.py` on the sidecar host before setting
+  `SHELL_EGRESS_PROXY=true`.
+
+### Known limitations
+
+- Handoffs and the routine test run have no chat or UI entry point. Until a test
+  run is recorded through the Python API, approving a schedule or webhook
+  workflow cannot save a standing rule for it.
+
 ## [0.6.0] - 2026-10-01
 
 The **governed shell** release. Kazi gains one governed pair of hands — a
@@ -566,7 +681,8 @@ The full orchestration core was opened.
 - Project rebranded from KAZI.OS to **Kazi** (Swahili for "work").
   Agent identity is configurable via `KAZI_AGENT_NAME` (default `Kazi`).
 
-[Unreleased]: https://github.com/bedah-kym/kazi-core/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/bedah-kym/kazi-core/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/bedah-kym/kazi-core/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/bedah-kym/kazi-core/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/bedah-kym/kazi-core/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/bedah-kym/kazi-core/releases/tag/v0.4.2

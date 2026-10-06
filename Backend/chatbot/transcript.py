@@ -8,6 +8,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 BOT_USERNAME = "kazi"
 _WAKE_WORD = re.compile(r"^@kazi(?=$|[\s,:;.!?])[\s,:;]*", re.IGNORECASE)
+_TRIMMED = "\n[... middle of this message trimmed for length ...]\n"
 
 Row = Tuple[int, str, str]
 
@@ -27,6 +28,31 @@ def has_several_speakers(rows: Iterable[Row]) -> bool:
     return len(speakers) > 1
 
 
+def _shorten(text: str, limit: int) -> str:
+    """``text`` cut to about ``limit`` characters, keeping its start and its end."""
+    room = max(limit - len(_TRIMMED), 2)
+    if len(text) <= room + len(_TRIMMED):
+        return text
+    head = room // 2
+    return text[:head] + _TRIMMED + text[len(text) - (room - head):]
+
+
+def _fit(messages: List[Dict[str, str]], max_chars: int) -> None:
+    """Drop the oldest exchanges until the rest fits. The last exchange always stays:
+    when it is too long on its own, its longest message loses its middle instead."""
+    total = sum(len(m["content"]) for m in messages)
+    while total > max_chars and any(m["role"] == "user" for m in messages[1:]):
+        total -= len(messages.pop(0)["content"])
+        while messages[0]["role"] == "assistant":
+            total -= len(messages.pop(0)["content"])
+    for message in sorted(messages, key=lambda m: -len(m["content"])):
+        if total <= max_chars:
+            break
+        before = len(message["content"])
+        message["content"] = _shorten(message["content"], before - (total - max_chars))
+        total -= before - len(message["content"])
+
+
 def build_history_messages(
     rows: Iterable[Row],
     *,
@@ -38,7 +64,7 @@ def build_history_messages(
 
     The history starts with a user message and never has two neighbours with
     the same role, which is what the model APIs expect. ``max_chars`` drops the
-    oldest whole messages until the rest fits.
+    oldest exchanges until the rest fits and never drops the last one.
     """
     messages: List[Dict[str, str]] = []
     for message_id, username, content in rows:
@@ -61,10 +87,8 @@ def build_history_messages(
         else:
             messages.append({"role": role, "content": text})
 
-    if max_chars is not None:
-        total = sum(len(m["content"]) for m in messages)
-        while len(messages) > 1 and total > max_chars:
-            total -= len(messages.pop(0)["content"])
     while messages and messages[0]["role"] == "assistant":
         messages.pop(0)
+    if max_chars is not None:
+        _fit(messages, max_chars)
     return messages

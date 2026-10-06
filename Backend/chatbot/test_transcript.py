@@ -90,6 +90,34 @@ class BuildHistoryMessagesTests(SimpleTestCase):
 
         self.assertEqual(len(messages), 1)
 
+    def test_an_oversized_message_does_not_cost_the_reply_that_followed_it(self):
+        paste = "START " + "x" * 5000 + " END"
+        rows = [(1, "admin", "hello"), (2, "kazi", "hi"), (3, "admin", paste), (4, "kazi", "Line 3 is the bug.")]
+
+        messages = build_history_messages(rows, max_chars=1000)
+
+        self.assertEqual([m["role"] for m in messages], ["user", "assistant"])
+        self.assertEqual(messages[1]["content"], "Line 3 is the bug.")
+        self.assertTrue(messages[0]["content"].startswith("START "))
+        self.assertTrue(messages[0]["content"].endswith(" END"))
+        self.assertIn("trimmed for length", messages[0]["content"])
+        self.assertLessEqual(sum(len(m["content"]) for m in messages), 1000)
+
+    def test_an_oversized_reply_is_shortened_and_the_question_before_it_stays_whole(self):
+        rows = [(1, "admin", "show me the log"), (2, "kazi", "y" * 5000)]
+
+        messages = build_history_messages(rows, max_chars=1000)
+
+        self.assertEqual(messages[0], {"role": "user", "content": "show me the log"})
+        self.assertLessEqual(sum(len(m["content"]) for m in messages), 1000)
+
+    def test_history_inside_the_budget_is_not_touched(self):
+        rows = [(1, "admin", "a" * 400), (2, "kazi", "b" * 400)]
+
+        messages = build_history_messages(rows, max_chars=800)
+
+        self.assertEqual([m["content"] for m in messages], ["a" * 400, "b" * 400])
+
 
 class WakeWordTests(SimpleTestCase):
     def test_addressed_messages_lose_the_wake_word(self):

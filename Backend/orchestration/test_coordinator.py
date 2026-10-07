@@ -103,7 +103,7 @@ class OrchestrationCoordinatorTests(SimpleTestCase):
             patch("orchestration.coordinator.load_memory_summary", new_callable=AsyncMock) as mem,
             patch("orchestration.coordinator.get_user_preferences", side_effect=_empty_preferences),
             patch("orchestration.coordinator.get_conversation_mode", new_callable=AsyncMock) as mode,
-            patch("orchestration.coordinator.is_reset_request", return_value=True),
+            patch("orchestration.coordinator.is_reset_command", return_value=True),
             patch("orchestration.coordinator.clear_task_state", new_callable=AsyncMock),
             patch("orchestration.coordinator.clear_result_sets", new_callable=AsyncMock),
             patch("orchestration.coordinator.clear_memory", new_callable=AsyncMock),
@@ -114,7 +114,7 @@ class OrchestrationCoordinatorTests(SimpleTestCase):
             mode.return_value = "classic"
 
             send_chunk = AsyncMock()
-            result = self._handle("reset everything", send_chunk=send_chunk)
+            result = self._handle("reset", send_chunk=send_chunk)
 
             self.assertFalse(result.persist)
             # The reset message is streamed, but the stream is never flushed
@@ -232,14 +232,14 @@ class OrchestrationCoordinatorTests(SimpleTestCase):
             else None
         )
         result = self._run(
-            "dismiss the nudge",
+            "dismiss suggestions",
             patches={"orchestration.coordinator.cache": cache},
         )
         self.assertIn("stop showing", result.full_response)
 
     def test_receipt_directive(self):
         result = self._run(
-            "show me my receipt",
+            "receipts",
             patches={
                 "orchestration.coordinator.fetch_recent_receipts": AsyncMock(return_value=[]),
                 "orchestration.coordinator.format_receipt_list": MagicMock(return_value="No receipts."),
@@ -255,17 +255,6 @@ class OrchestrationCoordinatorTests(SimpleTestCase):
             },
         )
         self.assertIn("Undone.", result.full_response)
-
-    def test_pause_directive(self):
-        result = self._run(
-            "stop for now",
-            patches={"orchestration.coordinator.set_conversation_mode": AsyncMock()},
-        )
-        self.assertIn("pause tasks", result.full_response)
-
-    def test_capabilities_directive(self):
-        result = self._run("what can you do")
-        self.assertIn("I can also", result.full_response)
 
     # --- Pending confirmations ---------------------------------------- #
 

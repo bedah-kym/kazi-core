@@ -75,19 +75,8 @@ class CoordinatorBranchTests(SimpleTestCase):
 
     # -- directives -------------------------------------------------------- #
 
-    def test_mode_command_sets_conversation_mode(self):
-        result, mocks, send_chunk = self._run(
-            "/focus",
-            patches={
-                "orchestration.coordinator.detect_mode_command": lambda q: "focus",
-                "orchestration.coordinator.set_conversation_mode": AsyncMock(),
-            },
-        )
-        mocks["set_conversation_mode"].assert_awaited_once()
-        self.assertTrue(send_chunk.await_count >= 1)
-
     def test_dismiss_directive(self):
-        result, mocks, send_chunk = self._run("dismiss the nudge")
+        result, mocks, send_chunk = self._run("dismiss suggestions")
         texts = [c.args[1] for c in send_chunk.await_args_list]
         self.assertTrue(any("stop showing" in t for t in texts))
 
@@ -95,7 +84,6 @@ class CoordinatorBranchTests(SimpleTestCase):
         result, mocks, send_chunk = self._run(
             "show receipts",
             patches={
-                "orchestration.coordinator.is_receipt_request": lambda q: True,
                 "orchestration.coordinator.fetch_recent_receipts": AsyncMock(return_value=[]),
                 "orchestration.coordinator.format_receipt_list": lambda receipts: "No recent actions.",
             },
@@ -107,24 +95,11 @@ class CoordinatorBranchTests(SimpleTestCase):
         result, mocks, send_chunk = self._run(
             "undo that",
             patches={
-                "orchestration.coordinator.is_undo_request": lambda q: True,
                 "orchestration.coordinator.undo_last_action": AsyncMock(return_value={"message": "Undone."}),
             },
         )
         texts = [c.args[1] for c in send_chunk.await_args_list]
         self.assertIn("Undone.", texts)
-
-    def test_pause_directive_sets_social_mode(self):
-        result, mocks, send_chunk = self._run(
-            "stop for now",
-            patches={"orchestration.coordinator.set_conversation_mode": AsyncMock()},
-        )
-        mocks["set_conversation_mode"].assert_awaited_once()
-
-    def test_capabilities_directive_lists_catalog(self):
-        result, mocks, send_chunk = self._run("what can you do")
-        texts = [c.args[1] for c in send_chunk.await_args_list]
-        self.assertTrue(any("help with" in t for t in texts))
 
     # -- pending confirmations -------------------------------------------- #
 
@@ -226,16 +201,16 @@ class CoordinatorBranchTests(SimpleTestCase):
         mocks["dismiss_pending_confirmation"].assert_not_called()
 
     def test_a_directive_reply_does_not_leave_the_pending_action_armed(self):
-        for query in ("stop for now", "what can you do", "show me the receipts"):
+        for query in ("receipts", "undo", "dismiss suggestions"):
             patches = {
                 "orchestration.coordinator.has_pending_agent_state": AsyncMock(return_value=True),
                 "orchestration.coordinator.resume_after_confirmation": MagicMock(
                     side_effect=AssertionError("must not resume")
                 ),
                 "orchestration.coordinator.dismiss_pending_confirmation": AsyncMock(),
-                "orchestration.coordinator.set_conversation_mode": AsyncMock(),
                 "orchestration.coordinator.fetch_recent_receipts": AsyncMock(return_value=[]),
                 "orchestration.coordinator.format_receipt_list": lambda r: "No receipts.",
+                "orchestration.coordinator.undo_last_action": AsyncMock(return_value={"message": "Undone."}),
             }
             result, mocks, send_chunk = self._run(query, mode="auto", patches=patches)
             mocks["dismiss_pending_confirmation"].assert_awaited_once()

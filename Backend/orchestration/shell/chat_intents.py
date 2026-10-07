@@ -113,3 +113,58 @@ def is_autopilot_request(text: Any) -> bool:
 
 def is_autopilot_disarm_request(text: Any) -> bool:
     return _normalized(text) in _DISARM
+
+
+# Exact chat commands, matched as the whole message like the autopilot replies.
+# A sentence that merely contains the word ("start over from the beginning for
+# me", "show me my receipt") belongs to the model, not to a directive.
+_RESET_COMMANDS = {"reset", "start over", "new conversation", "/reset"}
+_RECEIPTS_COMMANDS = {"receipts", "show receipts", "/receipts"}
+_UNDO_COMMANDS = {"undo", "undo that", "/undo"}
+_DISMISS_SUGGESTIONS_COMMANDS = {
+    "stop suggestions",
+    "dismiss suggestions",
+    "no more suggestions",
+}
+_CANCEL_COMMANDS = {
+    "stop",
+    "cancel",
+    "pause",
+    "nevermind",
+    "never mind",
+    "forget it",
+    "drop it",
+    "not now",
+    "autopilot off",
+    "disarm autopilot",
+    "stop autopilot",
+}
+
+
+def is_reset_command(text: Any) -> bool:
+    """True only when the whole message asks to start a fresh conversation."""
+    return _normalized(text) in _RESET_COMMANDS
+
+
+def is_receipts_command(text: Any) -> bool:
+    """True only when the whole message asks for the recent-action receipts."""
+    return _normalized(text) in _RECEIPTS_COMMANDS
+
+
+def is_undo_command(text: Any) -> bool:
+    """True only when the whole message asks to undo the last action."""
+    return _normalized(text) in _UNDO_COMMANDS
+
+
+def is_dismiss_suggestions_command(text: Any) -> bool:
+    """True only when the whole message dismisses proactive suggestions."""
+    return _normalized(text) in _DISMISS_SUGGESTIONS_COMMANDS
+
+
+def is_cancel_command(text: Any) -> bool:
+    """True only when the whole message is a stop/cancel/pause command.
+
+    The substring matcher stays for a pending action (it fails safe); this is
+    the strict form that may disarm autopilot with nothing pending.
+    """
+    return _normalized(text) in _CANCEL_COMMANDS

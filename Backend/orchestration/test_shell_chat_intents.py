@@ -5,7 +5,12 @@ from django.test import SimpleTestCase
 from orchestration.agent_prompts import build_confirmation_prompt
 from orchestration.shell.chat_intents import (
     is_approval_reply,
+    is_cancel_command,
     is_decline_reply,
+    is_dismiss_suggestions_command,
+    is_receipts_command,
+    is_reset_command,
+    is_undo_command,
     is_autopilot_disarm_request,
     is_autopilot_request,
 )
@@ -83,6 +88,80 @@ class AutopilotIntentTests(SimpleTestCase):
             self.assertTrue(is_autopilot_disarm_request(phrase), phrase)
             self.assertFalse(is_autopilot_request(phrase), phrase)
         self.assertFalse(is_autopilot_disarm_request("is autopilot off?"))
+
+
+class ExactCommandTests(SimpleTestCase):
+    def test_reset_commands(self):
+        for phrase in ("reset", "Reset.", "start over", "new conversation", "/reset", "please reset"):
+            self.assertTrue(is_reset_command(phrase), phrase)
+        for phrase in (
+            "the installer says I need to start over, what now?",
+            "reset everything",
+            "how do I reset my password?",
+            "start over from the beginning for me",
+            "",
+            None,
+        ):
+            self.assertFalse(is_reset_command(phrase), phrase)
+
+    def test_receipts_commands(self):
+        for phrase in ("receipts", "show receipts", "/receipts", "show receipts please"):
+            self.assertTrue(is_receipts_command(phrase), phrase)
+        for phrase in (
+            "save this receipt text to receipts.txt",
+            "show me my receipt",
+            "what receipts do I have from last week?",
+            "",
+            None,
+        ):
+            self.assertFalse(is_receipts_command(phrase), phrase)
+
+    def test_undo_commands(self):
+        for phrase in ("undo", "undo that", "/undo", "undo please"):
+            self.assertTrue(is_undo_command(phrase), phrase)
+        for phrase in (
+            "git revert the last commit in the workspace",
+            "how do I rollback a django migration",
+            "undo last action",
+            "please undo the last two things",
+            "",
+            None,
+        ):
+            self.assertFalse(is_undo_command(phrase), phrase)
+
+    def test_dismiss_suggestions_commands(self):
+        for phrase in (
+            "stop suggestions",
+            "dismiss suggestions",
+            "no more suggestions",
+            "dismiss suggestions please",
+        ):
+            self.assertTrue(is_dismiss_suggestions_command(phrase), phrase)
+        for phrase in ("dismiss the nudge", "stop", "what suggestions do you have?", "", None):
+            self.assertFalse(is_dismiss_suggestions_command(phrase), phrase)
+
+    def test_cancel_commands(self):
+        for phrase in (
+            "stop",
+            "cancel",
+            "pause",
+            "never mind",
+            "forget it",
+            "autopilot off",
+            "Stop.",
+            "cancel please",
+        ):
+            self.assertTrue(is_cancel_command(phrase), phrase)
+        for phrase in (
+            "why did the server stop responding?",
+            "add a pause of 2 seconds between retries",
+            "stop for now",
+            "the build did not stop in time",
+            "cancel, and never ask me again",
+            "",
+            None,
+        ):
+            self.assertFalse(is_cancel_command(phrase), phrase)
 
 
 class ConfirmationPromptTests(SimpleTestCase):

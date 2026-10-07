@@ -234,6 +234,35 @@ async def _resolve_persona(room_id: Optional[int], user_id: Optional[int]):
         return None
 
 
+_HANDOFF_TOOL_NAME = "handoff_to_workflow"
+
+
+def _is_scheduled_handoff(tc: Dict[str, Any]) -> bool:
+    """A handoff that creates anything but a one-off run must be confirmed.
+
+    A standing schedule is persistence, so no stored rule, autopilot window or
+    tainted run may let it start without the user's decision.
+    """
+    if tc.get("name") != _HANDOFF_TOOL_NAME:
+        return False
+    tool_input = tc.get("input")
+    if not isinstance(tool_input, dict):
+        return False
+    return str(tool_input.get("trigger_type") or "manual") != "manual"
+
+
+def _fill_handoff_timezone(
+    tc: Dict[str, Any],
+    preferences: Optional[Dict[str, Any]],
+) -> None:
+    """Resolve the schedule's timezone before the prompt so it shows the stored value."""
+    tool_input = tc.get("input")
+    if not isinstance(tool_input, dict) or tool_input.get("timezone"):
+        return
+    timezone = preferences.get("timezone") if isinstance(preferences, dict) else None
+    tool_input["timezone"] = timezone or "UTC"
+
+
 def _bucket_tool_calls(
     tool_calls: List[Dict[str, Any]],
     preferences: Optional[Dict[str, Any]],
@@ -246,7 +275,8 @@ def _bucket_tool_calls(
     the loop can route ``bounded`` -> inline and ``destructive`` -> durable.
     ``denied`` carries a human-readable refusal reason. A persona narrows the
     scope deterministically (#203); a tainted run escalates external-write
-    and credential-scoped actions so no stored rule can bypass them (#170).
+    and credential-scoped actions so no stored rule can bypass them (#170). A
+    schedule handoff is always confirmed, whatever the rules or taint (#222).
     """
     auto: List[Dict[str, Any]] = []
     pause: List[Tuple[Dict[str, Any], Optional[str]]] = []
@@ -267,6 +297,9 @@ def _bucket_tool_calls(
         tier = risk.get("shell_tier")
         if tier == "denied":
             denied.append((tc, "Refused: this command is not allowed under the active shell profile."))
+        elif _is_scheduled_handoff(tc):
+            _fill_handoff_timezone(tc, preferences)
+            pause.append((tc, tier))
         elif tainted and tc["name"] not in _SHELL_TOOL_NAMES and _taint_gated(tc["name"]):
             # One tier up: a tainted run never lets a stored rule skip the ask.
             # Shell is excluded: its risk fn already gates a tainted egress
@@ -837,6 +870,13 @@ META_TOOL_DEFINITIONS = [
                     "type": "string",
                     "description": "Cron expression if trigger_type is 'schedule' (e.g., '0 9 * * *' for daily 9am)",
                 },
+                "timezone": {
+                    "type": "string",
+                    "description": (
+                        "IANA timezone name for a schedule trigger (e.g. 'Africa/Nairobi'). "
+                        "Defaults to your profile timezone, then UTC."
+                    ),
+                },
             },
             "required": ["description", "steps"],
         },
@@ -1217,7 +1257,6 @@ async def _create_workflow_handoff(
         return {"status": "error", "message": "Steps must be a non-empty list."}
 
     try:
-        from workflows.models import UserWorkflow
         from asgiref.sync import sync_to_async
         from orchestration.workflow_planner import execute_adhoc_workflow
 
@@ -1225,15 +1264,17 @@ async def _create_workflow_handoff(
         # (workflow_name / workflow_description / triggers / steps) instead of
         # the old {description, steps} shape that bypassed validation and a
         # separate raw execution path.
-        definition = {
-            "workflow_name": description[:100] or "Agent handoff",
-            "workflow_description": description.strip()[:300],
-            "triggers": [{"trigger_type": trigger_type or "manual"}],
-            "steps": steps,
-            "metadata": {"source": "agent_handoff"},
-        }
+        def _definition(triggers):
+            return {
+                "workflow_name": description[:100] or "Agent handoff",
+                "workflow_description": description.strip()[:300],
+                "triggers": triggers,
+                "steps": steps,
+                "metadata": {"source": "agent_handoff"},
+            }
 
         if trigger_type == "manual":
+            definition = _definition([{"trigger_type": "manual"}])
             result = await execute_adhoc_workflow(
                 definition,
                 user_id=context.get("user_id"),
@@ -1253,17 +1294,59 @@ async def _create_workflow_handoff(
                 "workflow_id": workflow_id,
             }
 
-        workflow = await sync_to_async(UserWorkflow.objects.create)(
-            user_id=context.get("user_id"),
-            name=description[:100],
-            definition=definition,
-            status="active",
+        if trigger_type == "webhook":
+            return {
+                "status": "error",
+                "message": (
+                    "A webhook workflow needs a service and an event; "
+                    "I cannot create one from chat yet."
+                ),
+            }
+
+        if trigger_type != "schedule":
+            return {
+                "status": "error",
+                "message": f"I cannot create a '{trigger_type}' workflow from chat.",
+            }
+
+        from workflows.creation import (
+            WorkflowCreationError,
+            create_workflow_with_triggers,
+            describe_schedule,
         )
+
+        timezone = tool_input.get("timezone")
+        if not timezone:
+            from orchestration.user_preferences import get_user_preferences
+
+            preferences = await sync_to_async(get_user_preferences)(context.get("user_id"))
+            timezone = (preferences or {}).get("timezone") or "UTC"
+
+        definition = _definition([{
+            "trigger_type": "schedule",
+            "cron": tool_input.get("schedule"),
+            "timezone": timezone,
+        }])
+
+        try:
+            workflow, triggers = await create_workflow_with_triggers(
+                user_id=context.get("user_id"),
+                room_id=context.get("room_id"),
+                definition=definition,
+            )
+        except WorkflowCreationError as exc:
+            return {"status": "error", "message": str(exc)}
+
+        schedule = next(
+            (trigger for trigger in triggers if trigger.trigger_type == "schedule"),
+            None,
+        )
+        schedule_text = describe_schedule(schedule) if schedule else "the requested schedule"
         return {
             "status": "success",
             "message": (
-                f"Workflow '{description}' created (ID: {workflow.id}). "
-                f"Trigger type: {trigger_type}."
+                f"Workflow '{description}' created (ID: {workflow.id}) and scheduled "
+                f"to run {schedule_text}."
             ),
             "workflow_id": workflow.id,
         }
@@ -1365,9 +1448,19 @@ async def run_agent_loop(
         # Execute the previously paused tool
         pending = state.pending_tool
         state.pending_tool = None
-        result = await _execute_with_timeout(
-            pending["name"], pending["input"], context,
-        )
+        if pending["name"] in _META_TOOL_NAMES:
+            # `_execute_with_timeout` only knows catalog tools; a paused
+            # meta-tool (a schedule handoff) must go through its own executor.
+            # The main path hands it the turn's taint, so a delegated run
+            # paused in a tainted turn does not resume as if it were clean.
+            result = await _execute_meta_tool(
+                pending["name"], pending["input"], context,
+                _taint_preferences(preferences, state.tainted), system, tools,
+            )
+        else:
+            result = await _execute_with_timeout(
+                pending["name"], pending["input"], context,
+            )
         state.tool_call_count += 1
         state.tool_call_log.append({
             "name": pending["name"],

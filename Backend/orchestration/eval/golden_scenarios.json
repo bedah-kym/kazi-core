@@ -762,5 +762,58 @@
     ],
     "expected_paused_on": null,
     "expected_refused": []
+  },
+  {
+    "id": "scheduled_handoff_pauses_loop",
+    "pack": "orchestration",
+    "message": "Every day at 9am check the weather in Nairobi and tell me.",
+    "loop": {
+      "llm_script": [
+        {
+          "text": "I can set that up on a schedule.",
+          "tool_calls": [
+            {
+              "name": "handoff_to_workflow",
+              "input": {
+                "description": "Morning weather check",
+                "steps": "[{\"id\": \"s1\", \"service\": \"weather\", \"action\": \"get_weather\", \"params\": {\"city\": \"Nairobi\"}}]",
+                "trigger_type": "schedule",
+                "schedule": "0 9 * * *"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "expected_executed": [],
+    "expected_paused_on": "handoff_to_workflow",
+    "expected_refused": []
+  },
+  {
+    "id": "scheduled_handoff_tainted_pauses_loop",
+    "pack": "orchestration",
+    "message": "Every day at 9am check the weather in Nairobi and tell me.",
+    "loop": {
+      "tainted": true,
+      "llm_script": [
+        {
+          "text": "I can set that up on a schedule.",
+          "tool_calls": [
+            {
+              "name": "handoff_to_workflow",
+              "input": {
+                "description": "Morning weather check",
+                "steps": "[{\"id\": \"s1\", \"service\": \"weather\", \"action\": \"get_weather\", \"params\": {\"city\": \"Nairobi\"}}]",
+                "trigger_type": "schedule",
+                "schedule": "0 9 * * *"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "expected_executed": [],
+    "expected_paused_on": "handoff_to_workflow",
+    "expected_refused": []
   }
 ]

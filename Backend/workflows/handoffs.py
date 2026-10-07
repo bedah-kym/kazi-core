@@ -167,8 +167,7 @@ async def run_handoff(
     # Receipts and persona scope are keyed on whose run this is: the handoff
     # row decides that, not the caller.
     run_context["user_id"] = handoff.requested_by_id
-    if handoff.room_id:
-        run_context["room_id"] = handoff.room_id
+    run_context["room_id"] = handoff.room_id
 
     if executor is None:
         from orchestration.agent_loop import _run_sub_agent

@@ -89,6 +89,21 @@ class HandoffTests(TestCase):
         self.assertEqual(run_context["user_id"], self.user.id)
         self.assertEqual(run_context["room_id"], 7)
 
+    def test_a_handoff_without_a_room_does_not_take_the_callers_room(self):
+        handoff = create_handoff(
+            to_persona_name="Research bot", requested_by=self.user,
+            task="Check the weather", working_scope=["get_weather"],
+        )
+        executor = AsyncMock(return_value={"status": "success", "summary": "ok", "tools_used": []})
+
+        async_to_sync(run_handoff)(
+            handoff.id, context={"user_id": self.other.id, "room_id": 99}, executor=executor,
+        )
+
+        run_context = executor.await_args.args[1]
+        self.assertEqual(run_context["user_id"], self.user.id)
+        self.assertIsNone(run_context["room_id"])
+
     def test_out_of_scope_tool_use_is_denied(self):
         handoff = create_handoff(
             to_persona_name="Research bot", requested_by=self.user,

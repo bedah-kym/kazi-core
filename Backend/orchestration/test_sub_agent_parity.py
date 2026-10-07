@@ -133,7 +133,7 @@ class DelegatedPersonaTests(SimpleTestCase):
         h.executed.assert_not_called()
         h.receipt.assert_not_called()
         self.assertIn("persona", blocks[0]["content"])
-        self.assertNotIn("requires confirmation", blocks[0]["content"])
+        self.assertNotIn("requires explicit user confirmation", blocks[0]["content"])
 
     def _delegate_weather(self, persona):
         llm = MagicMock()
@@ -234,6 +234,30 @@ class DelegatedSearchTaintTests(SimpleTestCase):
 
         h.executed.assert_not_called()
         counted.assert_called_once_with(1, 1)
+
+    def test_the_taint_from_a_search_lasts_into_later_responses(self):
+        searched = {
+            "content": [{"type": "text", "text": "I looked it up."}],
+            "stop_reason": "tool_use",
+            "usage": {"server_tool_use": {"web_search_requests": 1}},
+        }
+        emails_later = {
+            "content": [{"type": "tool_use", "id": "t1", "name": "send_email", "input": {"to": "a@example.com"}}],
+            "stop_reason": "tool_use",
+            "usage": {},
+        }
+        llm = MagicMock()
+        llm.create_message = AsyncMock(side_effect=[searched, emails_later, _end_turn()])
+        with _Harness() as h, \
+                patch("orchestration.agent_loop.get_llm_client", return_value=llm), \
+                patch("orchestration.agent_loop._resolve_persona", new=AsyncMock(return_value=None)), \
+                patch("orchestration.agent_loop._record_search_usage"):
+            async_to_sync(_run_sub_agent)(
+                {"task": "research and email"}, dict(WHO), dict(self.AUTO_EMAIL), "system", [],
+            )
+
+        self.assertEqual(llm.create_message.await_count, 3)
+        h.executed.assert_not_called()
 
 
 class AliasReceiptTests(SimpleTestCase):

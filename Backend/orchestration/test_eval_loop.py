@@ -118,6 +118,22 @@ class LoopRunnerTests(SimpleTestCase):
         finally:
             os.unlink(path)
 
+    def test_a_loop_scenario_still_runs_its_other_checks(self):
+        # The loop part passes; the message is not an injection, so this must fail.
+        scenario = _auto_tool_scenario(expected_injection=True)
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".json", delete=False, encoding="utf-8",
+        ) as handle:
+            json.dump([scenario], handle)
+            path = handle.name
+        try:
+            out = StringIO()
+            with self.assertRaises(CommandError):
+                call_command("run_golden_eval", path=path, stdout=out)
+            self.assertIn("injection False != True", out.getvalue())
+        finally:
+            os.unlink(path)
+
     def test_command_exits_zero_when_all_scenarios_pass(self):
         with tempfile.NamedTemporaryFile(
             "w", suffix=".json", delete=False, encoding="utf-8",

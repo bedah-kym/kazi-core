@@ -88,20 +88,6 @@ class Command(BaseCommand):
                 self.stdout.write(f"[SKIP] {scenario_id} (requires LLM)")
                 continue
 
-            if scenario.get("loop"):
-                passed, details, _result = evaluate_loop_scenario(scenario)
-                if passed:
-                    totals["passed"] += 1
-                    by_pack[pack]["passed"] += 1
-                    self.stdout.write(f"[PASS] {scenario_id}")
-                else:
-                    totals["failed"] += 1
-                    by_pack[pack]["failed"] += 1
-                    reason = "; ".join(details) if details else "mismatch"
-                    failures.append(f"{scenario_id}: {reason}")
-                    self.stdout.write(f"[FAIL] {scenario_id}: {reason}")
-                continue
-
             message = scenario.get("message") or ""
             history = scenario.get("history") or ""
             preferences = scenario.get("preferences") or {}
@@ -115,6 +101,12 @@ class Command(BaseCommand):
 
             passed = True
             details: List[str] = []
+
+            if scenario.get("loop"):
+                loop_passed, loop_details, _result = evaluate_loop_scenario(scenario)
+                if not loop_passed:
+                    passed = False
+                    details.extend(loop_details or ["loop mismatch"])
 
             if expected_injection is not None:
                 actual_injection = is_prompt_injection(message)

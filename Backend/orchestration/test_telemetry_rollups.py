@@ -64,10 +64,7 @@ class EntityExtractionTests(RollupTestCase):
             {
                 "event": "agent_loop_done",
                 "ts": _iso(25),
-                "transcript": [
-                    {"tool": "get_weather", "input": {"city": "Nairobi"}},
-                    {"tool": "send_email", "input": {"email": "ops@example.com"}},
-                ],
+                "params": {"city": "Nairobi", "email": "ops@example.com"},
             },
         ]
         facts = rollups.extract_entity_facts(events)
@@ -105,10 +102,8 @@ class EntityExtractionTests(RollupTestCase):
 
     def test_distinct_values_for_same_entity_field_stay_separate(self):
         events = [
-            {"event": "agent_loop_done", "ts": _iso(25), "transcript": [
-                {"tool": "get_weather", "input": {"city": "Nairobi"}},
-                {"tool": "get_weather", "input": {"city": "Mombasa"}},
-            ]},
+            {"event": "agent_loop_done", "ts": _iso(25), "params": {"city": "Nairobi"}},
+            {"event": "agent_loop_done", "ts": _iso(25), "params": {"city": "Mombasa"}},
         ]
         facts = rollups.extract_entity_facts(events)
         cities = [r for r in facts.values() if r["type"] == "entity" and r["name"] == "city"]

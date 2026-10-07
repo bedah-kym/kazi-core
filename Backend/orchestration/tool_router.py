@@ -260,7 +260,7 @@ class MCPRouter:
         try:
             return await sync_to_async(cache.get)(key)
         except Exception as e:
-            logger.warning(f"Dialog state read failed: {e}")
+            logger.warning("Dialog state read failed: %s", type(e).__name__)
             return None
 
     async def _store_dialog_state(self, context: Dict, action: Optional[str], parameters: Dict, status: str = "success"):
@@ -274,7 +274,7 @@ class MCPRouter:
         try:
             await sync_to_async(cache.set)(key, state, self.DIALOG_STATE_TTL_SECONDS)
         except Exception as e:
-            logger.warning(f"Dialog state write failed: {e}")
+            logger.warning("Dialog state write failed: %s", type(e).__name__)
 
     def _merge_with_dialog_state(self, current_params: Dict, dialog_state: Optional[Dict]) -> Dict:
         """
@@ -531,7 +531,10 @@ class CalendarConnector(BaseConnector):
                         return {"status": "error", "message": "Calendly authorization failed. Please reconnect.", "action_required": "connect_calendly"}
 
                 if response.status_code != 200:
-                    logger.error("Calendly API error: %s", response.text)
+                    logger.error(
+                        "Calendly API error: status=%s body_chars=%s",
+                        response.status_code, len(response.text or ""),
+                    )
                     return {"status": "error", "message": "Failed to fetch Calendly events."}
 
             data = response.json()
@@ -587,7 +590,10 @@ class CalendarConnector(BaseConnector):
 
                 return await sync_to_async(update_profile)()
             else:
-                logger.error("Token refresh failed: %s", response.text)
+                logger.error(
+                    "Token refresh failed: status=%s body_chars=%s",
+                    response.status_code, len(response.text or ""),
+                )
                 return None
 
         except Exception as e:
@@ -673,7 +679,10 @@ class WeatherConnector(BaseConnector):
                     return {"status": "error", "message": f"City '{city}' not found."}
 
                 if response.status_code != 200:
-                    logger.error(f"OpenWeatherMap error: {response.text}")
+                    logger.error(
+                        "OpenWeatherMap error: status=%s body_chars=%s",
+                        response.status_code, len(response.text or ""),
+                    )
                     return {"status": "error", "message": "Failed to fetch weather data."}
 
                 data = response.json()
@@ -721,7 +730,10 @@ class GiphyConnector(BaseConnector):
                 response = await client.get(url, params=params)
 
                 if response.status_code != 200:
-                    logger.error(f"GIPHY error: {response.text}")
+                    logger.error(
+                        "GIPHY error: status=%s body_chars=%s",
+                        response.status_code, len(response.text or ""),
+                    )
                     return {"status": "error", "message": "Failed to search for GIFs."}
 
                 data = response.json()
@@ -777,7 +789,10 @@ class CurrencyConnector(BaseConnector):
                 response = await client.get(url)
 
                 if response.status_code != 200:
-                    logger.error(f"ExchangeRate-API error: {response.text}")
+                    logger.error(
+                        "ExchangeRate-API error: status=%s body_chars=%s",
+                        response.status_code, len(response.text or ""),
+                    )
                     return {"status": "error", "message": "Failed to fetch exchange rates."}
 
                 data = response.json()
@@ -985,7 +1000,7 @@ class ReminderConnector(BaseConnector):
                 from chatbot.tasks import schedule_reminder_delivery
                 await sync_to_async(schedule_reminder_delivery)(reminder.id, scheduled_time)
             except Exception as e:
-                logger.warning(f"Reminder scheduling skipped: {e}")
+                logger.warning("Reminder scheduling skipped: %s", type(e).__name__)
 
             # Format friendly time display in the USER's timezone, not UTC.
             local_dt = scheduled_time
@@ -1007,7 +1022,7 @@ class ReminderConnector(BaseConnector):
             }
 
         except Exception as e:
-            logger.error(f"Reminder error: {e}")
+            logger.error("Reminder error: %s", type(e).__name__)
             return {"status": "error", "message": "Failed to set reminder."}
 
     async def _list_reminders(self, user_id: int) -> Dict:

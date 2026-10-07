@@ -13,8 +13,8 @@ Design rules:
 - Idempotent: a per-window marker makes a second run in the same window
   a no-op.
 - Privacy: extraction reads only structured fields (command lines,
-  params, transcript inputs, typed command_result fields). Free-text
-  user content is never scanned.
+  params, typed command_result fields). Free-text user content is never
+  scanned.
 """
 from __future__ import annotations
 
@@ -278,17 +278,12 @@ def extract_entity_facts(events: Iterable[Dict[str, Any]]) -> Dict[str, Dict[str
         if event_type == "action_receipt" and event.get("action"):
             _add(f"service:{event['action']}", "service", str(event["action"]), ts)
 
-        # Named entities from tool params and loop transcripts.
+        # Named entities from tool params.
         param_dicts: List[Dict[str, Any]] = []
         if isinstance(event.get("params"), dict):
             param_dicts.append(event["params"])
         if isinstance(event.get("input"), dict):
             param_dicts.append(event["input"])
-        transcript = event.get("transcript")
-        if isinstance(transcript, list):
-            for entry in transcript:
-                if isinstance(entry, dict) and isinstance(entry.get("input"), dict):
-                    param_dicts.append(entry["input"])
         for params in param_dicts:
             for key in _ENTITY_KEYS:
                 value = params.get(key)

@@ -1425,7 +1425,7 @@ class LLMClient:
         except Exception:
             pass
 
-        logger.error(f"Failed to extract JSON from: {text[:100]}...")
+        logger.error("Failed to extract JSON from model output (%d chars)", len(text or ""))
         return {}
 
     def _should_cache(self, json_mode: bool, temperature: float) -> bool:

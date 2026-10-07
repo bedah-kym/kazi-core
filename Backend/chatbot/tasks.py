@@ -534,12 +534,12 @@ def generate_voice_response(self, message_id):
         return message.audio_url
     except OpenAIError as e:
         error_text = str(e)
-        logger.error(f"TTS error: {error_text}")
+        logger.error("TTS provider error class=%s chars=%d", type(e).__name__, len(error_text))
         if "insufficient_quota" in error_text or "Error code: 429" in error_text:
             return {"status": "skipped", "reason": "quota_exceeded"}
         raise self.retry(exc=e)
     except Exception as e:
-        logger.error(f"TTS error: {e}")
+        logger.error("TTS error class=%s", type(e).__name__)
         raise self.retry(exc=e)
 
 
@@ -565,7 +565,10 @@ def moderate_text_realtime(text_content):
 
         # Log if toxic (for admin review)
         if result and result[0]['label'] == 'toxic' and result[0]['score'] > 0.7:
-            logger.warning(f"Toxic content detected: {text_content[:50]}... Score: {result[0]['score']}")
+            logger.warning(
+                "Toxic content detected: score=%s chars=%d",
+                result[0]['score'], len(text_content or ""),
+            )
             return {"toxic": True, "score": result[0]['score']}
 
         return {"toxic": False}

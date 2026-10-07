@@ -138,7 +138,10 @@ class GmailConnector(BaseConnector):
                 "message": "Email sent successfully",
             }
 
-        logger.error("Gmail send failed: %s", response.text)
+        logger.error(
+            "Gmail send failed: status=%s body_chars=%s",
+            response.status_code, len(response.text or ""),
+        )
         return {
             "status": "error",
             "message": "Failed to send email via Gmail",
@@ -194,7 +197,10 @@ class GmailConnector(BaseConnector):
             response = await client.post(self.TOKEN_URL, data=data)
 
         if response.status_code != 200:
-            logger.error("Gmail token refresh failed: %s", response.text)
+            logger.error(
+                "Gmail token refresh failed: status=%s body_chars=%s",
+                response.status_code, len(response.text or ""),
+            )
             if "invalid_grant" in response.text:
                 await sync_to_async(self._disconnect_integration)(integration)
             return None

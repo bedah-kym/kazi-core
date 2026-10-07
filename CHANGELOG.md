@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "ok what does that do?") no longer runs a pending action; it cancels it and
   says so. A plain "no" cancels. A directive reply such as "stop for now"
   cancels the pending action instead of leaving it armed for a later "ok".
+- A delegated run (`delegate_task`) follows the main loop's rules. Each tool
+  call a sub-agent executes writes an action receipt, the room's persona scope
+  applies to it, and the cap on its tool calls is set by the harness: a
+  `max_tool_calls` value in tool input is ignored. A handoff's budget is
+  clamped again when it runs, and its receipts are attributed to the user who
+  requested it.
 
 ## [0.7.0] - 2026-10-04
 

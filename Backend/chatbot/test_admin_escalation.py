@@ -94,6 +94,31 @@ class AdminEscalationTests(TransactionTestCase):
         self.assertIn("overnight custodian", request_row.description)
         self.assertEqual(request_row.status, "pending")
 
+    @patch("orchestration.coordinator.OrchestrationCoordinator")
+    def test_an_email_like_address_does_not_escalate(self, mock_coord):
+        from notifications.models import Notification
+
+        alice = User.objects.create_user(
+            username="alice_email", password="fake-token",  # nosec B106 — test fixture — fake credential
+        )
+        User.objects.create_user(
+            username="rootadmin4", password="fake-token",  # nosec B106 — test fixture — fake credential
+            is_superuser=True, is_staff=True,
+        )
+        member = Member.objects.select_related("User").get(User=alice)
+        chatroom = Chatroom.objects.get(participants=member)
+        consumer = self._make_consumer(alice, member, chatroom)
+
+        async_to_sync(consumer.new_message)({
+            "from": "alice_email",
+            "message": "write to x@admin.example.com about it",
+            "chatid": str(chatroom.id),
+        })
+
+        self.assertFalse(
+            Notification.objects.filter(event_type="message.mention").exists()
+        )
+
     def test_admin_escalation_has_a_per_user_cooldown(self):
         from notifications.models import Notification
 

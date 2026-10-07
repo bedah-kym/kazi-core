@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An action called under an alias name (`run_shell`, `shell_command`, `email`,
   `remind` and the like) now writes its receipt under the canonical action, in
   the main loop as well. Before, these calls executed and left no receipt.
+- The telemetry file and the server log no longer receive what a turn sent to
+  its tools. The `agent_loop_done` transcript records each call's tool, status,
+  the number of input keys and the input size, not the input values, and the
+  tool router logs a failed provider call as a status code and a body size, not
+  the response body. The nightly rollup therefore no longer learns named
+  entities (city, email, phone number, amount) from tool inputs. Telemetry
+  written before this change is not rewritten: run `python Backend/manage.py
+  roll_telemetry`, then delete the rotated `orchestration-*.jsonl` files.
 
 ## [0.7.0] - 2026-10-04
 

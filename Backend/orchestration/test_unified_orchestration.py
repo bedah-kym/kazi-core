@@ -282,6 +282,43 @@ class HandoffResumeTests(TestCase):
         self.assertEqual(UserWorkflow.objects.count(), 0)
         self.assertEqual(WorkflowTrigger.objects.count(), 0)
 
+    @patch("orchestration.agent_loop._execute_meta_tool", new_callable=AsyncMock)
+    @patch("orchestration.agent_loop.get_llm_client")
+    def test_resume_hands_the_turn_taint_to_a_paused_meta_tool(
+        self, mock_get_llm, mock_meta,
+    ):
+        from orchestration.agent_loop import LoopState, run_agent_loop
+
+        mock_llm = MagicMock()
+        mock_llm.create_message = AsyncMock(return_value=_end_turn_response())
+        mock_get_llm.return_value = mock_llm
+        mock_meta.return_value = {"status": "success", "summary": "done"}
+
+        state = LoopState(
+            messages=[],
+            pending_tool={
+                "id": "t1", "name": "delegate_task", "input": {"task": "summarise"},
+            },
+            pending_tier=None,
+            tainted=True,
+        )
+
+        async def _collect():
+            return [
+                event async for event in run_agent_loop(
+                    user_message="",
+                    context=self.context,
+                    resumed_state=state,
+                    confirmed_tool=True,
+                )
+            ]
+
+        async_to_sync(_collect)()
+
+        mock_meta.assert_awaited_once()
+        preferences_arg = mock_meta.await_args.args[3]
+        self.assertTrue(preferences_arg.get("_shell_tainted"))
+
 
 class BackendCeleryLazyLoadTests(SimpleTestCase):
     """Backend/__init__.py lazy-loads celery_app (the manage.py check fix)."""

@@ -1451,9 +1451,11 @@ async def run_agent_loop(
         if pending["name"] in _META_TOOL_NAMES:
             # `_execute_with_timeout` only knows catalog tools; a paused
             # meta-tool (a schedule handoff) must go through its own executor.
+            # The main path hands it the turn's taint, so a delegated run
+            # paused in a tainted turn does not resume as if it were clean.
             result = await _execute_meta_tool(
                 pending["name"], pending["input"], context,
-                preferences, system, tools,
+                _taint_preferences(preferences, state.tainted), system, tools,
             )
         else:
             result = await _execute_with_timeout(

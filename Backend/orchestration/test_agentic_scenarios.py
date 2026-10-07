@@ -534,6 +534,10 @@ class SubAgentBudgetTests(SimpleTestCase):
                     "orchestration.agent_loop.update_memory_state",
                     new=AsyncMock(),
         ), \
+                patch(
+                    "orchestration.agent_loop._resolve_persona",
+                    new=AsyncMock(return_value=None),
+        ), \
                 patch("orchestration.agent_loop.record_event") as mock_record:
             result = run_async(_run_sub_agent(
                 {"task": "Do the thing"},

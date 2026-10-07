@@ -749,7 +749,9 @@ async def _record_receipt(
     """
     try:
         from orchestration.action_receipts import record_action_receipt, should_record_receipt
-        from orchestration.action_catalog import get_action_definition
+        from orchestration.action_catalog import get_action_definition, resolve_action_alias
+        # The executor runs an alias as its canonical action; audit it as that.
+        tool_name = resolve_action_alias(tool_name) or tool_name
         if not should_record_receipt(tool_name):
             return
         action_def = get_action_definition(tool_name) or {}
@@ -770,7 +772,7 @@ async def _record_receipt(
             reason=reason,
         )
     except Exception as exc:
-        logger.debug("Action receipt skipped for %s: %s", tool_name, exc)
+        logger.warning("Action receipt not recorded for %s: %s", tool_name, exc)
 
 
 # --------------------------------------------------------------------------- #
@@ -1002,6 +1004,7 @@ async def _execute_scoped_tool_calls(
     preferences: Optional[Dict[str, Any]],
     sub_tool_log: List[Dict[str, Any]],
     tool_call_cap: Optional[int] = None,
+    persona=None,
 ) -> Tuple[List[Dict[str, Any]], bool]:
     """Execute one response's tool_use batch under the sub-agent cap.
 
@@ -1022,10 +1025,17 @@ async def _execute_scoped_tool_calls(
             return result_blocks, True
 
         # Sub-agents cannot pause for confirmation; block anything that would.
-        auto, _pause, _denied = _bucket_tool_calls([tc], preferences, tainted=tainted)
+        # Persona scope and receipts are the same as in the main loop.
+        run_tainted = tainted
+        auto, _pause, denied = _bucket_tool_calls(
+            [tc], preferences, persona=persona, tainted=run_tainted,
+        )
         if _untrusted_source(tc["name"]):
             tainted = True
-        if not auto:
+        executed = False
+        if denied:
+            result = {"status": "error", "message": denied[0][1]}
+        elif not auto:
             result = {
                 "status": "error",
                 "message": (
@@ -1035,6 +1045,7 @@ async def _execute_scoped_tool_calls(
             }
         else:
             result = await _execute_with_timeout(tc["name"], tc["input"], context)
+            executed = True
         sub_tool_log.append({
             "name": tc["name"],
             "input": tc["input"],
@@ -1048,6 +1059,11 @@ async def _execute_scoped_tool_calls(
             )
         except Exception:
             pass
+        if executed:
+            await _record_receipt(
+                tc["name"], tc["input"], result, context,
+                basis=_shell_approval_basis(tc, preferences, run_tainted),
+            )
         result_blocks.append({
             "type": "tool_result",
             "tool_use_id": tc["id"],
@@ -1091,11 +1107,16 @@ async def _run_sub_agent(
 
     caps_enforced = context.get("caps_enforced", True)
     max_iterations = SUB_AGENT_MAX_ITERATIONS if caps_enforced else HARD_CAP_ITERATIONS
+    # The cap is granted by the harness (a handoff budget, via context). Tool
+    # input is written by the model and never sets it.
     try:
-        requested_cap = int(tool_input.get("max_tool_calls") or 0)
-    except (TypeError, ValueError):
-        requested_cap = 0
-    tool_call_cap = requested_cap or (SUB_AGENT_MAX_TOOL_CALLS if caps_enforced else HARD_CAP_TOOL_CALLS)
+        granted_cap = int(context.get("sub_agent_tool_call_cap") or 0)
+    except (TypeError, ValueError, OverflowError):
+        granted_cap = 0
+    tool_call_cap = min(granted_cap, HARD_CAP_TOOL_CALLS) if granted_cap > 0 else (
+        SUB_AGENT_MAX_TOOL_CALLS if caps_enforced else HARD_CAP_TOOL_CALLS
+    )
+    persona = await _resolve_persona(context.get("room_id"), context.get("user_id"))
 
     while iteration < max_iterations:
         if len(sub_tool_log) >= tool_call_cap:
@@ -1125,6 +1146,11 @@ async def _run_sub_agent(
         stop_reason = response.get("stop_reason", "end_turn")
         sub_messages.append({"role": "assistant", "content": content_blocks})
         tokens_used += _get_response_tokens(response)
+        searches = _count_search_uses(response)
+        if searches > 0:
+            # A server-side search brings in untrusted text; the main loop taints on it too.
+            _record_search_usage(context.get("user_id"), searches)
+            preferences = _taint_preferences(preferences, True)
 
         text = _extract_text(content_blocks)
         if text:
@@ -1138,7 +1164,7 @@ async def _run_sub_agent(
             tool_calls = _extract_tool_calls(content_blocks)
             result_blocks, capped = await _execute_scoped_tool_calls(
                 tool_calls, context, preferences, sub_tool_log,
-                tool_call_cap=tool_call_cap,
+                tool_call_cap=tool_call_cap, persona=persona,
             )
             sub_messages.append({"role": "user", "content": result_blocks})
             if capped:

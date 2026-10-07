@@ -69,6 +69,41 @@ class HandoffTests(TestCase):
         self.assertEqual(len(completed.receipts), 1)
         self.assertEqual(completed.receipts[0]["status"], "completed")
 
+    def test_the_run_is_capped_and_attributed_by_the_harness(self):
+        from workflows.handoffs import _max_budget
+
+        handoff = create_handoff(
+            to_persona_name="Research bot", requested_by=self.user,
+            task="Check the weather", working_scope=["get_weather"], budget=5, room_id=7,
+        )
+        # The stored task can be edited after creation.
+        handoff.task["budget"] = 10 ** 9
+        handoff.save(update_fields=["task"])
+        executor = AsyncMock(return_value={"status": "success", "summary": "ok", "tools_used": []})
+
+        async_to_sync(run_handoff)(handoff.id, context={"user_id": self.other.id}, executor=executor)
+
+        tool_input, run_context = executor.await_args.args[:2]
+        self.assertNotIn("max_tool_calls", tool_input)
+        self.assertEqual(run_context["sub_agent_tool_call_cap"], _max_budget())
+        self.assertEqual(run_context["user_id"], self.user.id)
+        self.assertEqual(run_context["room_id"], 7)
+
+    def test_a_handoff_without_a_room_does_not_take_the_callers_room(self):
+        handoff = create_handoff(
+            to_persona_name="Research bot", requested_by=self.user,
+            task="Check the weather", working_scope=["get_weather"],
+        )
+        executor = AsyncMock(return_value={"status": "success", "summary": "ok", "tools_used": []})
+
+        async_to_sync(run_handoff)(
+            handoff.id, context={"user_id": self.other.id, "room_id": 99}, executor=executor,
+        )
+
+        run_context = executor.await_args.args[1]
+        self.assertEqual(run_context["user_id"], self.user.id)
+        self.assertIsNone(run_context["room_id"])
+
     def test_out_of_scope_tool_use_is_denied(self):
         handoff = create_handoff(
             to_persona_name="Research bot", requested_by=self.user,

@@ -34,6 +34,15 @@ def _max_budget() -> int:
         return 50
 
 
+def _granted_budget(task: Dict[str, Any]) -> int:
+    """The stored budget, clamped again at run time: the task is editable in the admin."""
+    try:
+        value = int(task.get("budget") or _default_budget())
+    except (TypeError, ValueError, OverflowError):
+        value = _default_budget()
+    return min(max(1, value), _max_budget())
+
+
 def create_handoff(
     *,
     to_persona_name: str,
@@ -146,12 +155,19 @@ async def run_handoff(
 
     task = handoff.task or {}
     scope = {str(item).strip().lower() for item in (task.get("working_scope") or []) if item}
-    budget = int(task.get("budget") or _default_budget())
+    budget = _granted_budget(task)
     tool_input = {
         "task": task.get("task") or "",
         "tools": ",".join(sorted(scope)),
-        "max_tool_calls": budget,
     }
+    # The budget is granted by the harness through the context; the sub-agent
+    # ignores any cap that arrives in tool input, which the model can write.
+    run_context = dict(context or {})
+    run_context["sub_agent_tool_call_cap"] = budget
+    # Receipts and persona scope are keyed on whose run this is: the handoff
+    # row decides that, not the caller.
+    run_context["user_id"] = handoff.requested_by_id
+    run_context["room_id"] = handoff.room_id
 
     if executor is None:
         from orchestration.agent_loop import _run_sub_agent
@@ -160,7 +176,7 @@ async def run_handoff(
 
     try:
         result = await executor(
-            tool_input, context or {}, preferences, parent_system, list(parent_tools or []),
+            tool_input, run_context, preferences, parent_system, list(parent_tools or []),
         )
     except Exception as exc:
         logger.warning("Handoff %s executor failed: %s", handoff.id, exc)

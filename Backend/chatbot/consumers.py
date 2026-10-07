@@ -20,6 +20,7 @@ import asyncio
 from typing import Dict, Tuple
 from .models import Message, Member, Chatroom, UserModerationStatus, ModerationBatch, RoomReadState
 from .tasks import moderate_message_batch, generate_voice_response
+from .dispatch import dispatch_task
 from .transcript import build_history_messages, has_several_speakers, strip_wake_word
 from orchestration.user_preferences import get_user_preferences
 from orchestration.adaptive_task import load_task_state
@@ -233,11 +234,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
         if not should_schedule:
             return
 
+        from .tasks import refresh_room_context_summary
+        if not dispatch_task(refresh_room_context_summary, room_id, message_id, count):
+            return
+
         cache.set(last_key, now.isoformat(), timeout=60 * 60 * 6)
         cache.delete(counter_key)
-
-        from .tasks import refresh_room_context_summary
-        refresh_room_context_summary.delay(room_id, message_id, count)
 
     async def schedule_idle_nudge_if_needed(self, room_id, user_id):
         """
@@ -277,7 +279,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
         # Queue the idle nudge task
         from .tasks import schedule_idle_nudge
-        schedule_idle_nudge.delay(room_id, user_id)
+        dispatch_task(schedule_idle_nudge, room_id, user_id)
 
     async def presence_update(self, event):
         logger.debug(f"presence_update received by {self.scope['user'].username}: {event}")
@@ -643,9 +645,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
             await sync_to_async(redis.delete)(buffer_key)
 
             # Trigger async moderation task
-            moderate_message_batch.delay(batch.id)
-
-            logger.info(f"Triggered moderation batch {batch.id} for room {room_id}")
+            if dispatch_task(moderate_message_batch, batch.id):
+                logger.info(f"Triggered moderation batch {batch.id} for room {room_id}")
+            else:
+                logger.info(f"Moderation batch {batch.id} for room {room_id} left for the periodic sweep")
             return True
 
         return False
@@ -729,7 +732,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     async def new_message(self, data):
         try:
-            logger.info(f"=== NEW MESSAGE START === Data: {data}")
+            logger.info(
+                "=== NEW MESSAGE START === room=%r chars=%s",
+                data.get('chatid'), len(str(data.get('message') or '')),
+            )
 
             member_username = data['from']
             if member_username != self.scope["user"].username:
@@ -803,7 +809,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
             # Sanitize and validate message content
             message_content = data.get('message', '').strip()
-            logger.info(f"Step 6: Message content: {message_content[:50]}...")
+            logger.info("Step 6: Message length: %s", len(message_content))
 
             if not message_content or len(message_content) > 5000:
                 await self.send_chat_message({
@@ -1000,7 +1006,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                         full_response_text = result.full_response
 
                         if result.persist and full_response_text.strip():
-                            logger.info(f"Saving AI message to database: {full_response_text[:100]}...")
+                            logger.info("Saving AI message to database (%s chars)", len(full_response_text))
 
                             # Encrypt the AI response
                             encrypted_message = await self.encrypt_message({
@@ -1053,7 +1059,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                     except Exception as e:
                                         logger.warning(f"Voice preference check failed: {e}")
                                     if voice_enabled:
-                                        generate_voice_response.delay(ai_message.id)
+                                        dispatch_task(generate_voice_response, ai_message.id)
 
                                     # Broadcast saved message to clients for proper rendering
                                     message_json = await self.message_to_json(ai_message)

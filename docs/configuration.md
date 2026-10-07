@@ -30,6 +30,14 @@ a Compose `DATABASE_URL` with SQLite; with no `DATABASE_URL`, debug mode does
 **not** fall back. Production (`DEBUG=False`) never falls back. Force it with
 `KAZI_DEV_INMEMORY=1` (debug only — preserves other database URLs).
 
+Inline means in the process that asked: the room summary, document extraction
+and voice tasks run there, with real model calls if a key is set. This mode has
+no worker and no scheduler, so a task that is due later is not run at all: idle
+nudges are never sent and a reminder set for a future time is stored but not
+delivered. A retry is the exception: a task that asks to be retried later runs
+again at once, up to its retry limit. Test runs are different again: they never
+run a task body inline and never reach a broker.
+
 | Variable | Default | Purpose |
 |---|---|---|
 | `KAZI_DEV_INMEMORY` | auto (DEBUG + Compose `DATABASE_URL` + Redis unreachable) | Force the in-memory/SQLite dev fallback (ignored unless `DEBUG`). |

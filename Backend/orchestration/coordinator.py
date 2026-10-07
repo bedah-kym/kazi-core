@@ -113,6 +113,7 @@ class OrchestrationCoordinator:
         send_step_event: Callable[[str, dict], Awaitable[None]],
         get_context_prompt: Callable[[], Awaitable[str]],
         bump_signals: Callable[[List[Optional[str]]], None],
+        history_messages: Optional[List[dict]] = None,
     ) -> OrchestrationResult:
         """Route a chat turn, stream its response, and update room/user task state.
 
@@ -417,30 +418,6 @@ class OrchestrationCoordinator:
                 return False
             return bool(re.search(r"\b(nudge|suggestion|proactive)\b", lowered))
 
-        def _history_to_messages(history_text_arg: str):
-            """Convert 'Member: message' text history to Anthropic messages format."""
-            if not history_text_arg:
-                return None
-            messages = []
-            for line in history_text_arg.strip().split("\n"):
-                line = line.strip()
-                if not line or ": " not in line:
-                    continue
-                speaker, _, content = line.partition(": ")
-                content = content.strip()
-                if not content:
-                    continue
-                role = "assistant" if speaker.lower() == "kazi" else "user"
-                # Merge consecutive same-role messages
-                if messages and messages[-1]["role"] == role:
-                    messages[-1]["content"] += "\n" + content
-                else:
-                    messages.append({"role": role, "content": content})
-            # Anthropic requires messages to start with user role
-            if messages and messages[0]["role"] == "assistant":
-                messages = messages[1:]
-            return messages if messages else None
-
         async def _with_persona_identity(room_id, user_id, ctx_prompt: str) -> str:
             """Prepend the room persona's identity + skills to the loop context."""
             try:
@@ -510,10 +487,9 @@ class OrchestrationCoordinator:
                 "commands will still ask."
             )
 
-        async def _handle_agent_loop(query_text: str, history: str, ctx_prompt: str, mem_summary: str):
+        async def _handle_agent_loop(query_text: str, history_msgs, ctx_prompt: str, mem_summary: str):
             """Run the agentic loop and map AgentEvents to WebSocket frames."""
             await emit_progress("planning", "started", "Thinking…")
-            history_msgs = _history_to_messages(history)
             async for event in run_agent_loop(
                 user_message=query_text,
                 context={
@@ -528,7 +504,7 @@ class OrchestrationCoordinator:
                 preferences=user_preferences,
                 context_prompt=ctx_prompt,
                 memory_summary=mem_summary,
-                history=history_msgs,
+                history=history_msgs or None,
             ):
                 if event.kind == "text":
                     await broadcast_chunk(event.data.get("text", ""))
@@ -999,7 +975,7 @@ class OrchestrationCoordinator:
             try:
                 await _handle_agent_loop(
                     query,
-                    history_text,
+                    history_messages,
                     ctx_prompt,
                     mem_sum,
                 )

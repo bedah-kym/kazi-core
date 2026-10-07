@@ -118,8 +118,66 @@ class ChatConsumerRoutingTests(TransactionTestCase):
         consumer.message_to_json = AsyncMock(return_value={})
         consumer.schedule_context_summary = AsyncMock()
         consumer.schedule_idle_nudge_if_needed = AsyncMock()
-        consumer.get_history_as_text = AsyncMock(return_value="")
+        consumer.get_history_rows = AsyncMock(return_value=[])
         return consumer
+
+    @patch("orchestration.coordinator.OrchestrationCoordinator")
+    def test_history_excludes_the_current_message_and_names_speakers_in_a_shared_room(self, mock_coord):
+        from asgiref.sync import sync_to_async
+        from django.utils import timezone
+
+        from .consumers import DECRYPT_FAILED
+        from .models import Message
+
+        User = get_user_model()
+        alice = User.objects.create_user(username="alice", password="pw")  # nosec B106 — test fixture — fake credential
+        jon = User.objects.create_user(username="jon", password="pw")  # nosec B106 — test fixture — fake credential
+        member = Member.objects.select_related("User").get(User=alice)
+        jon_member = Member.objects.select_related("User").get(User=jon)
+        chatroom = Chatroom.objects.get(participants=member)
+        chatroom.participants.add(jon_member)
+
+        contents = {m.id: "Hello! This is your General room." for m in chatroom.chats.all()}
+        now = timezone.now()
+        Message.objects.filter(id__in=list(contents)).update(timestamp=now - timezone.timedelta(minutes=5))
+        for offset, text in enumerate(
+            ["my address is 12 Elm St", DECRYPT_FAILED, "Error: connection refused on 5432, why?"], start=1,
+        ):
+            earlier = Message.objects.create(
+                member=jon_member, content="{}", timestamp=now - timezone.timedelta(seconds=30 - offset),
+            )
+            chatroom.chats.add(earlier)
+            contents[earlier.id] = text
+
+        async def fake_json(msg):
+            username = await sync_to_async(lambda: msg.member.User.username)()
+            return {
+                "id": msg.id,
+                "member": username,
+                "content": contents.get(msg.id, "@kazi email my address to the courier"),
+            }
+
+        handle = AsyncMock(return_value=OrchestrationResult(full_response="", persist=False))
+        mock_coord.return_value.handle_message = handle
+        consumer = self._make_consumer(alice, member, chatroom)
+        consumer.get_chatroom_participants = AsyncMock(return_value=[member, jon_member])
+        consumer.message_to_json = fake_json
+        consumer.get_history_rows = ChatConsumer.get_history_rows.__get__(consumer)
+
+        async_to_sync(consumer.new_message)(
+            {"from": "alice", "message": "@kazi email my address to the courier", "chatid": str(chatroom.id)}
+        )
+
+        kwargs = handle.await_args.kwargs
+        self.assertEqual(kwargs["query"], "email my address to the courier")
+        self.assertEqual(
+            kwargs["history_messages"],
+            [{
+                "role": "user",
+                "content": "jon: my address is 12 Elm St\n\njon: Error: connection refused on 5432, why?",
+            }],
+        )
+        self.assertIn("from alice", async_to_sync(kwargs["get_context_prompt"])())
 
     @patch("orchestration.coordinator.OrchestrationCoordinator")
     def test_new_message_routes_ai_to_coordinator_and_persists(self, mock_coord):
@@ -154,7 +212,7 @@ class ChatConsumerRoutingTests(TransactionTestCase):
         consumer.message_to_json = AsyncMock(return_value={})
         consumer.schedule_context_summary = AsyncMock()
         consumer.schedule_idle_nudge_if_needed = AsyncMock()
-        consumer.get_history_as_text = AsyncMock(return_value="")
+        consumer.get_history_rows = AsyncMock(return_value=[])
 
         async_to_sync(consumer.new_message)(
             {"from": "alice", "message": "@kazi hello", "chatid": str(chatroom.id)}
@@ -165,6 +223,7 @@ class ChatConsumerRoutingTests(TransactionTestCase):
         self.assertEqual(kwargs["query"], "hello")
         self.assertEqual(kwargs["user_id"], alice.id)
         self.assertEqual(kwargs["room_id"], str(chatroom.id))
+        self.assertEqual(kwargs["history_messages"], [])
 
         # The coordinator result was persisted as a Kazi message.
         from .models import Message

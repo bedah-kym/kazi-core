@@ -5,8 +5,9 @@ from typing import Dict, List
 
 from asgiref.sync import async_to_sync
 from django.conf import settings
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 
+from orchestration.eval.loop_runner import evaluate_loop_scenario
 from orchestration.eval.scenario_packs import pack_name, select_pack
 from orchestration.intent_parser import parse_intent
 from orchestration.security_policy import is_prompt_injection, should_block_message
@@ -101,6 +102,12 @@ class Command(BaseCommand):
             passed = True
             details: List[str] = []
 
+            if scenario.get("loop"):
+                loop_passed, loop_details, _result = evaluate_loop_scenario(scenario)
+                if not loop_passed:
+                    passed = False
+                    details.extend(loop_details or ["loop mismatch"])
+
             if expected_injection is not None:
                 actual_injection = is_prompt_injection(message)
                 if actual_injection != expected_injection:
@@ -183,3 +190,4 @@ class Command(BaseCommand):
             self.stdout.write("Failures:")
             for failure in failures:
                 self.stdout.write(f"- {failure}")
+            raise CommandError(f"{len(failures)} scenario(s) failed")

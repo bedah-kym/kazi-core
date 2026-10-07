@@ -111,7 +111,10 @@ class MailgunConnector(BaseConnector):
                         "sandbox": self.use_sandbox
                     }
                 else:
-                    logger.error(f"Mailgun Error: {response.text}")
+                    logger.error(
+                        "Mailgun send failed: status=%s body_chars=%s",
+                        response.status_code, len(response.text or ""),
+                    )
                     return {
                         "error": f"Failed to send email: {response.status_code}",
                         "details": response.text,

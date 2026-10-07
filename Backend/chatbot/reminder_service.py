@@ -264,7 +264,7 @@ class LLMTimeParser:
                     "interpretation": result.get("interpretation", "")
                 }
         except Exception as e:
-            logging.error(f"LLM time parse error: {e}")
+            logger.error("LLM time parse error class=%s", type(e).__name__)
             return self._fallback_parse(text, user_timezone)
 
     @staticmethod
@@ -395,7 +395,10 @@ class LLMTimeParser:
                 "interpretation": "Parsed via fallback"
             }
         except Exception as e:
-            logger.debug("dateutil parse failed for %r: %s", text, e)
+            logger.debug(
+                "dateutil parse failed (text chars=%d): %s",
+                len(text or ""), type(e).__name__,
+            )
 
         clock = _parse_clock(text)
         if clock:

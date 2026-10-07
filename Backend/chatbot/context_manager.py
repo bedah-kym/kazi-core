@@ -487,7 +487,10 @@ class ContextManager:
     def _sanitize_note_content(text):
         """Strip prompt-injection patterns from note content before it enters the system prompt."""
         if _NOTE_INJECTION_RE.search(text):
-            logger.warning("Potential injection in note content, filtering (note starts: %s)", text[:80])
+            logger.warning(
+                "Potential injection in note content, filtering (note chars=%d)",
+                len(text or ""),
+            )
             text = _NOTE_INJECTION_RE.sub("[FILTERED]", text)
         return text
 

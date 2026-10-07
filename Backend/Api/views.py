@@ -30,8 +30,9 @@ def calendly_connect(request):
     # Use build_absolute_uri to get the full URL
     redirect_uri = request.build_absolute_uri('/api/calendly/callback/')
 
-    # Debug: Print the redirect URI to console
-    print(f"[calendly] Redirect URI being used: {redirect_uri}")
+    # The redirect URI is the app's own callback URL; log only its host, never
+    # the full URL or any query string.
+    logger.debug("[calendly] Using redirect host: %s", request.get_host())
 
     # Use user ID as state for security
     state = str(request.user.id)
@@ -48,7 +49,7 @@ def calendly_connect(request):
         f"&state={state}"
     )
 
-    print(f"[calendly] Full auth URL: {auth_url}")
+    logger.debug("[calendly] Authorization URL built")
 
     return Response({'authorization_url': auth_url})
 
@@ -74,7 +75,10 @@ def calendly_callback(request):
     }
     r = requests.post(token_url, data=payload, timeout=20)
     if r.status_code != 200:
-        logger.error('Calendly token exchange failed: %s', r.text)
+        logger.error(
+            'Calendly token exchange failed: status=%s body_chars=%s',
+            r.status_code, len(r.text or ""),
+        )
         return Response({'error': 'token exchange failed'}, status=500)
     data = r.json()
     access_token = data.get('access_token')

@@ -473,7 +473,7 @@
     ]
   },
   {
-    "id": "persona_delegated_out_of_scope_refused_loop",
+    "id": "persona_without_delegate_in_scope_cannot_delegate_loop",
     "pack": "orchestration",
     "message": "Delegate this to a sub-agent.",
     "loop": {

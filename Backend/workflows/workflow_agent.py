@@ -7,10 +7,10 @@ from asgiref.sync import sync_to_async
 from orchestration.llm_client import get_llm_client
 
 from .capabilities import get_capabilities_prompt, validate_workflow_definition
-from .models import WorkflowDraft, UserWorkflow, WorkflowTrigger
+from .creation import WorkflowCreationError, create_workflow_with_triggers
+from .models import WorkflowDraft, UserWorkflow
 from .promotion import PromotionError, is_save_skill_request, save_session_as_skill
 from .routine import normalize_routine, validate_routine_contract
-from .temporal_integration import create_schedule_for_trigger
 
 logger = logging.getLogger(__name__)
 
@@ -81,58 +81,13 @@ async def _close_draft(draft: WorkflowDraft, status: str) -> None:
 
 
 async def _create_workflow(user_id: int, room_id: Optional[int], definition: Dict[str, Any], draft: WorkflowDraft) -> UserWorkflow:
-    def _create():
-        workflow = UserWorkflow.objects.create(
-            user_id=user_id,
-            name=definition.get('workflow_name', 'Untitled Workflow'),
-            description=definition.get('workflow_description', ''),
-            definition=definition,
-            status='active',
-            created_from_room_id=room_id,
-            created_from_draft=draft,
-        )
-        return workflow
-
-    workflow = await sync_to_async(_create)()
-    await _register_triggers(workflow)
+    workflow, _triggers = await create_workflow_with_triggers(
+        user_id=user_id,
+        room_id=room_id,
+        definition=definition,
+        draft=draft,
+    )
     return workflow
-
-
-async def _register_triggers(workflow: UserWorkflow) -> None:
-    triggers = workflow.definition.get('triggers', [])
-
-    for trig in triggers:
-        trigger_type = trig.get('trigger_type')
-        service = trig.get('service', '')
-        event = trig.get('event', '')
-        config = trig.get('config', {}) or {}
-
-        if not trigger_type:
-            if service == 'schedule' or event == 'cron':
-                trigger_type = 'schedule'
-            elif service and event:
-                trigger_type = 'webhook'
-            else:
-                trigger_type = 'manual'
-
-        def _create_trigger():
-            return WorkflowTrigger.objects.create(
-                workflow=workflow,
-                trigger_type=trigger_type,
-                service=service,
-                event=event,
-                config=config,
-                schedule_cron=trig.get('cron') or config.get('cron'),
-                schedule_timezone=trig.get('timezone') or config.get('timezone', 'UTC'),
-            )
-
-        trigger = await sync_to_async(_create_trigger)()
-
-        if trigger.trigger_type == 'schedule':
-            try:
-                await create_schedule_for_trigger(trigger)
-            except Exception as exc:
-                logger.exception("Failed to create Temporal schedule for workflow %s: %s", workflow.id, exc)
 
 
 async def handle_workflow_message(user_id: int, room_id: Optional[int], message: str, history_text: str = '') -> str:
@@ -161,7 +116,10 @@ async def handle_workflow_message(user_id: int, room_id: Optional[int], message:
         routine_valid, routine_error = validate_routine_contract(definition)
         if not routine_valid:
             return f"This can't be enabled yet: {routine_error}"
-        workflow = await _create_workflow(user_id, room_id, definition, draft)
+        try:
+            workflow = await _create_workflow(user_id, room_id, definition, draft)
+        except WorkflowCreationError as exc:
+            return str(exc)
         await _close_draft(draft, 'confirmed')
         return f"Workflow created and activated: {workflow.name}"
 

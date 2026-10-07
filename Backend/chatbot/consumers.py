@@ -29,12 +29,13 @@ from django.utils.text import get_valid_filename
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
-# v0.7 @admin escalation: messages mentioning @admin go to superusers instead
-# of the bot. "@admin request persona "Name" - "description"" opens a
-# PersonaRequest for the admin to approve in the admin UI.
-ADMIN_MENTION_RE = re.compile(r'@admin\b', re.IGNORECASE)
+# v0.7 @admin escalation: a message that *starts* with @admin goes to
+# superusers instead of the bot. "@admin request persona "Name" - "description""
+# opens a PersonaRequest for the admin to approve in the admin UI. The anchor
+# keeps an address like x@admin.example.com from escalating.
+ADMIN_MENTION_RE = re.compile(r'^@admin(?=$|[\s,:;.!?])', re.IGNORECASE)
 ADMIN_PERSONA_REQUEST_RE = re.compile(
-    r'@admin\s+request\s+persona\s+"([^"]+)"(?:\s*[-–—]\s*"?([^"]*)"?)?',
+    r'^@admin\s+request\s+persona\s+"([^"]+)"(?:\s*[-–—]\s*"?([^"]*)"?)?',
     re.IGNORECASE,
 )
 

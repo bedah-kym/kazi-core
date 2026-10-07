@@ -88,21 +88,13 @@ class RoutingBranchTests(SimpleTestCase):
 
     # -- directives ----------------------------------------------------- #
 
-    def test_mode_command_short_circuits(self):
-        set_mode = AsyncMock()
-        result, chunks = self._run("focus mode", mocks={
-            "orchestration.coordinator.set_conversation_mode": set_mode,
-        })
-        self.assertTrue(result.persist)
-        set_mode.assert_awaited_once()
-
     def test_dismiss_directive(self):
-        result, chunks = self._run("dismiss the nudge please")
+        result, chunks = self._run("dismiss suggestions please")
         self.assertTrue(result.persist)
         self.assertTrue(self._broadcast(chunks, "stop showing"))
 
     def test_receipt_directive(self):
-        result, chunks = self._run("what did you do", mocks={
+        result, chunks = self._run("receipts", mocks={
             "orchestration.coordinator.fetch_recent_receipts": AsyncMock(return_value=[]),
             "orchestration.coordinator.format_receipt_list": MagicMock(return_value="No receipts yet."),
         })
@@ -110,25 +102,11 @@ class RoutingBranchTests(SimpleTestCase):
         self.assertTrue(self._broadcast(chunks, "No receipts"))
 
     def test_undo_directive(self):
-        result, chunks = self._run("undo last action", mocks={
+        result, chunks = self._run("undo", mocks={
             "orchestration.coordinator.undo_last_action": AsyncMock(return_value={"message": "Undone."}),
         })
         self.assertTrue(result.persist)
         self.assertTrue(self._broadcast(chunks, "Undone."))
-
-    def test_pause_directive(self):
-        set_mode = AsyncMock()
-        result, chunks = self._run("stop for now", mocks={
-            "orchestration.coordinator.set_conversation_mode": set_mode,
-        })
-        self.assertTrue(result.persist)
-        set_mode.assert_awaited_once()
-        self.assertTrue(self._broadcast(chunks, "pause tasks"))
-
-    def test_capabilities_directive(self):
-        result, chunks = self._run("what can you do")
-        self.assertTrue(result.persist)
-        self.assertTrue(self._broadcast(chunks, "help with"))
 
     # -- pending confirmations ------------------------------------------ #
 

@@ -8,7 +8,6 @@ dispatch, general chat) and talks back to the consumer through a small set
 of injected async callbacks so it has no Channels dependency of its own.
 """
 import logging
-import re
 import time
 import uuid
 from dataclasses import dataclass
@@ -26,8 +25,6 @@ from orchestration.action_receipts import (
     attach_receipt_to_result,
     build_confirmation_prompt,
     fetch_recent_receipts,
-    is_receipt_request,
-    is_undo_request,
     record_action_receipt,
     requires_confirmation,
     should_include_receipt,
@@ -48,14 +45,10 @@ from orchestration.adaptive_task import (
     store_result_set,
     needs_option_context,
     clear_result_sets,
-    is_reset_request,
     is_small_talk,
     is_cancel_request,
     is_resume_request,
     get_conversation_mode,
-    set_conversation_mode,
-    detect_mode_command,
-    format_mode_ack,
     is_task_paused,
     pause_task_state,
     clear_task_pause,
@@ -64,7 +57,15 @@ from orchestration.adaptive_task import (
 )
 from orchestration.memory_state import load_memory_summary, clear_memory
 from orchestration.security_policy import should_refuse_sensitive_request, sensitive_refusal_message
-from orchestration.shell.chat_intents import is_approval_reply, is_decline_reply
+from orchestration.shell.chat_intents import (
+    is_approval_reply,
+    is_decline_reply,
+    is_cancel_command,
+    is_dismiss_suggestions_command,
+    is_receipts_command,
+    is_reset_command,
+    is_undo_command,
+)
 from orchestration.agent_loop import (
     run_agent_loop,
     has_pending_agent_state,
@@ -240,19 +241,15 @@ class OrchestrationCoordinator:
             user_preferences["_shell_autopilot"] = False
         style_prompt = format_style_prompt(user_preferences)
         conversation_mode = await get_conversation_mode(adaptive_context)
-        mode_handled = False
-        mode_cmd = detect_mode_command(query)
-        if mode_cmd:
-            await set_conversation_mode(adaptive_context, mode_cmd)
-            conversation_mode = mode_cmd
-            await broadcast_chunk(format_mode_ack(mode_cmd))
-            mode_handled = True
-        if is_reset_request(query):
+        if is_reset_command(query):
             await clear_task_state(adaptive_context)
             await clear_result_sets(adaptive_context)
             await clear_memory(adaptive_context)
             cache.delete(pending_key)
             cache.delete(last_summary_key)
+            # A reset is not consent: nothing pending may survive it for a later "yes".
+            if AGENT_LOOP_ENABLED:
+                await dismiss_pending_confirmation(room_id, user_id)
             record_event(
                 "context_reset",
                 {
@@ -411,12 +408,6 @@ class OrchestrationCoordinator:
                 await broadcast_chunk(f"Error: {error_text}")
                 await emit_progress("executing", "completed", "Execution failed.")
             return result
-
-        def _is_dismiss_request(query_text: str) -> bool:
-            lowered = query_text.lower()
-            if not re.search(r"\b(dismiss|stop|no thanks)\b", lowered):
-                return False
-            return bool(re.search(r"\b(nudge|suggestion|proactive)\b", lowered))
 
         async def _with_persona_identity(room_id, user_id, ctx_prompt: str) -> str:
             """Prepend the room persona's identity + skills to the loop context."""
@@ -629,11 +620,16 @@ class OrchestrationCoordinator:
 
         # Autopilot kill switch. Evaluated before every other handler and
         # whatever the loaded flag says, so no branch below can swallow a stop.
+        # While an action is pending the broad, in-sentence match still applies
+        # (it fails safe); with nothing pending only a whole-message stop
+        # disarms the window, so "why did it stop?" reaches the model.
         from orchestration.shell.chat_intents import is_autopilot_disarm_request
         explicit_disarm = is_autopilot_disarm_request(query)
-        if explicit_disarm or is_cancel_request(query) or re.search(
-            r"\b(stop for now|pause for now|hold off)\b", query, re.IGNORECASE,
-        ):
+        pending_cached = cache.get(pending_key)
+        pending_confirmation = await _has_pending_confirmation() if AGENT_LOOP_ENABLED else False
+        something_pending = bool(pending_cached) or pending_confirmation
+        cancel_request = is_cancel_request(query) if something_pending else is_cancel_command(query)
+        if explicit_disarm or cancel_request:
             was_armed = bool(user_preferences.get("_shell_autopilot"))
             autopilot_turn["forced_off"] = True
             user_preferences["_shell_autopilot"] = False
@@ -682,8 +678,8 @@ class OrchestrationCoordinator:
                 reply = "I couldn't change the host approvals just now. Nothing was changed."
             await broadcast_chunk(reply)
 
-        handled_directive = mode_handled or explicit_disarm or bool(host_request)
-        if not handled_directive and _is_dismiss_request(query):
+        handled_directive = explicit_disarm or bool(host_request)
+        if not handled_directive and is_dismiss_suggestions_command(query):
             last_reason_key = f"proactive:last_reason:{room_id}:{user_id}"
             dismissed_key = f"proactive:dismissed:{room_id}:{user_id}"
             last_reason = cache.get(last_reason_key)
@@ -695,7 +691,7 @@ class OrchestrationCoordinator:
             cache.delete(pending_key)
             await broadcast_chunk("Got it. I will stop showing that kind of suggestion here.")
             handled_directive = True
-        if not handled_directive and is_receipt_request(query):
+        if not handled_directive and is_receipts_command(query):
             receipts = await fetch_recent_receipts(
                 user_id=user_id,
                 room_id=room_id,
@@ -703,42 +699,15 @@ class OrchestrationCoordinator:
             )
             await broadcast_chunk(format_receipt_list(receipts))
             handled_directive = True
-        if not handled_directive and is_undo_request(query):
+        if not handled_directive and is_undo_command(query):
             undo_result = await undo_last_action(
                 user_id=user_id,
                 room_id=room_id,
             )
             await broadcast_chunk(undo_result.get("message") or "Okay.")
             handled_directive = True
-        if not handled_directive and re.search(r"\b(stop for now|pause for now|hold off)\b", query, re.IGNORECASE):
-            await set_conversation_mode(adaptive_context, "social")
-            await broadcast_chunk("Okay, I will pause tasks for now. Say 'resume' when you are ready.")
-            handled_directive = True
-        if not handled_directive and re.search(
-            r"\b(what can you do|what are your (capabilities|tools|features)|"
-            r"what tools do you have|help me understand|show me your tools)\b",
-            query, re.IGNORECASE,
-        ):
-            from orchestration.action_catalog import ACTION_CATALOG
-            categories = {}
-            for action_def in ACTION_CATALOG:
-                svc = action_def.get("service", "other")
-                categories.setdefault(svc, []).append(
-                    f"**{action_def['action'].replace('_', ' ')}** — {action_def.get('description', '')[:80]}"
-                )
-            lines = ["Here's what I can help with:\n"]
-            for svc, actions in sorted(categories.items()):
-                lines.append(f"\n**{svc.title()}**")
-                for a in actions:
-                    lines.append(f"  - {a}")
-            lines.append(
-                "\nI can also **search the web** for information and **delegate complex tasks** "
-                "to focused sub-assistants."
-            )
-            await broadcast_chunk("\n".join(lines))
-            handled_directive = True
 
-        pending = cache.get(pending_key)
+        pending = pending_cached
         pending_handled = handled_directive
         cached_request_declined = False
         if pending and not pending_handled:
@@ -802,14 +771,14 @@ class OrchestrationCoordinator:
         keeps_pending = explicit_disarm or bool(host_request)
         answered_without_consent = handled_directive or cached_request_declined
         if answered_without_consent and not keeps_pending and AGENT_LOOP_ENABLED:
-            if await _has_pending_confirmation():
+            if pending_confirmation:
                 cache.delete(pending_key)
                 await dismiss_pending_confirmation(room_id, user_id)
                 await broadcast_chunk("\n\nI did not run the pending action; it is cancelled.")
 
         # --- Agent loop confirmation resume ---
         if not pending_handled and AGENT_LOOP_ENABLED:
-            if await _has_pending_confirmation():
+            if pending_confirmation:
                 from orchestration.shell.chat_intents import is_autopilot_request
 
                 async def _resume_confirmed():

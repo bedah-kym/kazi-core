@@ -234,6 +234,35 @@ async def _resolve_persona(room_id: Optional[int], user_id: Optional[int]):
         return None
 
 
+_HANDOFF_TOOL_NAME = "handoff_to_workflow"
+
+
+def _is_scheduled_handoff(tc: Dict[str, Any]) -> bool:
+    """A handoff that creates anything but a one-off run must be confirmed.
+
+    A standing schedule is persistence, so no stored rule, autopilot window or
+    tainted run may let it start without the user's decision.
+    """
+    if tc.get("name") != _HANDOFF_TOOL_NAME:
+        return False
+    tool_input = tc.get("input")
+    if not isinstance(tool_input, dict):
+        return False
+    return str(tool_input.get("trigger_type") or "manual") != "manual"
+
+
+def _fill_handoff_timezone(
+    tc: Dict[str, Any],
+    preferences: Optional[Dict[str, Any]],
+) -> None:
+    """Resolve the schedule's timezone before the prompt so it shows the stored value."""
+    tool_input = tc.get("input")
+    if not isinstance(tool_input, dict) or tool_input.get("timezone"):
+        return
+    timezone = preferences.get("timezone") if isinstance(preferences, dict) else None
+    tool_input["timezone"] = timezone or "UTC"
+
+
 def _bucket_tool_calls(
     tool_calls: List[Dict[str, Any]],
     preferences: Optional[Dict[str, Any]],
@@ -246,7 +275,8 @@ def _bucket_tool_calls(
     the loop can route ``bounded`` -> inline and ``destructive`` -> durable.
     ``denied`` carries a human-readable refusal reason. A persona narrows the
     scope deterministically (#203); a tainted run escalates external-write
-    and credential-scoped actions so no stored rule can bypass them (#170).
+    and credential-scoped actions so no stored rule can bypass them (#170). A
+    schedule handoff is always confirmed, whatever the rules or taint (#222).
     """
     auto: List[Dict[str, Any]] = []
     pause: List[Tuple[Dict[str, Any], Optional[str]]] = []
@@ -267,6 +297,9 @@ def _bucket_tool_calls(
         tier = risk.get("shell_tier")
         if tier == "denied":
             denied.append((tc, "Refused: this command is not allowed under the active shell profile."))
+        elif _is_scheduled_handoff(tc):
+            _fill_handoff_timezone(tc, preferences)
+            pause.append((tc, tier))
         elif tainted and tc["name"] not in _SHELL_TOOL_NAMES and _taint_gated(tc["name"]):
             # One tier up: a tainted run never lets a stored rule skip the ask.
             # Shell is excluded: its risk fn already gates a tainted egress
@@ -1415,9 +1448,17 @@ async def run_agent_loop(
         # Execute the previously paused tool
         pending = state.pending_tool
         state.pending_tool = None
-        result = await _execute_with_timeout(
-            pending["name"], pending["input"], context,
-        )
+        if pending["name"] in _META_TOOL_NAMES:
+            # `_execute_with_timeout` only knows catalog tools; a paused
+            # meta-tool (a schedule handoff) must go through its own executor.
+            result = await _execute_meta_tool(
+                pending["name"], pending["input"], context,
+                preferences, system, tools,
+            )
+        else:
+            result = await _execute_with_timeout(
+                pending["name"], pending["input"], context,
+            )
         state.tool_call_count += 1
         state.tool_call_log.append({
             "name": pending["name"],

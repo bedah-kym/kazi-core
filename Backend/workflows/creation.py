@@ -12,7 +12,7 @@ from asgiref.sync import sync_to_async
 from django.db import transaction
 
 from .models import UserWorkflow, WorkflowTrigger
-from .temporal_integration import create_schedule_for_trigger
+from .temporal_integration import create_schedule_for_trigger, delete_trigger_schedule
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +117,7 @@ async def create_workflow_with_triggers(
 
     workflow, rows = await sync_to_async(_create_rows)()
 
+    registered: List[WorkflowTrigger] = []
     for trigger in rows:
         if trigger.trigger_type != "schedule":
             continue
@@ -124,6 +125,15 @@ async def create_workflow_with_triggers(
             await create_schedule_for_trigger(trigger)
         except Exception as exc:
             reason = str(exc) or exc.__class__.__name__
+            # A failed workflow must not leave an earlier schedule live.
+            for done in registered:
+                try:
+                    await delete_trigger_schedule(done)
+                except Exception as cleanup_exc:
+                    logger.warning(
+                        "Could not remove schedule for trigger %s: %s",
+                        done.id, cleanup_exc,
+                    )
 
             def _mark_failed():
                 workflow.status = "failed"
@@ -133,6 +143,7 @@ async def create_workflow_with_triggers(
             raise WorkflowCreationError(
                 f"Could not register the schedule: {reason}"
             ) from exc
+        registered.append(trigger)
 
     def _reload():
         workflow.refresh_from_db()

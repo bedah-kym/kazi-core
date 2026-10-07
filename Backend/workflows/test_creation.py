@@ -113,6 +113,39 @@ class CreateWorkflowWithTriggersTests(TestCase):
         self.assertEqual(UserWorkflow.objects.count(), 0)
         self.assertEqual(WorkflowTrigger.objects.count(), 0)
 
+    @patch("workflows.creation.delete_trigger_schedule", new_callable=AsyncMock)
+    @patch("workflows.creation.create_schedule_for_trigger", new_callable=AsyncMock)
+    def test_later_schedule_failure_removes_the_earlier_schedule(
+        self, mock_schedule, mock_delete,
+    ):
+        from workflows.creation import (
+            WorkflowCreationError,
+            create_workflow_with_triggers,
+        )
+
+        mock_schedule.side_effect = [None, RuntimeError("temporal down")]
+        definition = {
+            "workflow_name": "Two schedules",
+            "workflow_description": "",
+            "triggers": [
+                {"trigger_type": "schedule", "cron": "0 9 * * *", "timezone": "UTC"},
+                {"trigger_type": "schedule", "cron": "0 18 * * *", "timezone": "UTC"},
+            ],
+            "steps": [
+                {"id": "s1", "service": "weather", "action": "get_weather", "params": {}},
+            ],
+        }
+
+        with self.assertRaises(WorkflowCreationError):
+            async_to_sync(create_workflow_with_triggers)(
+                user_id=self.user.id, room_id=None, definition=definition,
+            )
+
+        workflow = UserWorkflow.objects.get()
+        self.assertEqual(workflow.status, "failed")
+        self.assertEqual(WorkflowTrigger.objects.count(), 2)
+        mock_delete.assert_awaited_once()
+
     def test_describe_schedule_matches_row(self):
         from workflows.creation import describe_schedule
 

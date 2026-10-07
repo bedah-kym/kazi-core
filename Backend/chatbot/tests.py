@@ -180,6 +180,27 @@ class ChatConsumerRoutingTests(TransactionTestCase):
         self.assertIn("from alice", async_to_sync(kwargs["get_context_prompt"])())
 
     @patch("orchestration.coordinator.OrchestrationCoordinator")
+    def test_message_text_is_not_written_to_the_log(self, mock_coord):
+        User = get_user_model()
+        alice = User.objects.create_user(username="alice_logs", password="pw")  # nosec B106 — test fixture — fake credential
+        member = Member.objects.select_related("User").get(User=alice)
+        chatroom = Chatroom.objects.get(participants=member)
+        mock_coord.return_value.handle_message = AsyncMock(
+            return_value=OrchestrationResult(full_response="the reply mentions walrus-9912", persist=True)
+        )
+        consumer = self._make_consumer(alice, member, chatroom)
+
+        with self.assertLogs("chatbot.consumers", level="INFO") as logs:
+            async_to_sync(consumer.new_message)(
+                {"from": "alice_logs", "message": "@kazi my phrase is otter-4471", "chatid": str(chatroom.id)}
+            )
+
+        written = "\n".join(logs.output)
+        self.assertIn("NEW MESSAGE START", written)
+        self.assertNotIn("otter-4471", written)
+        self.assertNotIn("walrus-9912", written)
+
+    @patch("orchestration.coordinator.OrchestrationCoordinator")
     def test_new_message_routes_ai_to_coordinator_and_persists(self, mock_coord):
         User = get_user_model()
         alice = User.objects.create_user(username="alice", password="pw")  # nosec B106 — test fixture — fake credential

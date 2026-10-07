@@ -877,3 +877,9 @@ if 'test' in sys.argv:
         }
     }
     SILENCED_SYSTEM_CHECKS = ['django_ratelimit.E003']
+    # Test runs never reach a broker and never run a task body inline, whatever
+    # the environment says. Celery reads CELERY_BROKER_URL from the environment
+    # and from celery.py ahead of this file, so the write URL is pinned as well.
+    CELERY_BROKER_URL = 'memory://'
+    CELERY_BROKER_WRITE_URL = 'memory://'
+    CELERY_TASK_ALWAYS_EAGER = False

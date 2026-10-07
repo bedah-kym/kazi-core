@@ -1,4 +1,6 @@
 """API surface tests: plan-aware throttling (v0.6 stress-test fix)."""
+import contextlib
+import io
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -78,11 +80,14 @@ class CalendlyLogRedactionTests(SimpleTestCase):
     def test_connect_does_not_log_the_auth_url(self):
         from Api.views import calendly_connect
 
-        with self.assertLogs(level="DEBUG") as captured:
+        # The leak this replaced was a print(), which log capture alone cannot see.
+        printed = io.StringIO()
+        with self.assertLogs(level="DEBUG") as captured, contextlib.redirect_stdout(printed):
             response = calendly_connect(self._request("post", "/api/calendly/connect/"))
 
         self.assertEqual(response.status_code, 200)
         self.assertNotIn(self.FAKE, "\n".join(captured.output))
+        self.assertEqual(printed.getvalue(), "")
 
     def test_callback_does_not_log_the_provider_body(self):
         from Api.views import calendly_callback

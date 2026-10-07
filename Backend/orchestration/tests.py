@@ -6,6 +6,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import SimpleTestCase, TestCase, override_settings
 
 from asgiref.sync import async_to_sync
@@ -289,7 +290,8 @@ class InjectionCorpusTests(SimpleTestCase):
             path = handle.name
         try:
             out = StringIO()
-            call_command("run_golden_eval", path=path, stdout=out)
+            with self.assertRaises(CommandError):
+                call_command("run_golden_eval", path=path, stdout=out)
             self.assertIn("Failed: 1", out.getvalue())
             self.assertIn("injection False != True", out.getvalue())
         finally:

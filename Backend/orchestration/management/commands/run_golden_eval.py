@@ -5,8 +5,9 @@ from typing import Dict, List
 
 from asgiref.sync import async_to_sync
 from django.conf import settings
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 
+from orchestration.eval.loop_runner import evaluate_loop_scenario
 from orchestration.eval.scenario_packs import pack_name, select_pack
 from orchestration.intent_parser import parse_intent
 from orchestration.security_policy import is_prompt_injection, should_block_message
@@ -85,6 +86,20 @@ class Command(BaseCommand):
                 totals["skipped"] += 1
                 by_pack[pack]["skipped"] += 1
                 self.stdout.write(f"[SKIP] {scenario_id} (requires LLM)")
+                continue
+
+            if scenario.get("loop"):
+                passed, details, _result = evaluate_loop_scenario(scenario)
+                if passed:
+                    totals["passed"] += 1
+                    by_pack[pack]["passed"] += 1
+                    self.stdout.write(f"[PASS] {scenario_id}")
+                else:
+                    totals["failed"] += 1
+                    by_pack[pack]["failed"] += 1
+                    reason = "; ".join(details) if details else "mismatch"
+                    failures.append(f"{scenario_id}: {reason}")
+                    self.stdout.write(f"[FAIL] {scenario_id}: {reason}")
                 continue
 
             message = scenario.get("message") or ""
@@ -183,3 +198,4 @@ class Command(BaseCommand):
             self.stdout.write("Failures:")
             for failure in failures:
                 self.stdout.write(f"- {failure}")
+            raise CommandError(f"{len(failures)} scenario(s) failed")

@@ -837,6 +837,13 @@ META_TOOL_DEFINITIONS = [
                     "type": "string",
                     "description": "Cron expression if trigger_type is 'schedule' (e.g., '0 9 * * *' for daily 9am)",
                 },
+                "timezone": {
+                    "type": "string",
+                    "description": (
+                        "IANA timezone name for a schedule trigger (e.g. 'Africa/Nairobi'). "
+                        "Defaults to your profile timezone, then UTC."
+                    ),
+                },
             },
             "required": ["description", "steps"],
         },
@@ -1217,7 +1224,6 @@ async def _create_workflow_handoff(
         return {"status": "error", "message": "Steps must be a non-empty list."}
 
     try:
-        from workflows.models import UserWorkflow
         from asgiref.sync import sync_to_async
         from orchestration.workflow_planner import execute_adhoc_workflow
 
@@ -1225,15 +1231,17 @@ async def _create_workflow_handoff(
         # (workflow_name / workflow_description / triggers / steps) instead of
         # the old {description, steps} shape that bypassed validation and a
         # separate raw execution path.
-        definition = {
-            "workflow_name": description[:100] or "Agent handoff",
-            "workflow_description": description.strip()[:300],
-            "triggers": [{"trigger_type": trigger_type or "manual"}],
-            "steps": steps,
-            "metadata": {"source": "agent_handoff"},
-        }
+        def _definition(triggers):
+            return {
+                "workflow_name": description[:100] or "Agent handoff",
+                "workflow_description": description.strip()[:300],
+                "triggers": triggers,
+                "steps": steps,
+                "metadata": {"source": "agent_handoff"},
+            }
 
         if trigger_type == "manual":
+            definition = _definition([{"trigger_type": "manual"}])
             result = await execute_adhoc_workflow(
                 definition,
                 user_id=context.get("user_id"),
@@ -1253,17 +1261,59 @@ async def _create_workflow_handoff(
                 "workflow_id": workflow_id,
             }
 
-        workflow = await sync_to_async(UserWorkflow.objects.create)(
-            user_id=context.get("user_id"),
-            name=description[:100],
-            definition=definition,
-            status="active",
+        if trigger_type == "webhook":
+            return {
+                "status": "error",
+                "message": (
+                    "A webhook workflow needs a service and an event; "
+                    "I cannot create one from chat yet."
+                ),
+            }
+
+        if trigger_type != "schedule":
+            return {
+                "status": "error",
+                "message": f"I cannot create a '{trigger_type}' workflow from chat.",
+            }
+
+        from workflows.creation import (
+            WorkflowCreationError,
+            create_workflow_with_triggers,
+            describe_schedule,
         )
+
+        timezone = tool_input.get("timezone")
+        if not timezone:
+            from orchestration.user_preferences import get_user_preferences
+
+            preferences = await sync_to_async(get_user_preferences)(context.get("user_id"))
+            timezone = (preferences or {}).get("timezone") or "UTC"
+
+        definition = _definition([{
+            "trigger_type": "schedule",
+            "cron": tool_input.get("schedule"),
+            "timezone": timezone,
+        }])
+
+        try:
+            workflow, triggers = await create_workflow_with_triggers(
+                user_id=context.get("user_id"),
+                room_id=context.get("room_id"),
+                definition=definition,
+            )
+        except WorkflowCreationError as exc:
+            return {"status": "error", "message": str(exc)}
+
+        schedule = next(
+            (trigger for trigger in triggers if trigger.trigger_type == "schedule"),
+            None,
+        )
+        schedule_text = describe_schedule(schedule) if schedule else "the requested schedule"
         return {
             "status": "success",
             "message": (
-                f"Workflow '{description}' created (ID: {workflow.id}). "
-                f"Trigger type: {trigger_type}."
+                f"Workflow '{description}' created (ID: {workflow.id}) and scheduled "
+                f"to run {schedule_text}."
             ),
             "workflow_id": workflow.id,
         }

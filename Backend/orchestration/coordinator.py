@@ -247,6 +247,9 @@ class OrchestrationCoordinator:
             await clear_memory(adaptive_context)
             cache.delete(pending_key)
             cache.delete(last_summary_key)
+            # A reset is not consent: nothing pending may survive it for a later "yes".
+            if AGENT_LOOP_ENABLED:
+                await dismiss_pending_confirmation(room_id, user_id)
             record_event(
                 "context_reset",
                 {

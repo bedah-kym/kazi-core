@@ -40,6 +40,7 @@ class CoordinatorCommandTests(SimpleTestCase):
             "orchestration.coordinator.get_user_preferences": _empty_preferences,
             "orchestration.coordinator.get_conversation_mode": AsyncMock(return_value="auto"),
             "orchestration.coordinator.has_pending_agent_state": AsyncMock(return_value=False),
+            "orchestration.coordinator.dismiss_pending_confirmation": AsyncMock(),
             "orchestration.coordinator.load_task_state": AsyncMock(return_value=None),
             "orchestration.coordinator.cache": cache,
             "orchestration.coordinator.record_event": MagicMock(),
@@ -86,6 +87,21 @@ class CoordinatorCommandTests(SimpleTestCase):
         )
         self.assertNotIn("user_message", captured)
         self.assertIn("starting fresh", sent.lower())
+
+    def test_reset_cancels_a_pending_action_so_a_later_yes_cannot_run_it(self):
+        dismiss = AsyncMock()
+        _result, captured, _sent = self._run(
+            "reset",
+            patches={
+                "orchestration.coordinator.clear_task_state": AsyncMock(),
+                "orchestration.coordinator.clear_result_sets": AsyncMock(),
+                "orchestration.coordinator.clear_memory": AsyncMock(),
+                "orchestration.coordinator.has_pending_agent_state": AsyncMock(return_value=True),
+                "orchestration.coordinator.dismiss_pending_confirmation": dismiss,
+            },
+        )
+        dismiss.assert_awaited_once()
+        self.assertNotIn("user_message", captured)
 
     def test_receipts_command_lists(self):
         _result, captured, sent = self._run(

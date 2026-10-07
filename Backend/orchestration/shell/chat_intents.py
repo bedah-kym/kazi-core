@@ -118,9 +118,15 @@ def is_autopilot_disarm_request(text: Any) -> bool:
 # Exact chat commands, matched as the whole message like the autopilot replies.
 # A sentence that merely contains the word ("start over from the beginning for
 # me", "show me my receipt") belongs to the model, not to a directive.
-_RESET_COMMANDS = {"reset", "start over", "new conversation", "/reset"}
-_RECEIPTS_COMMANDS = {"receipts", "show receipts", "/receipts"}
-_UNDO_COMMANDS = {"undo", "undo that", "/undo"}
+_RESET_COMMANDS = {
+    "reset", "start over", "new conversation", "/reset",
+    "fresh start", "clear context", "reset context", "forget context",
+}
+_RECEIPTS_COMMANDS = {
+    "receipts", "show receipts", "/receipts",
+    "audit trail", "action log", "show actions", "show activity",
+}
+_UNDO_COMMANDS = {"undo", "undo that", "/undo", "take that back", "undo last action"}
 _DISMISS_SUGGESTIONS_COMMANDS = {
     "stop suggestions",
     "dismiss suggestions",

@@ -104,6 +104,7 @@ class OrchestrationCoordinatorTests(SimpleTestCase):
             patch("orchestration.coordinator.get_user_preferences", side_effect=_empty_preferences),
             patch("orchestration.coordinator.get_conversation_mode", new_callable=AsyncMock) as mode,
             patch("orchestration.coordinator.is_reset_command", return_value=True),
+            patch("orchestration.coordinator.dismiss_pending_confirmation", new_callable=AsyncMock),
             patch("orchestration.coordinator.clear_task_state", new_callable=AsyncMock),
             patch("orchestration.coordinator.clear_result_sets", new_callable=AsyncMock),
             patch("orchestration.coordinator.clear_memory", new_callable=AsyncMock),

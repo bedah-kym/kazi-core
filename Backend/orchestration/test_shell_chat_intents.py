@@ -92,7 +92,10 @@ class AutopilotIntentTests(SimpleTestCase):
 
 class ExactCommandTests(SimpleTestCase):
     def test_reset_commands(self):
-        for phrase in ("reset", "Reset.", "start over", "new conversation", "/reset", "please reset"):
+        for phrase in (
+            "reset", "Reset.", "start over", "new conversation", "/reset", "please reset",
+            "fresh start", "clear context", "reset context", "forget context",
+        ):
             self.assertTrue(is_reset_command(phrase), phrase)
         for phrase in (
             "the installer says I need to start over, what now?",
@@ -105,7 +108,10 @@ class ExactCommandTests(SimpleTestCase):
             self.assertFalse(is_reset_command(phrase), phrase)
 
     def test_receipts_commands(self):
-        for phrase in ("receipts", "show receipts", "/receipts", "show receipts please"):
+        for phrase in (
+            "receipts", "show receipts", "/receipts", "show receipts please",
+            "audit trail", "action log", "show actions", "show activity",
+        ):
             self.assertTrue(is_receipts_command(phrase), phrase)
         for phrase in (
             "save this receipt text to receipts.txt",
@@ -117,12 +123,12 @@ class ExactCommandTests(SimpleTestCase):
             self.assertFalse(is_receipts_command(phrase), phrase)
 
     def test_undo_commands(self):
-        for phrase in ("undo", "undo that", "/undo", "undo please"):
+        for phrase in ("undo", "undo that", "/undo", "undo please", "take that back", "undo last action"):
             self.assertTrue(is_undo_command(phrase), phrase)
         for phrase in (
             "git revert the last commit in the workspace",
             "how do I rollback a django migration",
-            "undo last action",
+            "take that back to the shop",
             "please undo the last two things",
             "",
             None,

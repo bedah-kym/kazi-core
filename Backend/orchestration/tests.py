@@ -404,6 +404,7 @@ class AgentCapsToggleLoopTests(SimpleTestCase):
     @patch("orchestration.agent_loop.get_llm_client")
     @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)
     @patch("orchestration.agent_loop.update_memory_state", new=AsyncMock())
+    @patch("orchestration.agent_loop._resolve_persona", new=AsyncMock(return_value=None))
     def test_sub_agent_skips_cap_when_parent_caps_disabled(self, mock_exec, mock_llm_client):
         from orchestration.agent_loop import _run_sub_agent
 

@@ -187,3 +187,63 @@ class DelegatedCapTests(SimpleTestCase):
             with self.subTest(cap=nonsense):
                 result, h = self._run({"task": "loop"}, {**WHO, "sub_agent_tool_call_cap": nonsense})
                 self.assertEqual(h.executed.await_count, agent_loop.SUB_AGENT_MAX_TOOL_CALLS)
+
+    def test_a_granted_cap_cannot_exceed_the_hard_cap(self):
+        with patch("orchestration.agent_loop.HARD_CAP_TOOL_CALLS", 5):
+            result, h = self._run({"task": "loop"}, {**WHO, "sub_agent_tool_call_cap": 10 ** 9})
+        self.assertEqual(h.executed.await_count, 5)
+
+    def test_a_cap_that_is_not_a_finite_number_falls_back_to_the_default(self):
+        result, h = self._run({"task": "loop"}, {**WHO, "sub_agent_tool_call_cap": float("inf")})
+        self.assertEqual(h.executed.await_count, agent_loop.SUB_AGENT_MAX_TOOL_CALLS)
+
+
+class DelegatedSearchTaintTests(SimpleTestCase):
+    """A stored rule lets send_email run unprompted; a run that has read the web must not use it."""
+
+    AUTO_EMAIL = {"approval_overrides": {"send_email": "auto"}}
+
+    def _delegate(self, searches):
+        usage = {"input_tokens": 10, "output_tokens": 5}
+        if searches:
+            usage["server_tool_use"] = {"web_search_requests": searches}
+        first = {
+            "content": [{"type": "tool_use", "id": "t0", "name": "send_email", "input": {"to": "a@example.com"}}],
+            "stop_reason": "tool_use",
+            "usage": usage,
+        }
+        llm = MagicMock()
+        llm.create_message = AsyncMock(side_effect=[first, _end_turn()])
+        with _Harness() as h, \
+                patch("orchestration.agent_loop.get_llm_client", return_value=llm), \
+                patch("orchestration.agent_loop._resolve_persona", new=AsyncMock(return_value=None)), \
+                patch("orchestration.agent_loop._record_search_usage") as counted:
+            async_to_sync(_run_sub_agent)(
+                {"task": "research and email"}, dict(WHO), dict(self.AUTO_EMAIL), "system", [],
+            )
+        return h, counted
+
+    def test_without_a_search_the_stored_rule_lets_the_email_run(self):
+        h, counted = self._delegate(searches=0)
+
+        h.executed.assert_awaited_once()
+        counted.assert_not_called()
+
+    def test_a_search_made_by_the_sub_agent_taints_the_rest_of_its_run(self):
+        h, counted = self._delegate(searches=1)
+
+        h.executed.assert_not_called()
+        counted.assert_called_once_with(1, 1)
+
+
+class AliasReceiptTests(SimpleTestCase):
+    def test_a_call_made_under_an_alias_is_receipted_as_the_action_it_ran(self):
+        for alias in ("run_shell", "shell_command"):
+            with self.subTest(alias=alias):
+                writer = AsyncMock()
+                with patch("orchestration.action_receipts.record_action_receipt", new=writer):
+                    async_to_sync(agent_loop._record_receipt)(
+                        alias, {"command": "ls"}, {"status": "success"}, WHO, basis="open_profile",
+                    )
+                writer.assert_awaited_once()
+                self.assertEqual(writer.await_args.kwargs["action"], "run_command")

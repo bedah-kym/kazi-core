@@ -1763,8 +1763,9 @@ async def run_agent_loop(
         except Exception:
             pass
 
-    # Full loop transcript for audit trail. Input values are not copied into
-    # the telemetry file or the server log: only the key names and size.
+    # Full loop transcript for audit trail. Neither input values nor input key
+    # names are copied into the telemetry file or the server log — only the
+    # number of keys and the size, since a key name is model-written text.
     transcript = []
     for entry in state.tool_call_log:
         tool_input = entry.get("input")
@@ -1772,7 +1773,7 @@ async def run_agent_loop(
             "tool": entry.get("name"),
             "status": entry.get("output", {}).get("status") if isinstance(entry.get("output"), dict) else None,
             "iteration": entry.get("iteration"),
-            "input_keys": sorted(tool_input.keys()) if isinstance(tool_input, dict) else [],
+            "input_key_count": len(tool_input) if isinstance(tool_input, dict) else 0,
             "input_chars": len(json.dumps(tool_input, default=str)),
         })
 

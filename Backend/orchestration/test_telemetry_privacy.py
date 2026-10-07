@@ -64,10 +64,9 @@ def _response(blocks, stop_reason):
 
 
 class AgentLoopTelemetryPrivacyTests(SimpleTestCase):
-    def test_tool_input_values_are_not_written_to_telemetry_or_logs(self):
+    def _run_send_email(self, payload):
         from orchestration.agent_loop import run_agent_loop
 
-        payload = {"to": "ops@example.com", "subject": "Report", "text": FAKE}
         mock_llm = MagicMock()
         mock_llm.create_message = AsyncMock(side_effect=[
             _response([_text("Mailing."), _tool_use("send_email", payload)], "tool_use"),
@@ -99,6 +98,12 @@ class AgentLoopTelemetryPrivacyTests(SimpleTestCase):
             with captured_log_messages() as messages:
                 _run(_collect())
 
+        return mock_record, messages
+
+    def test_tool_input_values_are_not_written_to_telemetry_or_logs(self):
+        payload = {"to": "ops@example.com", "subject": "Report", "text": FAKE}
+        mock_record, messages = self._run_send_email(payload)
+
         recorded = json.dumps(
             [call.args for call in mock_record.call_args_list], default=str,
         )
@@ -112,8 +117,32 @@ class AgentLoopTelemetryPrivacyTests(SimpleTestCase):
         entry = done_payload["transcript"][0]
         self.assertEqual(entry["tool"], "send_email")
         self.assertNotIn("input", entry)
-        self.assertEqual(entry["input_keys"], ["subject", "text", "to"])
+        self.assertNotIn("input_keys", entry)
+        self.assertEqual(entry["input_key_count"], 3)
         self.assertEqual(entry["input_chars"], len(json.dumps(payload)))
+
+    def test_input_key_name_is_not_written_to_telemetry_or_logs(self):
+        payload = {
+            "to": "ops@example.com",
+            "subject": "Report",
+            "text": "body",
+            FAKE: "value",
+        }
+        mock_record, messages = self._run_send_email(payload)
+
+        recorded = json.dumps(
+            [call.args for call in mock_record.call_args_list], default=str,
+        )
+        self.assertNotIn(FAKE, recorded)
+        self.assertNotIn(FAKE, "\n".join(messages))
+
+        done_payload = next(
+            call.args[1] for call in mock_record.call_args_list
+            if call.args and call.args[0] == "agent_loop_done"
+        )
+        entry = done_payload["transcript"][0]
+        self.assertEqual(entry["input_key_count"], 4)
+        self.assertNotIn("input_keys", entry)
 
 
 class RouterLogPrivacyTests(TransactionTestCase):

@@ -150,8 +150,11 @@ async def run_handoff(
     tool_input = {
         "task": task.get("task") or "",
         "tools": ",".join(sorted(scope)),
-        "max_tool_calls": budget,
     }
+    # The budget is granted by the harness through the context; the sub-agent
+    # ignores any cap that arrives in tool input, which the model can write.
+    run_context = dict(context or {})
+    run_context["sub_agent_tool_call_cap"] = budget
 
     if executor is None:
         from orchestration.agent_loop import _run_sub_agent
@@ -160,7 +163,7 @@ async def run_handoff(
 
     try:
         result = await executor(
-            tool_input, context or {}, preferences, parent_system, list(parent_tools or []),
+            tool_input, run_context, preferences, parent_system, list(parent_tools or []),
         )
     except Exception as exc:
         logger.warning("Handoff %s executor failed: %s", handoff.id, exc)

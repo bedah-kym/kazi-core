@@ -98,6 +98,57 @@ class CreateWorkflowWithTriggersTests(TestCase):
         self.assertEqual(UserWorkflow.objects.count(), 0)
         self.assertEqual(WorkflowTrigger.objects.count(), 0)
 
+    @patch("workflows.creation.create_schedule_for_trigger", new_callable=AsyncMock)
+    def test_cron_that_is_not_a_schedule_writes_nothing(self, mock_schedule):
+        from workflows.creation import (
+            WorkflowCreationError,
+            create_workflow_with_triggers,
+        )
+
+        for cron in ("foo foo foo foo foo", "61 * * * *", "0 25 * * *", "0 9 * 13 *"):
+            with self.subTest(cron=cron):
+                with self.assertRaises(WorkflowCreationError):
+                    async_to_sync(create_workflow_with_triggers)(
+                        user_id=self.user.id, room_id=None,
+                        definition=_definition(cron=cron),
+                    )
+
+        self.assertEqual(UserWorkflow.objects.count(), 0)
+        self.assertEqual(WorkflowTrigger.objects.count(), 0)
+        mock_schedule.assert_not_awaited()
+
+    @patch("workflows.creation.create_schedule_for_trigger", new_callable=AsyncMock)
+    def test_timezone_that_is_not_an_iana_name_writes_nothing(self, mock_schedule):
+        from workflows.creation import (
+            WorkflowCreationError,
+            create_workflow_with_triggers,
+        )
+
+        for timezone in ("EAT", "Nairobi time", "../etc/passwd", "x" * 51):
+            with self.subTest(timezone=timezone):
+                with self.assertRaises(WorkflowCreationError):
+                    async_to_sync(create_workflow_with_triggers)(
+                        user_id=self.user.id, room_id=None,
+                        definition=_definition(timezone=timezone),
+                    )
+
+        self.assertEqual(UserWorkflow.objects.count(), 0)
+        self.assertEqual(WorkflowTrigger.objects.count(), 0)
+        mock_schedule.assert_not_awaited()
+
+    @patch("workflows.creation.create_schedule_for_trigger", new_callable=AsyncMock)
+    def test_cron_with_names_ranges_and_steps_is_still_accepted(self, mock_schedule):
+        from workflows.creation import create_workflow_with_triggers
+
+        for index, cron in enumerate(("0 9 * * MON-FRI", "*/15 8-17 * * *", "0 9 1 JAN *")):
+            with self.subTest(cron=cron):
+                _, triggers = async_to_sync(create_workflow_with_triggers)(
+                    user_id=self.user.id, room_id=None,
+                    definition=_definition(cron=cron),
+                )
+                self.assertEqual(triggers[0].schedule_cron, cron)
+                self.assertEqual(mock_schedule.await_count, index + 1)
+
     def test_webhook_without_event_writes_nothing(self):
         from workflows.creation import (
             WorkflowCreationError,

@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from asgiref.sync import sync_to_async
+from celery.schedules import ParseException, crontab
 from django.db import transaction
 
 from .models import UserWorkflow, WorkflowTrigger
@@ -19,6 +21,46 @@ logger = logging.getLogger(__name__)
 
 class WorkflowCreationError(Exception):
     """A workflow could not be created, or a required trigger could not be registered."""
+
+
+def _column_length(field: str) -> int:
+    return WorkflowTrigger._meta.get_field(field).max_length
+
+
+def _check_cron(cron: Any) -> None:
+    """Refuse a cron the scheduler would reject only after the rows exist."""
+    text = str(cron or "")
+    fields = text.split()
+    if len(fields) != 5:
+        raise WorkflowCreationError(
+            "A schedule trigger needs a cron expression with five fields."
+        )
+    minute, hour, day_of_month, month_of_year, day_of_week = fields
+    try:
+        if len(text) > _column_length("schedule_cron"):
+            raise ValueError("cron expression too long")
+        crontab(
+            minute=minute, hour=hour, day_of_month=day_of_month,
+            month_of_year=month_of_year, day_of_week=day_of_week,
+        )
+    except (ParseException, ValueError) as exc:
+        raise WorkflowCreationError(
+            "The cron expression is not valid. Its five fields are minute, "
+            "hour, day of month, month and day of week."
+        ) from exc
+
+
+def _check_timezone(timezone: Any) -> None:
+    name = str(timezone)
+    try:
+        if len(name) > _column_length("schedule_timezone"):
+            raise ValueError("timezone name too long")
+        ZoneInfo(name)
+    # A name that is a folder of zones ("Africa") raises OSError, not a lookup error.
+    except (ZoneInfoNotFoundError, ValueError, OSError) as exc:
+        raise WorkflowCreationError(
+            "The timezone is not a known IANA name such as Africa/Nairobi."
+        ) from exc
 
 
 def _classify_trigger(raw: Dict[str, Any]) -> Dict[str, Any]:
@@ -46,10 +88,8 @@ def _classify_trigger(raw: Dict[str, Any]) -> Dict[str, Any]:
     timezone = raw.get("timezone") or config.get("timezone") or "UTC"
 
     if trigger_type == "schedule":
-        if not cron or len(str(cron).split()) != 5:
-            raise WorkflowCreationError(
-                "A schedule trigger needs a cron expression with five fields."
-            )
+        _check_cron(cron)
+        _check_timezone(timezone)
     elif trigger_type == "webhook":
         if not service or not event:
             raise WorkflowCreationError(

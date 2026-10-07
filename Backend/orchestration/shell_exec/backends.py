@@ -17,6 +17,7 @@ import datetime
 import ipaddress
 import logging
 import os
+import platform
 import re
 import shutil
 import signal
@@ -278,6 +279,10 @@ class ShellBackend:
             requested = self.config.timeout_default
         return min(requested, self.config.timeout_max)
 
+    def environment(self) -> Dict[str, str]:
+        """The operating system and shell commands run in, for the model's prompt."""
+        return {"platform": "unknown", "shell": "unknown"}
+
     async def execute(
         self,
         command: str,
@@ -523,6 +528,12 @@ class LocalBackend(ShellBackend):
     """Run the command as a subprocess in the workspace (``open`` profile only)."""
 
     name = "local"
+
+    def environment(self) -> Dict[str, str]:
+        # create_subprocess_shell uses COMSPEC on Windows and /bin/sh elsewhere.
+        if sys.platform == "win32":
+            return {"platform": "Windows", "shell": "cmd.exe"}
+        return {"platform": platform.system() or "Linux", "shell": "sh"}
 
     async def execute(
         self,

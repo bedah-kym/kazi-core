@@ -18,16 +18,14 @@ logger = logging.getLogger(__name__)
 # --------------------------------------------------------------------------- #
 
 _IDENTITY = """\
-You are {agent_name}, an AI assistant built into the Kazi platform. \
-You help users manage communication, payments, travel, scheduling, and more \
-by calling tools on their behalf.
+You are {agent_name}, an assistant that gets things done by calling tools. \
+Prefer the specific tool when one fits the job; use the shell for the rest.
 """
 
 _TOOL_RULES = """\
 ## How to use tools
 
 - You have access to a set of tools. Use them to take actions for the user.
-- Always explain briefly what you are about to do before calling a tool.
 - Never fabricate data — always rely on tool results.
 - You may call multiple tools in parallel when the tasks are independent \
 (e.g., checking weather in two cities simultaneously).
@@ -52,7 +50,6 @@ or ask the user for the missing information.
 - You can chain tools to complete complex requests step by step.
 - Example: "Email me the cheapest flight to Mombasa" → search_flights → \
 pick cheapest → send_email (with confirmation).
-- Give brief progress updates between steps so the user knows what's happening.
 - If you cannot complete all steps, explain what you accomplished and what remains.
 """
 
@@ -75,7 +72,6 @@ _RESPONSE_RULES = """\
 - Be concise but helpful. Match the user's communication style.
 - When presenting search results (flights, hotels, etc.), format them clearly \
 with the most important details (price, time, rating) highlighted.
-- When chaining multiple tools, give brief progress updates between steps.
 - If you cannot complete a task, explain what you accomplished and what remains.
 """
 
@@ -154,6 +150,81 @@ _MODALITY_RULES = """\
 When the user asks you to sing, speak, or play something aloud, prefer a voice
 tool (generate_speech) so they get a voice note rather than lyrics as text.
 """
+
+
+def build_environment_block(env: Optional[Dict[str, Any]]) -> str:
+    """Tell the model where its commands run. ``env`` comes from the shell layer."""
+    lines = ["## Where you are running"]
+    env = env or {}
+    if env.get("platform") and env.get("shell"):
+        lines.append(f"- Shell commands run on {env['platform']} through {env['shell']}.")
+    else:
+        lines.append(
+            "- The operating system and shell that commands run on could not be determined. "
+            "Check with a harmless command before assuming either."
+        )
+
+    profile = env.get("profile")
+    image = env.get("image") or "a minimal image"
+    if profile == "open":
+        taint_minutes = int(env.get("taint_minutes") or 0)
+        recently = (
+            f"for about {taint_minutes} minutes after the room sees tool output "
+            "(shell, web search or delegated work)"
+            if taint_minutes else "once the current turn has read tool output"
+        )
+        lines.append(
+            "- This room's shell is not sandboxed: commands run directly on the host, as the "
+            "account that runs Kazi."
+        )
+        lines.append(
+            f"- The harness asks the user before a command {recently}, when the command needs "
+            "root, or when it is on the harness's short destructive list. Otherwise the command "
+            "runs at once. While the user has autopilot armed, only the destructive list asks."
+        )
+        lines.append(
+            "- That list is short and does not cover every delete, overwrite or move. Before "
+            "doing any of those to something the user did not ask you to change, ask them yourself."
+        )
+        lines.append(
+            "- Commands start in this room's workspace folder. Files you create there are still "
+            "there next turn."
+        )
+        lines.append(
+            "- Replies the harness handles itself: `yes` or `no` to a pending action; `autopilot` "
+            "as the reply to a shell prompt stops the asking for a limited window, and "
+            "`autopilot off` ends it."
+        )
+    elif profile == "standard":
+        lines.append(
+            f"- Each command runs in a fresh, non-root container ({image}) with a read-only root "
+            "filesystem and no network. Do not assume bash, Python or a package manager is "
+            "installed. Commands that need root are refused."
+        )
+        lines.append(
+            "- A command the harness recognises as a network tool can run with network access, "
+            "usually after asking the user. Any other command that needs the network just fails."
+        )
+        lines.append(
+            "- Commands start in this room's workspace folder. Files you create there are still "
+            "there next turn."
+        )
+        replies = "- Replies the harness handles itself: `yes` or `no` to a pending action"
+        if env.get("egress_proxy"):
+            replies += (
+                "; `allow host <name>` and `revoke host <name>` change which hosts the sandbox "
+                "may reach"
+            )
+        lines.append(replies + ".")
+    elif profile == "locked":
+        lines.append(
+            f"- Each command runs in a fresh, non-root container ({image}) with no network. "
+            "Commands that need the network or root are refused. Do not assume bash, Python or "
+            "a package manager is installed."
+        )
+        lines.append("- Commands start in this room's workspace folder.")
+        lines.append("- Replies the harness handles itself: `yes` or `no` to a pending action.")
+    return "\n".join(lines)
 
 
 def build_system_prompt(

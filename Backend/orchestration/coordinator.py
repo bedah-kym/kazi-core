@@ -430,6 +430,20 @@ class OrchestrationCoordinator:
                 logger.debug("Persona identity injection skipped: %s", exc)
             return ctx_prompt
 
+        async def _with_environment(ctx_prompt: str) -> str:
+            """Prepend where commands run, from the shell layer rather than a guess."""
+            try:
+                from orchestration.agent_prompts import build_environment_block
+                from orchestration.shell.environment import get_shell_environment
+                from orchestration.shell.profiles import resolve_profile
+
+                profile = await sync_to_async(resolve_profile)(room_id, user_preferences)
+                block = build_environment_block(await get_shell_environment(profile))
+                return "\n\n".join([block, ctx_prompt or ""]).strip()
+            except Exception as exc:
+                logger.debug("Environment block skipped: %s", exc)
+                return ctx_prompt
+
         # Set when this turn's message is a stop word: the window stays off for
         # the whole turn even if the store write failed.
         autopilot_turn = {"forced_off": False}
@@ -805,6 +819,7 @@ class OrchestrationCoordinator:
                     except Exception:
                         pass
                     ctx_prompt = await _with_persona_identity(room_id, user_id, ctx_prompt)
+                    ctx_prompt = await _with_environment(ctx_prompt)
                     mem_sum = await load_memory_summary(adaptive_context) or ""
                     await _handle_agent_resume(ctx_prompt, mem_sum)
 
@@ -971,6 +986,7 @@ class OrchestrationCoordinator:
             except Exception:
                 pass
             ctx_prompt = await _with_persona_identity(room_id, user_id, ctx_prompt)
+            ctx_prompt = await _with_environment(ctx_prompt)
             mem_sum = await load_memory_summary(adaptive_context) or ""
             try:
                 await _handle_agent_loop(

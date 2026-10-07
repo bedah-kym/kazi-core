@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- An approval reply must be the whole message. A reply that starts with an
+  approval word and then says something else ("ok, but use a different folder",
+  "ok what does that do?") no longer runs a pending action; it cancels it and
+  says so. A plain "no" cancels. A directive reply such as "stop for now"
+  cancels the pending action instead of leaving it armed for a later "ok".
+
 ## [0.7.0] - 2026-10-04
 
 The **teammate you can name** release. Workflows become versioned artifacts with

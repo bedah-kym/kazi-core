@@ -21,6 +21,8 @@ from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.utils import timezone
 
+from chatbot.transcript import BOT_USERNAME
+
 from .models import Notification
 
 logger = logging.getLogger(__name__)
@@ -168,6 +170,8 @@ class NotificationService:
         for member in participants:
             member_user = member.User
             if member_user.username == sender_username:
+                continue
+            if member_user.username == BOT_USERNAME:
                 continue
             if member_user.username in online_usernames:
                 continue

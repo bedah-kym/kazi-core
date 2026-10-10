@@ -109,6 +109,9 @@ and sub-agents inherit and acquire it.
 - A yes/no reply to an inline shell prompt is recognised; the command used to be
   proposed again indefinitely.
 - Workflow reruns get fresh run ids.
+- The assistant shows as online in a room when a model provider is configured,
+  and offline when none is. It used to show as offline always, and was sent
+  unread-message notifications like an absent person.
 
 ### Security
 

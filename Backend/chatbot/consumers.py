@@ -21,7 +21,13 @@ from typing import Dict, Tuple
 from .models import Message, Member, Chatroom, UserModerationStatus, ModerationBatch, RoomReadState
 from .tasks import moderate_message_batch, generate_voice_response
 from .dispatch import dispatch_task
-from .transcript import build_history_messages, has_several_speakers, strip_wake_word
+from .presence import agent_status
+from .transcript import (
+    BOT_USERNAME,
+    build_history_messages,
+    has_several_speakers,
+    strip_wake_word,
+)
 from orchestration.user_preferences import get_user_preferences
 from orchestration.adaptive_task import load_task_state
 from django.conf import settings
@@ -174,6 +180,19 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     logger.error(f"Could not get username from member: {e}")
                     continue
 
+                # The bot has no socket, so its status is declared, not inferred
+                # from the room's online set.
+                if uname == BOT_USERNAME:
+                    bot_status = agent_status()
+                    presence.append({
+                        "user": uname,
+                        "status": bot_status,
+                        "last_seen": None,
+                        "kind": "agent",
+                    })
+                    logger.debug(f"Presence: {uname} -> {bot_status} (agent)")
+                    continue
+
                 # Check if user is in the online set
                 is_online = uname in online_set
 
@@ -195,6 +214,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     "user": uname,
                     "status": status,
                     "last_seen": ls,
+                    "kind": "human",
                 })
 
                 logger.debug(f"Presence: {uname} -> {status}")

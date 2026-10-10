@@ -31,7 +31,6 @@ from .transcript import (
     strip_wake_word,
 )
 from orchestration.user_preferences import get_user_preferences
-from orchestration.adaptive_task import load_task_state
 from django.conf import settings
 from django.utils.text import get_valid_filename
 logger = logging.getLogger(__name__)
@@ -330,22 +329,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
     async def schedule_idle_nudge_if_needed(self, room_id, user_id):
         """
         Schedule idle nudge only if:
-        1. No pending orchestration
-        2. No pending task state
-        3. Workspace has idle_nudges_enabled
+        1. No nudge is already pending
+        2. Workspace has idle_nudges_enabled
         """
         last_activity_key = f"proactive:last_activity:{room_id}:{user_id}"
         cache.set(last_activity_key, timezone.now().isoformat(), timeout=60 * 60 * 24)
-
-        # Check for pending orchestration
-        pending_key = f"orchestration:pending:{room_id}:{user_id}"
-        if cache.get(pending_key):
-            return
-
-        # Check for pending task state
-        adaptive_state = await load_task_state({"user_id": user_id, "room_id": room_id})
-        if adaptive_state and adaptive_state.get("status") in ("awaiting_slots", "ready"):
-            return
 
         # Check for pending nudge already scheduled
         pending_key = f"proactive:pending:{room_id}:{user_id}"
@@ -1016,7 +1004,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             # Read history under the lock, so a message queued behind a
                             # running turn sees that turn's reply.
                             history_rows = await self.get_history_rows(room_id, limit=8)
-                            history_text = '\n'.join(f'{name}: {text}' for _, name, text in history_rows)
                             multi_user = len(human_members) > 1 or has_several_speakers(history_rows)
                             history_messages = build_history_messages(
                                 history_rows,
@@ -1035,7 +1022,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                 room_id=room_id,
                                 username=member_username,
                                 message_id=message.id,
-                                history_text=history_text,
                                 history_messages=history_messages,
                                 send_chunk=send_chunk,
                                 send_step_event=send_step_event,
@@ -1484,76 +1470,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
     async def send_chat_message(self, message):
         """Helper to send message to group"""
         await self.send(text_data=json.dumps(message))
-
-    async def ai_response_message(self, event):
-        """
-        Handler for AI bot responses sent via channel layer
-        Called by Celery task after generating AI reply
-        """
-        try:
-            ai_reply = event.get('ai_reply')
-            event.get('user_id')
-
-            # Encrypt AI response
-            encrypted_message = await self.encrypt_message({
-                'content': ai_reply,
-                'timestamp': str(timezone.now())
-            })
-
-            if not encrypted_message:
-                logger.error("Failed to encrypt AI response")
-                return
-
-            # Create message from AI bot
-            def _create_ai_message():
-                ai_user, created = User.objects.get_or_create(
-                    username='kazi',
-                    defaults={
-                        'first_name': 'Kazi',
-                        'last_name': 'AI',
-                        'is_active': True,  # Activate so profile is visible
-                        'email': 'kazi@kwikchat.ai'
-                    }
-                )
-                # Use filter().first() to handle duplicate Members
-                ai_member = Member.objects.filter(User=ai_user).first()
-                if not ai_member:
-                    ai_member = Member.objects.create(User=ai_user)
-
-                payload = json.dumps({
-                    'data': encrypted_message['data'],
-                    'nonce': encrypted_message['nonce'],
-                })
-
-                return Message.objects.create(
-                    member=ai_member,
-                    content=payload,
-                    timestamp=timezone.now()
-                )
-
-            message = await sync_to_async(_create_ai_message)()
-
-            # Add to room
-            room_id = event.get('room_id')
-            current_chat = await self.get_current_chatroom(room_id)
-            if current_chat:
-                await sync_to_async(current_chat.chats.add)(message)
-                await sync_to_async(current_chat.save)()
-                try:
-                    await self.schedule_context_summary(room_id, message.id)
-                except Exception as e:
-                    logger.warning(f"Context summary refresh skipped: {e}")
-
-            # Send to clients with correct command
-            message_json = await self.message_to_json(message)
-
-            await self.send(text_data=json.dumps({
-                "command": "ai_message",  # Changed from "new_message"
-                "message": message_json
-            }))
-
-        except Exception as e:
-            logger.error(f"Error in ai_response_message: {e}")
 
     async def ai_stream_chunk(self, event):
         """Handle streaming AI response chunks"""

@@ -38,10 +38,8 @@ class CoordinatorCommandTests(SimpleTestCase):
         defaults = {
             "orchestration.coordinator.load_memory_summary": AsyncMock(return_value=None),
             "orchestration.coordinator.get_user_preferences": _empty_preferences,
-            "orchestration.coordinator.get_conversation_mode": AsyncMock(return_value="auto"),
             "orchestration.coordinator.has_pending_agent_state": AsyncMock(return_value=False),
             "orchestration.coordinator.dismiss_pending_confirmation": AsyncMock(),
-            "orchestration.coordinator.load_task_state": AsyncMock(return_value=None),
             "orchestration.coordinator.cache": cache,
             "orchestration.coordinator.record_event": MagicMock(),
             "orchestration.coordinator.run_agent_loop": _capture_loop,
@@ -59,7 +57,6 @@ class CoordinatorCommandTests(SimpleTestCase):
                 room_id="1",
                 username="alice",
                 message_id=42,
-                history_text="",
                 send_chunk=send_chunk,
                 send_step_event=AsyncMock(),
                 get_context_prompt=AsyncMock(return_value=""),

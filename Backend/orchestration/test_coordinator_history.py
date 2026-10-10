@@ -22,9 +22,7 @@ def _run_agent_turn(query, *, history_messages=None, memory_summary=None, contex
     targets = {
         "orchestration.coordinator.load_memory_summary": AsyncMock(return_value=memory_summary),
         "orchestration.coordinator.get_user_preferences": lambda user_id: {},
-        "orchestration.coordinator.get_conversation_mode": AsyncMock(return_value="auto"),
         "orchestration.coordinator.has_pending_agent_state": AsyncMock(return_value=False),
-        "orchestration.coordinator.load_task_state": AsyncMock(return_value=None),
         "orchestration.coordinator.cache": cache,
         "orchestration.coordinator.record_event": MagicMock(),
         "orchestration.coordinator.run_agent_loop": _capture,
@@ -37,7 +35,6 @@ def _run_agent_turn(query, *, history_messages=None, memory_summary=None, contex
             room_id="1",
             username="alice",
             message_id=42,
-            history_text="",
             send_chunk=AsyncMock(),
             send_step_event=AsyncMock(),
             get_context_prompt=AsyncMock(return_value=context_prompt),

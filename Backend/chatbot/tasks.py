@@ -15,7 +15,6 @@ from .models import (
     Chatroom,
     ModerationBatch,
     UserModerationStatus,
-    AIConversation,
     Reminder,
     DocumentUpload,
     RoomContext,
@@ -23,7 +22,6 @@ from .models import (
     DailySummary,
     Member,
 )
-from .context_manager import ContextManager
 from orchestration.llm_client import get_llm_client, extract_json
 from users.encryption import TokenEncryption
 from django.contrib.auth import get_user_model
@@ -233,175 +231,6 @@ def process_pending_batches():
 
     logger.info(f"Moderation: queued {count}, skipped {skipped} (disabled by workspace)")
     return {"queued": count, "skipped": skipped}
-
-
-@shared_task(bind=True, max_retries=3, default_retry_delay=30, ignore_result=True)
-def generate_ai_response(self, room_id, user_id, user_message):
-    """
-    Generate AI assistant response with streaming support
-    """
-    InferenceClient = _get_hf_client_cls()
-    if not InferenceClient:
-        logger.error("HuggingFace not available")
-        return {"error": "HF not installed"}
-
-    try:
-        user = User.objects.get(id=user_id)
-        room = Chatroom.objects.get(id=room_id)
-
-        # Get conversation context
-        conversation, created = AIConversation.objects.get_or_create(
-            user=user,
-            room=room,
-            defaults={'context': '[]', 'last_interaction': timezone.now()}
-        )
-
-        # Load context efficiently: parse JSON and slice to last 3 items
-        # This avoids storing unbounded context; sliding window pattern
-        try:
-            all_context = json.loads(conversation.context)
-            # Keep only the last 3 exchanges to limit memory bloat
-            context = all_context[-3:] if len(all_context) > 3 else all_context
-        except (json.JSONDecodeError, TypeError):
-            context = []
-
-        # Prune old context from storage if it exceeds max size
-        max_context_items = 20  # Keep last 20 in DB for future retrieval
-        if len(all_context) > max_context_items:
-            pruned_context = all_context[-max_context_items:]
-            conversation.context = json.dumps(pruned_context)
-            conversation.save(update_fields=['context'])
-
-        hf_token = os.environ.get('HF_API_TOKEN', '')
-        client = InferenceClient(token=hf_token if hf_token else None)
-
-        # Build messages for chat completion
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are Kazi, an assistant within kwikchat which is part of the TaskShare freelancing platform. "
-                    "short responses are preferred. "
-                    " kiwkchat helps freelancers manage tasks and projects collaboratively, so your responses should focus on that context. "
-                    "offer knowlege about task management, project planning, and effective communication, but avoid going off-topic."
-                    "You can also help freelancers spot bad actors or scams by analyzing message patterns, but never accuse directly. "
-                    "if you detect potential scams or harmful behavior, respond with a polite warning about safety and suggest reporting to admins."
-                    " Taskshare is a gig-sharing platform connecting freelancers with clients for short-term projects or out sourcing needs,"
-                    "kwikchat is the integrated chat system within Taskshare that enables seamless communication between freelancers and clients regarding tasks, project updates, and collaboration and meetings."
-                    " To non taskshare freelancers kwikchat is a general purpose chat system for managing tasks and projects with others."
-                    "Non taskshare users can also generate invoices, plan meetings using calendy , manage simple tasks, and share files securely."
-                    "for disputes or complex issues, always suggest escalating to human support rather than trying to resolve directly."
-                    " in a dispute resolution room you should summarize the pain points for the human moderators rather than taking sides.if users insist on discussing legal, financial, or medical topics, firmly refuse and suggest consulting a qualified professional."
-                    "Your job is to help users communicate clearly and safely while discussing tasks and projects. "
-                    "Be concise, polite, and professional. "
-                    "Encourage respectful collaboration, and flag or refuse to generate content that includes harassment, spam, or scams. "
-                    "You can summarize conversations, clarify task details, and offer neutral guidanceâ€”never make legal, financial, or medical claims."
-                    f"\n\n{ContextManager.get_context_prompt(room_id)}"
-                ),
-            }
-        ]
-
-        # Add conversation history
-        for exchange in context:
-            messages.append({"role": "user", "content": exchange['user']})
-            messages.append({"role": "assistant", "content": exchange['assistant']})
-
-        messages.append({"role": "user", "content": user_message})
-
-        models_to_try = [
-            "meta-llama/Llama-3.2-3B-Instruct",
-            "mistralai/Mistral-7B-Instruct-v0.2",
-        ]
-
-        ai_reply = None
-        for model in models_to_try:
-            try:
-                response = client.chat_completion(
-                    messages=messages,
-                    model=model,
-                    max_tokens=150,
-                    temperature=0.7,
-                    stream=True  # âœ… Enable streaming
-                )
-
-                # Collect full response and send chunks
-                full_response = ""
-                chunk_buffer = ""
-
-                from channels.layers import get_channel_layer
-                from asgiref.sync import async_to_sync
-                channel_layer = get_channel_layer()
-                room_group_name = f"chat_{room_id}"
-
-                for chunk in response:
-                    if hasattr(chunk.choices[0].delta, 'content'):
-                        token = chunk.choices[0].delta.content
-                        if token:
-                            full_response += token
-                            chunk_buffer += token
-
-                            # Send chunks every ~5 characters for smooth typing
-                            if len(chunk_buffer) >= 5:
-                                async_to_sync(channel_layer.group_send)(
-                                    room_group_name,
-                                    {
-                                        "type": "ai_stream_chunk",
-                                        "room_id": room_id,
-                                        "chunk": chunk_buffer,
-                                        "is_final": False
-                                    }
-                                )
-                                chunk_buffer = ""
-
-                # Send remaining buffer
-                if chunk_buffer:
-                    async_to_sync(channel_layer.group_send)(
-                        room_group_name,
-                        {
-                            "type": "ai_stream_chunk",
-                            "room_id": room_id,
-                            "chunk": chunk_buffer,
-                            "is_final": False
-                        }
-                    )
-
-                ai_reply = full_response.strip()
-                break
-
-            except Exception as model_error:
-                logger.warning(f"Model {model} failed: {model_error}")
-                continue
-
-        if not ai_reply or len(ai_reply) < 2:
-            ai_reply = "I'm experiencing high demand. Please try again! ðŸ¤–"
-
-        # Update conversation context
-        context.append({
-            'user': user_message,
-            'assistant': ai_reply,
-            'timestamp': timezone.now().isoformat()
-        })
-        conversation.context = json.dumps(context)
-        conversation.message_count = len(json.loads(conversation.context))
-        conversation.last_interaction = timezone.now()
-        conversation.save()
-
-        # Send final complete message
-        async_to_sync(channel_layer.group_send)(
-            room_group_name,
-            {
-                "type": "ai_response_message",
-                "room_id": room_id,
-                "user_id": user_id,
-                "ai_reply": ai_reply
-            }
-        )
-
-        return {'status': 'success', 'ai_reply': ai_reply}
-
-    except Exception as e:
-        logger.error(f"Error generating AI response: {e}")
-        raise self.retry(exc=e)
 
 
 @shared_task(bind=True, max_retries=3, ignore_result=True)

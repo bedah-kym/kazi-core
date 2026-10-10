@@ -102,6 +102,24 @@ class PresenceStoreTests(SimpleTestCase):
         async_to_sync(presence.connect)(14, 6, "b")
         self.assertEqual(presence.online_user_ids(14), {5, 6})
 
+    def test_leaving_one_room_does_not_take_the_user_offline_elsewhere(self):
+        async_to_sync(presence.connect)(15, 8, "a")
+        async_to_sync(presence.connect)(16, 8, "b")
+
+        self.assertTrue(async_to_sync(presence.disconnect)(15, 8, "a"))
+
+        self.assertTrue(presence.is_user_online(8))
+
+    @override_settings(PRESENCE_BEAT_SECONDS=30, PRESENCE_WINDOW_SECONDS=10)
+    def test_a_window_shorter_than_two_beats_is_widened(self):
+        clock = [1000.0]
+        with _clock(clock):
+            async_to_sync(presence.connect)(17, 9, "a")
+            clock[0] += 70
+            self.assertEqual(presence.online_user_ids(17), {9})
+            clock[0] += 10
+            self.assertEqual(presence.online_user_ids(17), set())
+
 
 class PresenceBackoffTests(SimpleTestCase):
     def setUp(self):
@@ -130,6 +148,13 @@ class PresenceBackoffTests(SimpleTestCase):
             first, online = async_to_sync(presence.connect)(21, 7, "a")
         self.assertFalse(first)
         self.assertEqual(online, set())
+
+    @override_settings(CACHES=REDIS_CACHES)
+    def test_a_beat_reports_unknown_when_the_store_is_down(self):
+        with patch("chatbot.presence.get_redis_connection", side_effect=ConnectionError("down")):
+            self.assertIsNone(async_to_sync(presence.beat)(22, 7, "a"))
+            # Inside the back-off the store is not asked, and the answer is still "unknown".
+            self.assertIsNone(async_to_sync(presence.beat)(22, 7, "a"))
 
 
 class RedisPipelineTests(SimpleTestCase):
@@ -276,6 +301,69 @@ class ConsumerPresenceTests(SimpleTestCase):
 
             consumer.send.reset_mock()
             await consumer._presence_tick(33, 2, consumer._presence_connection_id)
+
+        async_to_sync(run)()
+
+    def test_a_tick_keeps_the_last_state_when_the_store_is_down(self):
+        clock = [1000.0]
+        members = [_FakeMember(1, "alice"), _FakeMember(2, "bob")]
+
+        async def run():
+            with _clock(clock):
+                await presence.connect(36, 1, "alice-conn")
+                consumer = self._consumer(36, 2, "bob", members)
+                with patch("chatbot.consumers.agent_status", return_value="offline"):
+                    await consumer.connect()
+                consumer.send.reset_mock()
+
+                with override_settings(CACHES=REDIS_CACHES), patch(
+                    "chatbot.presence.get_redis_connection",
+                    side_effect=ConnectionError("down"),
+                ):
+                    await consumer._presence_tick(36, 2, consumer._presence_connection_id)
+                consumer.send.assert_not_awaited()
+
+                # The store is back and nothing changed meanwhile: still nothing to send.
+                clock[0] += 31
+                await consumer._presence_tick(36, 2, consumer._presence_connection_id)
+                consumer.send.assert_not_awaited()
+                self.assertEqual(consumer._presence_ids, {1, 2})
+
+        async_to_sync(run)()
+
+    def test_only_the_first_and_last_connection_are_announced(self):
+        members = [_FakeMember(2, "bob")]
+
+        async def run():
+            first = self._consumer(37, 2, "bob", members)
+            second = self._consumer(37, 2, "bob", members)
+            with patch("chatbot.consumers.agent_status", return_value="offline"), patch(
+                "chatbot.consumers.Member"
+            ) as member_model:
+                await first.connect()
+                await second.connect()
+
+                online = first.channel_layer.group_send.await_args.args[1]
+                self.assertEqual(
+                    (online["user"], online["status"], online["kind"]), ("bob", "online", "human")
+                )
+                self.assertTrue(online["last_seen"])
+                second.channel_layer.group_send.assert_not_awaited()
+
+                first.channel_layer.group_send.reset_mock()
+                await first.disconnect(1000)
+                first.channel_layer.group_send.assert_not_awaited()
+                member_model.objects.filter.assert_not_called()
+
+                await second.disconnect(1000)
+
+            offline = second.channel_layer.group_send.await_args.args[1]
+            self.assertEqual(
+                (offline["user"], offline["status"], offline["kind"]), ("bob", "offline", "human")
+            )
+            member_model.objects.filter.assert_called_once_with(User_id=2)
+            saved = member_model.objects.filter.return_value.update.call_args.kwargs["last_seen"]
+            self.assertEqual(offline["last_seen"], saved.isoformat())
 
         async_to_sync(run)()
 

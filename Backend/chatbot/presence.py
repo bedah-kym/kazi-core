@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Dict, Set, Tuple
+from typing import Dict, Optional, Set, Tuple
 
 from asgiref.sync import sync_to_async
 from django.conf import settings
@@ -49,7 +49,12 @@ def _now() -> float:
 
 
 def _window_seconds() -> int:
-    return int(getattr(settings, "PRESENCE_WINDOW_SECONDS", 75))
+    """The expiry window, never shorter than two beats plus slack.
+
+    A shorter window would drop a connected user every time one beat is late.
+    """
+    window = int(getattr(settings, "PRESENCE_WINDOW_SECONDS", 75))
+    return max(window, 2 * beat_interval_seconds() + 15)
 
 
 def beat_interval_seconds() -> int:
@@ -170,10 +175,9 @@ def _local_apply(room_id, user_id, connection_id, remove: bool) -> Tuple[Set[int
             _local_rooms.pop(room_id, None)
             online_ids = set()
             user_count = 0
-        if remove:
-            if user_count == 0:
-                _local_users.pop(user_id, None)
-        else:
+        # As in the Redis store, a disconnect leaves the user's entry to expire:
+        # the user may still be connected to another room.
+        if not remove:
             _local_users[user_id] = now + _window_seconds()
         return online_ids, user_count
 
@@ -219,10 +223,14 @@ async def connect(room_id, user_id, connection_id) -> Tuple[bool, Set[int]]:
     return count == 1, online
 
 
-async def beat(room_id, user_id, connection_id) -> Set[int]:
-    """Refresh this connection and return the room's online user ids."""
+async def beat(room_id, user_id, connection_id) -> Optional[Set[int]]:
+    """Refresh this connection and return the room's online user ids.
+
+    ``None`` means the store could not be read. That is "unknown", not "nobody
+    is online": the caller keeps what it last showed.
+    """
     if _skipping():
-        return set()
+        return None
     try:
         if _redis_configured():
             online, _count = await sync_to_async(_redis_apply, thread_sensitive=False)(
@@ -232,7 +240,7 @@ async def beat(room_id, user_id, connection_id) -> Set[int]:
             online, _count = _local_apply(room_id, user_id, connection_id, False)
     except Exception as exc:
         _trip_backoff(exc)
-        return set()
+        return None
     return online
 
 

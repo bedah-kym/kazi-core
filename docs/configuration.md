@@ -106,6 +106,15 @@ fallback above.
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` | empty | Enables the Telegram bot connector. |
 
+## Presence
+
+The server keeps the heartbeat; the page sends nothing.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `PRESENCE_BEAT_SECONDS` | `30` | How often each open chat connection refreshes its presence entry. |
+| `PRESENCE_WINDOW_SECONDS` | `75` | How long after its last beat a connection still counts as online. This bounds how long a user stays "online" after a web process dies without closing its sockets. Values below `2 × beat + 15` are raised to that, so one late beat does not drop a connected user. |
+
 ## Moderation & scheduled sweeps
 
 | Variable | Default | Purpose |

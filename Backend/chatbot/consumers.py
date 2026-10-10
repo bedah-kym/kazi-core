@@ -141,7 +141,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
         # 7. Announce online once, on the user's first connection.
         if first_connection:
-            await self._broadcast_presence("online")
+            await self._broadcast_presence("online", timezone.now().isoformat())
 
         # 8. Send the current snapshot (one store read for the whole room).
         entries = []
@@ -164,17 +164,21 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 self._presence_loop(room_id, user_id, connection_id)
             )
 
-    async def _broadcast_presence(self, status):
+    async def _broadcast_presence(self, status, last_seen):
         """Broadcast a human's presence change to the room (best effort)."""
         try:
-            await self.channel_layer.group_send(
-                self.room_group_name,
-                {
-                    "type": "presence_update",
-                    "user": self.scope["user"].username,
-                    "status": status,
-                    "kind": "human",
-                },
+            await asyncio.wait_for(
+                self.channel_layer.group_send(
+                    self.room_group_name,
+                    {
+                        "type": "presence_update",
+                        "user": self.scope["user"].username,
+                        "status": status,
+                        "last_seen": last_seen,
+                        "kind": "human",
+                    },
+                ),
+                timeout=2.0,
             )
         except Exception as exc:
             logger.warning("Presence broadcast skipped (%s); room sees stale presence", exc)
@@ -219,6 +223,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         return entries
 
     async def _save_member_last_seen(self, user_id):
+        """Save "now" as the member's last seen time and return it."""
         now = timezone.now()
 
         def _save():
@@ -228,6 +233,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             await sync_to_async(_save)()
         except Exception as exc:
             logger.debug("Member.last_seen save skipped: %s", exc)
+        return now
 
     async def _presence_loop(self, room_id, user_id, connection_id):
         # A random first sleep spreads connections restored by a deploy.
@@ -247,8 +253,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
         # A store hiccup must not close the socket; the loop keeps going.
         try:
             online_ids = await presence.beat(room_id, user_id, connection_id)
-            if online_ids != getattr(self, "_presence_ids", set()):
-                self._presence_ids = set(online_ids)
+            # None: the store could not be read. Keep what the page last showed
+            # rather than turning the whole room offline.
+            if online_ids is not None and online_ids != getattr(self, "_presence_ids", set()):
                 chat = await self.get_current_chatroom(room_id)
                 if chat is not None:
                     participants = await self.get_chatroom_participants(chat)
@@ -257,6 +264,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                         "command": "presence_snapshot",
                         "presence": entries,
                     }))
+                    self._presence_ids = set(online_ids)
             self._presence_ticks = getattr(self, "_presence_ticks", 0) + 1
             if self._presence_ticks % 10 == 0:
                 await self._save_member_last_seen(user_id)
@@ -512,8 +520,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
             if room_id is not None and connection_id is not None:
                 last = await presence.disconnect(room_id, user_id, connection_id)
                 if last:
-                    await self._save_member_last_seen(user_id)
-                    await self._broadcast_presence("offline")
+                    seen_at = await self._save_member_last_seen(user_id)
+                    await self._broadcast_presence("offline", seen_at.isoformat())
 
         except Exception as e:
             logger.error(f"Disconnect error for {self.channel_name}: {e}")

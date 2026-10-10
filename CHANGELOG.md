@@ -103,6 +103,12 @@ and sub-agents inherit and acquire it.
   `format X:`, `Remove-Item -Recurse/-Force`).
 - Credential-scoping contract 1.1 describes the enforced egress proxy.
 - The v0.7 models are registered in the Django admin.
+- A reminder counts its owner as online only while they have a chat connection
+  open (within `PRESENCE_WINDOW_SECONDS` of its last beat). It used to count
+  anyone who had opened or closed the chat in the last 15 minutes.
+- Presence is stored under new Redis keys (`presence:room:*`, `presence:user:*`)
+  that expire by themselves. The old `online:chat_*` and `lastseen:*` keys are
+  no longer read or written and can be deleted.
 
 ### Fixed
 
@@ -112,6 +118,10 @@ and sub-agents inherit and acquire it.
 - The assistant shows as online in a room when a model provider is configured,
   and offline when none is. It used to show as offline always, and was sent
   unread-message notifications like an absent person.
+- Who is online in a room is tracked per connection. Closing one of two tabs no
+  longer shows the user as offline, and a connection that never closed cleanly
+  ages out instead of staying online for ever (and silencing that user's unread
+  notifications for the room).
 
 ### Security
 

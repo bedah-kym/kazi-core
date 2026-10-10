@@ -9,12 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Every chat message goes to the agent loop. The coordinator's older pipeline
+  (planner, intent router, response synthesiser, cached confirmation and slot
+  filling) is removed, so a turn can no longer be planned and acted on twice.
+- The per-connection callbacks a turn sends are unchanged, but the coordinator
+  no longer takes a plain-text conversation transcript. The consumer passes the
+  structured history as before.
 - A reminder counts its owner as online only while they have a chat connection
   open (within `PRESENCE_WINDOW_SECONDS` of its last beat). It used to count
   anyone who had opened or closed the chat in the last 15 minutes.
 
 ### Fixed
 
+- A turn the agent loop fails now ends with one error message ("Something went
+  wrong on my side. Nothing further was run.") and one telemetry event instead
+  of re-planning the same message through the removed pipeline.
 - The assistant shows as online in a room when a model provider is configured,
   and offline when none is. It used to show as offline always, and was sent
   unread-message notifications like an absent person.

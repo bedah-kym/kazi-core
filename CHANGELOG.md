@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- A reminder counts its owner as online only while they have a chat connection
+  open (within `PRESENCE_WINDOW_SECONDS` of its last beat). It used to count
+  anyone who had opened or closed the chat in the last 15 minutes.
+
+### Fixed
+
+- The assistant shows as online in a room when a model provider is configured,
+  and offline when none is. It used to show as offline always, and was sent
+  unread-message notifications like an absent person.
+- Who is online in a room is tracked per connection. Closing one of two tabs no
+  longer shows the user as offline, and a connection that never closed cleanly
+  ages out instead of staying online for ever (and silencing that user's unread
+  notifications for the room).
+
 ### Security
 
 - An approval reply must be the whole message. A reply that starts with an
@@ -33,6 +49,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   entities (city, email, phone number, amount) from tool inputs. Telemetry
   written before this change is not rewritten: run `python Backend/manage.py
   roll_telemetry`, then delete the rotated `orchestration-*.jsonl` files.
+
+### Upgrade notes
+
+- Presence is stored under new Redis keys (`presence:room:*`, `presence:user:*`)
+  that expire by themselves. The old `online:chat_*` and `lastseen:*` keys are
+  no longer read or written and never expire: delete them once every web
+  process runs this version.
 
 ## [0.7.0] - 2026-10-04
 
@@ -109,9 +132,6 @@ and sub-agents inherit and acquire it.
 - A yes/no reply to an inline shell prompt is recognised; the command used to be
   proposed again indefinitely.
 - Workflow reruns get fresh run ids.
-- The assistant shows as online in a room when a model provider is configured,
-  and offline when none is. It used to show as offline always, and was sent
-  unread-message notifications like an absent person.
 
 ### Security
 

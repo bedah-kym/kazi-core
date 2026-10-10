@@ -623,29 +623,19 @@ def schedule_reminder_delivery(reminder_id: int, scheduled_time):
     send_reminder.apply_async((reminder_id,), eta=scheduled_time)
 
 
-PRESENCE_ONLINE_SECONDS = 900
 REMINDER_URGENT_MAX_RETRIES = 5
 REMINDER_RETRY_BASE_SECONDS = 30
 REMINDER_RETRY_CAP_SECONDS = 300
 
 
 def _is_user_online(user) -> bool:
-    """A user is online if their websocket heartbeat is younger than the window."""
-    try:
-        from django_redis import get_redis_connection
+    """A user is online while the presence service has a fresh beat for them."""
+    from chatbot.presence import is_user_online
 
-        redis = get_redis_connection("default")
-        raw = redis.get(f"lastseen:{user.username}")
-        if not raw:
-            return False
-        if isinstance(raw, bytes):
-            raw = raw.decode("utf-8")
-        last_seen = timezone.datetime.fromisoformat(raw)
-        if timezone.is_naive(last_seen):
-            last_seen = timezone.make_aware(last_seen, timezone.utc)
-        return (timezone.now() - last_seen).total_seconds() < PRESENCE_ONLINE_SECONDS
-    except Exception:
+    user_id = getattr(user, "id", None)
+    if not user_id:
         return False
+    return is_user_online(user_id)
 
 
 def _resolve_delivery_mode(reminder: Reminder) -> str:

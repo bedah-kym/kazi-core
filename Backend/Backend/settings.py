@@ -415,6 +415,11 @@ else:
         },
     }
 
+# Presence: the server keeps the heartbeat. A connection beats every
+# PRESENCE_BEAT_SECONDS and a user is online while a beat is inside the window.
+PRESENCE_BEAT_SECONDS = int(os.environ.get('PRESENCE_BEAT_SECONDS', 30))
+PRESENCE_WINDOW_SECONDS = int(os.environ.get('PRESENCE_WINDOW_SECONDS', 75))
+
 # Celery Beat Schedule — single source of truth. A second definition later in
 # this file silently replaced this dict once already (dropping the reminder
 # sweep and the deferred-workflow replay watchdog); never redefine it below.

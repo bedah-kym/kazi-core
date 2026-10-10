@@ -815,5 +815,38 @@
     "expected_executed": [],
     "expected_paused_on": "handoff_to_workflow",
     "expected_refused": []
+  },
+  {
+    "id": "failed_tool_try_again_loop",
+    "pack": "orchestration",
+    "message": "That failed because the service was down. Try again.",
+    "loop": {
+      "llm_script": [
+        {
+          "tool_calls": [
+            {
+              "name": "get_weather",
+              "input": {
+                "city": "Nairobi"
+              }
+            }
+          ]
+        },
+        {
+          "text": "It is 22C in Nairobi."
+        }
+      ],
+      "tool_results": {
+        "get_weather": {
+          "status": "success",
+          "temperature": 22
+        }
+      }
+    },
+    "expected_executed": [
+      "get_weather"
+    ],
+    "expected_paused_on": null,
+    "expected_refused": []
   }
 ]

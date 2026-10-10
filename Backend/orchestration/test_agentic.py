@@ -136,6 +136,46 @@ class AgentPromptsTests(SimpleTestCase):
         self.assertIn("test@test.com", msg)
         self.assertIn("yes", msg.lower())
 
+    def test_error_recovery_does_not_forbid_retrying_a_failed_call(self):
+        from orchestration.agent_prompts import build_system_prompt
+        prompt = build_system_prompt()
+        self.assertNotIn("retry a failed tool up to 2 times", prompt)
+        self.assertNotIn("Never retry with the exact same parameters", prompt)
+        self.assertIn(
+            "If a tool returns an error, read the message. Fix what you can, or ask the user for what is missing.",
+            prompt,
+        )
+        self.assertIn(
+            "A tool that failed earlier may work now. When the user asks you to try again, call it again.",
+            prompt,
+        )
+        self.assertIn(
+            "The harness stops repeated failures of the same call within one turn and tells you when it has.",
+            prompt,
+        )
+
+    def test_prompt_tells_the_model_to_describe_only_this_turn(self):
+        from orchestration.agent_prompts import build_system_prompt
+        prompt = build_system_prompt()
+        self.assertIn(
+            "Describe only what happened in this turn. If you did not call a tool in this turn, "
+            "do not describe an attempt or a result.",
+            prompt,
+        )
+        self.assertIn(
+            "If a rule, a limit or a missing tool stops you, say which one. That is a complete answer.",
+            prompt,
+        )
+
+    def test_open_environment_block_tells_the_model_to_call_the_tool(self):
+        from orchestration.agent_prompts import build_environment_block
+        block = build_environment_block({"profile": "open", "platform": "Linux", "shell": "bash"})
+        self.assertIn(
+            "Your part is to call the tool. The harness then asks the user and shows them the exact action. "
+            "Do not ask for permission in text and do not write the approval question yourself.",
+            block,
+        )
+
 
 # ---------------------------------------------------------------------------
 #  Phase 4: Error Recovery & Dedup

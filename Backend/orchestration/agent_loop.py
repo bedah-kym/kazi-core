@@ -1661,9 +1661,11 @@ async def run_agent_loop(
             if safe_calls:
                 async def _run_safe(tc: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
                     dedup = _dedup_key(tc["name"], tc["input"])
-                    if dedup in seen_calls:
+                    if dedup in seen_calls and tc["name"] not in _SHELL_TOOL_NAMES:
                         # Return a cached result from a previous identical
-                        # SUCCESSFUL call. Failed calls stay retryable.
+                        # SUCCESSFUL call. Failed calls stay retryable, and a
+                        # repeated shell command runs again instead of showing
+                        # stale output from the earlier run.
                         cached = next(
                             (e["output"] for e in state.tool_call_log
                              if e["name"] == tc["name"]
@@ -1673,7 +1675,10 @@ async def run_agent_loop(
                             None,
                         )
                         if cached is not None:
-                            return tc, cached
+                            repeated = dict(cached)
+                            repeated["repeated"] = True
+                            repeated["note"] = "This exact call already ran in this turn. This is the earlier result; nothing ran again."
+                            return tc, repeated
 
                     service = _service_for_tool(tc["name"])
                     if _circuit_breaker_open(service):
@@ -1688,7 +1693,10 @@ async def run_agent_loop(
                         if retries >= MAX_RETRIES_PER_TOOL:
                             return tc, {
                                 "status": "error",
-                                "message": f"Max retries ({MAX_RETRIES_PER_TOOL}) reached for {tc['name']}.",
+                                "message": (
+                                    f"Stopped retrying {tc['name']} after {retries} failures in this turn. "
+                                    "It can be tried again in a new message."
+                                ),
                             }
                         await asyncio.sleep(_retry_backoff_seconds(retries))
                     seen_calls.add(dedup)

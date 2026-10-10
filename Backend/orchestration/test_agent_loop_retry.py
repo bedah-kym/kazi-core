@@ -196,7 +196,8 @@ class AgentLoopRetryIntegrationTests(SimpleTestCase):
         self.assertEqual(mock_exec.await_count, 2)
         results = [e.data.get("result") for e in events if e.kind == "tool_result"]
         self.assertTrue(any(
-            "Max retries" in (r.get("message") or "") for r in results if isinstance(r, dict)
+            "Stopped retrying get_weather after 2 failures in this turn." in (r.get("message") or "")
+            for r in results if isinstance(r, dict)
         ))
         # Exactly one backoff sleep (2^1 = 2s) before the single retry.
         backoff_sleeps = [c.args[0] for c in mock_sleep.call_args_list if c.args and c.args[0] > 0.1]

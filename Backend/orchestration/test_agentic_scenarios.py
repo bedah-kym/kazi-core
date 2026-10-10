@@ -9,7 +9,7 @@ import asyncio
 import json
 from unittest.mock import AsyncMock, patch, MagicMock
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, override_settings
 
 
 def run_async(coro):
@@ -640,3 +640,82 @@ class SubAgentBudgetTests(SimpleTestCase):
 
         self.assertEqual(result["stopped_reason"], "token_budget")
         self.assertIn("token budget", result["summary"].lower())
+
+
+# ---------------------------------------------------------------------------
+#  Scenario 12: An identical shell command runs again in the same turn
+# ---------------------------------------------------------------------------
+
+class Scenario12RepeatedShellCommandTest(SimpleTestCase):
+    """A repeated shell command is not answered from the earlier result."""
+
+    @override_settings(SHELL_EXEC_PROFILE="standard")
+    @patch("orchestration.agent_loop.asyncio.sleep", new_callable=AsyncMock)
+    @patch("orchestration.agent_loop.get_llm_client")
+    @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)
+    @patch("orchestration.agent_loop.cache")
+    def test_identical_shell_command_runs_again(self, mock_cache, mock_exec, mock_get_llm, mock_sleep):
+        mock_cache.get.return_value = None
+        mock_exec.return_value = {"status": "success", "stdout": "hi"}
+        mock_llm = MagicMock()
+        mock_llm.create_message = AsyncMock(side_effect=[
+            _make_llm_response(
+                [_tool_use_block("t1", "run_command", {"command": "echo hi"})],
+                stop_reason="tool_use",
+            ),
+            _make_llm_response(
+                [_tool_use_block("t2", "run_command", {"command": "echo hi"})],
+                stop_reason="tool_use",
+            ),
+            _make_llm_response([_text_block("Ran it again.")], stop_reason="end_turn"),
+        ])
+        mock_get_llm.return_value = mock_llm
+
+        from orchestration.agent_loop import run_agent_loop
+        events = run_async(collect_events(run_agent_loop(
+            user_message="Run echo hi, then run it again",
+            context={"user_id": 1, "room_id": 1, "username": "test"},
+        )))
+
+        self.assertEqual(mock_exec.await_count, 2)
+        self.assertIn("done", [e.kind for e in events])
+
+
+# ---------------------------------------------------------------------------
+#  Scenario 13: A repeated non-shell call is not run twice; it is labelled
+# ---------------------------------------------------------------------------
+
+class Scenario13RepeatedNonShellCallTest(SimpleTestCase):
+    """A second identical create_note must not duplicate the side effect."""
+
+    @patch("orchestration.agent_loop.get_llm_client")
+    @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)
+    @patch("orchestration.agent_loop.cache")
+    def test_identical_note_call_is_not_run_twice(self, mock_cache, mock_exec, mock_get_llm):
+        mock_cache.get.return_value = None
+        mock_exec.return_value = {"status": "success", "note_id": 7}
+        mock_llm = MagicMock()
+        mock_llm.create_message = AsyncMock(side_effect=[
+            _make_llm_response(
+                [_tool_use_block("t1", "create_note", {"text": "buy milk"})],
+                stop_reason="tool_use",
+            ),
+            _make_llm_response(
+                [_tool_use_block("t2", "create_note", {"text": "buy milk"})],
+                stop_reason="tool_use",
+            ),
+            _make_llm_response([_text_block("Noted.")], stop_reason="end_turn"),
+        ])
+        mock_get_llm.return_value = mock_llm
+
+        from orchestration.agent_loop import run_agent_loop
+        events = run_async(collect_events(run_agent_loop(
+            user_message="Note that I need to buy milk",
+            context={"user_id": 1, "room_id": 1, "username": "test"},
+        )))
+
+        self.assertEqual(mock_exec.await_count, 1)
+        results = [e.data.get("result") for e in events if e.kind == "tool_result"]
+        self.assertEqual(len(results), 2)
+        self.assertTrue(results[1].get("repeated"))
+        self.assertIn("already ran in this turn", results[1].get("note", ""))

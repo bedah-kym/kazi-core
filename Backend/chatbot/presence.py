@@ -58,7 +58,8 @@ def _window_seconds() -> int:
 
 
 def beat_interval_seconds() -> int:
-    return int(getattr(settings, "PRESENCE_BEAT_SECONDS", 30))
+    """Seconds between beats, never below one: zero would spin the beat loop."""
+    return max(1, int(getattr(settings, "PRESENCE_BEAT_SECONDS", 30)))
 
 
 def _room_key(room_id) -> str:

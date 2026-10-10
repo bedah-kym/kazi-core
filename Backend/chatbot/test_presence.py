@@ -120,6 +120,10 @@ class PresenceStoreTests(SimpleTestCase):
             clock[0] += 10
             self.assertEqual(presence.online_user_ids(17), set())
 
+    @override_settings(PRESENCE_BEAT_SECONDS=0)
+    def test_a_beat_interval_below_one_second_is_raised(self):
+        self.assertEqual(presence.beat_interval_seconds(), 1)
+
 
 class PresenceBackoffTests(SimpleTestCase):
     def setUp(self):

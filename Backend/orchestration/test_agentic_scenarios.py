@@ -679,6 +679,105 @@ class Scenario12RepeatedShellCommandTest(SimpleTestCase):
 
         self.assertEqual(mock_exec.await_count, 2)
         self.assertIn("done", [e.kind for e in events])
+        # A repeat of a command that worked is not a retry: no backoff wait.
+        backoff = [c.args[0] for c in mock_sleep.call_args_list if c.args and c.args[0] > 0.1]
+        self.assertEqual(backoff, [])
+
+    def _run_shell_script(self, commands, results, mock_cache, mock_exec, mock_get_llm):
+        mock_cache.get.return_value = None
+        mock_exec.side_effect = results
+        mock_llm = MagicMock()
+        mock_llm.create_message = AsyncMock(side_effect=[
+            _make_llm_response(
+                [_tool_use_block(f"t{i}", "run_command", {"command": command})],
+                stop_reason="tool_use",
+            )
+            for i, command in enumerate(commands)
+        ] + [_make_llm_response([_text_block("Done.")], stop_reason="end_turn")])
+        mock_get_llm.return_value = mock_llm
+
+        from orchestration.agent_loop import run_agent_loop
+        events = run_async(collect_events(run_agent_loop(
+            user_message="Run these",
+            context={"user_id": 1, "room_id": 1, "username": "test"},
+        )))
+        return [e.data.get("result") for e in events if e.kind == "tool_result"]
+
+    @override_settings(SHELL_EXEC_PROFILE="standard")
+    @patch("orchestration.agent_loop.asyncio.sleep", new_callable=AsyncMock)
+    @patch("orchestration.agent_loop.get_llm_client")
+    @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)
+    @patch("orchestration.agent_loop.cache")
+    def test_repeat_of_a_command_that_worked_runs_after_other_failures(
+        self, mock_cache, mock_exec, mock_get_llm, mock_sleep,
+    ):
+        ok = {"status": "success", "stdout": "hi"}
+        down = {"status": "error", "message": "The shell sidecar is unreachable."}
+        results = self._run_shell_script(
+            ["echo hi", "ls a", "ls b", "echo hi"], [ok, down, down, ok],
+            mock_cache, mock_exec, mock_get_llm,
+        )
+
+        self.assertEqual(mock_exec.await_count, 4)
+        self.assertEqual(results[-1], ok)
+
+    @override_settings(SHELL_EXEC_PROFILE="standard")
+    @patch("orchestration.agent_loop.asyncio.sleep", new_callable=AsyncMock)
+    @patch("orchestration.agent_loop.get_llm_client")
+    @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)
+    @patch("orchestration.agent_loop.cache")
+    def test_identical_failing_shell_command_is_still_bounded(
+        self, mock_cache, mock_exec, mock_get_llm, mock_sleep,
+    ):
+        ok = {"status": "success", "stdout": "hi"}
+        down = {"status": "error", "message": "The shell sidecar is unreachable."}
+        results = self._run_shell_script(
+            ["echo hi", "echo hi", "echo hi", "echo hi"], [ok, down, down, ok],
+            mock_cache, mock_exec, mock_get_llm,
+        )
+
+        self.assertEqual(mock_exec.await_count, 3)
+        self.assertEqual(
+            results[-1]["message"],
+            "Stopped retrying run_command after 2 failures in this turn. It can be tried again in a new message.",
+        )
+
+    @override_settings(SHELL_EXEC_PROFILE="open", SHELL_EXEC_PROFILES=["open"])
+    @patch("orchestration.agent_loop.save_pending_confirmation", new_callable=AsyncMock)
+    @patch("orchestration.agent_loop.asyncio.sleep", new_callable=AsyncMock)
+    @patch("orchestration.agent_loop.get_llm_client")
+    @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)
+    @patch("orchestration.agent_loop.cache")
+    def test_repeat_that_needs_approval_pauses_instead_of_running(
+        self, mock_cache, mock_exec, mock_get_llm, mock_sleep, mock_save,
+    ):
+        """Unsandboxed room: the first run taints the turn, so the repeat must ask."""
+        mock_cache.get.return_value = None
+        mock_exec.return_value = {"status": "success", "stdout": "hi"}
+        mock_llm = MagicMock()
+        mock_llm.create_message = AsyncMock(side_effect=[
+            _make_llm_response(
+                [_tool_use_block("t1", "run_command", {"command": "echo hi"})],
+                stop_reason="tool_use",
+            ),
+            _make_llm_response(
+                [_tool_use_block("t2", "run_command", {"command": "echo hi"})],
+                stop_reason="tool_use",
+            ),
+        ])
+        mock_get_llm.return_value = mock_llm
+
+        from orchestration.agent_loop import run_agent_loop
+        events = run_async(collect_events(run_agent_loop(
+            user_message="Run echo hi, then run it again",
+            context={"user_id": 1, "room_id": 1, "username": "test"},
+            preferences={"shell_profile": "open"},
+        )))
+
+        self.assertEqual(mock_exec.await_count, 1)
+        confirm_event = next(e for e in events if e.kind == "confirmation")
+        self.assertEqual(confirm_event.data["tool_name"], "run_command")
+        self.assertEqual(confirm_event.data["tool_input"], {"command": "echo hi"})
 
 
 # ---------------------------------------------------------------------------

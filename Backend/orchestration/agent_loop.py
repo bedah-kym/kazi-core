@@ -1661,24 +1661,28 @@ async def run_agent_loop(
             if safe_calls:
                 async def _run_safe(tc: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
                     dedup = _dedup_key(tc["name"], tc["input"])
-                    if dedup in seen_calls and tc["name"] not in _SHELL_TOOL_NAMES:
-                        # Return a cached result from a previous identical
-                        # SUCCESSFUL call. Failed calls stay retryable, and a
-                        # repeated shell command runs again instead of showing
-                        # stale output from the earlier run.
-                        cached = next(
-                            (e["output"] for e in state.tool_call_log
+                    is_retry = dedup in seen_calls
+                    if is_retry:
+                        # The latest identical call in this turn decides. A
+                        # failure is retried under the bound below. A success
+                        # is answered from the earlier result, except for a
+                        # shell command, which runs again: its output can change.
+                        earlier = next(
+                            (e["output"] for e in reversed(state.tool_call_log)
                              if e["name"] == tc["name"]
-                             and isinstance(e["output"], dict)
-                             and e["output"].get("status") == "success"
                              and _dedup_key(e["name"], e["input"]) == dedup),
                             None,
                         )
-                        if cached is not None:
-                            repeated = dict(cached)
-                            repeated["repeated"] = True
-                            repeated["note"] = "This exact call already ran in this turn. This is the earlier result; nothing ran again."
-                            return tc, repeated
+                        if isinstance(earlier, dict) and earlier.get("status") == "success":
+                            if tc["name"] not in _SHELL_TOOL_NAMES:
+                                repeated = dict(earlier)
+                                repeated["repeated"] = True
+                                repeated["note"] = (
+                                    "This exact call already ran in this turn. "
+                                    "This is the earlier result; nothing ran again."
+                                )
+                                return tc, repeated
+                            is_retry = False
 
                     service = _service_for_tool(tc["name"])
                     if _circuit_breaker_open(service):
@@ -1687,7 +1691,7 @@ async def run_agent_loop(
                             "message": _circuit_open_message(service),
                         }
 
-                    if dedup in seen_calls:
+                    if is_retry:
                         # Retrying a previously-failed identical call.
                         retries = state.retry_counts.get(tc["name"], 0)
                         if retries >= MAX_RETRIES_PER_TOOL:

@@ -10,8 +10,8 @@ dependency of its own.
 import logging
 import time
 import uuid
-from dataclasses import dataclass
-from typing import Awaitable, Callable, List, Optional
+from dataclasses import dataclass, field
+from typing import Awaitable, Callable, Dict, List, Optional
 
 from asgiref.sync import sync_to_async
 from django.core.cache import cache
@@ -23,6 +23,7 @@ from orchestration.action_receipts import (
     fetch_recent_receipts,
     undo_last_action,
     format_receipt_list,
+    _sanitize_payload,
 )
 from orchestration.adaptive_task import (
     clear_task_state,
@@ -30,7 +31,11 @@ from orchestration.adaptive_task import (
     is_cancel_request,
 )
 from orchestration.memory_state import load_memory_summary, clear_memory
-from orchestration.security_policy import should_refuse_sensitive_request, sensitive_refusal_message
+from orchestration.security_policy import (
+    should_refuse_sensitive_request,
+    sensitive_refusal_message,
+    sanitize_parameters,
+)
 from orchestration.shell.chat_intents import (
     is_approval_reply,
     is_decline_reply,
@@ -46,9 +51,52 @@ from orchestration.agent_loop import (
     resume_after_confirmation,
     cancel_pending_action,
     dismiss_pending_confirmation,
+    _UNTRUSTED_TOOL_NAMES,
 )
 
 logger = logging.getLogger(__name__)
+
+MAX_TOOL_RECORDS = 10
+_SHOWN_LIMIT = 2000
+
+
+def _tool_record(data: Dict) -> Dict:
+    """One tool call of the turn: the call's input (sanitised) and the text the model saw."""
+    result = data.get("result")
+    result = result if isinstance(result, dict) else {}
+    raw_input = data.get("input")
+    raw_input = raw_input if isinstance(raw_input, dict) else {}
+    return {
+        "name": data.get("name") or "",
+        "input": _sanitize_payload(sanitize_parameters(raw_input)),
+        "status": result.get("status") or "",
+        "shown": str(data.get("shown") or "")[:_SHOWN_LIMIT],
+    }
+
+
+def _cap_tool_records(records: List[Dict]) -> List[Dict]:
+    if len(records) <= MAX_TOOL_RECORDS:
+        return records
+    dropped = len(records) - MAX_TOOL_RECORDS
+    capped = [dict(record) for record in records[:MAX_TOOL_RECORDS]]
+    capped[-1]["note"] = f"{dropped} more tool calls were not recorded."
+    return capped
+
+
+def _history_replays_untrusted(history_msgs: Optional[List[dict]]) -> bool:
+    """Whether the built history carries a replayed result from an untrusted tool."""
+    for message in history_msgs or []:
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if (
+                isinstance(block, dict)
+                and block.get("type") == "tool_use"
+                and block.get("name") in _UNTRUSTED_TOOL_NAMES
+            ):
+                return True
+    return False
 
 
 @dataclass
@@ -57,6 +105,8 @@ class OrchestrationResult:
 
     full_response: str = ""
     persist: bool = True
+    tools: List[Dict] = field(default_factory=list)
+    harness: str = ""
 
 
 class OrchestrationCoordinator:
@@ -93,14 +143,16 @@ class OrchestrationCoordinator:
         a fresh agent run ends the turn with one error message and nothing
         further runs; errors during confirmation resume propagate.
         """
-        stream_state = {"buffer": [], "last_send": 0, "first_token_sent": False, "full_response": []}  # nosec B105 — state keys, not a credential
+        stream_state = {"buffer": [], "last_send": 0, "first_token_sent": False, "full_response": [], "harness": [], "tools": []}  # nosec B105 — state keys, not a credential
         turn_step_id = f"turn_{message_id}"
         correlation_id = uuid.uuid4().hex
 
-        async def broadcast_chunk(chunk_text, is_final=False):
+        async def broadcast_chunk(chunk_text, is_final=False, harness=False):
             # Store all chunks to build full response
             if chunk_text:
                 stream_state["full_response"].append(chunk_text)
+                if harness:
+                    stream_state["harness"].append(chunk_text)
 
             # Filter leading whitespace if first token hasn't been sent
             if not stream_state["first_token_sent"] and not is_final:
@@ -207,7 +259,7 @@ class OrchestrationCoordinator:
                     "correlation_id": correlation_id,
                 },
             )
-            await broadcast_chunk("Okay, starting fresh. What would you like to do?")
+            await broadcast_chunk("Okay, starting fresh. What would you like to do?", harness=True)
             await emit_progress("done", "completed", "Context reset.")
             return OrchestrationResult(full_response="".join(stream_state["full_response"]), persist=False)
         if should_refuse_sensitive_request(query):
@@ -219,7 +271,7 @@ class OrchestrationCoordinator:
                     "correlation_id": correlation_id,
                 },
             )
-            await broadcast_chunk(sensitive_refusal_message())
+            await broadcast_chunk(sensitive_refusal_message(), harness=True)
             await emit_progress("done", "completed", "Request refused.")
             return OrchestrationResult(full_response="".join(stream_state["full_response"]), persist=False)
 
@@ -330,6 +382,7 @@ class OrchestrationCoordinator:
                 context_prompt=ctx_prompt,
                 memory_summary=mem_summary,
                 history=history_msgs or None,
+                history_tainted=_history_replays_untrusted(history_msgs),
             ):
                 if event.kind == "text":
                     await broadcast_chunk(event.data.get("text", ""))
@@ -341,16 +394,17 @@ class OrchestrationCoordinator:
                     tool = event.data.get("name", "action")
                     await emit_progress("executing", "started", f"Running {tool.replace('_', ' ')}…")
                 elif event.kind == "tool_result":
+                    stream_state["tools"].append(_tool_record(event.data))
                     tool = event.data.get("name", "action")
                     result = event.data.get("result", {})
                     status = result.get("status", "")
                     msg = f"{tool.replace('_', ' ')}: {status}"
                     await emit_progress("executing", "completed", msg)
                 elif event.kind == "confirmation":
-                    await broadcast_chunk(event.data.get("message", "Please confirm.") + await _autopilot_hint())
+                    await broadcast_chunk(event.data.get("message", "Please confirm.") + await _autopilot_hint(), harness=True)
                     await emit_progress("validating", "completed", "Waiting for confirmation.")
                 elif event.kind == "error":
-                    await broadcast_chunk(event.data.get("message", "Something went wrong."))
+                    await broadcast_chunk(event.data.get("message", "Something went wrong."), harness=True)
                     await emit_progress("executing", "completed", "Error encountered.")
                 elif event.kind == "done":
                     await emit_progress("done", "completed", "Request complete.")
@@ -379,15 +433,16 @@ class OrchestrationCoordinator:
                     tool = event.data.get("name", "action")
                     await emit_progress("executing", "started", f"Running {tool.replace('_', ' ')}…")
                 elif event.kind == "tool_result":
+                    stream_state["tools"].append(_tool_record(event.data))
                     tool = event.data.get("name", "action")
                     result = event.data.get("result", {})
                     status = result.get("status", "")
                     await emit_progress("executing", "completed", f"{tool.replace('_', ' ')}: {status}")
                 elif event.kind == "confirmation":
-                    await broadcast_chunk(event.data.get("message", "Please confirm.") + await _autopilot_hint())
+                    await broadcast_chunk(event.data.get("message", "Please confirm.") + await _autopilot_hint(), harness=True)
                     await emit_progress("validating", "completed", "Waiting for confirmation.")
                 elif event.kind == "error":
-                    await broadcast_chunk(event.data.get("message", "Something went wrong."))
+                    await broadcast_chunk(event.data.get("message", "Something went wrong."), harness=True)
                 elif event.kind == "done":
                     await emit_progress("done", "completed", "Request complete.")
 
@@ -406,12 +461,14 @@ class OrchestrationCoordinator:
                     "Autopilot armed for this room. Shell commands, including root and "
                     "network ones, now run on this unsandboxed host without asking until "
                     "the window expires or you say **autopilot off**. Commands on the "
-                    "destructive list still ask."
+                    "destructive list still ask.",
+                    harness=True,
                 )
             else:
                 await broadcast_chunk(
                     "I couldn't arm autopilot, so nothing has changed. It needs a room on "
-                    "the unsandboxed shell profile. Reply yes or no to the pending command."
+                    "the unsandboxed shell profile. Reply yes or no to the pending command.",
+                    harness=True,
                 )
             return armed
 
@@ -435,14 +492,15 @@ class OrchestrationCoordinator:
             except Exception as exc:
                 logger.warning("Autopilot disarm failed: %s", exc)
             if disarmed:
-                await broadcast_chunk("Autopilot disarmed for this room.\n\n")
+                await broadcast_chunk("Autopilot disarmed for this room.\n\n", harness=True)
             elif disarmed is None and (was_armed or explicit_disarm):
                 await broadcast_chunk(
                     "I couldn't confirm autopilot was disarmed. It is off for this message; "
-                    "disarm it from the operations inbox to be sure."
+                    "disarm it from the operations inbox to be sure.",
+                    harness=True,
                 )
             elif explicit_disarm:
-                await broadcast_chunk("Autopilot was not armed for this room.")
+                await broadcast_chunk("Autopilot was not armed for this room.", harness=True)
 
         # Host grants for the sandboxed shell's egress proxy: exact replies only.
         from orchestration.shell.chat_intents import host_grant_request
@@ -471,7 +529,7 @@ class OrchestrationCoordinator:
             except Exception as exc:
                 logger.warning("Host grant request failed: %s", exc)
                 reply = "I couldn't change the host approvals just now. Nothing was changed."
-            await broadcast_chunk(reply)
+            await broadcast_chunk(reply, harness=True)
 
         handled_directive = explicit_disarm or bool(host_request)
         if not handled_directive and is_dismiss_suggestions_command(query):
@@ -483,7 +541,7 @@ class OrchestrationCoordinator:
                 if last_reason not in dismissed:
                     dismissed.append(last_reason)
                     cache.set(dismissed_key, dismissed, timeout=60 * 60 * 24 * 14)
-            await broadcast_chunk("Got it. I will stop showing that kind of suggestion here.")
+            await broadcast_chunk("Got it. I will stop showing that kind of suggestion here.", harness=True)
             handled_directive = True
         if not handled_directive and is_receipts_command(query):
             receipts = await fetch_recent_receipts(
@@ -491,14 +549,14 @@ class OrchestrationCoordinator:
                 room_id=room_id,
                 limit=3,
             )
-            await broadcast_chunk(format_receipt_list(receipts))
+            await broadcast_chunk(format_receipt_list(receipts), harness=True)
             handled_directive = True
         if not handled_directive and is_undo_command(query):
             undo_result = await undo_last_action(
                 user_id=user_id,
                 room_id=room_id,
             )
-            await broadcast_chunk(undo_result.get("message") or "Okay.")
+            await broadcast_chunk(undo_result.get("message") or "Okay.", harness=True)
             handled_directive = True
 
         pending_handled = handled_directive
@@ -511,7 +569,7 @@ class OrchestrationCoordinator:
         if handled_directive and not keeps_pending:
             if pending_confirmation:
                 await dismiss_pending_confirmation(room_id, user_id)
-                await broadcast_chunk("\n\nI did not run the pending action; it is cancelled.")
+                await broadcast_chunk("\n\nI did not run the pending action; it is cancelled.", harness=True)
 
         # --- Agent loop confirmation resume ---
         if not pending_handled:
@@ -532,7 +590,7 @@ class OrchestrationCoordinator:
                 # Cancel is checked first: a refusal must never be read as consent.
                 if is_cancel_request(query) or is_decline_reply(query):
                     cancel_msg = await cancel_pending_action(room_id, user_id)
-                    await broadcast_chunk(cancel_msg or "Okay, cancelled.")
+                    await broadcast_chunk(cancel_msg or "Okay, cancelled.", harness=True)
                     pending_handled = True
                 elif is_autopilot_request(query) and await _pending_armable_shell():
                     # Arming confirms the pending command only when it armed;
@@ -547,7 +605,7 @@ class OrchestrationCoordinator:
                     # Anything else is not consent: drop the pending action, say so,
                     # and handle the message as a new turn.
                     await dismiss_pending_confirmation(room_id, user_id)
-                    await broadcast_chunk("I did not run the pending action; it is cancelled.\n\n")
+                    await broadcast_chunk("I did not run the pending action; it is cancelled.\n\n", harness=True)
 
         if not pending_handled:
             # --- Agentic loop path ---
@@ -581,7 +639,7 @@ class OrchestrationCoordinator:
                         "error_class": agent_exc.__class__.__name__,
                     },
                 )
-                await broadcast_chunk("Something went wrong on my side. Nothing further was run.")
+                await broadcast_chunk("Something went wrong on my side. Nothing further was run.", harness=True)
 
         # End stream
         await emit_progress("done", "completed", "Request complete.")
@@ -589,4 +647,8 @@ class OrchestrationCoordinator:
 
         full_response_text = "".join(stream_state["full_response"])
 
-        return OrchestrationResult(full_response=full_response_text)
+        return OrchestrationResult(
+            full_response=full_response_text,
+            tools=_cap_tool_records(stream_state["tools"]),
+            harness="".join(stream_state["harness"]),
+        )

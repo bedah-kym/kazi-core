@@ -1371,6 +1371,7 @@ async def run_agent_loop(
     context_prompt: str = "",
     memory_summary: str = "",
     history: Optional[List[Dict[str, Any]]] = None,
+    history_tainted: bool = False,
     resumed_state: Optional[LoopState] = None,
     confirmed_tool: bool = False,
 ) -> AsyncGenerator[AgentEvent, None]:
@@ -1474,6 +1475,8 @@ async def run_agent_loop(
         yield AgentEvent("tool_result", {
             "name": pending["name"],
             "result": result,
+            "input": pending["input"],
+            "shown": _sanitize_tool_result(json.dumps(result, default=str)),
         })
 
         # Memory update & receipt for confirmed tool
@@ -1523,7 +1526,7 @@ async def run_agent_loop(
         state = LoopState(
             messages=messages,
             start_time=time.monotonic(),
-            tainted=await sync_to_async(_conversation_tainted)(room_id),
+            tainted=(history_tainted or await sync_to_async(_conversation_tainted)(room_id)),
         )
 
     # Track seen tool calls for dedup
@@ -1747,7 +1750,12 @@ async def run_agent_loop(
                     if _untrusted_source(tc["name"]):
                         _taint_run(state, room_id)
                     yield AgentEvent("tool_start", {"name": tc["name"], "input": tc["input"]})
-                    yield AgentEvent("tool_result", {"name": tc["name"], "result": result})
+                    yield AgentEvent("tool_result", {
+                        "name": tc["name"],
+                        "result": result,
+                        "input": tc["input"],
+                        "shown": _sanitize_tool_result(json.dumps(result, default=str)),
+                    })
 
                     # Memory update & receipt (fire-and-forget)
                     try:

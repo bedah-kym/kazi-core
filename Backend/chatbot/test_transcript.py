@@ -12,6 +12,21 @@ ASSISTANT_REPLY = (
 )
 
 
+def _tool_ids(messages):
+    """Every tool_use id and every tool_result id the built history carries."""
+    uses, results = set(), set()
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if block.get("type") == "tool_use":
+                uses.add(block["id"])
+            elif block.get("type") == "tool_result":
+                results.add(block["tool_use_id"])
+    return uses, results
+
+
 class BuildHistoryMessagesTests(SimpleTestCase):
     def test_a_multi_line_assistant_reply_stays_one_assistant_message(self):
         rows = [(1, "admin", "make a folder"), (2, "kazi", ASSISTANT_REPLY)]
@@ -137,3 +152,109 @@ class SpeakerTests(SimpleTestCase):
     def test_several_speakers_are_detected_from_who_wrote_the_rows(self):
         self.assertTrue(has_several_speakers([(1, "amina", "a"), (2, "kazi", "b"), (3, "jon", "c")]))
         self.assertFalse(has_several_speakers([(1, "amina", "a"), (2, "kazi", "b"), (3, "Amina", "c")]))
+
+
+def _reply(by, tools=None, harness=""):
+    return {"tools": tools or [], "by": by, "harness": harness}
+
+
+HARNESS = "I'd like to run command with the following details: ls. Should I go ahead? (yes / no)"
+
+
+class ToolRecordReplayTests(SimpleTestCase):
+    def test_a_reply_with_records_replays_native_tool_blocks(self):
+        rows = [
+            (1, "admin", "run the two commands"),
+            (2, "kazi", "Here is what happened.", _reply(1, tools=[
+                {"name": "run_command", "input": {"command": "false"},
+                 "status": "error", "shown": '{"status": "error", "message": "boom"}'},
+                {"name": "run_command", "input": {"command": "true"},
+                 "status": "success", "shown": '{"status": "success"}'},
+            ])),
+        ]
+
+        messages = build_history_messages(rows, viewer_user_id=1)
+
+        self.assertEqual([m["role"] for m in messages], ["user", "assistant", "user", "assistant"])
+        uses = messages[1]["content"]
+        self.assertEqual([b["type"] for b in uses], ["tool_use", "tool_use"])
+        self.assertEqual([b["name"] for b in uses], ["run_command", "run_command"])
+        self.assertEqual([b["input"] for b in uses], [{"command": "false"}, {"command": "true"}])
+        results = messages[2]["content"]
+        self.assertEqual([b["type"] for b in results], ["tool_result", "tool_result"])
+        self.assertEqual(results[0]["content"], '{"status": "error", "message": "boom"}')
+        self.assertEqual(results[1]["content"], '{"status": "success"}')
+        self.assertEqual(results[0]["tool_use_id"], uses[0]["id"])
+        self.assertEqual(results[1]["tool_use_id"], uses[1]["id"])
+        self.assertEqual(messages[3], {"role": "assistant", "content": "Here is what happened."})
+
+    def test_the_model_text_after_the_records_is_the_reply_without_the_harness(self):
+        rows = [
+            (1, "admin", "run it"),
+            (2, "kazi", "I ran it. " + HARNESS, _reply(1, tools=[
+                {"name": "run_command", "input": {"command": "ls"},
+                 "status": "success", "shown": "listed"},
+            ], harness=HARNESS)),
+        ]
+
+        messages = build_history_messages(rows, viewer_user_id=1)
+
+        self.assertIn({"role": "assistant", "content": "I ran it."}, messages)
+        self.assertFalse(any(
+            isinstance(m["content"], str) and HARNESS in m["content"] and m["role"] == "assistant"
+            for m in messages
+        ))
+
+    def test_harness_text_becomes_a_note_on_the_next_user_message(self):
+        rows = [
+            (2, "kazi", HARNESS, _reply(1, harness=HARNESS)),
+            (3, "admin", "yes"),
+        ]
+
+        messages = build_history_messages(rows, viewer_user_id=1)
+
+        self.assertEqual([m["role"] for m in messages], ["user"])
+        self.assertEqual(messages[0]["content"], f"[Harness: {HARNESS}]\nyes")
+
+    def test_another_users_records_are_not_replayed(self):
+        rows = [
+            (1, "bob", "run it"),
+            (2, "kazi", "Done.", _reply(2, tools=[
+                {"name": "run_command", "input": {"command": "ls"},
+                 "status": "success", "shown": "listed"},
+            ])),
+            (3, "admin", "what next?"),
+        ]
+
+        messages = build_history_messages(rows, viewer_user_id=1)
+
+        self.assertEqual([m["role"] for m in messages], ["user", "assistant", "user"])
+        self.assertEqual(messages[1], {"role": "assistant", "content": "Done."})
+        self.assertEqual(_tool_ids(messages), (set(), set()))
+
+    def test_trimming_drops_a_tool_exchange_whole(self):
+        rows = [
+            (1, "admin", "go"),
+            (2, "kazi", "done", _reply(1, tools=[
+                {"name": "run_command", "input": {"command": "ls"},
+                 "status": "success", "shown": "x" * 400},
+            ])),
+            (3, "admin", "next"),
+            (4, "kazi", "fine"),
+        ]
+
+        messages = build_history_messages(rows, max_chars=50, viewer_user_id=1)
+
+        uses, results = _tool_ids(messages)
+        self.assertEqual(uses, results)
+        self.assertEqual([m["content"] for m in messages], ["next", "fine"])
+
+    def test_an_old_reply_without_records_builds_as_today(self):
+        rows = [(1, "admin", "hi"), (2, "kazi", "hello")]
+
+        messages = build_history_messages(rows, viewer_user_id=1)
+
+        self.assertEqual(
+            messages,
+            [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}],
+        )

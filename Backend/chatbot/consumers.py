@@ -1010,6 +1010,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                 exclude_message_id=message.id,
                                 multi_user=multi_user,
                                 max_chars=int(getattr(settings, "HISTORY_MAX_CHARS", 60000)),
+                                viewer_user_id=member_user.id,
                             )
                             if multi_user:
                                 speaker_note = (
@@ -1040,7 +1041,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             # Encrypt the AI response
                             encrypted_message = await self.encrypt_message({
                                 'content': full_response_text,
-                                'timestamp': str(timezone.now())
+                                'timestamp': str(timezone.now()),
+                                'tools': result.tools,
+                                'by': member_user.id,
+                                'harness': result.harness,
                             })
 
                             if encrypted_message:
@@ -1566,28 +1570,27 @@ class ChatConsumer(AsyncWebsocketConsumer):
             self.last_key_rotation = current_time
             self.messages_since_rotation = 0
 
+    async def _decrypt_stored(self, message):
+        """Return (content, payload) for a stored message; payload is {} when there is none."""
+        db_content = message.content
+        try:
+            # The content from DB should be a JSON string with 'data' and 'nonce'
+            parsed_payload = json.loads(db_content)
+        except (json.JSONDecodeError, TypeError):
+            # Old plaintext messages are not JSON.
+            return db_content, {}
+        if not (isinstance(parsed_payload, dict) and 'data' in parsed_payload and 'nonce' in parsed_payload):
+            return db_content, {}
+        decrypted_payload = await self.decrypt_message(parsed_payload['data'], parsed_payload['nonce'])
+        if isinstance(decrypted_payload, dict) and 'content' in decrypted_payload:
+            return decrypted_payload['content'], decrypted_payload
+        return DECRYPT_FAILED, {}
+
     async def message_to_json(self, message):
         """Decrypts message content before sending to the client."""
         try:
             username = await sync_to_async(lambda: message.member.User.username)()
-            final_content = DECRYPT_FAILED
-
-            db_content = message.content
-            try:
-                # The content from DB should be a JSON string with 'data' and 'nonce'
-                parsed_payload = json.loads(db_content)
-                if isinstance(parsed_payload, dict) and 'data' in parsed_payload and 'nonce' in parsed_payload:
-                    # Decrypt the payload from the database
-                    decrypted_payload = await self.decrypt_message(parsed_payload['data'], parsed_payload['nonce'])
-                    # The decrypted content is also a dict, get the actual message from it
-                    if decrypted_payload and 'content' in decrypted_payload:
-                        final_content = decrypted_payload['content']
-                else:
-                    # This handles old messages that might not be encrypted
-                    final_content = db_content
-            except (json.JSONDecodeError, TypeError):
-                # This handles the case where the content is not JSON (e.g., old plaintext messages)
-                final_content = db_content
+            final_content, _payload = await self._decrypt_stored(message)
 
             return {
                 'id': message.id,
@@ -1605,7 +1608,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             }
 
     async def get_history_rows(self, room_id, limit=5):
-        "Last N messages, oldest first, as (message_id, username, content)."
+        "Last N messages, oldest first, as (message_id, username, content, extra)."
         try:
             from .models import Chatroom
             get_room = sync_to_async(Chatroom.objects.get)
@@ -1622,8 +1625,17 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 msg_json = await self.message_to_json(msg)
                 content = msg_json.get('content', '')
                 member = msg_json.get('member', 'Unknown')
-                if content and content != DECRYPT_FAILED and member != 'system':
-                    rows.append((msg.id, member, content))
+                if not content or content == DECRYPT_FAILED or member == 'system':
+                    continue
+                _content, payload = await self._decrypt_stored(msg)
+                extra = None
+                if isinstance(payload, dict) and isinstance(payload.get('tools'), list):
+                    extra = {
+                        'tools': payload.get('tools') or [],
+                        'by': payload.get('by'),
+                        'harness': payload.get('harness') or '',
+                    }
+                rows.append((msg.id, member, content, extra))
 
             return rows
         except Exception as e:

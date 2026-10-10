@@ -51,7 +51,7 @@ from orchestration.agent_loop import (
     resume_after_confirmation,
     cancel_pending_action,
     dismiss_pending_confirmation,
-    _UNTRUSTED_TOOL_NAMES,
+    _untrusted_source,
 )
 
 logger = logging.getLogger(__name__)
@@ -93,7 +93,7 @@ def _history_replays_untrusted(history_msgs: Optional[List[dict]]) -> bool:
             if (
                 isinstance(block, dict)
                 and block.get("type") == "tool_use"
-                and block.get("name") in _UNTRUSTED_TOOL_NAMES
+                and _untrusted_source(block.get("name"))
             ):
                 return True
     return False
@@ -106,6 +106,8 @@ class OrchestrationResult:
     full_response: str = ""
     persist: bool = True
     tools: List[Dict] = field(default_factory=list)
+    # The reply in two parts: what the model wrote and what the harness wrote.
+    model_text: str = ""
     harness: str = ""
 
 
@@ -143,7 +145,7 @@ class OrchestrationCoordinator:
         a fresh agent run ends the turn with one error message and nothing
         further runs; errors during confirmation resume propagate.
         """
-        stream_state = {"buffer": [], "last_send": 0, "first_token_sent": False, "full_response": [], "harness": [], "tools": []}  # nosec B105 — state keys, not a credential
+        stream_state = {"buffer": [], "last_send": 0, "first_token_sent": False, "full_response": [], "model": [], "harness": [], "tools": []}  # nosec B105 — state keys, not a credential
         turn_step_id = f"turn_{message_id}"
         correlation_id = uuid.uuid4().hex
 
@@ -151,8 +153,7 @@ class OrchestrationCoordinator:
             # Store all chunks to build full response
             if chunk_text:
                 stream_state["full_response"].append(chunk_text)
-                if harness:
-                    stream_state["harness"].append(chunk_text)
+                stream_state["harness" if harness else "model"].append(chunk_text)
 
             # Filter leading whitespace if first token hasn't been sent
             if not stream_state["first_token_sent"] and not is_final:
@@ -650,5 +651,6 @@ class OrchestrationCoordinator:
         return OrchestrationResult(
             full_response=full_response_text,
             tools=_cap_tool_records(stream_state["tools"]),
+            model_text="".join(stream_state["model"]),
             harness="".join(stream_state["harness"]),
         )

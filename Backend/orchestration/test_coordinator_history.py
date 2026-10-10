@@ -102,6 +102,7 @@ class CoordinatorHistoryTests(SimpleTestCase):
             "status": "success",
             "shown": '{"status": "success", "stdout": "hi"}',
         }])
+        self.assertEqual(result.model_text, "Running it now. ")
         self.assertEqual(result.harness, "Should I go ahead? (yes / no)")
         self.assertEqual(result.full_response, "Running it now. Should I go ahead? (yes / no)")
 

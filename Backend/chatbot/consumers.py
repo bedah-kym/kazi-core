@@ -1044,6 +1044,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                 'timestamp': str(timezone.now()),
                                 'tools': result.tools,
                                 'by': member_user.id,
+                                'model': result.model_text,
                                 'harness': result.harness,
                             })
 
@@ -1633,6 +1634,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     extra = {
                         'tools': payload.get('tools') or [],
                         'by': payload.get('by'),
+                        'model': payload.get('model'),
                         'harness': payload.get('harness') or '',
                     }
                 rows.append((msg.id, member, content, extra))

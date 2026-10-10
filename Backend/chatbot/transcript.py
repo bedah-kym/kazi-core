@@ -41,23 +41,17 @@ def _shorten(text: str, limit: int) -> str:
 
 
 def _content_len(message: Dict[str, Any]) -> int:
-    """Rough size of one message, for string content and for block content."""
+    """Size of one message, measured the way the agent loop measures history.
+
+    The loop trims history again, message by message. If it counted more than
+    this does, it would cut a tool exchange in half after the fit below.
+    """
     content = message.get("content")
     if isinstance(content, str):
         return len(content)
-    total = 0
-    for block in content or []:
-        if not isinstance(block, dict):
-            total += len(str(block))
-        elif block.get("type") == "tool_result":
-            total += len(str(block.get("content") or ""))
-        elif block.get("type") == "tool_use":
-            total += len(str(block.get("name") or "")) + len(
-                json.dumps(block.get("input") or {}, default=str, sort_keys=True)
-            )
-        else:
-            total += len(json.dumps(block, default=str, sort_keys=True))
-    return total
+    if isinstance(content, list):
+        return len(json.dumps(content, default=str))
+    return len(str(content or ""))
 
 
 def _as_blocks(content: Any) -> List[Dict[str, Any]]:
@@ -95,18 +89,18 @@ def _harness_note(harness: str) -> str:
 
 def _harness_of(extra: Any) -> str:
     harness = extra.get("harness") if isinstance(extra, dict) else ""
-    return harness if isinstance(harness, str) else ""
+    return harness.strip() if isinstance(harness, str) else ""
 
 
-def _model_text(content: str, harness: str) -> str:
-    """The reply with the harness's own text removed, so it is never the assistant's words."""
-    if not harness:
-        return content
-    if content == harness:
-        return ""
-    if content.endswith(harness):
-        return content[: len(content) - len(harness)].rstrip()
-    return content
+def _model_text(content: str, extra: Any) -> str:
+    """What the model itself wrote in a reply.
+
+    A reply saved with its parts stores the model's text on its own, so the
+    harness's text never has to be cut out of the full reply. A reply without
+    parts is all the model's.
+    """
+    model = extra.get("model") if isinstance(extra, dict) else None
+    return model.strip() if isinstance(model, str) else content
 
 
 def _assistant_messages(
@@ -116,7 +110,6 @@ def _assistant_messages(
     viewer_user_id: Optional[int],
 ) -> List[Tuple[str, Any]]:
     """The assistant/user messages one stored reply becomes."""
-    harness = _harness_of(extra)
     out: List[Tuple[str, Any]] = []
 
     tools = extra.get("tools") if isinstance(extra, dict) else None
@@ -149,7 +142,7 @@ def _assistant_messages(
         out.append(("assistant", use_blocks))
         out.append(("user", result_blocks))
 
-    model = _model_text(text, harness)
+    model = _model_text(text, extra)
     if model:
         out.append(("assistant", model))
     return out
@@ -202,6 +195,12 @@ def _fit(messages: List[Dict[str, Any]], max_chars: int) -> None:
         before = len(message["content"])
         message["content"] = _shorten(message["content"], before - (total - max_chars))
         total -= before - len(message["content"])
+    if total > max_chars:
+        # Still too long: the tool exchanges of the last turn go, each one whole.
+        turns[0] = [
+            m for m in surviving
+            if not (_has_block(m, "tool_use") or _has_block(m, "tool_result"))
+        ]
     messages[:] = [message for turn in turns for message in turn]
 
 
@@ -217,11 +216,13 @@ def build_history_messages(
 
     The history starts with a user message and never has two neighbours with
     the same role, which is what the model APIs expect. A reply ``extra`` may
-    carry ``tools`` (its records), ``by`` (who started the turn) and ``harness``
-    (text the harness wrote). Records are replayed as native tool blocks only
-    into a turn started by ``viewer_user_id``; the harness text becomes a note
-    on the next user message. ``max_chars`` drops the oldest turns until the
-    rest fits and never drops the last one.
+    carry ``tools`` (its records), ``by`` (who started the turn), ``model``
+    (what the model wrote) and ``harness`` (what the harness wrote). Records
+    are replayed as native tool blocks only into a turn started by
+    ``viewer_user_id``. The harness text becomes a note on the next user
+    message, or a last user message of its own when the reply is the latest
+    one. ``max_chars`` drops the oldest turns until the rest fits and never
+    drops the last one.
     """
     messages: List[Dict[str, Any]] = []
     pending_note = ""
@@ -252,6 +253,11 @@ def build_history_messages(
             if not text:
                 continue
             _append(messages, "user", text)
+
+    if pending_note:
+        # The reply being answered is the latest one: its note goes last, right
+        # before the user message the caller adds.
+        _append(messages, "user", pending_note)
 
     _strip_leading_assistant(messages)
     if max_chars is not None:

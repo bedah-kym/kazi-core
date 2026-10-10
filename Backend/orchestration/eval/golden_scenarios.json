@@ -909,6 +909,11 @@
     "pack": "orchestration",
     "message": "Send the report.",
     "loop": {
+      "preferences": {
+        "approval_overrides": {
+          "send_email": "auto"
+        }
+      },
       "history_tainted": true,
       "history": [
         {
@@ -963,6 +968,11 @@
     "pack": "orchestration",
     "message": "Send the report.",
     "loop": {
+      "preferences": {
+        "approval_overrides": {
+          "send_email": "auto"
+        }
+      },
       "history_tainted": true,
       "history": [
         {

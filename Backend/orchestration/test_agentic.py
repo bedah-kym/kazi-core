@@ -136,6 +136,69 @@ class AgentPromptsTests(SimpleTestCase):
         self.assertIn("test@test.com", msg)
         self.assertIn("yes", msg.lower())
 
+    def test_error_recovery_does_not_forbid_retrying_a_failed_call(self):
+        from orchestration.agent_prompts import build_system_prompt
+        prompt = build_system_prompt()
+        self.assertNotIn("retry a failed tool up to 2 times", prompt)
+        self.assertNotIn("Never retry with the exact same parameters", prompt)
+        self.assertIn(
+            "If a tool returns an error, read the message. Fix what you can, or ask the user for what is missing.",
+            prompt,
+        )
+        self.assertIn(
+            "A tool that failed earlier may work now. When the user asks you to try again, call it again.",
+            prompt,
+        )
+        self.assertIn(
+            "The harness stops repeated failures of the same call within one turn and tells you when it has.",
+            prompt,
+        )
+
+    def test_prompt_tells_the_model_to_describe_only_this_turn(self):
+        from orchestration.agent_prompts import build_system_prompt
+        prompt = build_system_prompt()
+        self.assertIn(
+            "Describe only what happened in this turn. If you did not call a tool in this turn, "
+            "do not describe an attempt or a result.",
+            prompt,
+        )
+        self.assertIn(
+            "If a rule, a limit or a missing tool stops you, say which one. That is a complete answer.",
+            prompt,
+        )
+
+    def test_open_environment_block_tells_the_model_to_call_the_tool(self):
+        from orchestration.agent_prompts import build_environment_block
+        block = build_environment_block({"profile": "open", "platform": "Linux", "shell": "bash"})
+        self.assertIn(
+            "Your part is to call the tool. The harness then asks the user and shows them the exact action. "
+            "Do not ask for permission in text and do not write the approval question yourself.",
+            block,
+        )
+
+    def test_safety_rules_leave_the_approval_question_to_the_harness(self):
+        from orchestration.agent_prompts import build_system_prompt
+        prompt = build_system_prompt()
+        # The old rule told the model to ask in text first, against the line above.
+        self.assertNotIn("Do NOT call the tool until the user says yes", prompt)
+        self.assertNotIn("ask the user to confirm before executing", prompt)
+        self.assertIn(
+            "The harness decides which actions need the user's approval, and it asks for it. "
+            "When the user asks for an action, call the tool with the exact details.",
+            prompt,
+        )
+        self.assertIn(
+            "Do not ask for permission in text before calling a tool, and do not write an approval "
+            "question yourself. A question you write is not an approval: nothing is pending, "
+            "and a yes to it runs nothing.",
+            prompt,
+        )
+        self.assertIn(
+            "Ask the user first only when you do not know what they want: "
+            "a missing recipient, amount, date or other detail.",
+            prompt,
+        )
+
 
 # ---------------------------------------------------------------------------
 #  Phase 4: Error Recovery & Dedup

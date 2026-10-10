@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The agent prompt no longer limits how often the model may retry a call or forbids repeating one. It now says to read a tool error and fix it or ask, to call a failed tool again when the user asks, that the harness bounds repeated failures of the same call in a turn, and to describe only what happened in the turn. In an unsandboxed room it also says the model's part is to call the tool while the harness asks the user.
+- The agent prompt no longer tells the model to ask the user in text before a high-risk action and to hold the tool call until they say yes. That rule contradicted the harness, which already pauses those actions and shows the user the exact call; the model asked once in text and the harness asked again. The prompt now says to call the tool and let the harness ask, and to ask first only when a detail is missing. Which actions pause is unchanged.
 - Every chat message goes to the agent loop. The coordinator's older pipeline
   (planner, intent router, response synthesiser, cached confirmation and slot
   filling) is removed, so a turn can no longer be planned and acted on twice.
@@ -21,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- An identical shell command in one turn now runs again instead of answering with the earlier output as if it were fresh. Any other identical call still does not run a second time, but its result is labelled as the earlier one. The message when the harness stops retrying now says the call can be tried again in a new message.
 - A turn the agent loop fails now ends with one error message ("Something went
   wrong on my side. Nothing further was run.") and one telemetry event instead
   of re-planning the same message through the removed pipeline.

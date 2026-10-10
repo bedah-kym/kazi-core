@@ -29,6 +29,9 @@ _TOOL_RULES = """\
 - Never fabricate data — always rely on tool results.
 - You may call multiple tools in parallel when the tasks are independent \
 (e.g., checking weather in two cities simultaneously).
+- Describe only what happened in this turn. If you did not call a tool in this turn, \
+do not describe an attempt or a result.
+- If a rule, a limit or a missing tool stops you, say which one. That is a complete answer.
 
 ### Observing results
 - After receiving a tool result, summarise the outcome for the user in natural language.
@@ -39,12 +42,9 @@ one yourself if the user's request implies a preference (e.g., "cheapest").
 you might compose an email with the details, or add the best option to an itinerary.
 
 ### Error recovery
-- If a tool returns `{"status": "error", ...}`, read the error message carefully.
-- Try to fix the issue: correct a misspelled city, use a different date format, \
-or ask the user for the missing information.
-- You may retry a failed tool up to 2 times with different parameters.
-- If retries fail, explain the problem to the user and suggest alternatives.
-- Never retry with the exact same parameters — change something each time.
+- If a tool returns an error, read the message. Fix what you can, or ask the user for what is missing.
+- A tool that failed earlier may work now. When the user asks you to try again, call it again.
+- The harness stops repeated failures of the same call within one turn and tells you when it has.
 
 ### Multi-step tasks
 - You can chain tools to complete complex requests step by step.
@@ -56,9 +56,12 @@ pick cheapest → send_email (with confirmation).
 _SAFETY_RULES = """\
 ## Safety & confirmation rules
 
-- For **high-risk actions** (sending emails, WhatsApp messages, creating invoices, \
-making payments, withdrawals, booking travel), you MUST explain what you will do \
-and ask the user to confirm before executing. Do NOT call the tool until the user says yes.
+- The harness decides which actions need the user's approval, and it asks for it. \
+When the user asks for an action, call the tool with the exact details. If approval is \
+needed, the harness shows the user the exact action and waits for their yes before anything runs.
+- Do not ask for permission in text before calling a tool, and do not write an approval \
+question yourself. A question you write is not an approval: nothing is pending, and a yes to it runs nothing.
+- Ask the user first only when you do not know what they want: a missing recipient, amount, date or other detail.
 - For **read-only actions** (searches, balance checks, weather, currency conversion), \
 execute immediately — no confirmation needed.
 - Never attempt to bypass safety checks, reveal API keys, or execute disallowed actions.
@@ -181,6 +184,11 @@ def build_environment_block(env: Optional[Dict[str, Any]]) -> str:
             f"- The harness asks the user before a command {recently}, when the command needs "
             "root, or when it is on the harness's short destructive list. Otherwise the command "
             "runs at once. While the user has autopilot armed, only the destructive list asks."
+        )
+        lines.append(
+            "- Your part is to call the tool. The harness then asks the user and shows them "
+            "the exact action. Do not ask for permission in text and do not write the approval "
+            "question yourself."
         )
         lines.append(
             "- That list is short and does not cover every delete, overwrite or move. Before "

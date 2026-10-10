@@ -176,6 +176,19 @@ def _strip_leading_assistant(messages: List[Dict[str, Any]]) -> None:
             messages.pop(0)
 
 
+def _without_tool_blocks(content: Any) -> Any:
+    """``content`` without its tool calls and tool results; plain text comes back as a string."""
+    if not isinstance(content, list):
+        return content
+    rest = [
+        block for block in content
+        if not (isinstance(block, dict) and block.get("type") in ("tool_use", "tool_result"))
+    ]
+    if all(isinstance(block, dict) and block.get("type") == "text" for block in rest):
+        return "\n\n".join(block.get("text") or "" for block in rest if block.get("text"))
+    return rest
+
+
 def _fit(messages: List[Dict[str, Any]], max_chars: int) -> None:
     """Drop the oldest turns until the rest fits. The last turn always stays:
     when it is too long on its own, its longest plain-text message is shortened.
@@ -197,10 +210,11 @@ def _fit(messages: List[Dict[str, Any]], max_chars: int) -> None:
         total -= before - len(message["content"])
     if total > max_chars:
         # Still too long: the tool exchanges of the last turn go, each one whole.
-        turns[0] = [
-            m for m in surviving
-            if not (_has_block(m, "tool_use") or _has_block(m, "tool_result"))
-        ]
+        # Text that shares a message with a tool result stays.
+        kept: List[Dict[str, Any]] = []
+        for message in surviving:
+            _append(kept, message["role"], _without_tool_blocks(message["content"]))
+        turns[0] = kept
     messages[:] = [message for turn in turns for message in turn]
 
 

@@ -325,6 +325,24 @@ class ToolRecordReplayTests(SimpleTestCase):
         self.assertEqual(_tool_ids(messages), (set(), set()))
         self.assertEqual([m["content"] for m in messages], ["go", "done"])
 
+    def test_text_that_shares_a_message_with_a_tool_result_survives_the_last_resort(self):
+        """A reply with records and no model text: the next user message joins the tool results."""
+        rows = [
+            (1, "admin", "go"),
+            (2, "kazi", "Something went wrong on my side.", _reply(
+                1, harness="", model="", tools=[
+                    {"name": "run_command", "input": {"command": "ls"},
+                     "status": "success", "shown": "x" * 400},
+                ],
+            )),
+            (3, "admin", "and then?"),
+        ]
+
+        messages = build_history_messages(rows, max_chars=50, viewer_user_id=1)
+
+        self.assertEqual(_tool_ids(messages), (set(), set()))
+        self.assertEqual(messages, [{"role": "user", "content": "go\n\nand then?"}])
+
     def test_the_agent_loop_does_not_trim_a_fitted_history_again(self):
         """The loop trims message by message; a second trim would cut a tool exchange in half."""
         from orchestration.agent_loop import _fit_history_to_budget

@@ -1572,20 +1572,29 @@ class ChatConsumer(AsyncWebsocketConsumer):
             self.messages_since_rotation = 0
 
     async def _decrypt_stored(self, message):
-        """Return (content, payload) for a stored message; payload is {} when there is none."""
+        """Return (content, payload) for a stored message; payload is {} when there is none.
+
+        A loaded message is decrypted once: the result is kept on the instance.
+        """
+        cached = getattr(message, '_stored_parts', None)
+        if cached is not None:
+            return cached
         db_content = message.content
+        parts = (db_content, {})
         try:
             # The content from DB should be a JSON string with 'data' and 'nonce'
             parsed_payload = json.loads(db_content)
         except (json.JSONDecodeError, TypeError):
             # Old plaintext messages are not JSON.
-            return db_content, {}
-        if not (isinstance(parsed_payload, dict) and 'data' in parsed_payload and 'nonce' in parsed_payload):
-            return db_content, {}
-        decrypted_payload = await self.decrypt_message(parsed_payload['data'], parsed_payload['nonce'])
-        if isinstance(decrypted_payload, dict) and 'content' in decrypted_payload:
-            return decrypted_payload['content'], decrypted_payload
-        return DECRYPT_FAILED, {}
+            parsed_payload = None
+        if isinstance(parsed_payload, dict) and 'data' in parsed_payload and 'nonce' in parsed_payload:
+            decrypted_payload = await self.decrypt_message(parsed_payload['data'], parsed_payload['nonce'])
+            if isinstance(decrypted_payload, dict) and 'content' in decrypted_payload:
+                parts = (decrypted_payload['content'], decrypted_payload)
+            else:
+                parts = (DECRYPT_FAILED, {})
+        message._stored_parts = parts
+        return parts
 
     async def message_to_json(self, message):
         """Decrypts message content before sending to the client."""

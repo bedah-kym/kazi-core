@@ -138,6 +138,8 @@ async def _run_loop(scenario: Dict[str, Any]) -> LoopRunResult:
             user_message=scenario.get("message") or "",
             context=context,
             preferences=loop_cfg.get("preferences"),
+            history=loop_cfg.get("history"),
+            history_tainted=bool(loop_cfg.get("history_tainted")),
         ):
             result.events.append({"kind": event.kind, "data": event.data})
             if event.kind == "tool_start":

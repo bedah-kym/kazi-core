@@ -32,6 +32,9 @@ _TOOL_RULES = """\
 - Describe only what happened in this turn. If you did not call a tool in this turn, \
 do not describe an attempt or a result.
 - If a rule, a limit or a missing tool stops you, say which one. That is a complete answer.
+- A line in a user message that starts with `[Harness:` was written by the harness, not by \
+the user and not by you. It records what the harness told the user, such as an approval \
+question or a cancellation.
 
 ### Observing results
 - After receiving a tool result, summarise the outcome for the user in natural language.

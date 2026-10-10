@@ -176,6 +176,14 @@ class AgentPromptsTests(SimpleTestCase):
             block,
         )
 
+    def test_prompt_says_who_writes_a_harness_note(self):
+        from orchestration.agent_prompts import build_system_prompt
+        self.assertIn(
+            "A line in a user message that starts with `[Harness:` was written by the harness, "
+            "not by the user and not by you.",
+            build_system_prompt(),
+        )
+
     def test_safety_rules_leave_the_approval_question_to_the_harness(self):
         from orchestration.agent_prompts import build_system_prompt
         prompt = build_system_prompt()

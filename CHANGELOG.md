@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A reply now keeps a record of the tool calls made during it — each call's name, its input (sanitised the way an action receipt's parameters are), its status, and the text the model was shown — together with the id of the user who started the turn and the reply in two parts: what the model wrote and what the harness wrote. The extra data lives inside the reply's existing encrypted payload; there is no migration, and a reply saved before this change builds as it always did.
+- The model's next turn from that user is given the earlier calls in its native tool format (a `tool_use` block and its `tool_result`), instead of only the assistant's prose. In a shared room the records are replayed only into turns started by the same user; other members still see the reply's text and not someone else's tool output.
+- Text the harness wrote — an approval question, a cancel notice, a receipts list, a failure notice — is no longer stored as the assistant's own words. It is replayed to the model as a bracketed `[Harness: ...]` note in a user message, and the prompt says who writes such a note.
 - The agent prompt no longer limits how often the model may retry a call or forbids repeating one. It now says to read a tool error and fix it or ask, to call a failed tool again when the user asks, that the harness bounds repeated failures of the same call in a turn, and to describe only what happened in the turn. In an unsandboxed room it also says the model's part is to call the tool while the harness asks the user.
 - The agent prompt no longer tells the model to ask the user in text before a high-risk action and to hold the tool call until they say yes. That rule contradicted the harness, which already pauses those actions and shows the user the exact call; the model asked once in text and the harness asked again. The prompt now says to call the tool and let the harness ask, and to ask first only when a detail is missing. Which actions pause is unchanged.
 - Every chat message goes to the agent loop. The coordinator's older pipeline
@@ -37,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- A turn whose replayed history contains output from an untrusted tool (the shell, a web search or a delegated run) now starts tainted, so a gated action it calls still asks the user. The room's taint cache key and lifetime are unchanged; the replay itself carries sanitised text only.
 - An approval reply must be the whole message. A reply that starts with an
   approval word and then says something else ("ok, but use a different folder",
   "ok what does that do?") no longer runs a pending action; it cancels it and

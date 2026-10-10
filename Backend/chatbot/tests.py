@@ -284,6 +284,29 @@ class ChatConsumerRoutingTests(TransactionTestCase):
         self.assertEqual(_agent_loop_lock_refs, {})
 
 
+class StoredMessageDecryptTests(SimpleTestCase):
+    def test_a_loaded_message_is_decrypted_once(self):
+        consumer = ChatConsumer()
+        consumer.decrypt_message = AsyncMock(return_value={"content": "hello", "tools": []})
+        message = SimpleNamespace(content=json.dumps({"data": "d", "nonce": "n"}))
+
+        first = async_to_sync(consumer._decrypt_stored)(message)
+        second = async_to_sync(consumer._decrypt_stored)(message)
+
+        self.assertEqual(first, ("hello", {"content": "hello", "tools": []}))
+        self.assertEqual(second, first)
+        self.assertEqual(consumer.decrypt_message.await_count, 1)
+
+    def test_a_plaintext_message_is_returned_as_it_is(self):
+        consumer = ChatConsumer()
+        consumer.decrypt_message = AsyncMock()
+
+        parts = async_to_sync(consumer._decrypt_stored)(SimpleNamespace(content="plain old text"))
+
+        self.assertEqual(parts, ("plain old text", {}))
+        consumer.decrypt_message.assert_not_awaited()
+
+
 class AgentLoopLockTests(SimpleTestCase):
     def setUp(self):
         _agent_loop_locks.clear()

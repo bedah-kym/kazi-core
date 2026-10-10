@@ -1,4 +1,5 @@
 import json
+import random
 import re
 import traceback
 from asgiref.sync import sync_to_async
@@ -21,6 +22,7 @@ from typing import Dict, Tuple
 from .models import Message, Member, Chatroom, UserModerationStatus, ModerationBatch, RoomReadState
 from .tasks import moderate_message_batch, generate_voice_response
 from .dispatch import dispatch_task
+from . import presence
 from .presence import agent_status
 from .transcript import (
     BOT_USERNAME,
@@ -119,117 +121,172 @@ class ChatConsumer(AsyncWebsocketConsumer):
         except Exception as exc:
             logger.warning("Channel layer unavailable on connect (%s); joining room degraded", exc)
 
-        current_time = timezone.now().isoformat()
+        room_id = getattr(current_chat, "id", None)
+        user_id = self.scope["user"].id
+        connection_id = uuid.uuid4().hex[:12]
+        self._presence_room_id = room_id
+        self._presence_user_id = user_id
+        self._presence_connection_id = connection_id
 
-        # 6. Update presence in Redis ATOMICALLY (best effort when Redis is down)
-        try:
-            redis = get_redis_connection("default")
-            key = f"online:{self.room_group_name}"
-            user = self.scope["user"].username
+        first_connection = False
+        online_ids: set = set()
+        if room_id is not None:
+            first_connection, online_ids = await presence.connect(
+                room_id, user_id, connection_id,
+            )
+        self._presence_ids = set(online_ids)
 
-            await sync_to_async(redis.srem)(key, user)
-            await sync_to_async(redis.sadd)(key, user)
-
-            last_seen_key = f"lastseen:{user}"
-            await sync_to_async(redis.set)(last_seen_key, current_time)
-        except Exception as exc:
-            logger.warning("Presence backend unavailable on connect (%s); presence degraded", exc)
-            redis = None
-            key = f"online:{self.room_group_name}"
-            user = self.scope["user"].username
-
-        # 7. Accept connection
+        # 6. Accept connection
         await self.accept()
 
-        # 8. Broadcast online status to ALL other users
+        # 7. Announce online once, on the user's first connection.
+        if first_connection:
+            await self._broadcast_presence("online")
+
+        # 8. Send the current snapshot (one store read for the whole room).
+        entries = []
+        try:
+            participants = await self.get_chatroom_participants(current_chat)
+            entries = await self._build_presence(participants, online_ids, user_id)
+        except Exception as e:
+            logger.error(f"Error building presence snapshot: {e}")
+            logger.error(traceback.format_exc())
+
+        logger.info(f"Sending presence snapshot to {self.scope['user'].username}: {len(entries)} users")
+        await self.send(text_data=json.dumps({
+            "command": "presence_snapshot",
+            "presence": entries,
+        }))
+
+        # 9. Keep this connection's member fresh until it closes.
+        if room_id is not None:
+            self._presence_task = asyncio.create_task(
+                self._presence_loop(room_id, user_id, connection_id)
+            )
+
+    async def _broadcast_presence(self, status):
+        """Broadcast a human's presence change to the room (best effort)."""
         try:
             await self.channel_layer.group_send(
                 self.room_group_name,
                 {
                     "type": "presence_update",
-                    "user": user,
-                    "status": "online",
-                    "last_seen": current_time,
-                }
+                    "user": self.scope["user"].username,
+                    "status": status,
+                    "kind": "human",
+                },
             )
         except Exception as exc:
             logger.warning("Presence broadcast skipped (%s); room sees stale presence", exc)
 
-        # 9. Small delay to ensure broadcast propagates
-        try:
-            await asyncio.sleep(0.2)
-        except Exception:
-            pass
+    async def _build_presence(self, participants, online_ids, connecting_user_id):
+        """One entry per participant, from the room's online ids and the agent's status."""
+        entries = []
+        for member in participants:
+            try:
+                uname, uid = await sync_to_async(
+                    lambda m: (m.User.username, m.User.id)
+                )(member)
+            except Exception as e:
+                logger.error(f"Could not get username from member: {e}")
+                continue
 
-        # 10. Build FRESH presence snapshot
-        presence = []
-        try:
-            participants = await self.get_chatroom_participants(current_chat)
-
-            # Re-read Redis to get absolute latest state
-            raw_online = await sync_to_async(redis.smembers)(key) if redis is not None else set()
-            online_set = set(u.decode() if isinstance(u, bytes) else u for u in raw_online)
-
-            logger.debug(f"Building presence for {user}: {len(participants)} participants, {len(online_set)} online")
-
-            for member in participants:
-                try:
-                    # CRITICAL: Must wrap DB access in sync_to_async
-                    uname = await sync_to_async(lambda m: m.User.username)(member)
-                except Exception as e:
-                    logger.error(f"Could not get username from member: {e}")
-                    continue
-
-                # The bot has no socket, so its status is declared, not inferred
-                # from the room's online set.
-                if uname == BOT_USERNAME:
-                    bot_status = agent_status()
-                    presence.append({
-                        "user": uname,
-                        "status": bot_status,
-                        "last_seen": None,
-                        "kind": "agent",
-                    })
-                    logger.debug(f"Presence: {uname} -> {bot_status} (agent)")
-                    continue
-
-                # Check if user is in the online set
-                is_online = uname in online_set
-
-                # Fetch last_seen from Redis
-                ls = await sync_to_async(redis.get)(f"lastseen:{uname}") if redis is not None else None
-                if isinstance(ls, bytes):
-                    try:
-                        ls = ls.decode()
-                    except Exception:
-                        ls = None
-
-                # Force current connecting user to online status
-                if uname == user:
-                    is_online = True
-                    ls = current_time
-
-                status = 'online' if is_online else 'offline'
-                presence.append({
+            # The bot has no socket, so its status is declared, not inferred.
+            if uname == BOT_USERNAME:
+                entries.append({
                     "user": uname,
-                    "status": status,
-                    "last_seen": ls,
-                    "kind": "human",
+                    "status": agent_status(),
+                    "last_seen": None,
+                    "kind": "agent",
                 })
+                continue
 
-                logger.debug(f"Presence: {uname} -> {status}")
+            is_online = uid in online_ids or uid == connecting_user_id
+            last_seen = None
+            if not is_online:
+                member_last_seen = getattr(member, "last_seen", None)
+                if member_last_seen is not None:
+                    try:
+                        last_seen = member_last_seen.isoformat()
+                    except Exception:
+                        last_seen = None
+            entries.append({
+                "user": uname,
+                "status": "online" if is_online else "offline",
+                "last_seen": last_seen,
+                "kind": "human",
+            })
+        return entries
 
-        except Exception as e:
-            logger.error(f"Error building presence snapshot: {e}")
-            logger.error(traceback.format_exc())
+    async def _save_member_last_seen(self, user_id):
+        now = timezone.now()
 
-        logger.info(f"Sending presence snapshot to {user}: {len(presence)} users")
+        def _save():
+            Member.objects.filter(User_id=user_id).update(last_seen=now)
 
-        # 11. Send snapshot to the newly connected user
-        await self.send(text_data=json.dumps({
-            "command": "presence_snapshot",
-            "presence": presence,
-        }))
+        try:
+            await sync_to_async(_save)()
+        except Exception as exc:
+            logger.debug("Member.last_seen save skipped: %s", exc)
+
+    async def _presence_loop(self, room_id, user_id, connection_id):
+        # A random first sleep spreads connections restored by a deploy.
+        await asyncio.sleep(
+            random.uniform(0, presence.beat_interval_seconds())  # nosec B311 — deploy jitter, not a security decision
+        )
+        while True:
+            try:
+                await self._presence_tick(room_id, user_id, connection_id)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("Presence tick skipped: %s", exc)
+            await asyncio.sleep(presence.beat_interval_seconds())
+
+    async def _presence_tick(self, room_id, user_id, connection_id):
+        # A store hiccup must not close the socket; the loop keeps going.
+        try:
+            online_ids = await presence.beat(room_id, user_id, connection_id)
+            if online_ids != getattr(self, "_presence_ids", set()):
+                self._presence_ids = set(online_ids)
+                chat = await self.get_current_chatroom(room_id)
+                if chat is not None:
+                    participants = await self.get_chatroom_participants(chat)
+                    entries = await self._build_presence(participants, online_ids, user_id)
+                    await self.send(text_data=json.dumps({
+                        "command": "presence_snapshot",
+                        "presence": entries,
+                    }))
+            self._presence_ticks = getattr(self, "_presence_ticks", 0) + 1
+            if self._presence_ticks % 10 == 0:
+                await self._save_member_last_seen(user_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("Presence tick skipped: %s", exc)
+
+    async def _stop_presence(self):
+        task = getattr(self, "_presence_task", None)
+        self._presence_task = None
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+
+    async def __call__(self, scope, receive, send):
+        # A beat made with create_task is not cancelled with the consumer and
+        # `disconnect` does not run in every teardown, so stop it here too.
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            task = getattr(self, "_presence_task", None)
+            self._presence_task = None
+            if task is not None:
+                task.cancel()
 
     async def schedule_context_summary(self, room_id, message_id):
         min_messages = getattr(settings, "CONTEXT_SUMMARY_MIN_MESSAGES", 6)
@@ -309,6 +366,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             "command": "presence",
             "user": event.get("user"),
             "status": event.get("status"),
+            "kind": event.get("kind", "human"),
         }
 
         if 'last_seen' in event:
@@ -434,6 +492,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
             # Connection was never fully established
             return
 
+        # Stop this connection's beat first so it cannot re-add the member.
+        await self._stop_presence()
+
         try:
             # 1. Leave the chat group with timeout
             try:
@@ -444,62 +505,15 @@ class ChatConsumer(AsyncWebsocketConsumer):
             except asyncio.TimeoutError:
                 logger.warning(f"Group discard timed out for {self.channel_name}")
 
-            # 2. Remove from Redis set of online users
-            cache_key = f"online:{self.room_group_name}"
-            redis = get_redis_connection("default")
-            try:
-                await sync_to_async(redis.srem)(cache_key, self.scope["user"].username)
-            except Exception as e:
-                logger.error(f"Redis srem error: {e}")
-
-            # 3. Update last seen
-            try:
-                last_seen_key = f"lastseen:{self.scope['user'].username}"
-                now_iso = timezone.now().isoformat()
-                await sync_to_async(redis.set)(last_seen_key, now_iso)
-
-                # persist to Member.last_seen if Member exists
-                def persist_last_seen(username, iso_ts):
-                    try:
-                        u = User.objects.filter(username=username).first()
-                        if not u:
-                            return
-                        m = Member.objects.filter(User=u).first()
-                        if not m:
-                            return
-                        from django.utils.dateparse import parse_datetime
-                        dt = parse_datetime(iso_ts)
-                        if dt is None:
-                            return
-                        m.last_seen = dt
-                        m.save()
-                    except Exception as e:
-                        logger.error(f"Error persisting last_seen: {e}")
-
-                await sync_to_async(persist_last_seen)(self.scope['user'].username, now_iso)
-
-                # Broadcast offline status with last_seen to the group with timeout
-                logger.debug(f"Broadcasting offline for {self.scope['user'].username}")
-                try:
-                    await asyncio.wait_for(
-                        self.channel_layer.group_send(
-                            self.room_group_name,
-                            {
-                                "type": "presence_update",
-                                "user": self.scope["user"].username,
-                                "status": "offline",
-                                "last_seen": now_iso
-                            }
-                        ),
-                        timeout=2.0
-                    )
-                except asyncio.TimeoutError:
-                    logger.warning(f"Presence broadcast timed out for {self.scope['user'].username}")
-                except Exception as e:
-                    logger.error(f"Presence broadcast error: {e}")
-
-            except Exception as e:
-                logger.error(f"Last seen update error: {e}")
+            # 2. The user is offline only when this was their last connection.
+            room_id = getattr(self, "_presence_room_id", None)
+            user_id = getattr(self, "_presence_user_id", None)
+            connection_id = getattr(self, "_presence_connection_id", None)
+            if room_id is not None and connection_id is not None:
+                last = await presence.disconnect(room_id, user_id, connection_id)
+                if last:
+                    await self._save_member_last_seen(user_id)
+                    await self._broadcast_presence("offline")
 
         except Exception as e:
             logger.error(f"Disconnect error for {self.channel_name}: {e}")
@@ -916,7 +930,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 try:
                     from notifications.services import NotificationService
                     await sync_to_async(NotificationService.notify_room_message)(
-                        member_user, current_chat, message, self.room_group_name,
+                        member_user, current_chat, message,
                     )
                 except Exception as e:
                     logger.debug(f"Room notification dispatch skipped: {e}")
@@ -1259,7 +1273,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             try:
                 from notifications.services import NotificationService
                 await sync_to_async(NotificationService.notify_room_message)(
-                    member_user, current_chat, message, self.room_group_name,
+                    member_user, current_chat, message,
                 )
             except Exception as e:
                 logger.debug(f"Room notification dispatch skipped: {e}")
@@ -1419,7 +1433,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             try:
                 from notifications.services import NotificationService
                 await sync_to_async(NotificationService.notify_room_message)(
-                    member_user, current_chat, message, self.room_group_name,
+                    member_user, current_chat, message,
                 )
             except Exception as e:
                 logger.debug(f"Room notification dispatch skipped: {e}")

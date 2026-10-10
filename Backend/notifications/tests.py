@@ -1,4 +1,6 @@
 """Tests for the unified notification service."""
+import asyncio
+
 from asgiref.sync import async_to_sync
 from unittest.mock import AsyncMock, patch, MagicMock
 
@@ -313,9 +315,67 @@ class NotifyRoomMessageBotTests(TestCase):
         mock_get_redis.return_value = redis
 
         NotificationService.notify_room_message(
-            self.sender, self.room, self.message, "chat_1",
+            self.sender, self.room, self.message,
         )
 
         notified = [call.kwargs.get("user") for call in mock_notify.call_args_list]
         self.assertNotIn(self.bot, notified)
         self.assertIn(self.human, notified)
+
+
+class NotifyRoomMessagePresenceTests(TestCase):
+    """Online users are skipped; a connection that aged out is notified."""
+
+    def setUp(self):
+        from chatbot import presence
+
+        presence._local_rooms.clear()
+        presence._local_users.clear()
+        presence._skip_until = 0.0
+
+        self.sender = User.objects.create_user(
+            username="presence-n-sender", email="ns@example.com",
+            password="pass",  # nosec B106 — test fixture — fake credential
+        )
+        self.online = User.objects.create_user(
+            username="presence-n-online", email="no@example.com",
+            password="pass",  # nosec B106 — test fixture — fake credential
+        )
+        self.away = User.objects.create_user(
+            username="presence-n-away", email="na@example.com",
+            password="pass",  # nosec B106 — test fixture — fake credential
+        )
+        self.room = Chatroom.objects.create()
+        sender_member = None
+        for user in (self.sender, self.online, self.away):
+            member, _ = Member.objects.get_or_create(User=user)
+            self.room.participants.add(member)
+            if user == self.sender:
+                sender_member = member
+        self.message = Message.objects.create(
+            member=sender_member, content="hi", timestamp=timezone.now(),
+        )
+
+    @patch.object(NotificationService, "notify")
+    @patch("django_redis.get_redis_connection")
+    def test_a_connected_user_is_skipped_and_a_stale_one_is_notified(
+        self, mock_get_redis, mock_notify,
+    ):
+        from chatbot import presence
+
+        redis = MagicMock()
+        redis.get.return_value = None
+        mock_get_redis.return_value = redis
+
+        clock = [1000.0]
+        with patch.object(presence, "_now", new=lambda: clock[0]):
+            asyncio.run(presence.connect(self.room.id, self.online.id, "c1"))
+            asyncio.run(presence.connect(self.room.id, self.away.id, "c2"))
+            clock[0] += 80
+            asyncio.run(presence.beat(self.room.id, self.online.id, "c1"))
+
+            NotificationService.notify_room_message(self.sender, self.room, self.message)
+
+        notified = [call.kwargs.get("user") for call in mock_notify.call_args_list]
+        self.assertIn(self.away, notified)
+        self.assertNotIn(self.online, notified)

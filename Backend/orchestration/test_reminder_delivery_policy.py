@@ -178,13 +178,18 @@ class ReminderDeliveryRouterTests(TransactionTestCase):
         ):
             self.assertFalse(chatbot_tasks._send_reminder_email(reminder))
 
-    def test_online_check_decodes_redis_bytes(self):
-        class FakeRedis:
-            def get(self, key):
-                return (timezone.now() - timedelta(minutes=2)).isoformat().encode("utf-8")
+    def test_online_check_uses_the_presence_window(self):
+        from chatbot import presence
 
-        with patch("django_redis.get_redis_connection", return_value=FakeRedis()):
+        presence._local_rooms.clear()
+        presence._local_users.clear()
+        presence._skip_until = 0.0
+        clock = [1000.0]
+        with patch.object(presence, "_now", new=lambda: clock[0]):
+            asyncio.run(presence.connect(901, self.user.id, "conn"))
             self.assertTrue(chatbot_tasks._is_user_online(self.user))
+            clock[0] += 76
+            self.assertFalse(chatbot_tasks._is_user_online(self.user))
 
     def test_whatsapp_mode_uses_sync_send_with_profile_phone(self):
         reminder = self._reminder(via_email=False, via_whatsapp=True)

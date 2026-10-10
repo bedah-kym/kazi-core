@@ -21,6 +21,7 @@ from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.utils import timezone
 
+from chatbot import presence
 from chatbot.transcript import BOT_USERNAME
 
 from .models import Notification
@@ -143,11 +144,11 @@ class NotificationService:
         return notification
 
     @staticmethod
-    def notify_room_message(sender, room, message, room_group_name: str) -> None:
+    def notify_room_message(sender, room, message) -> None:
         """
         Notify offline room participants about a new message.
-        Skips users who are currently online in the room (checked via Redis
-        presence set) and applies a 5-minute debounce per user+room.
+        Skips users who are online in the room (from the presence service) and
+        applies a 5-minute debounce per user+room.
         """
         try:
             from django_redis import get_redis_connection
@@ -156,8 +157,7 @@ class NotificationService:
         except Exception:
             return
 
-        online_users = redis.smembers(f"online:{room_group_name}")
-        online_usernames = {u.decode() if isinstance(u, bytes) else u for u in online_users}
+        online_ids = presence.online_user_ids(room.id)
 
         # Get room participants
         try:
@@ -173,7 +173,7 @@ class NotificationService:
                 continue
             if member_user.username == BOT_USERNAME:
                 continue
-            if member_user.username in online_usernames:
+            if member_user.id in online_ids:
                 continue
 
             # 5-minute debounce

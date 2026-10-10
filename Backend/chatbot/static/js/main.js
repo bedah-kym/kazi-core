@@ -1169,6 +1169,23 @@ function updateHeaderPresence(user, status, lastSeen) {
     }
 }
 
+// An AI-only room is shown under its display name ("General (AI)" or a
+// persona's name), so its header and sidebar dots are keyed by that name and
+// never match the agent's username. Paint them from the agent's entry.
+function applyAgentPresence(entry) {
+    if (!entry || entry.kind !== 'agent') return;
+    if (typeof isAiOnlyRoom === 'undefined' || !isAiOnlyRoom) return;
+    if (typeof otherUser === 'undefined' || !otherUser) return;
+
+    const online = entry.status === 'online';
+    document.querySelectorAll('.sidebar-dot').forEach(dot => {
+        if (dot.getAttribute('data-user') !== otherUser) return;
+        dot.classList.toggle('online', online);
+        dot.classList.toggle('offline', !online);
+    });
+    updateHeaderPresence(otherUser, entry.status, null);
+}
+
 function handlePresenceUpdate(data) {
     console.log('📡 handlePresenceUpdate called with:', data);
 
@@ -1177,10 +1194,12 @@ function handlePresenceUpdate(data) {
         userPresenceMap.clear();
         presenceList.forEach(entry => {
             updateUserPresence(entry.user, entry.status, entry.last_seen);
+            applyAgentPresence(entry);
         });
         updateGroupChatHeader();
     } else if (data.command === 'presence') {
         updateUserPresence(data.user, data.status, data.last_seen);
+        applyAgentPresence(data);
         updateGroupChatHeader();
     }
 }

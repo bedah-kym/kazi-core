@@ -176,6 +176,29 @@ class AgentPromptsTests(SimpleTestCase):
             block,
         )
 
+    def test_safety_rules_leave_the_approval_question_to_the_harness(self):
+        from orchestration.agent_prompts import build_system_prompt
+        prompt = build_system_prompt()
+        # The old rule told the model to ask in text first, against the line above.
+        self.assertNotIn("Do NOT call the tool until the user says yes", prompt)
+        self.assertNotIn("ask the user to confirm before executing", prompt)
+        self.assertIn(
+            "The harness decides which actions need the user's approval, and it asks for it. "
+            "When the user asks for an action, call the tool with the exact details.",
+            prompt,
+        )
+        self.assertIn(
+            "Do not ask for permission in text before calling a tool, and do not write an approval "
+            "question yourself. A question you write is not an approval: nothing is pending, "
+            "and a yes to it runs nothing.",
+            prompt,
+        )
+        self.assertIn(
+            "Ask the user first only when you do not know what they want: "
+            "a missing recipient, amount, date or other detail.",
+            prompt,
+        )
+
 
 # ---------------------------------------------------------------------------
 #  Phase 4: Error Recovery & Dedup

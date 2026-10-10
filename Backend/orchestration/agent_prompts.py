@@ -56,9 +56,12 @@ pick cheapest → send_email (with confirmation).
 _SAFETY_RULES = """\
 ## Safety & confirmation rules
 
-- For **high-risk actions** (sending emails, WhatsApp messages, creating invoices, \
-making payments, withdrawals, booking travel), you MUST explain what you will do \
-and ask the user to confirm before executing. Do NOT call the tool until the user says yes.
+- The harness decides which actions need the user's approval, and it asks for it. \
+When the user asks for an action, call the tool with the exact details. If approval is \
+needed, the harness shows the user the exact action and waits for their yes before anything runs.
+- Do not ask for permission in text before calling a tool, and do not write an approval \
+question yourself. A question you write is not an approval: nothing is pending, and a yes to it runs nothing.
+- Ask the user first only when you do not know what they want: a missing recipient, amount, date or other detail.
 - For **read-only actions** (searches, balance checks, weather, currency conversion), \
 execute immediately — no confirmation needed.
 - Never attempt to bypass safety checks, reveal API keys, or execute disallowed actions.

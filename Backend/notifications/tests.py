@@ -4,7 +4,11 @@ from unittest.mock import AsyncMock, patch, MagicMock
 
 from django.contrib.auth import get_user_model
 from django.test import SimpleTestCase, TestCase
+from django.utils import timezone
 
+from chatbot.models import Chatroom, Member, Message
+from chatbot.transcript import BOT_USERNAME
+from notifications.services import NotificationService
 from orchestration.user_preferences import _normalize_notify_matrix
 
 User = get_user_model()
@@ -272,3 +276,46 @@ class NotificationConsumerRedisOutageTests(SimpleTestCase):
         await consumer.disconnect(1001)
 
         consumer.channel_layer.group_discard.assert_awaited_once()
+
+
+class NotifyRoomMessageBotTests(TestCase):
+    """The bot is a room participant but never a notification target."""
+
+    def setUp(self):
+        self.sender = User.objects.create_user(
+            username="presence-sender", email="s@example.com",
+            password="pass",  # nosec B106 — test fixture — fake credential
+        )
+        self.human = User.objects.create_user(
+            username="presence-other", email="o@example.com",
+            password="pass",  # nosec B106 — test fixture — fake credential
+        )
+        self.bot, _ = User.objects.get_or_create(
+            username=BOT_USERNAME, defaults={"email": "kazi@example.com"},
+        )
+        self.room = Chatroom.objects.create()
+        self.sender_member = None
+        for user in (self.sender, self.human, self.bot):
+            member, _ = Member.objects.get_or_create(User=user)
+            self.room.participants.add(member)
+            if user == self.sender:
+                self.sender_member = member
+        self.message = Message.objects.create(
+            member=self.sender_member, content="hi", timestamp=timezone.now(),
+        )
+
+    @patch.object(NotificationService, "notify")
+    @patch("django_redis.get_redis_connection")
+    def test_the_bot_is_never_notified(self, mock_get_redis, mock_notify):
+        redis = MagicMock()
+        redis.smembers.return_value = set()
+        redis.get.return_value = None
+        mock_get_redis.return_value = redis
+
+        NotificationService.notify_room_message(
+            self.sender, self.room, self.message, "chat_1",
+        )
+
+        notified = [call.kwargs.get("user") for call in mock_notify.call_args_list]
+        self.assertNotIn(self.bot, notified)
+        self.assertIn(self.human, notified)

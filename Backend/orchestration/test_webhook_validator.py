@@ -28,7 +28,8 @@ class IntaSendSignatureTests(SimpleTestCase):
         self.assertFalse(verify_intasend_signature(None, SECRET, BODY))
         self.assertFalse(verify_intasend_signature(SECRET, "", BODY))
 
-    def test_non_ascii_header_rejected_without_error(self):
+    def test_non_ascii_challenge(self):
+        self.assertTrue(verify_intasend_signature("sécret-ü", "sécret-ü", BODY))
         self.assertFalse(verify_intasend_signature("sécret-ü", SECRET, BODY))
 
     def test_hmac_signature_still_accepted(self):

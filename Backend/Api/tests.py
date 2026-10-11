@@ -126,14 +126,19 @@ class KaziReplyPermissionTests(TestCase):
         response = self.client.get("/api/newreply/")
         self.assertIn(response.status_code, (401, 403))
 
-    def test_regular_user_cannot_list_or_create(self):
+    def test_regular_user_cannot_list(self):
         self.client.force_authenticate(self._user("reply-regular"))
         self.assertEqual(self.client.get("/api/newreply/").status_code, 403)
+        self.assertEqual(self.client.head("/api/newreply/").status_code, 403)
+
+    def test_regular_user_cannot_create(self):
+        self.client.force_authenticate(self._user("reply-regular"))
         payload = {"message": "m", "sender": "s", "command": "c", "chatid": 1}
         self.assertEqual(self.client.post("/api/newreply/", payload).status_code, 403)
 
     def test_user_with_model_perms_can_list_and_create(self):
         self.client.force_authenticate(self._user("reply-staff", perms=("view_kazireply", "add_kazireply")))
         self.assertEqual(self.client.get("/api/newreply/").status_code, 200)
+        self.assertEqual(self.client.head("/api/newreply/").status_code, 200)
         payload = {"message": "m", "sender": "s", "command": "c", "chatid": 1}
         self.assertEqual(self.client.post("/api/newreply/", payload).status_code, 201)

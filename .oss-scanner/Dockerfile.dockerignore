@@ -1,7 +1,0 @@
-# Replaces the root .dockerignore for this Dockerfile only. The root one is tuned for the slim
-# runtime image and drops docs/ and *.md, which the scanner should be able to read.
-.env
-.env.*
-!.env.example
-**/__pycache__
-.venv

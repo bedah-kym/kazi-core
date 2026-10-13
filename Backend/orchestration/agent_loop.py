@@ -1620,14 +1620,10 @@ async def run_agent_loop(
         # Append the assistant message to the conversation
         state.messages.append({"role": "assistant", "content": content_blocks})
 
-        # ---- Stream text in small chunks for typing effect ----------- #
+        # ---- Emit the model's text as one block ---------------------- #
         text = redact_sensitive_text(_extract_text(content_blocks))
         if text:
-            # Simulate streaming by chunking the text into small pieces
-            chunk_size = 12  # ~3 words per chunk
-            for i in range(0, len(text), chunk_size):
-                yield AgentEvent("text_delta", {"text": text[i:i + chunk_size]})
-                await asyncio.sleep(0.02)  # 20ms between chunks
+            yield AgentEvent("text_delta", {"text": text})
 
         # ---- If LLM is done talking, exit the loop ------------------- #
         if stop_reason == "end_turn":

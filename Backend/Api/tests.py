@@ -126,6 +126,13 @@ class KaziReplyPermissionTests(TestCase):
         response = self.client.get("/api/newreply/")
         self.assertIn(response.status_code, (401, 403))
 
+    def test_anonymous_still_cannot_create(self):
+        from Api.models import KaziReply
+        payload = {"message": "m", "sender": "s", "command": "c", "chatid": 1}
+        response = self.client.post("/api/newreply/", payload)
+        self.assertIn(response.status_code, (401, 403))
+        self.assertEqual(KaziReply.objects.count(), 1)
+
     def test_regular_user_cannot_list(self):
         self.client.force_authenticate(self._user("reply-regular"))
         self.assertEqual(self.client.get("/api/newreply/").status_code, 403)

@@ -230,19 +230,19 @@ async def execute_workflow_step(step: Dict[str, Any], context: Dict[str, Any]) -
         prefs = context.get("preferences")
         if isinstance(prefs, dict):
             return prefs
+        from orchestration.user_preferences import (
+            conservative_default_preferences,
+            load_preferences_fail_closed,
+        )
+
         user_id = context.get("user_id")
-        if not user_id:
-            context["preferences"] = {}
-            return {}
-        try:
-            from orchestration.user_preferences import get_user_preferences
+        if user_id:
             from asgiref.sync import sync_to_async
 
-            prefs = await sync_to_async(get_user_preferences)(user_id)
-        except Exception:
-            prefs = {}
-        if not isinstance(prefs, dict):
-            prefs = {}
+            prefs = await sync_to_async(load_preferences_fail_closed)(user_id)
+        else:
+            # A workflow step always has an owner; a missing one is a failed lookup.
+            prefs = conservative_default_preferences()
         context["preferences"] = prefs
         return prefs
 

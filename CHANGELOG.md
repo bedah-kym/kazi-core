@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Payment, email and WhatsApp actions are now refused when a user's capability preferences cannot be read, both in workflow steps and in chat turns. A failed lookup — or a workflow step with no owner — turns those three gates off instead of allowing the action; search, travel, reminders and calendar keep working.
 - A turn whose replayed history contains output from an untrusted tool (the shell, a web search or a delegated run) now starts tainted, so a gated action it calls still asks the user. The room's taint cache key and lifetime are unchanged; the replay itself carries sanitised text only.
 - An approval reply must be the whole message. A reply that starts with an
   approval word and then says something else ("ok, but use a different folder",

@@ -18,7 +18,7 @@ from django.core.cache import cache
 
 from orchestration.telemetry import record_event
 from orchestration.contracts import build_step_event
-from orchestration.user_preferences import get_user_preferences
+from orchestration.user_preferences import conservative_default_preferences, get_user_preferences
 from orchestration.action_receipts import (
     fetch_recent_receipts,
     undo_last_action,
@@ -223,7 +223,7 @@ class OrchestrationCoordinator:
             user_preferences = await sync_to_async(get_user_preferences)(user_id)
         except Exception as e:
             logger.warning(f"User preferences load failed: {e}")
-            user_preferences = {}
+            user_preferences = conservative_default_preferences()
         try:
             from orchestration.preference_mining import merge_learned_overrides
             user_preferences = await sync_to_async(merge_learned_overrides)(user_preferences, user_id, room_id)

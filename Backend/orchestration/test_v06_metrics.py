@@ -16,11 +16,7 @@ decorator should be removed in the same PR that ships the feature.
 
 All tests are hermetic: no network, no real LLM, no database.
 """
-import asyncio
-
 from django.test import SimpleTestCase, override_settings
-
-from unittest.mock import AsyncMock, MagicMock, patch
 
 
 class V06SuccessMetricTests(SimpleTestCase):
@@ -115,39 +111,3 @@ class V06SuccessMetricTests(SimpleTestCase):
             self._advertised_actions(),
             "generate_speech is not advertised to the planner",
         )
-
-    def test_uncovered_request_does_not_dead_end(self):
-        """Metric: an uncovered open-ended request must not dead-end — it
-        either reaches the shell tail (run_command, once Phase 1 lands) or
-        asks for help (brief §4.4: "the shell covers the open-ended tail").
-
-        Currently satisfied: the planner falls back to `single` (which the
-        agent loop routes to general chat) and the agent loop advertises
-        `delegate_task`. This test locks that behavior against regressions.
-        """
-        from orchestration.agent_loop import _META_TOOL_NAMES
-        from orchestration.intent_parser import IntentParser
-        from orchestration.workflow_planner import plan_user_request
-
-        message = "help me figure out why my laptop battery drains so fast"
-
-        empty_plan_llm = MagicMock()
-        empty_plan_llm.generate_json = AsyncMock(
-            return_value={"mode": "single", "steps": None, "confidence": 0.1}
-        )
-        crashing_llm = MagicMock()
-        crashing_llm.generate_json = AsyncMock(side_effect=RuntimeError("llm down"))
-
-        for mock_llm in (empty_plan_llm, crashing_llm):
-            with patch("orchestration.workflow_planner.get_llm_client", return_value=mock_llm):
-                plan = asyncio.run(plan_user_request(message, history_text=""))
-            self.assertIn(
-                plan.get("mode"),
-                ("single", "needs_clarification"),
-                "uncovered request dead-ended with mode %r" % plan.get("mode"),
-            )
-            if plan.get("mode") == "needs_clarification":
-                self.assertTrue(plan.get("assistant_message"))
-
-        self.assertIn("delegate_task", _META_TOOL_NAMES)
-        self.assertIn("general_chat", IntentParser.SUPPORTED_ACTIONS)

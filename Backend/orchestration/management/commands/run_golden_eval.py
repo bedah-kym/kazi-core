@@ -11,7 +11,6 @@ from orchestration.eval.loop_runner import evaluate_loop_scenario
 from orchestration.eval.scenario_packs import pack_name, select_pack
 from orchestration.intent_parser import parse_intent
 from orchestration.security_policy import is_prompt_injection, should_block_message
-from orchestration.workflow_planner import plan_user_request
 
 
 class Command(BaseCommand):
@@ -92,8 +91,6 @@ class Command(BaseCommand):
             history = scenario.get("history") or ""
             preferences = scenario.get("preferences") or {}
 
-            expected_mode = scenario.get("expected_mode")
-            expected_actions = scenario.get("expected_actions") or []
             expected_intent_action = scenario.get("expected_intent_action")
             expected_injection = scenario.get("expected_injection")
             expected_blocked = scenario.get("expected_blocked")
@@ -128,30 +125,6 @@ class Command(BaseCommand):
                 if actual_tier != expected_shell_tier:
                     passed = False
                     details.append(f"shell_tier {actual_tier} != {expected_shell_tier}")
-
-            if expected_mode or expected_actions:
-                plan = async_to_sync(plan_user_request)(
-                    message,
-                    history,
-                    user_id=None,
-                    preferences=preferences,
-                )
-                mode = plan.get("mode")
-                if expected_mode and mode != expected_mode:
-                    passed = False
-                    details.append(f"mode {mode} != {expected_mode}")
-
-                if expected_actions:
-                    definition = plan.get("workflow_definition") or {}
-                    actions = [
-                        step.get("action")
-                        for step in (definition.get("steps") or [])
-                        if isinstance(step, dict)
-                    ]
-                    for action in expected_actions:
-                        if action not in actions:
-                            passed = False
-                            details.append(f"missing action {action}")
 
             if expected_intent_action:
                 intent = async_to_sync(parse_intent)(

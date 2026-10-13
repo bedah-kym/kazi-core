@@ -26,37 +26,6 @@ from orchestration.security_policy import (
 )
 
 
-class ConfirmationMatchingTests(SimpleTestCase):
-    """Only affirmative-led replies may confirm a pending gate.
-
-    Substring matching once let "yesterday's weather" confirm a pending
-    high-risk workflow ("yes" in "yesterday").
-    """
-
-    def test_affirmative_replies_match(self):
-        from orchestration.workflow_planner import looks_like_confirmation
-        for message in (
-            "yes", "Yes.", "YES",
-            "yeah, send it", "ok do it", "Okay, proceed",
-            "approve", "approved, go on", "confirm that", "confirmed",
-            "proceed with the booking", "go ahead", "Go ahead and email it",
-        ):
-            self.assertTrue(looks_like_confirmation(message), msg=message)
-
-    def test_non_affirmative_messages_do_not_match(self):
-        from orchestration.workflow_planner import looks_like_confirmation
-        for message in (
-            "yesterday's weather in Mombasa",
-            "can you confirm my email address?",
-            "did you approve the invoice?",
-            "cancel that",
-            "not yet",
-            "what's the weather?",
-            "",
-        ):
-            self.assertFalse(looks_like_confirmation(message), msg=message)
-
-
 class ActionCatalogTests(SimpleTestCase):
     def test_send_whatsapp_alias(self):
         self.assertEqual(resolve_action_alias("send_whatsapp"), "send_message")
@@ -530,51 +499,6 @@ class Te2FailClosedTests(SimpleTestCase):
         self.assertEqual(conservative["custom_key"], "kept")
         # Input untouched
         self.assertTrue(prefs["allow_payments"])
-
-    @patch("django.contrib.auth.get_user_model")
-    def test_planner_prefs_fail_closed_on_lookup_error(self, mock_get_user_model):
-        from orchestration.workflow_planner import _get_user_capability_prefs
-
-        mock_get_user_model.return_value.objects.get.side_effect = RuntimeError("db down")
-
-        prefs = self._run(_get_user_capability_prefs(42))
-
-        self.assertFalse(prefs["allow_payments"])
-        self.assertFalse(prefs["allow_whatsapp"])
-        self.assertFalse(prefs["allow_email"])
-        self.assertTrue(prefs["allow_travel"])
-
-    @patch("django.contrib.auth.get_user_model")
-    def test_manager_llm_disabled_on_lookup_error(self, mock_get_user_model):
-        from orchestration.workflow_planner import _manager_llm_enabled_for_user
-
-        mock_get_user_model.return_value.objects.get.side_effect = RuntimeError("db down")
-
-        self.assertFalse(self._run(_manager_llm_enabled_for_user(42)))
-
-    def test_planner_blocks_payment_step_when_lookup_fails(self):
-        # Old attack still blocked: with the lookup failing, a withdraw step
-        # must be refused, not silently allowed.
-        from orchestration.workflow_planner import _steps_allowed_for_user
-
-        steps = [{"action": "withdraw", "params": {"amount": 100}}]
-
-        with patch(
-            "orchestration.workflow_planner._get_user_capability_prefs",
-            new=AsyncMock(return_value={
-                "allow_payments": False,
-                "allow_travel": True,
-                "allow_email": False,
-                "allow_whatsapp": False,
-                "allow_reminders": True,
-                "allow_web_search": True,
-                "allow_calendar": True,
-            }),
-        ):
-            denial = self._run(_steps_allowed_for_user(steps, 42))
-
-        self.assertIsNotNone(denial)
-        self.assertIn("disabled", denial)
 
     def test_router_prefs_fail_closed_on_unexpected_error(self):
         from orchestration.tool_router import MCPRouter

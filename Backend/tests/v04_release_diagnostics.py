@@ -603,18 +603,6 @@ def _():
 
 
 # ---------------------------------------------------------------------------
-# 16. WORKFLOW PLANNER (without LLM — deterministic stub path)
-# ---------------------------------------------------------------------------
-
-@check("planner", "workflow_planner imports and exposes plan_user_request")
-def _():
-    from orchestration.workflow_planner import plan_user_request
-    import inspect
-    sig = inspect.signature(plan_user_request)
-    return f"signature: {list(sig.parameters)}"
-
-
-# ---------------------------------------------------------------------------
 # 17. CONNECTOR REGISTRY
 # ---------------------------------------------------------------------------
 

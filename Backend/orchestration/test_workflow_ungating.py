@@ -1,9 +1,8 @@
 import asyncio
 import os
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
-from asgiref.sync import async_to_sync
-from django.test import SimpleTestCase, override_settings
+from django.test import SimpleTestCase
 
 
 def run_async(coro):
@@ -12,57 +11,6 @@ def run_async(coro):
         return loop.run_until_complete(coro)
     finally:
         loop.close()
-
-
-class WorkflowPlannerUngatingTests(SimpleTestCase):
-    @override_settings(MANAGER_LLM_ENABLED=False)
-    @patch("orchestration.workflow_planner.get_llm_client")
-    def test_plan_user_request_returns_real_adhoc_workflow(self, mock_get_llm):
-        mock_llm = MagicMock()
-        # plan_user_request uses generate_json() (v0.4.2 validated-output path),
-        # not generate_text()+extract_json().
-        mock_llm.generate_json = AsyncMock(
-            return_value={
-                "mode": "adhoc_workflow",
-                "assistant_message": "Working on it.",
-                "confidence": 0.95,
-                "steps": [
-                    {
-                        "id": "step_1",
-                        "service": "weather",
-                        "action": "get_weather",
-                        "params": {"city": "Nairobi"},
-                    },
-                    {
-                        "id": "step_2",
-                        "service": "currency",
-                        "action": "convert_currency",
-                        "params": {
-                            "amount": 100,
-                            "from_currency": "USD",
-                            "to_currency": "KES",
-                        },
-                    },
-                ],
-            }
-        )
-        mock_get_llm.return_value = mock_llm
-
-        from orchestration.workflow_planner import plan_user_request
-
-        result = async_to_sync(plan_user_request)(
-            "Check Nairobi weather then convert 100 USD to KES",
-            history_text="",
-            user_id=None,
-            preferences={},
-        )
-        self.assertEqual(result.get("mode"), "adhoc_workflow")
-        definition = result.get("workflow_definition") or {}
-        steps = definition.get("steps") or []
-        self.assertGreaterEqual(len(steps), 2)
-        actions = [step.get("action") for step in steps if isinstance(step, dict)]
-        self.assertIn("get_weather", actions)
-        self.assertIn("convert_currency", actions)
 
 
 class ManagerVerifierUngatingTests(SimpleTestCase):

@@ -8,11 +8,6 @@
       "time_format": "24h",
       "tone": "friendly"
     },
-    "expected_mode": "adhoc_workflow",
-    "expected_actions": [
-      "search_flights",
-      "send_email"
-    ],
     "requires_llm": true,
     "pack": "orchestration"
   },
@@ -23,10 +18,6 @@
     "preferences": {
       "date_order": "DMY"
     },
-    "expected_mode": "adhoc_workflow",
-    "expected_actions": [
-      "search_hotels"
-    ],
     "requires_llm": true,
     "pack": "orchestration"
   },
@@ -34,7 +25,6 @@
     "id": "weather_single",
     "message": "What is the weather in Nairobi?",
     "history": "",
-    "expected_intent_action": "get_weather",
     "requires_llm": true,
     "pack": "orchestration"
   },
@@ -42,7 +32,6 @@
     "id": "quota_status",
     "message": "Show my quotas.",
     "history": "",
-    "expected_intent_action": "check_quotas",
     "requires_llm": true,
     "pack": "orchestration"
   },

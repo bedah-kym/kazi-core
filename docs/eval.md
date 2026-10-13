@@ -21,13 +21,6 @@ The harness runs each scenario through one or more of:
   (`expected_executed`), the tool that paused for confirmation, if any
   (`expected_paused_on`), and the tools the gate refused
   (`expected_refused`). This is the path every live chat message takes.
-- **Intent parsing** — `orchestration.intent_parser.parse_intent()`. A
-  scenario's `expected_intent_action` is matched against the parsed
-  action.
-- **Workflow planning** — `orchestration.workflow_planner.plan_user_request()`.
-  A scenario's `expected_mode` is matched against the planner's chosen
-  mode; `expected_actions` is a subset-match against the actions in the
-  produced plan's steps.
 
 Each scenario can opt into one or more checks.
 
@@ -85,11 +78,18 @@ a JSON array. Minimal example:
 ```json
 [
   {
-    "id": "weather_single",
+    "id": "weather_single_loop",
     "message": "What is the weather in Nairobi?",
-    "history": "",
-    "expected_intent_action": "get_weather",
-    "requires_llm": true
+    "loop": {
+      "llm_script": [
+        {"tool_calls": [{"name": "get_weather", "input": {"city": "Nairobi"}}]},
+        {"text": "It is sunny."}
+      ]
+    },
+    "expected_executed": ["get_weather"],
+    "expected_paused_on": null,
+    "expected_refused": [],
+    "pack": "orchestration"
   }
 ]
 ```
@@ -100,15 +100,12 @@ a JSON array. Minimal example:
 |---|---|---|
 | `id` | string | Stable identifier for the scenario. Shown in pass/fail output. |
 | `message` | string | The user message under test. |
-| `history` | string | Optional. Conversation history string, in the same format consumed by the planner. |
-| `preferences` | object | Optional. User preferences passed into the planner (`date_order`, `time_format`, `tone`, etc.). |
+| `history` | string | Optional. Conversation history string. |
+| `preferences` | object | Optional. User preferences (`date_order`, `time_format`, `tone`, etc.). |
 | `requires_llm` | bool | If `true`, the scenario is **skipped** unless `--allow-llm` is set. |
 | `loop` | object | If set, runs the scenario through `run_agent_loop` with a scripted model and stubbed tools. See below. |
 | `expected_injection` | bool | If set, runs `is_prompt_injection(message)` and asserts the result. |
 | `expected_blocked` | bool | If set, runs `should_block_message(message)` and asserts the result. |
-| `expected_intent_action` | string | If set, runs `parse_intent` and asserts the parsed action matches. |
-| `expected_mode` | string | If set, runs `plan_user_request` and asserts the planner mode matches (e.g. `adhoc_workflow`, `single_action`). |
-| `expected_actions` | array of strings | If set, runs `plan_user_request` and asserts every listed action appears in the plan. |
 | `expected_executed` | array of strings | Loop only. Asserts the tools that ran, in order. |
 | `expected_paused_on` | string or `null` | Loop only. Asserts the tool that paused for confirmation (`null` when the turn completed). |
 | `expected_refused` | array of strings | Loop only. Asserts the tools the gate refused (out of persona scope, or a denied shell tier). |
@@ -150,14 +147,15 @@ without calling a provider or touching the network:
 
 ### Adding scenarios
 
-1. Capture a real-or-realistic user message you want the planner to
+1. Capture a real-or-realistic user message you want the agent loop to
    handle.
-2. Decide what's worth pinning: the intent action, the planner mode,
-   the action list, or some combination.
+2. Decide what's worth pinning: the tools that ran
+   (`expected_executed`), the tool that paused (`expected_paused_on`),
+   or the tools the gate refused (`expected_refused`).
 3. Add the entry to `golden_scenarios.json`.
-4. Run `python Backend/manage.py run_golden_eval --allow-llm --limit 1`
+4. Run `python Backend/manage.py run_golden_eval --limit 1`
    in isolation and confirm it passes before committing.
-5. PRs that change planner or intent-parser logic should justify any
+5. PRs that change the agent loop or a gate should justify any
    scenario regressions in the description.
 
 ## Scenario packs
@@ -171,7 +169,7 @@ Current packs:
 
 | Pack | What it covers |
 |---|---|
-| `orchestration` | Intent parsing + workflow planning. |
+| `orchestration` | The agent loop and the ad-hoc workflow handoff. |
 | `injection` | Prompt-injection detection / blocking. |
 | `shell` | The governed-shell classifier (`run_command` tiers). |
 
@@ -212,7 +210,7 @@ repo secret and edit the job to:
 ```
 
 The job stays advisory until enough scenarios accumulate that an
-unintended planner regression would show up as a failure. Flip
+unintended agent-loop regression would show up as a failure. Flip
 `continue-on-error` to `false` once the coverage justifies it.
 
 ### Nightly full pack
@@ -228,5 +226,5 @@ explicit provider-spend approval. Without it, no provider is called.
 - [`Backend/orchestration/eval/README.md`](https://github.com/bedah-kym/kazi-core/blob/main/Backend/orchestration/eval/README.md) — the in-tree note that
   pre-dates this doc; will get a one-line pointer here in a future
   cleanup.
-- [`docs/architecture.md`](architecture.md) — where intent parsing and
-  workflow planning sit in the runtime.
+- [`docs/architecture.md`](architecture.md) — where the agent loop and
+  the ad-hoc workflow handoff sit in the runtime.

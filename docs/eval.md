@@ -45,11 +45,10 @@ Run a custom scenario file:
 python Backend/manage.py run_golden_eval --path /path/to/my_scenarios.json
 ```
 
-Limit the run to the first N scenarios (handy when iterating on a
-single one):
+Limit the run to the first N scenarios of the file or pack:
 
 ```bash
-python Backend/manage.py run_golden_eval --allow-llm --limit 1
+python Backend/manage.py run_golden_eval --pack shell --limit 3
 ```
 
 ## Output
@@ -57,14 +56,15 @@ python Backend/manage.py run_golden_eval --allow-llm --limit 1
 Per-scenario lines and a totals summary:
 
 ```
-[PASS] travel_email_results
-[FAIL] hotel_search: missing action search_hotels
-[SKIP] weather_single (requires LLM)
-[PASS] quota_status
+[PASS] travel_email_results_loop
+[FAIL] hotel_search_loop: executed [] != ['search_hotels']
+[PASS] weather_single_loop
+[FAIL] my_new_scenario: no checks
 
-Total: 4 | Passed: 2 | Failed: 1 | Skipped: 1
+Total: 4 | Passed: 2 | Failed: 2 | Skipped: 0
 Failures:
-- hotel_search: missing action search_hotels
+- hotel_search_loop: executed [] != ['search_hotels']
+- my_new_scenario: no checks
 ```
 
 Exit code is **0 on success or skips, non-zero on failures** — CI can
@@ -100,9 +100,7 @@ a JSON array. Minimal example:
 |---|---|---|
 | `id` | string | Stable identifier for the scenario. Shown in pass/fail output. |
 | `message` | string | The user message under test. |
-| `history` | string | Optional. Conversation history string. |
-| `preferences` | object | Optional. User preferences (`date_order`, `time_format`, `tone`, etc.). |
-| `requires_llm` | bool | If `true`, the scenario is **skipped** unless `--allow-llm` is set. |
+| `requires_llm` | bool | If `true`, the scenario is **skipped** unless `--allow-llm` is set. No scenario in the default file needs it. |
 | `loop` | object | If set, runs the scenario through `run_agent_loop` with a scripted model and stubbed tools. See below. |
 | `expected_injection` | bool | If set, runs `is_prompt_injection(message)` and asserts the result. |
 | `expected_blocked` | bool | If set, runs `should_block_message(message)` and asserts the result. |
@@ -141,6 +139,8 @@ without calling a provider or touching the network:
 |---|---|---|
 | `llm_script` | array | The model's turns, in order. Each turn is `{"text": …, "tool_calls": [{"name", "input"}]}`; the last turn has no tool calls. |
 | `preferences` | object | Optional preferences passed to the loop (e.g. `shell_profile`, `approval_overrides`). |
+| `history` | array | Optional. Earlier messages handed to the loop, in the model's message format; may contain `tool_use` and `tool_result` blocks. |
+| `history_tainted` | bool | Optional. Starts the run tainted, as a turn does when its history replays output from an untrusted tool. |
 | `tainted` | bool | Optional. Starts the run with untrusted text already in the room. |
 | `persona_scope` | array of strings | Optional. Activates a persona whose tool scope is this list; out-of-scope calls are refused. |
 | `tool_results` | object | Optional. Per tool name, the result the stub returns (default `{"status": "success"}`). Use it to carry instruction-like text in a result. |
@@ -153,8 +153,11 @@ without calling a provider or touching the network:
    (`expected_executed`), the tool that paused (`expected_paused_on`),
    or the tools the gate refused (`expected_refused`).
 3. Add the entry to `golden_scenarios.json`.
-4. Run `python Backend/manage.py run_golden_eval --limit 1`
-   in isolation and confirm it passes before committing.
+4. Run it on its own and confirm it passes before committing: put the
+   scenario alone in a file and run
+   `python Backend/manage.py run_golden_eval --path /path/to/one_scenario.json`,
+   or run its pack with `--pack <pack>`. A scenario with no `loop` block
+   and no `expected_*` check fails with "no checks".
 5. PRs that change the agent loop or a gate should justify any
    scenario regressions in the description.
 

@@ -76,6 +76,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - The unused workflow planner is gone. `workflow_planner.py` now only starts and runs an ad-hoc multi-step workflow for the agent loop's handoff (`execute_adhoc_workflow`); the request planner, its manager review and the reply synthesiser are removed, together with `manager_verifier.py` and `intent_parser.py`. The "Manager LLM fallback" switch is removed from the settings page; a stored `manager_llm_enabled` preference still loads but nothing reads it. The golden eval no longer supports the `expected_mode`, `expected_actions` and `expected_intent_action` scenario fields; the matching `_loop` scenarios keep that coverage.
+- Four golden-eval scenarios that only carried planner checks are removed (`travel_email_results`, `hotel_search`, `weather_single`, `quota_status`); their `_loop` twins hold the checks. `run_golden_eval` now fails a scenario that has no `loop` block and no `expected_*` check, where it used to report a pass.
 
 ### Upgrade notes
 

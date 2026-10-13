@@ -248,6 +248,30 @@ class InjectionCorpusTests(SimpleTestCase):
         self.assertIn("Failed: 0", output)
         self.assertIn("[PASS] inj_ignore_instructions_email", output)
 
+    def test_every_scenario_checks_something(self):
+        path = os.path.join(settings.BASE_DIR, "orchestration", "eval", "golden_scenarios.json")
+        with open(path, "r", encoding="utf-8") as handle:
+            scenarios = json.load(handle)
+        checks = ("expected_injection", "expected_blocked", "expected_shell_tier")
+        empty = [s["id"] for s in scenarios if not s.get("loop") and all(s.get(k) is None for k in checks)]
+        self.assertEqual(empty, [])
+
+    def test_eval_runner_fails_a_scenario_with_no_checks(self):
+        import tempfile
+
+        shell = [{"id": "checks_nothing", "pack": "orchestration", "message": "hello", "requires_llm": True}]
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as handle:
+            json.dump(shell, handle)
+            path = handle.name
+        try:
+            out = StringIO()
+            with self.assertRaises(CommandError):
+                call_command("run_golden_eval", path=path, stdout=out)
+            self.assertIn("[FAIL] checks_nothing: no checks", out.getvalue())
+            self.assertIn("Passed: 0", out.getvalue())
+        finally:
+            os.unlink(path)
+
     def test_eval_runner_flags_injection_mismatch(self):
         import tempfile
 

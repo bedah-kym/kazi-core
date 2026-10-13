@@ -11,6 +11,10 @@ from orchestration.eval.scenario_packs import pack_name, select_pack
 from orchestration.security_policy import is_prompt_injection, should_block_message
 
 
+# A scenario must carry a loop block or at least one of these.
+_CHECK_FIELDS = ("expected_injection", "expected_blocked", "expected_shell_tier")
+
+
 class Command(BaseCommand):
     help = "Run golden scenario evaluations for the agent loop and its gates."
 
@@ -78,6 +82,13 @@ class Command(BaseCommand):
             pack = pack_name(scenario)
             by_pack[pack]["total"] += 1
             scenario_id = scenario.get("id") or f"scenario_{totals['total']}"
+            if not scenario.get("loop") and all(scenario.get(key) is None for key in _CHECK_FIELDS):
+                # Nothing would be checked: say so instead of reporting a pass.
+                totals["failed"] += 1
+                by_pack[pack]["failed"] += 1
+                failures.append(f"{scenario_id}: no checks")
+                self.stdout.write(f"[FAIL] {scenario_id}: no checks")
+                continue
             requires_llm = bool(scenario.get("requires_llm"))
             if requires_llm and not allow_llm:
                 totals["skipped"] += 1

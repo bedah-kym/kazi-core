@@ -108,7 +108,7 @@ def verify_intasend_signature(signature: str, secret: str, body: bytes) -> bool:
         return False
 
     # Fast-path: direct challenge match
-    if signature and signature.strip() == secret:
+    if signature and hmac.compare_digest(signature.strip().encode(), secret.encode()):
         return True
 
     # Optional HMAC support (sha256=... or raw hex)

@@ -101,3 +101,51 @@ class CalendlyLogRedactionTests(SimpleTestCase):
 
         self.assertEqual(response.status_code, 500)
         self.assertNotIn(self.FAKE, "\n".join(captured.output))
+
+
+class KaziReplyPermissionTests(TestCase):
+    def setUp(self):
+        cache.clear()
+        self.addCleanup(cache.clear)
+        self.client = APIClient()
+        from Api.models import KaziReply
+        KaziReply.objects.create(message="private", sender="kazi", command="cmd", chatid=1)
+
+    def _user(self, username, perms=()):
+        from django.contrib.auth.models import Permission
+        user = User.objects.create_user(
+            username=username,
+            email=f"{username}@example.com",
+            password="secret",  # nosec B106 — test fixture — fake credential
+        )
+        for codename in perms:
+            user.user_permissions.add(Permission.objects.get(codename=codename))
+        return user
+
+    def test_anonymous_cannot_list_replies(self):
+        response = self.client.get("/api/newreply/")
+        self.assertIn(response.status_code, (401, 403))
+
+    def test_anonymous_still_cannot_create(self):
+        from Api.models import KaziReply
+        payload = {"message": "m", "sender": "s", "command": "c", "chatid": 1}
+        response = self.client.post("/api/newreply/", payload)
+        self.assertIn(response.status_code, (401, 403))
+        self.assertEqual(KaziReply.objects.count(), 1)
+
+    def test_regular_user_cannot_list(self):
+        self.client.force_authenticate(self._user("reply-regular"))
+        self.assertEqual(self.client.get("/api/newreply/").status_code, 403)
+        self.assertEqual(self.client.head("/api/newreply/").status_code, 403)
+
+    def test_regular_user_cannot_create(self):
+        self.client.force_authenticate(self._user("reply-regular"))
+        payload = {"message": "m", "sender": "s", "command": "c", "chatid": 1}
+        self.assertEqual(self.client.post("/api/newreply/", payload).status_code, 403)
+
+    def test_user_with_model_perms_can_list_and_create(self):
+        self.client.force_authenticate(self._user("reply-staff", perms=("view_kazireply", "add_kazireply")))
+        self.assertEqual(self.client.get("/api/newreply/").status_code, 200)
+        self.assertEqual(self.client.head("/api/newreply/").status_code, 200)
+        payload = {"message": "m", "sender": "s", "command": "c", "chatid": 1}
+        self.assertEqual(self.client.post("/api/newreply/", payload).status_code, 201)

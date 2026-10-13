@@ -41,6 +41,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - Payment, email and WhatsApp actions are now refused when a user's capability preferences cannot be read, both in workflow steps and in chat turns. A failed lookup — or a workflow step with no owner — turns those three gates off instead of allowing the action; search, travel, reminders and calendar keep working. In the same failure, a standing grant no longer decides for the user (their "always ask" choice could not be read, so the workflow asks), and a chat turn applies no learned approval shortcut. An empty preferences object handed to a workflow step is treated as not loaded.
+- `/api/newreply/` requires a signed-in user with the reply model's permissions:
+  `Api.view_kazireply` to list (`GET`, `HEAD`) and `Api.add_kazireply` to create.
+  Before, anyone could list every stored reply without signing in, and any
+  signed-in user could create one.
+- The IntaSend webhook challenge is compared in constant time. The result is the
+  same for every input.
 - A turn whose replayed history contains output from an untrusted tool (the shell, a web search or a delegated run) now starts tainted, so a gated action it calls still asks the user. The room's taint cache key and lifetime are unchanged; the replay itself carries sanitised text only.
 - An approval reply must be the whole message. A reply that starts with an
   approval word and then says something else ("ok, but use a different folder",
@@ -69,6 +75,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Upgrade notes
 
+- A client that calls `/api/newreply/` now gets 403 unless its user has
+  `Api.view_kazireply` (to list) or `Api.add_kazireply` (to create). Grant those
+  permissions in the admin, or use a superuser. Nothing in this repository calls
+  the endpoint.
 - Presence is stored under new Redis keys (`presence:room:*`, `presence:user:*`)
   that expire by themselves. The old `online:chat_*` and `lastseen:*` keys are
   no longer read or written and never expire: delete them once every web

@@ -485,28 +485,6 @@ def _():
 
 
 # ---------------------------------------------------------------------------
-# 12. MANAGER VERIFIER (README: deterministic supervisor reorders steps)
-# ---------------------------------------------------------------------------
-
-@check("manager-verifier", "reorders email-after-search workflow")
-def _():
-    from orchestration.manager_verifier import ManagerVerifier
-    steps = [
-        {"id": "step_1", "service": "gmail", "action": "send_email",
-         "params": {"to": "u@example.com", "subject": "Results", "text": "see below"}},
-        {"id": "step_2", "service": "search", "action": "search_info",
-         "params": {"query": "best Nairobi hotels"}},
-    ]
-    review = ManagerVerifier().review_steps(steps, "Find hotels and email me the list")
-    if review.get("verdict") != "approve":
-        return f"FAIL: verdict={review.get('verdict')}"
-    reviewed = review.get("steps") or []
-    if not reviewed or reviewed[0].get("action") != "search_info":
-        return f"FAIL: not reordered, first step is {reviewed[0].get('action') if reviewed else 'none'}"
-    return "search_info correctly placed before send_email"
-
-
-# ---------------------------------------------------------------------------
 # 13. CONNECTORS THAT WEREN'T COVERED
 # ---------------------------------------------------------------------------
 
@@ -600,18 +578,6 @@ def _():
     if "processed" not in result and "failed" not in result and "started" not in result:
         return f"FAIL: no expected keys in result: {list(result.keys())}"
     return f"watchdog tick ok: {result}"
-
-
-# ---------------------------------------------------------------------------
-# 16. WORKFLOW PLANNER (without LLM — deterministic stub path)
-# ---------------------------------------------------------------------------
-
-@check("planner", "workflow_planner imports and exposes plan_user_request")
-def _():
-    from orchestration.workflow_planner import plan_user_request
-    import inspect
-    sig = inspect.signature(plan_user_request)
-    return f"signature: {list(sig.parameters)}"
 
 
 # ---------------------------------------------------------------------------

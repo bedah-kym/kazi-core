@@ -26,37 +26,6 @@ from orchestration.security_policy import (
 )
 
 
-class ConfirmationMatchingTests(SimpleTestCase):
-    """Only affirmative-led replies may confirm a pending gate.
-
-    Substring matching once let "yesterday's weather" confirm a pending
-    high-risk workflow ("yes" in "yesterday").
-    """
-
-    def test_affirmative_replies_match(self):
-        from orchestration.workflow_planner import looks_like_confirmation
-        for message in (
-            "yes", "Yes.", "YES",
-            "yeah, send it", "ok do it", "Okay, proceed",
-            "approve", "approved, go on", "confirm that", "confirmed",
-            "proceed with the booking", "go ahead", "Go ahead and email it",
-        ):
-            self.assertTrue(looks_like_confirmation(message), msg=message)
-
-    def test_non_affirmative_messages_do_not_match(self):
-        from orchestration.workflow_planner import looks_like_confirmation
-        for message in (
-            "yesterday's weather in Mombasa",
-            "can you confirm my email address?",
-            "did you approve the invoice?",
-            "cancel that",
-            "not yet",
-            "what's the weather?",
-            "",
-        ):
-            self.assertFalse(looks_like_confirmation(message), msg=message)
-
-
 class ActionCatalogTests(SimpleTestCase):
     def test_send_whatsapp_alias(self):
         self.assertEqual(resolve_action_alias("send_whatsapp"), "send_message")
@@ -278,6 +247,30 @@ class InjectionCorpusTests(SimpleTestCase):
         output = out.getvalue()
         self.assertIn("Failed: 0", output)
         self.assertIn("[PASS] inj_ignore_instructions_email", output)
+
+    def test_every_scenario_checks_something(self):
+        path = os.path.join(settings.BASE_DIR, "orchestration", "eval", "golden_scenarios.json")
+        with open(path, "r", encoding="utf-8") as handle:
+            scenarios = json.load(handle)
+        checks = ("expected_injection", "expected_blocked", "expected_shell_tier")
+        empty = [s["id"] for s in scenarios if not s.get("loop") and all(s.get(k) is None for k in checks)]
+        self.assertEqual(empty, [])
+
+    def test_eval_runner_fails_a_scenario_with_no_checks(self):
+        import tempfile
+
+        shell = [{"id": "checks_nothing", "pack": "orchestration", "message": "hello", "requires_llm": True}]
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as handle:
+            json.dump(shell, handle)
+            path = handle.name
+        try:
+            out = StringIO()
+            with self.assertRaises(CommandError):
+                call_command("run_golden_eval", path=path, stdout=out)
+            self.assertIn("[FAIL] checks_nothing: no checks", out.getvalue())
+            self.assertIn("Passed: 0", out.getvalue())
+        finally:
+            os.unlink(path)
 
     def test_eval_runner_flags_injection_mismatch(self):
         import tempfile
@@ -530,51 +523,6 @@ class Te2FailClosedTests(SimpleTestCase):
         self.assertEqual(conservative["custom_key"], "kept")
         # Input untouched
         self.assertTrue(prefs["allow_payments"])
-
-    @patch("django.contrib.auth.get_user_model")
-    def test_planner_prefs_fail_closed_on_lookup_error(self, mock_get_user_model):
-        from orchestration.workflow_planner import _get_user_capability_prefs
-
-        mock_get_user_model.return_value.objects.get.side_effect = RuntimeError("db down")
-
-        prefs = self._run(_get_user_capability_prefs(42))
-
-        self.assertFalse(prefs["allow_payments"])
-        self.assertFalse(prefs["allow_whatsapp"])
-        self.assertFalse(prefs["allow_email"])
-        self.assertTrue(prefs["allow_travel"])
-
-    @patch("django.contrib.auth.get_user_model")
-    def test_manager_llm_disabled_on_lookup_error(self, mock_get_user_model):
-        from orchestration.workflow_planner import _manager_llm_enabled_for_user
-
-        mock_get_user_model.return_value.objects.get.side_effect = RuntimeError("db down")
-
-        self.assertFalse(self._run(_manager_llm_enabled_for_user(42)))
-
-    def test_planner_blocks_payment_step_when_lookup_fails(self):
-        # Old attack still blocked: with the lookup failing, a withdraw step
-        # must be refused, not silently allowed.
-        from orchestration.workflow_planner import _steps_allowed_for_user
-
-        steps = [{"action": "withdraw", "params": {"amount": 100}}]
-
-        with patch(
-            "orchestration.workflow_planner._get_user_capability_prefs",
-            new=AsyncMock(return_value={
-                "allow_payments": False,
-                "allow_travel": True,
-                "allow_email": False,
-                "allow_whatsapp": False,
-                "allow_reminders": True,
-                "allow_web_search": True,
-                "allow_calendar": True,
-            }),
-        ):
-            denial = self._run(_steps_allowed_for_user(steps, 42))
-
-        self.assertIsNotNone(denial)
-        self.assertIn("disabled", denial)
 
     def test_router_prefs_fail_closed_on_unexpected_error(self):
         from orchestration.tool_router import MCPRouter

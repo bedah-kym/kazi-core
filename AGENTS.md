@@ -36,8 +36,7 @@ Protected paths are listed in `.claude/protected_paths.txt` and `.github/CODEOWN
 Backend/
   orchestration/           # Agent core — start here for most changes
     agent_loop.py          # ReAct loop (think -> act -> observe) — read this first
-    workflow_planner.py    # Multi-step plan decomposition
-    manager_verifier.py    # Deterministic plan verification + reordering
+    workflow_planner.py    # Starts and runs an ad-hoc multi-step workflow
     tool_executor.py       # Tool dispatch + safety gates
     base_connector.py      # BaseConnector interface
     connector_registry.py  # Auto-discovery (directory + examples/ + entry points) — single source of truth

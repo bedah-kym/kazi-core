@@ -47,7 +47,6 @@ def settings(request):
         "nudge_frequency": "low",
         "proactive_snooze_until": None,
         "ai_voice_enabled": False,
-        "manager_llm_enabled": True,
         "allow_web_search": True,
         "allow_travel": True,
         "allow_payments": True,
@@ -64,7 +63,6 @@ def settings(request):
             "nudge_frequency": "low",
             "proactive_snooze_until": None,
             "ai_voice_enabled": False,
-            "manager_llm_enabled": False,
             "allow_web_search": False,
             "allow_travel": True,
             "allow_payments": True,
@@ -78,7 +76,6 @@ def settings(request):
             "nudge_frequency": "low",
             "proactive_snooze_until": None,
             "ai_voice_enabled": False,
-            "manager_llm_enabled": True,
             "allow_web_search": True,
             "allow_travel": True,
             "allow_payments": True,
@@ -92,7 +89,6 @@ def settings(request):
             "nudge_frequency": "high",
             "proactive_snooze_until": None,
             "ai_voice_enabled": False,
-            "manager_llm_enabled": True,
             "allow_web_search": True,
             "allow_travel": True,
             "allow_payments": True,
@@ -208,7 +204,6 @@ def settings(request):
             else:
                 prefs["proactive_assistant_enabled"] = request.POST.get('proactive_assistant_enabled') == 'on'
                 prefs["ai_voice_enabled"] = request.POST.get('ai_voice_enabled') == 'on'
-                prefs["manager_llm_enabled"] = request.POST.get('manager_llm_enabled') == 'on'
                 prefs["allow_web_search"] = request.POST.get('allow_web_search') == 'on'
                 prefs["allow_travel"] = request.POST.get('allow_travel') == 'on'
                 prefs["allow_payments"] = request.POST.get('allow_payments') == 'on'

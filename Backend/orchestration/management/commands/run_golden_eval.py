@@ -3,19 +3,20 @@ import os
 from collections import defaultdict
 from typing import Dict, List
 
-from asgiref.sync import async_to_sync
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
 from orchestration.eval.loop_runner import evaluate_loop_scenario
 from orchestration.eval.scenario_packs import pack_name, select_pack
-from orchestration.intent_parser import parse_intent
 from orchestration.security_policy import is_prompt_injection, should_block_message
-from orchestration.workflow_planner import plan_user_request
+
+
+# A scenario must carry a loop block or at least one of these.
+_CHECK_FIELDS = ("expected_injection", "expected_blocked", "expected_shell_tier")
 
 
 class Command(BaseCommand):
-    help = "Run golden scenario evaluations for orchestration planning and intent parsing."
+    help = "Run golden scenario evaluations for the agent loop and its gates."
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -81,6 +82,13 @@ class Command(BaseCommand):
             pack = pack_name(scenario)
             by_pack[pack]["total"] += 1
             scenario_id = scenario.get("id") or f"scenario_{totals['total']}"
+            if not scenario.get("loop") and all(scenario.get(key) is None for key in _CHECK_FIELDS):
+                # Nothing would be checked: say so instead of reporting a pass.
+                totals["failed"] += 1
+                by_pack[pack]["failed"] += 1
+                failures.append(f"{scenario_id}: no checks")
+                self.stdout.write(f"[FAIL] {scenario_id}: no checks")
+                continue
             requires_llm = bool(scenario.get("requires_llm"))
             if requires_llm and not allow_llm:
                 totals["skipped"] += 1
@@ -89,12 +97,7 @@ class Command(BaseCommand):
                 continue
 
             message = scenario.get("message") or ""
-            history = scenario.get("history") or ""
-            preferences = scenario.get("preferences") or {}
 
-            expected_mode = scenario.get("expected_mode")
-            expected_actions = scenario.get("expected_actions") or []
-            expected_intent_action = scenario.get("expected_intent_action")
             expected_injection = scenario.get("expected_injection")
             expected_blocked = scenario.get("expected_blocked")
             expected_shell_tier = scenario.get("expected_shell_tier")
@@ -128,40 +131,6 @@ class Command(BaseCommand):
                 if actual_tier != expected_shell_tier:
                     passed = False
                     details.append(f"shell_tier {actual_tier} != {expected_shell_tier}")
-
-            if expected_mode or expected_actions:
-                plan = async_to_sync(plan_user_request)(
-                    message,
-                    history,
-                    user_id=None,
-                    preferences=preferences,
-                )
-                mode = plan.get("mode")
-                if expected_mode and mode != expected_mode:
-                    passed = False
-                    details.append(f"mode {mode} != {expected_mode}")
-
-                if expected_actions:
-                    definition = plan.get("workflow_definition") or {}
-                    actions = [
-                        step.get("action")
-                        for step in (definition.get("steps") or [])
-                        if isinstance(step, dict)
-                    ]
-                    for action in expected_actions:
-                        if action not in actions:
-                            passed = False
-                            details.append(f"missing action {action}")
-
-            if expected_intent_action:
-                intent = async_to_sync(parse_intent)(
-                    message,
-                    {"history": history, "preferences": preferences},
-                )
-                actual_action = intent.get("action")
-                if actual_action != expected_intent_action:
-                    passed = False
-                    details.append(f"intent {actual_action} != {expected_intent_action}")
 
             if passed:
                 totals["passed"] += 1

@@ -51,7 +51,7 @@ this shape (see also
 | `on_timeout` | no | What to do if approval expires: `cancel`, `continue`, `fail`. Defaults to `cancel`. |
 | `timeout_seconds` | no | Per-step execution timeout. Defaults to 300. |
 | `max_attempts` | no | Retry count on transient errors. Defaults to 3. |
-| `depends_on` | no | List of step ids that must complete before this one. The manager verifier reorders steps to honor dependencies. |
+| `depends_on` | no | List of step ids whose results this step needs. Steps run in the order written; a step stops with an error when a listed step has not run or returned an error. A dependency cycle is rejected when the definition is validated. |
 
 ## How to add one
 
@@ -95,13 +95,12 @@ UserWorkflow.objects.create(
 
 ### Option 3 — Let the agent compose one
 
-When a user asks the agent to do something multi-step, the
-[`workflow_planner`](https://github.com/bedah-kym/kazi-core/blob/main/Backend/orchestration/workflow_planner.py)
-proposes a workflow definition, the
-[`manager_verifier`](https://github.com/bedah-kym/kazi-core/blob/main/Backend/orchestration/manager_verifier.py)
-reorders + fills gaps + catches bad plans, and the runtime executes
-it. You don't need to write the JSON by hand for ad-hoc requests —
-this is the path most chat-driven workflows take.
+When a user asks the agent to do something multi-step, the agent loop
+builds a workflow definition and hands it to
+[`execute_adhoc_workflow`](https://github.com/bedah-kym/kazi-core/blob/main/Backend/orchestration/workflow_planner.py),
+which creates the workflow row and runs it. You don't need to write the
+JSON by hand for ad-hoc requests — this is the path most chat-driven
+workflows take.
 
 ## Triggering a run
 
@@ -127,9 +126,10 @@ A param value can reference a prior step's output:
 }
 ```
 
-The runtime resolves the template after the prior step completes and
-just before this step runs. References to steps that haven't run yet
-or that returned an error are caught by the manager verifier.
+The runtime resolves the template just before this step runs. Nothing
+reorders steps for you: a reference to a step that has not run yet
+resolves to empty text. List the step in `depends_on` so the run stops
+with an error instead.
 
 ## Scheduled and event workflows are routines
 
@@ -186,9 +186,9 @@ ops UI can diff two versions.
   Rerun produces double side effects. The
   [replay-safety contract](contracts/replay-safety.md) covers how to
   pair this with `resolve_step_idempotency_key`.
-- **Forgetting `depends_on`.** The manager verifier tries to reorder
-  steps based on parameter references, but explicit `depends_on` is
-  always safer.
+- **Forgetting `depends_on`.** Steps run in the order written and
+  nothing infers dependencies from parameter references. Without
+  `depends_on`, a step runs even when the step it reads from failed.
 
 ## Next
 

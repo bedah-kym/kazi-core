@@ -319,7 +319,7 @@ class ReferenceResolver:
     async def _get_user_preferences(self) -> Dict:
         """Get user's preferences."""
         try:
-            from orchestration.workflow_planner import get_user_preferences
+            from orchestration.user_preferences import get_user_preferences
             return await sync_to_async(get_user_preferences)(self.user_id)
         except Exception:
             return {}

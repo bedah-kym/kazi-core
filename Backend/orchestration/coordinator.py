@@ -145,7 +145,7 @@ class OrchestrationCoordinator:
         a fresh agent run ends the turn with one error message and nothing
         further runs; errors during confirmation resume propagate.
         """
-        stream_state = {"buffer": [], "last_send": 0, "first_token_sent": False, "full_response": [], "model": [], "harness": [], "tools": []}  # nosec B105 — state keys, not a credential
+        stream_state = {"buffer": [], "last_send": 0, "first_token_sent": False, "full_response": [], "model": [], "harness": [], "tools": [], "chunks": 0, "chars": 0}  # nosec B105 — state keys, not a credential
         turn_step_id = f"turn_{message_id}"
         correlation_id = uuid.uuid4().hex
 
@@ -170,19 +170,25 @@ class OrchestrationCoordinator:
             # Send if buffer > 6 chars OR > 0.08s passed OR is_final
             if len(joined_text) > 6 or (current_time - stream_state["last_send"]) > 0.08 or is_final:
                 if joined_text or is_final:
+                    if joined_text:
+                        stream_state["chunks"] += 1
+                        stream_state["chars"] += len(joined_text)
                     try:
                         await send_chunk(correlation_id, joined_text, is_final)
                     finally:
-                        record_event(
-                            "progress_event",
-                            {
-                                "phase": "stream",
-                                "state": "chunk",
-                                "room_id": room_id,
-                                "user_id": user_id,
-                                "correlation_id": correlation_id,
-                            },
-                        )
+                        if is_final:
+                            record_event(
+                                "progress_event",
+                                {
+                                    "phase": "stream",
+                                    "state": "completed",
+                                    "chunks": stream_state["chunks"],
+                                    "chars": stream_state["chars"],
+                                    "room_id": room_id,
+                                    "user_id": user_id,
+                                    "correlation_id": correlation_id,
+                                },
+                            )
                     stream_state["buffer"] = []
                     stream_state["last_send"] = current_time
 

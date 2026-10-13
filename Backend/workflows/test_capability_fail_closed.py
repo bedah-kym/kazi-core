@@ -94,6 +94,36 @@ class StepCapabilityLookupFailsClosedTests(SimpleTestCase):
             SEND_EMAIL, "allow_email", {"user_id": 7, "room_id": None, "preferences": {"allow_email": False}}
         )
 
+    def test_empty_preferences_in_the_context_are_not_read_as_allowed(self):
+        with _lookup_down():
+            self._assert_denied(SEND_EMAIL, "allow_email", {"user_id": 7, "room_id": None, "preferences": {}})
+
+
+class AskFirstLookupFailsClosedTests(SimpleTestCase):
+    """A standing grant must not decide when the user's "always ask" choice cannot be read."""
+
+    def test_failed_lookup_means_ask_first(self):
+        from workflows.grants import user_asks_first
+
+        with _lookup_down():
+            self.assertTrue(user_asks_first(7, "send_email"))
+
+    def test_no_override_means_the_grant_may_decide(self):
+        from workflows.grants import user_asks_first
+
+        with _user_not_found():
+            self.assertFalse(user_asks_first(7, "send_email"))
+
+    def test_an_always_override_still_asks_first(self):
+        from workflows.grants import user_asks_first
+
+        with patch(
+            "orchestration.user_preferences.get_user_preferences",
+            return_value={"approval_overrides": {"send_email": "always"}},
+        ):
+            self.assertTrue(user_asks_first(7, "send_email"))
+            self.assertFalse(user_asks_first(7, "get_weather"))
+
 
 class LoadPreferencesFailClosedTests(SimpleTestCase):
 

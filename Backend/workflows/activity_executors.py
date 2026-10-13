@@ -228,7 +228,8 @@ async def execute_workflow_step(step: Dict[str, Any], context: Dict[str, Any]) -
 
     async def _effective_preferences() -> Dict[str, Any]:
         prefs = context.get("preferences")
-        if isinstance(prefs, dict):
+        # An empty dict is "not loaded", never "everything allowed".
+        if isinstance(prefs, dict) and prefs:
             return prefs
         from orchestration.user_preferences import (
             conservative_default_preferences,

@@ -1,5 +1,6 @@
 """A chat turn's capability gate denies when the preference lookup fails."""
 import asyncio
+from unittest.mock import patch
 
 from django.test import SimpleTestCase
 
@@ -20,6 +21,32 @@ class CoordinatorCapabilityLookupFailsClosedTests(SimpleTestCase):
         self.assertFalse(prefs.get("allow_payments", True))
         self.assertFalse(prefs.get("allow_whatsapp", True))
         self.assertTrue(prefs.get("allow_web_search"))
+
+    def test_failed_lookup_applies_no_learned_approval_shortcut(self):
+        def _boom(user_id):
+            raise RuntimeError("db down")
+
+        def _learned(preferences, user_id, room_id):
+            merged = dict(preferences or {})
+            merged["approval_overrides"] = {"run_command": "auto"}
+            return merged
+
+        with patch("orchestration.preference_mining.merge_learned_overrides", side_effect=_learned) as merge:
+            _result, captured = _run_agent_turn("hello", load_preferences=_boom)
+
+        merge.assert_not_called()
+        self.assertFalse(captured["preferences"].get("approval_overrides"))
+
+    def test_successful_lookup_still_gets_learned_shortcuts(self):
+        def _learned(preferences, user_id, room_id):
+            merged = dict(preferences or {})
+            merged["approval_overrides"] = {"run_command": "auto"}
+            return merged
+
+        with patch("orchestration.preference_mining.merge_learned_overrides", side_effect=_learned):
+            _result, captured = _run_agent_turn("hello", load_preferences=lambda user_id: {"allow_email": True})
+
+        self.assertEqual(captured["preferences"]["approval_overrides"], {"run_command": "auto"})
 
     def test_execute_tool_still_denies_email_with_conservative_preferences(self):
         from orchestration.tool_executor import execute_tool

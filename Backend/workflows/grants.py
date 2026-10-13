@@ -99,8 +99,10 @@ def user_asks_first(user_id: Optional[int], action: str) -> bool:
         from orchestration.user_preferences import get_user_preferences
 
         overrides = (get_user_preferences(user_id) or {}).get("approval_overrides") or {}
-    except Exception:
-        return False
+    except Exception as exc:
+        # The user's "always ask" choice could not be read: ask.
+        logger.warning("Approval override lookup failed (%s); asking first.", type(exc).__name__)
+        return True
     return overrides.get(action) == "always"
 
 

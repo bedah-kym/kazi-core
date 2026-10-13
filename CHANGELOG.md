@@ -73,6 +73,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   written before this change is not rewritten: run `python Backend/manage.py
   roll_telemetry`, then delete the rotated `orchestration-*.jsonl` files.
 
+### Removed
+
+- The unused workflow planner is gone. `workflow_planner.py` now only starts and runs an ad-hoc multi-step workflow for the agent loop's handoff (`execute_adhoc_workflow`); the request planner, its manager review and the reply synthesiser are removed, together with `manager_verifier.py` and `intent_parser.py`. The "Manager LLM fallback" switch is removed from the settings page; a stored `manager_llm_enabled` preference still loads but nothing reads it. The golden eval no longer supports the `expected_mode`, `expected_actions` and `expected_intent_action` scenario fields; the matching `_loop` scenarios keep that coverage.
+
 ### Upgrade notes
 
 - A client that calls `/api/newreply/` now gets 403 unless its user has

@@ -95,13 +95,12 @@ UserWorkflow.objects.create(
 
 ### Option 3 — Let the agent compose one
 
-When a user asks the agent to do something multi-step, the
-[`workflow_planner`](https://github.com/bedah-kym/kazi-core/blob/main/Backend/orchestration/workflow_planner.py)
-proposes a workflow definition, the
-[`manager_verifier`](https://github.com/bedah-kym/kazi-core/blob/main/Backend/orchestration/manager_verifier.py)
-reorders + fills gaps + catches bad plans, and the runtime executes
-it. You don't need to write the JSON by hand for ad-hoc requests —
-this is the path most chat-driven workflows take.
+When a user asks the agent to do something multi-step, the agent loop
+builds a workflow definition and hands it to
+[`execute_adhoc_workflow`](https://github.com/bedah-kym/kazi-core/blob/main/Backend/orchestration/workflow_planner.py),
+which creates the workflow row and runs it. You don't need to write the
+JSON by hand for ad-hoc requests — this is the path most chat-driven
+workflows take.
 
 ## Triggering a run
 

@@ -104,8 +104,7 @@ auto-discovers it on restart.
 
 | Feature | What it does |
 |---|---|
-| Multi-step workflows | *"Book a flight, find a hotel, email my boss the itinerary"* — planned, verified, executed as one run |
-| Manager verifier | A deterministic supervisor that reorders steps, fills missing params, and catches bad plans |
+| Multi-step workflows | *"Book a flight, find a hotel, email my boss the itinerary"* — composed and executed as one run |
 | Multi-provider LLM | Anthropic (Claude), DeepSeek (full tool-calling), and Hugging Face, with automatic fallback |
 | Skills | Drop-in `SKILL.md` instruction packs the agent discovers and loads on demand |
 | Telegram messaging | Send text, media, and inline keyboards via the Telegram Bot API |

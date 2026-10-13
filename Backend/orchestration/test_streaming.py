@@ -125,5 +125,5 @@ class StreamingTests(SimpleTestCase):
         self.assertEqual(len(completed), 1)
         payload = completed[0][1]
         self.assertEqual(payload["chars"], len(reply))
-        self.assertGreaterEqual(payload["chunks"], 1)
+        self.assertEqual(payload["chunks"], 1)
         self.assertEqual(result.full_response, reply)

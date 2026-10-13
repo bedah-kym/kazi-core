@@ -1,7 +1,10 @@
 """User preference helpers for personalization and locale-aware parsing."""
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, Optional
+
+logger = logging.getLogger(__name__)
 
 _ALLOWED_TONES = {"friendly", "formal", "direct", "warm", "casual"}
 _ALLOWED_VERBOSITY = {"short", "balanced", "detailed"}
@@ -310,6 +313,28 @@ def get_user_preferences(user_id: Optional[int]) -> Dict[str, Any]:
         timezone_name=getattr(profile, "timezone", "") or "",
         location=getattr(profile, "location", "") or "",
     )
+
+
+def conservative_default_preferences() -> Dict[str, Any]:
+    """Default preferences with the sensitive capability gates off."""
+    from orchestration.security_policy import conservative_capability_prefs
+
+    return conservative_capability_prefs(
+        normalize_preferences({}, language="", timezone_name="", location="")
+    )
+
+
+def load_preferences_fail_closed(user_id: Optional[int]) -> Dict[str, Any]:
+    """Preferences for capability gates: a failed lookup denies the sensitive gates."""
+    try:
+        return get_user_preferences(user_id)
+    except Exception as exc:
+        logger.warning(
+            "Preference lookup failed for user %s (%s); sensitive capability gates are denied.",
+            user_id,
+            type(exc).__name__,
+        )
+        return conservative_default_preferences()
 
 
 ENFORCE_AGENT_CAPS_PREF_KEY = "enforce_agent_caps"

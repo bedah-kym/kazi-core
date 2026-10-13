@@ -18,7 +18,7 @@ from django.core.cache import cache
 
 from orchestration.telemetry import record_event
 from orchestration.contracts import build_step_event
-from orchestration.user_preferences import get_user_preferences
+from orchestration.user_preferences import conservative_default_preferences, get_user_preferences
 from orchestration.action_receipts import (
     fetch_recent_receipts,
     undo_last_action,
@@ -219,16 +219,21 @@ class OrchestrationCoordinator:
         }
         memory_summary = await load_memory_summary(adaptive_context)
         user_preferences = {}
+        preferences_loaded = True
         try:
             user_preferences = await sync_to_async(get_user_preferences)(user_id)
         except Exception as e:
             logger.warning(f"User preferences load failed: {e}")
-            user_preferences = {}
-        try:
-            from orchestration.preference_mining import merge_learned_overrides
-            user_preferences = await sync_to_async(merge_learned_overrides)(user_preferences, user_id, room_id)
-        except Exception as e:
-            logger.debug("Learned override merge skipped: %s", e)
+            user_preferences = conservative_default_preferences()
+            preferences_loaded = False
+        # Learned overrides only relieve friction beneath the user's own choices.
+        # When those could not be read, none is applied.
+        if preferences_loaded:
+            try:
+                from orchestration.preference_mining import merge_learned_overrides
+                user_preferences = await sync_to_async(merge_learned_overrides)(user_preferences, user_id, room_id)
+            except Exception as e:
+                logger.debug("Learned override merge skipped: %s", e)
         try:
             from orchestration.shell.profiles import resolve_profile
             resolved = await sync_to_async(resolve_profile)(room_id, user_preferences)

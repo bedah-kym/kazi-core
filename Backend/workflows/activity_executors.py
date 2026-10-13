@@ -18,7 +18,7 @@ from orchestration.action_catalog import (
     get_capability_gate,
     resolve_action_alias,
 )
-from orchestration.security_policy import should_block_action, sanitize_parameters
+from orchestration.security_policy import SENSITIVE_CAPABILITY_GATES, should_block_action, sanitize_parameters
 
 from .capability_manifest import capability_for_step
 from .runtime import resolve_step_idempotency_key
@@ -228,21 +228,23 @@ async def execute_workflow_step(step: Dict[str, Any], context: Dict[str, Any]) -
 
     async def _effective_preferences() -> Dict[str, Any]:
         prefs = context.get("preferences")
-        if isinstance(prefs, dict):
+        # Reuse what the caller loaded only when it carries every sensitive gate.
+        # An empty or partial dict is "not loaded", never "allowed".
+        if isinstance(prefs, dict) and all(gate in prefs for gate in SENSITIVE_CAPABILITY_GATES):
             return prefs
+        from orchestration.user_preferences import (
+            conservative_default_preferences,
+            load_preferences_fail_closed,
+        )
+
         user_id = context.get("user_id")
-        if not user_id:
-            context["preferences"] = {}
-            return {}
-        try:
-            from orchestration.user_preferences import get_user_preferences
+        if user_id:
             from asgiref.sync import sync_to_async
 
-            prefs = await sync_to_async(get_user_preferences)(user_id)
-        except Exception:
-            prefs = {}
-        if not isinstance(prefs, dict):
-            prefs = {}
+            prefs = await sync_to_async(load_preferences_fail_closed)(user_id)
+        else:
+            # A workflow step always has an owner; a missing one is a failed lookup.
+            prefs = conservative_default_preferences()
         context["preferences"] = prefs
         return prefs
 
@@ -279,7 +281,9 @@ async def execute_workflow_step(step: Dict[str, Any], context: Dict[str, Any]) -
 
     preferences = await _effective_preferences()
     capability_gate = get_capability_gate(action)
-    if capability_gate and not preferences.get(capability_gate, True):
+    # A sensitive gate that is missing is denied; the other gates default to allowed.
+    gate_default = capability_gate not in SENSITIVE_CAPABILITY_GATES
+    if capability_gate and not preferences.get(capability_gate, gate_default):
         return {
             "status": "error",
             "error": (

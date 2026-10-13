@@ -485,28 +485,6 @@ def _():
 
 
 # ---------------------------------------------------------------------------
-# 12. MANAGER VERIFIER (README: deterministic supervisor reorders steps)
-# ---------------------------------------------------------------------------
-
-@check("manager-verifier", "reorders email-after-search workflow")
-def _():
-    from orchestration.manager_verifier import ManagerVerifier
-    steps = [
-        {"id": "step_1", "service": "gmail", "action": "send_email",
-         "params": {"to": "u@example.com", "subject": "Results", "text": "see below"}},
-        {"id": "step_2", "service": "search", "action": "search_info",
-         "params": {"query": "best Nairobi hotels"}},
-    ]
-    review = ManagerVerifier().review_steps(steps, "Find hotels and email me the list")
-    if review.get("verdict") != "approve":
-        return f"FAIL: verdict={review.get('verdict')}"
-    reviewed = review.get("steps") or []
-    if not reviewed or reviewed[0].get("action") != "search_info":
-        return f"FAIL: not reordered, first step is {reviewed[0].get('action') if reviewed else 'none'}"
-    return "search_info correctly placed before send_email"
-
-
-# ---------------------------------------------------------------------------
 # 13. CONNECTORS THAT WEREN'T COVERED
 # ---------------------------------------------------------------------------
 

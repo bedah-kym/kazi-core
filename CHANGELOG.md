@@ -40,7 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- Payment, email and WhatsApp actions are now refused when a user's capability preferences cannot be read, both in workflow steps and in chat turns. A failed lookup — or a workflow step with no owner — turns those three gates off instead of allowing the action; search, travel, reminders and calendar keep working. In the same failure, a standing grant no longer decides for the user (their "always ask" choice could not be read, so the workflow asks), and a chat turn applies no learned approval shortcut. An empty preferences object handed to a workflow step is treated as not loaded.
+- Payment, email and WhatsApp actions are now refused when a user's capability preferences cannot be read, both in workflow steps and in chat turns. A failed lookup — or a workflow step with no owner — turns those three gates off instead of allowing the action; search, travel, reminders and calendar keep working. In the same failure, a standing grant no longer decides for the user (their "always ask" choice could not be read, so the workflow asks), and a chat turn applies no learned approval shortcut. A preferences object handed to a workflow step is reused only when it carries all three of those gates; an empty or partial one is reloaded, and a gate that is still missing is denied.
 - `/api/newreply/` requires a signed-in user with the reply model's permissions:
   `Api.view_kazireply` to list (`GET`, `HEAD`) and `Api.add_kazireply` to create.
   Before, anyone could list every stored reply without signing in, and any

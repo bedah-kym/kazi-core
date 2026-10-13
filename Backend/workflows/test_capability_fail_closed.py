@@ -90,9 +90,25 @@ class StepCapabilityLookupFailsClosedTests(SimpleTestCase):
 
     def test_email_step_is_denied_when_the_owner_switched_email_off(self):
         # The case that was already blocked before this change must stay blocked.
-        self._assert_denied(
-            SEND_EMAIL, "allow_email", {"user_id": 7, "room_id": None, "preferences": {"allow_email": False}}
-        )
+        switched_off = {"allow_email": False, "allow_payments": True, "allow_whatsapp": True}
+        self._assert_denied(SEND_EMAIL, "allow_email", {"user_id": 7, "room_id": None, "preferences": switched_off})
+
+    def test_partial_preferences_in_the_context_are_reloaded_not_trusted(self):
+        partial = {"timezone": "Africa/Nairobi"}
+        with _lookup_down():
+            self._assert_denied(SEND_EMAIL, "allow_email", {"user_id": 7, "room_id": None, "preferences": partial})
+
+    def test_partial_preferences_get_the_owners_real_gates(self):
+        partial = {"timezone": "Africa/Nairobi"}
+        context = {"user_id": 7, "room_id": None, "preferences": partial}
+        with _user_not_found():
+            self._run_step(GET_WEATHER, context)
+        self.assertTrue(context["preferences"]["allow_email"])
+        self.assertIn("allow_payments", context["preferences"])
+
+    def test_a_loader_that_returns_no_gates_still_denies(self):
+        with patch("orchestration.user_preferences.get_user_preferences", return_value={"timezone": "UTC"}):
+            self._assert_denied(SEND_EMAIL, "allow_email", {"user_id": 7, "room_id": None})
 
     def test_empty_preferences_in_the_context_are_not_read_as_allowed(self):
         with _lookup_down():

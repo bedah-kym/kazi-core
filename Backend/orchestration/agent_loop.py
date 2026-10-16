@@ -25,7 +25,7 @@ from orchestration.agent_prompts import (
     build_confirmation_prompt,
     build_system_prompt,
 )
-from orchestration.llm_client import get_llm_client
+from orchestration.llm_client import TokenQuotaExceeded, _humanize_seconds, get_llm_client
 from orchestration.memory_state import update_memory_state, save_memory_summary
 from orchestration.model_catalog import find_model, model_pref_key, parse_model_id, provider_configured
 from orchestration.security_policy import redact_sensitive_text
@@ -114,6 +114,9 @@ class LoopState:
     prev_input_tokens: int = 0
     end_reason: str = ""
     awaiting_budget: bool = False
+    # T-F3b: the pause was the hourly token quota, not the turn's own budget, so
+    # resuming it must not be read as a budget grant.
+    awaiting_quota: bool = False
     budget_extensions: int = 0
     # v0.7 (#170): set once output from an untrusted source (shell, web
     # search) enters context. Tainted runs escalate external-write and
@@ -129,8 +132,13 @@ def _state_key(room_id: int, user_id: int) -> str:
     return AGENT_STATE_KEY.format(room_id=room_id, user_id=user_id)
 
 
-def save_loop_state(room_id: int, user_id: int, state: LoopState) -> None:
-    """Persist the loop state to Redis so it survives a confirmation pause."""
+def save_loop_state(room_id: int, user_id: int, state: LoopState, ttl: Optional[int] = None) -> None:
+    """Persist the loop state to Redis so it survives a confirmation pause.
+
+    ``ttl`` overrides the default window. A quota pause uses it to outlive the
+    wait until enough of the hour rolls out, so the paused work can resume
+    (T-F3b).
+    """
     serialisable = {
         "messages": state.messages,
         "iteration": state.iteration,
@@ -146,12 +154,13 @@ def save_loop_state(room_id: int, user_id: int, state: LoopState) -> None:
         "prev_input_tokens": state.prev_input_tokens,
         "end_reason": state.end_reason,
         "awaiting_budget": state.awaiting_budget,
+        "awaiting_quota": state.awaiting_quota,
         "budget_extensions": state.budget_extensions,
     }
     cache.set(
         _state_key(room_id, user_id),
         json.dumps(serialisable, default=str),
-        CONFIRMATION_STATE_TTL,
+        ttl or CONFIRMATION_STATE_TTL,
     )
 
 
@@ -179,6 +188,7 @@ def load_loop_state(room_id: int, user_id: int) -> Optional[LoopState]:
         prev_input_tokens=data.get("prev_input_tokens", 0),
         end_reason=data.get("end_reason", ""),
         awaiting_budget=bool(data.get("awaiting_budget", False)),
+        awaiting_quota=bool(data.get("awaiting_quota", False)),
         budget_extensions=data.get("budget_extensions", 0),
     )
     return state
@@ -855,6 +865,40 @@ def _maximum_budget_note(state: "LoopState") -> str:
     return (
         f"I've used the maximum budget for this turn: {_budget_end_detail(state)}. "
         "I can't extend it further; send a new message to continue."
+    )
+
+
+def _quota_pause_ttl(retry_after_seconds: Any) -> int:
+    """How long a quota-paused turn is kept so it can resume (T-F3b).
+
+    The rolling hour can free up to an hour out, so the default 10-minute
+    confirmation window is too short. Keep the state for the wait plus a margin,
+    never less than the default window.
+    """
+    try:
+        retry = int(retry_after_seconds or 0)
+    except (TypeError, ValueError, OverflowError):
+        retry = 0
+    return max(CONFIRMATION_STATE_TTL, retry + 300)
+
+
+def _quota_reached_note(state: "LoopState", exc: "TokenQuotaExceeded") -> str:
+    """The harness line shown when the hourly work-token quota blocks a turn.
+
+    It says plainly what ran, that the limit is the hour's, roughly when enough
+    frees up, and how to continue from where it stopped without redoing finished
+    work. It is the harness's words, not the model's, and claims no success.
+    """
+    detail = _budget_end_detail(state)
+    if getattr(exc, "reason", "limit") == "unreadable":
+        return (
+            f"I couldn't check this hour's token limit, so I stopped rather than "
+            f"risk overrunning it: {detail}. Reply **continue** and I'll try again."
+        )
+    when = _humanize_seconds(getattr(exc, "retry_after_seconds", 0))
+    return (
+        f"I've reached this hour's token limit: {detail}. It frees up in {when}. "
+        "Reply **continue** then and I'll pick up from where it stopped."
     )
 
 
@@ -1600,6 +1644,10 @@ async def _run_sub_agent(
         sub_messages.append({"role": "assistant", "content": content_blocks})
         work, prev_input_tokens = _work_tokens(response, prev_input_tokens)
         tokens_used += work
+        # Charge the delegated run's work to the user's rolling-hour quota too:
+        # it is the user's work, and only this run knows what it newly read
+        # (T-F3b).
+        llm.record_work_tokens(work, context.get("user_id"))
         searches = _count_search_uses(response)
         if searches > 0:
             # A server-side search brings in untrusted text; the main loop taints on it too.
@@ -1810,6 +1858,7 @@ async def run_agent_loop(
     resumed_state: Optional[LoopState] = None,
     confirmed_tool: bool = False,
     budget_extended: bool = False,
+    quota_resumed: bool = False,
 ) -> AsyncGenerator[AgentEvent, None]:
     """
     Run the agentic loop. Yields AgentEvent objects for the consumer to handle.
@@ -1825,6 +1874,8 @@ async def run_agent_loop(
         resumed_state: If resuming after a confirmation or budget pause.
         confirmed_tool: True if the user just confirmed a pending tool.
         budget_extended: True if the user just granted the turn more budget.
+        quota_resumed: True if the user is resuming a turn the hourly token
+            quota stopped. It continues the turn without touching its budget.
     """
     llm = get_llm_client()
     if user_message:
@@ -1983,6 +2034,22 @@ async def run_agent_loop(
             }], state),
         })
 
+    elif resumed_state and quota_resumed:
+        # The hourly quota blocked the turn and has now freed (T-F3b). Continue
+        # from exactly where it stopped: the tool log is intact, so no finished
+        # call repeats. This is *not* a budget grant, so the turn's budget and
+        # its extension count are untouched; a plain reply resumes it.
+        state = resumed_state
+        state.start_time = time.monotonic()
+        state.awaiting_budget = False
+        state.awaiting_quota = False
+        state.tainted = state.tainted or await sync_to_async(_conversation_tainted)(room_id)
+        _append_note_to_last_user(
+            state.messages,
+            "[Harness: the hourly token limit has freed up. Continue from where "
+            "you stopped; do not repeat work already done.]",
+        )
+
     elif resumed_state and budget_extended:
         # The user granted more budget after the model asked for it. Continue
         # from exactly where the turn stopped: the tool log is intact, so no
@@ -2127,6 +2194,25 @@ async def run_agent_loop(
                 provider=override_provider,
                 use_prompt_cache=True,
             )
+        except TokenQuotaExceeded as quota_exc:
+            # The hour's work-token quota blocked the call. End the turn the
+            # same way a budget stop does: keep the state so the user can
+            # resume from where it stopped without redoing finished work, and
+            # say plainly that the hourly limit was reached and roughly when
+            # enough frees up (T-F3b).
+            logger.warning("Agent loop stopped by hourly token quota: %s", quota_exc)
+            state.end_reason = "quota"
+            state.awaiting_budget = True
+            # Mark it as a quota pause, not a budget one, so a reply resumes the
+            # turn without inflating its budget (T-F3b).
+            state.awaiting_quota = True
+            if room_id and user_id:
+                save_loop_state(
+                    room_id, user_id, state,
+                    ttl=_quota_pause_ttl(quota_exc.retry_after_seconds),
+                )
+            yield AgentEvent("error", {"message": _quota_reached_note(state, quota_exc)})
+            break
         except Exception as exc:
             logger.error("Agent loop LLM call failed: %s", exc, exc_info=True)
             state.end_reason = "error"
@@ -2140,6 +2226,9 @@ async def run_agent_loop(
         # previous call. The resent prefix is not charged (T-F3).
         iter_work, state.prev_input_tokens = _work_tokens(response, state.prev_input_tokens)
         state.tokens_used += iter_work
+        # Charge the same work to the rolling-hour quota, so a long conversation
+        # does not spend the hour's limit just by being resent (T-F3b).
+        llm.record_work_tokens(iter_work, user_id)
 
         if (
             not state.budget_warning_sent
@@ -2669,6 +2758,56 @@ async def has_pending_budget_state(room_id: int, user_id: int) -> bool:
     """Whether a turn is paused waiting for the user to grant more budget."""
     state = await sync_to_async(load_loop_state)(room_id, user_id)
     return bool(state and state.awaiting_budget)
+
+
+async def pending_resume_kind(room_id: int, user_id: int) -> str:
+    """Which pause is waiting for a reply: ``"quota"``, ``"budget"`` or ``""``.
+
+    Both a budget stop and a quota stop keep the state with ``awaiting_budget``
+    set, so the reply handler needs to tell them apart: a quota resume must not
+    be read as a budget grant (T-F3b).
+    """
+    state = await sync_to_async(load_loop_state)(room_id, user_id)
+    if not state or not state.awaiting_budget:
+        return ""
+    # ``end_reason`` also covers a state saved before the flag existed.
+    return "quota" if (state.awaiting_quota or state.end_reason == "quota") else "budget"
+
+
+async def resume_after_quota(
+    *,
+    context: Dict[str, Any],
+    preferences: Optional[Dict[str, Any]] = None,
+    context_prompt: str = "",
+    memory_summary: str = "",
+    environment_block: str = "",
+) -> AsyncGenerator[AgentEvent, None]:
+    """Continue a turn the hourly token quota stopped, from where it stopped.
+
+    The saved loop state carries the conversation and the tool log, so a call
+    that already finished is not repeated. Unlike a budget grant, this never
+    changes the turn's budget or its extension count (T-F3b).
+    """
+    room_id = context.get("room_id")
+    user_id = context.get("user_id")
+    state = await sync_to_async(load_loop_state)(room_id, user_id)
+    if not state or not (state.awaiting_quota or state.end_reason == "quota"):
+        yield AgentEvent("error", {
+            "message": "There is no paused turn waiting for the hourly limit to free up.",
+        })
+        return
+    clear_loop_state(room_id, user_id)
+    async for event in run_agent_loop(
+        user_message="",  # Not used on resume
+        context=context,
+        preferences=preferences,
+        context_prompt=context_prompt,
+        memory_summary=memory_summary,
+        environment_block=environment_block,
+        resumed_state=state,
+        quota_resumed=True,
+    ):
+        yield event
 
 
 async def resume_with_more_budget(

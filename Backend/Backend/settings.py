@@ -591,9 +591,12 @@ LLM_REVIEWER_MODEL = os.environ.get('LLM_REVIEWER_MODEL', '')
 # falls back to the first configured provider (anthropic, deepseek, huggingface).
 LLM_DEFAULT_PROVIDER = os.environ.get('LLM_DEFAULT_PROVIDER', '')
 
-# LLM token quota
+# LLM token quota. The hourly limit counts work tokens (generated + newly-read
+# input) over a rolling hour, in the same unit as AGENT_TURN_TOKEN_BUDGET, and
+# defaults to at least twice the default turn budget so a user can finish one
+# full default turn and start another within the hour (T-F3b).
 LLM_TOKEN_QUOTA_ENABLED = os.environ.get('LLM_TOKEN_QUOTA_ENABLED', 'True').lower() in ('1', 'true', 'yes')
-LLM_TOKEN_LIMIT_PER_USER_PER_HOUR = int(os.environ.get('LLM_TOKEN_LIMIT_PER_USER_PER_HOUR', 50000))
+LLM_TOKEN_LIMIT_PER_USER_PER_HOUR = int(os.environ.get('LLM_TOKEN_LIMIT_PER_USER_PER_HOUR', 200000))
 
 # LLM cost guards
 LLM_MAX_TOKENS = int(os.environ.get('LLM_MAX_TOKENS', 700))  # hard ceiling per call

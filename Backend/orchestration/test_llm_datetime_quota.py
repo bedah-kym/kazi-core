@@ -97,7 +97,8 @@ class TokenBudgetExemptionTests(TransactionTestCase):
         user = User.objects.create_user(
             username="quota-user", email="qu@example.com", password="secret",  # nosec B106 — test fixture — fake credential
         )
-        cache.set(f"llm_tokens:{user.pk}", 123, timeout=3600)
+        self.client._record_token_usage(123, user.pk)
         budget = asyncio.run(self.client._get_user_token_budget(user.pk))
-        self.assertEqual(budget["limit"], 50000)
+        self.assertEqual(budget["limit"], 200000)
         self.assertEqual(budget["used"], 123)
+        self.assertFalse(budget["exempt"])

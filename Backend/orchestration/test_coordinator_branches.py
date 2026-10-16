@@ -41,10 +41,16 @@ class CoordinatorBranchTests(SimpleTestCase):
             "orchestration.coordinator.has_pending_budget_state": AsyncMock(return_value=False),
             "orchestration.coordinator.cache": MagicMock(),
             "orchestration.coordinator.record_event": MagicMock(),
+            # A quota pause defaults to the hour having freed, so tests that do
+            # not care about the check resume as before (T-F3b).
+            "orchestration.coordinator._quota_resume_still_blocked": AsyncMock(return_value=None),
         }
         defaults.update(patches or {})
         for target, new in defaults.items():
-            mocks[target.rsplit(".", 1)[-1]] = stack.enter_context(patch(target, new))
+            # create=True lets a target added after a test was written still be
+            # patched on an older revision; the assertion, not a setup error, is
+            # then what fails there.
+            mocks[target.rsplit(".", 1)[-1]] = stack.enter_context(patch(target, new, create=True))
 
         mocks["cache"].get.return_value = None
 
@@ -180,6 +186,50 @@ class CoordinatorBranchTests(SimpleTestCase):
             )
             resume.assert_called_once()
             self.assertTrue(any(c.args[1] == "ok" for c in send_chunk.await_args_list), query)
+
+    def test_a_quota_pause_resumes_without_granting_more_budget(self):
+        budget_resume = MagicMock(side_effect=AssertionError("must not grant budget"))
+        quota_resume = MagicMock(side_effect=_event_stream)
+        result, mocks, send_chunk = self._run(
+            "continue",
+            patches={
+                "orchestration.coordinator.has_pending_budget_state": AsyncMock(return_value=True),
+                "orchestration.coordinator.pending_resume_kind": AsyncMock(return_value="quota"),
+                "orchestration.coordinator.resume_with_more_budget": budget_resume,
+                "orchestration.coordinator.resume_after_quota": quota_resume,
+                "orchestration.coordinator.clear_loop_state": MagicMock(),
+            },
+        )
+        quota_resume.assert_called_once()
+        budget_resume.assert_not_called()
+        sent = "".join(c.args[1] for c in send_chunk.await_args_list)
+        self.assertIn("hourly", sent.lower())
+        self.assertNotIn("more budget", sent.lower())
+
+    def test_a_quota_resume_while_still_full_never_claims_it_freed(self):
+        from orchestration.llm_client import TokenQuotaExceeded
+
+        # The resume path must not run at all while the hour is still full.
+        quota_resume = MagicMock(side_effect=_event_stream)
+        result, mocks, send_chunk = self._run(
+            "continue",
+            patches={
+                "orchestration.coordinator.has_pending_budget_state": AsyncMock(return_value=True),
+                "orchestration.coordinator.pending_resume_kind": AsyncMock(return_value="quota"),
+                "orchestration.coordinator.resume_after_quota": quota_resume,
+                "orchestration.coordinator.clear_loop_state": MagicMock(),
+                # The check says the hour is still full.
+                "orchestration.coordinator._quota_resume_still_blocked": AsyncMock(
+                    return_value=TokenQuotaExceeded(1800, reason="limit"),
+                ),
+            },
+        )
+        quota_resume.assert_not_called()
+        mocks["clear_loop_state"].assert_not_called()
+        sent = "".join(c.args[1] for c in send_chunk.await_args_list).lower()
+        self.assertNotIn("freed up", sent)
+        self.assertIn("still reached", sent)
+        self.assertIn("hour", sent)
 
     def test_a_whole_message_stop_ends_the_budget_pause(self):
         for query in ("no", "stop"):

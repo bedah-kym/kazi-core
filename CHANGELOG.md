@@ -49,6 +49,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backstops (10k iterations, 10k tool calls, a 30-minute wall clock) stay far
   above the bound, and the native web-search tool is rebuilt from the live
   daily allowance on every request so one turn cannot exceed the daily limit.
+- The per-user hourly token quota now counts **work tokens** over a real
+  rolling hour (T-F3b). It charges what the model generates plus the input it
+  newly reads — the same unit as the turn budget — so a long conversation no
+  longer consumes the hour just by resending its prompt, and usage ages out of
+  the rolling hour even while a user keeps calling. The default limit rises to
+  200,000, at least twice the default turn budget, so a user can finish one full
+  default turn and start another within the hour. A blocked call is refused with
+  a message that says the hourly limit was reached and roughly when capacity
+  frees up; a turn blocked mid-way keeps its state, so the user can reply
+  **continue** once it frees up and resume without redoing finished work — this
+  resumption is **not** a budget grant, so it never raises the turn's budget or
+  its extension count. Recordings are atomic, so concurrent calls from two rooms,
+  parallel delegations or several worker processes are never dropped, and every
+  usage bucket keeps a TTL so it ages out of the rolling hour. The check fails
+  closed: if usage cannot be read, a call that needs the quota is refused. That
+  now holds under the production cache too, where `REDIS_CACHE_IGNORE_EXCEPTIONS`
+  (default on) makes a Redis outage read as an empty hour; the quota read
+  surfaces the outage instead, while every other cache user keeps ignoring it.
+  Replying **continue** while the hour is still full says it is still reached and
+  keeps the paused turn, rather than claiming it freed.
+  `LLM_TOKEN_QUOTA_ENABLED` and the staff/superuser exemption are unchanged.
 - A turn is offered only the tools that can work for that user in that room. An
   action whose connector did not load is no longer offered: a connector skipped
   at boot (`TELEGRAM_BOT_TOKEN`, `SHELL_EXEC_TOKEN` unset, the IntaSend SDK not

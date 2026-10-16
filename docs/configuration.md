@@ -83,7 +83,41 @@ provider above.
 | Variable | Default | Purpose |
 |---|---|---|
 | `LLM_TOKEN_QUOTA_ENABLED` | `True` | Per-user token quota enforcement. |
-| `LLM_TOKEN_LIMIT_PER_USER_PER_HOUR` | `50000` | Hourly token budget per user. |
+| `LLM_TOKEN_LIMIT_PER_USER_PER_HOUR` | `200000` | Rolling-hour **work-token** budget per user. |
+
+The hourly quota counts **work tokens** — what the model generates plus the
+input it newly reads — in the same unit as `AGENT_TURN_TOKEN_BUDGET` (T-F3b). The
+system prompt, tool list and history resent on every call are *not* charged, so
+a long conversation does not spend the hour's limit just by being resent. A
+single-shot call has nothing resent, so it counts what it actually sent and
+received. Staff and superusers are exempt.
+
+Usage is kept in short-lived buckets and read back over a true **rolling hour**:
+usage older than an hour stops counting even while the user keeps calling.
+Recordings are atomic, so concurrent calls (two rooms, parallel delegations,
+several worker processes for one user) are never dropped, and every bucket keeps
+a TTL so it always ages out. The default limit is at least twice the default turn
+budget, so a user can finish one full default turn and start another within the
+hour.
+
+When the hour is full, a call is refused with a message that says the hourly
+limit was reached and roughly when capacity frees up. A turn blocked mid-way ends
+like a budget stop: its state is kept, so the user can reply **continue** once it
+frees up and pick up where it stopped without redoing finished work. Resuming a
+quota stop is **not** a budget grant: it never raises the turn's budget or its
+extension count (a turn stopped by its own budget still extends as before).
+Replying **continue** while the hour is still full says so and keeps the paused
+turn, instead of claiming the limit freed.
+
+The check **fails closed**: if usage cannot be read, a call that needs the quota
+is refused rather than allowed. This matters for self-hosters because the
+production cache (`REDIS_CACHE_IGNORE_EXCEPTIONS`, default on) deliberately
+swallows cache errors so HTTP views keep serving during a Redis outage. The quota
+read bypasses that and surfaces the outage, so during a Redis outage a non-staff
+user's quota-bound calls are refused with a "could not be checked" message;
+every other cache user keeps today's ignore-and-serve behaviour. If Redis is down
+for an extended time and you would rather fail open for the quota too, set
+`LLM_TOKEN_QUOTA_ENABLED=False` — but that lifts the limit for everyone.
 
 ## Memory & context budgets
 

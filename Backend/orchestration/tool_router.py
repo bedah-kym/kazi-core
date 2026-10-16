@@ -620,6 +620,16 @@ def register_search_backend(backend) -> None:
     _search_backend = backend
 
 
+def search_backend_available() -> bool:
+    """True when a real web-search backend is registered.
+
+    The agent loop uses this to decide whether ``search_info`` can really
+    search, and therefore whether to offer it instead of saying search is
+    unavailable.
+    """
+    return _search_backend is not None
+
+
 async def _run_search_backend(query: str, context: Dict) -> Optional[Dict]:
     if _search_backend is None:
         return None

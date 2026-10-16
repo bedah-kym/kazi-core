@@ -247,3 +247,11 @@ class SearchConnectorHonestyTests(SimpleTestCase):
 
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["results"], [{"title": "Nairobi"}])
+
+    def test_backend_availability_reports_registration(self):
+        from orchestration.tool_router import register_search_backend, search_backend_available
+
+        self.assertFalse(search_backend_available())
+        register_search_backend(lambda query, context: None)
+        self.addCleanup(lambda: register_search_backend(None))
+        self.assertTrue(search_backend_available())

@@ -8,10 +8,21 @@ your stack — no vendor lock-in, no data leaving your server.
 
 ## Why people pick Kazi
 
+- **One agent loop, one path.** Every chat turn runs the same ReAct loop —
+  think, call a tool, observe, repeat. There is no second pipeline deciding in
+  parallel. [Architecture →](architecture.md)
+- **A governed pair of hands.** `run_command` runs through a deliberately dumb
+  sidecar inside a sandbox: non-root, read-only root filesystem, no
+  capabilities, network off by default. Safe commands run silently, bounded
+  ones ask inline, destructive ones wait for a durable approval — with a
+  workspace snapshot to roll back to. [Security →](security.md)
 - **The agent remembers.** A 3-tier memory system (hot / warm / cold) persists
   what it learns about your rooms, contacts, and preferences across conversations.
-- **Nothing important runs on autopilot.** High-risk actions pause at durable
-  human checkpoints and only resume after you approve.
+- **Learning that proposes, never grants.** Skills, routines and standing
+  grants (v0.7) let repeated work run on a schedule you approved once; a grant
+  is scoped to a version and lapses when the workflow drifts. [Features →](features.md)
+- **Nothing important runs on autopilot.** Risky actions pause at durable human
+  checkpoints and only resume after you approve.
 - **You own it.** Your server, your data, your payment rail. Security — injection
   detection, parameter sanitization, risk gates — ships in the core.
 

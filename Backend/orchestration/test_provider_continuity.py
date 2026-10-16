@@ -85,7 +85,7 @@ class ClaudeContinuityTests(SimpleTestCase):
     def _capture_body(self, messages):
         captured = {}
 
-        async def fake_post(self, url, headers=None, json=None):
+        async def fake_post(self, url, headers=None, json=None, **kwargs):
             captured["json"] = json
             return httpx.Response(
                 200,

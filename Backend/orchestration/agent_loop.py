@@ -38,6 +38,11 @@ logger = logging.getLogger(__name__)
 
 MAX_ITERATIONS = 10
 MAX_TOOL_CALLS = 15
+# Anthropic returns stop_reason "pause_turn" while a server-side tool (its web
+# search) is still running; the documented contract is to send the paused turn
+# back unchanged so the model can finish. A provider that pauses forever must
+# still end, so cap the run of consecutive pauses.
+MAX_CONSECUTIVE_PAUSES = 3
 # Backstop when the install-level caps toggle is OFF (Settings > Capabilities):
 # "unlimited" means 10k, never infinite — a runaway loop must always terminate.
 HARD_CAP_ITERATIONS = 10000
@@ -62,10 +67,6 @@ MAX_SEARCHES_PER_REQUEST = 5
 # Token budget per loop
 LOOP_TOKEN_BUDGET = 50000  # hard cap per single agent loop invocation
 LOOP_TOKEN_WARNING_RATIO = 0.80  # warn user at 80%
-
-# Model selection
-MODEL_SONNET = "claude-sonnet-4-6"
-MODEL_HAIKU = "claude-haiku-4-5-20251001"
 
 
 # --------------------------------------------------------------------------- #
@@ -157,8 +158,12 @@ def clear_loop_state(room_id: int, user_id: int) -> None:
 
 
 # delegate_task is included because a sub-agent's summary can carry text from
-# anything the sub-agent read.
-_UNTRUSTED_TOOL_NAMES = {"run_command", "run_shell", "shell_command", "web_search", "delegate_task"}
+# anything the sub-agent read. search_info is included because a registered
+# search backend returns web text, the same untrusted source as web_search.
+_UNTRUSTED_TOOL_NAMES = {
+    "run_command", "run_shell", "shell_command",
+    "web_search", "search_info", "delegate_task",
+}
 _SHELL_TOOL_NAMES = {"run_command", "run_shell", "shell_command"}
 
 
@@ -645,30 +650,6 @@ def _sanitize_tool_result(result_json: str) -> str:
 #  Model routing                                                              #
 # --------------------------------------------------------------------------- #
 
-def _select_model(user_message: str, iteration: int) -> str:
-    """
-    Pick Haiku for simple single-tool requests, Sonnet for everything else.
-
-    Heuristic: use Haiku on the FIRST iteration if the message is short and
-    looks like a straightforward single action. Once we're in multi-turn
-    (iteration > 1) always use Sonnet for better reasoning.
-    """
-    if iteration > 1:
-        return MODEL_SONNET
-
-    words = user_message.split()
-    if len(words) > 25:
-        return MODEL_SONNET
-
-    # Multi-step indicators → Sonnet
-    multi_step_words = {"then", "after", "next", "also", "and then", "both", "compare"}
-    lowered = user_message.lower()
-    if any(w in lowered for w in multi_step_words):
-        return MODEL_SONNET
-
-    return MODEL_HAIKU
-
-
 def _resolve_model_override(room_id: Optional[int]) -> Tuple[Optional[str], Optional[str]]:
     """
     Read the per-room model preference (``model_pref:{room_id}``) and return a
@@ -689,6 +670,20 @@ def _resolve_model_override(room_id: Optional[int]) -> Tuple[Optional[str], Opti
     return provider, model
 
 
+def _search_backend_available() -> bool:
+    """True when a real web-search backend is registered (the search seam)."""
+    from orchestration.tool_router import search_backend_available
+
+    return search_backend_available()
+
+
+def _is_search_action(tool_name: str) -> bool:
+    """True for the web-search action (including its aliases)."""
+    from orchestration.action_catalog import resolve_action_alias
+
+    return resolve_action_alias(tool_name) == "search_info"
+
+
 async def _execute_with_timeout(
     tool_name: str,
     tool_input: Dict[str, Any],
@@ -696,8 +691,17 @@ async def _execute_with_timeout(
     timeout: float = TOOL_TIMEOUT_SECONDS,
 ) -> Dict[str, Any]:
     """Execute a tool with a timeout wrapper."""
+    # The registered-backend search path shares the native search budget: the
+    # daily limit is checked before the call and one use is recorded on success.
+    is_search = _is_search_action(tool_name)
+    if is_search and get_remaining_searches(context.get("user_id")) <= 0:
+        return {
+            "status": "error",
+            "message": "You've reached today's web search limit. Try again tomorrow.",
+            "results": [],
+        }
     try:
-        return await asyncio.wait_for(
+        result = await asyncio.wait_for(
             execute_tool(tool_name, tool_input, context),
             timeout=timeout,
         )
@@ -707,6 +711,9 @@ async def _execute_with_timeout(
             "message": f"Tool {tool_name} timed out after {timeout}s. "
                        f"The operation may still be processing.",
         }
+    if is_search and result.get("status") == "success":
+        _record_search_usage(context.get("user_id"), 1)
+    return result
 
 
 # --------------------------------------------------------------------------- #
@@ -1144,6 +1151,7 @@ async def _run_sub_agent(
     tokens_used = 0
     stopped_reason: Optional[str] = None
     completed = False
+    consecutive_pauses = 0
 
     caps_enforced = context.get("caps_enforced", True)
     max_iterations = SUB_AGENT_MAX_ITERATIONS if caps_enforced else HARD_CAP_ITERATIONS
@@ -1201,6 +1209,7 @@ async def _run_sub_agent(
             break
 
         if stop_reason == "tool_use":
+            consecutive_pauses = 0
             tool_calls = _extract_tool_calls(content_blocks)
             result_blocks, capped = await _execute_scoped_tool_calls(
                 tool_calls, context, preferences, sub_tool_log,
@@ -1210,6 +1219,25 @@ async def _run_sub_agent(
             if capped:
                 stopped_reason = "max_tool_calls"
                 break
+            continue
+
+        if stop_reason == "pause_turn":
+            # A server-side tool is still running: send the paused turn back so
+            # the model can finish, but bound the run of pauses.
+            consecutive_pauses += 1
+            if consecutive_pauses > MAX_CONSECUTIVE_PAUSES:
+                stopped_reason = "pause_limit"
+                if not collected_text:
+                    collected_text.append("The model paused repeatedly and did not finish this task.")
+                break
+            continue
+
+        # A stop reason we do not handle. End the run rather than re-sending the
+        # same messages until the iteration cap.
+        stopped_reason = f"unhandled_stop:{stop_reason}"
+        if not collected_text:
+            collected_text.append("The model declined to continue this task.")
+        break
 
     if stopped_reason is None and not completed:
         stopped_reason = "max_iterations"
@@ -1406,26 +1434,37 @@ async def run_agent_loop(
     max_iterations = MAX_ITERATIONS if caps_enforced else HARD_CAP_ITERATIONS
     timeout_cap = LOOP_TIMEOUT_SECONDS if caps_enforced else None
 
+    # Claude native web search is an Anthropic server-side tool. No other
+    # provider has one. `search_info` (SearchConnector) is a real search only
+    # when offered: native search on Anthropic, or a registered search backend
+    # elsewhere. With neither it is excluded and the prompt says so, or the
+    # model invents a search.
+    override_provider, _ = _resolve_model_override(room_id)
+    effective_provider = override_provider or llm.default_provider()
+    native_search = effective_provider == "anthropic"
+    backend_search = (not native_search) and _search_backend_available()
+
     # Build tool definitions (filtered by user capabilities)
     tools = get_tool_definitions(
         user_capabilities=user_caps,
-        exclude_actions=["search_info"],  # Replaced by Claude native web search
+        exclude_actions=[] if backend_search else ["search_info"],
     )
     # Add meta-tools (delegate_task, handoff_to_workflow)
     tools.extend(META_TOOL_DEFINITIONS)
 
-    # Add Claude native web search (server-side tool) with rate-limited budget
-    user_location_hint = None
-    if preferences:
-        loc = preferences.get("location")
-        tz = preferences.get("timezone")
-        if loc or tz:
-            user_location_hint = {"type": "approximate"}
-            if loc:
-                user_location_hint["city"] = loc
-            if tz:
-                user_location_hint["timezone"] = tz
-    web_search_tool = _build_web_search_tool(user_id, user_location_hint)
+    web_search_tool = None
+    if native_search:
+        user_location_hint = None
+        if preferences:
+            loc = preferences.get("location")
+            tz = preferences.get("timezone")
+            if loc or tz:
+                user_location_hint = {"type": "approximate"}
+                if loc:
+                    user_location_hint["city"] = loc
+                if tz:
+                    user_location_hint["timezone"] = tz
+        web_search_tool = _build_web_search_tool(user_id, user_location_hint)
     if web_search_tool:
         tools.append(web_search_tool)
 
@@ -1435,6 +1474,11 @@ async def run_agent_loop(
         context_prompt=context_prompt,
         memory_summary=memory_summary,
     )
+    if not web_search_tool and not backend_search:
+        system += (
+            "\n\nWeb search is not available in this environment. If the user asks "
+            "you to search the web, say plainly that you cannot search the web here."
+        )
 
     # ------------------------------------------------------------------ #
     #  Initialise or resume loop state                                    #
@@ -1534,6 +1578,9 @@ async def run_agent_loop(
     for entry in state.tool_call_log:
         seen_calls.add(_dedup_key(entry["name"], entry["input"]))
 
+    # Consecutive pause_turn responses. Reset by any other stop reason.
+    consecutive_pauses = 0
+
     # ------------------------------------------------------------------ #
     #  Main ReAct loop                                                    #
     # ------------------------------------------------------------------ #
@@ -1569,7 +1616,8 @@ async def run_agent_loop(
             break
 
         # ---- Call LLM ------------------------------------------------ #
-        selected_model = _select_model(user_message, state.iteration)
+        # No keyword router picks the model: the room's chosen model when one is
+        # set, else the operator's default provider resolves its own default.
         override_provider, override_model = _resolve_model_override(room_id)
         try:
             response = await llm.create_message(
@@ -1579,7 +1627,7 @@ async def run_agent_loop(
                 temperature=0.3,
                 max_tokens=4096,
                 user_id=user_id,
-                model=override_model if override_model else selected_model,
+                model=override_model,
                 provider=override_provider,
                 use_prompt_cache=True,
             )
@@ -1637,6 +1685,7 @@ async def run_agent_loop(
 
         # ---- Handle tool calls --------------------------------------- #
         if stop_reason == "tool_use":
+            consecutive_pauses = 0
             tool_calls = _extract_tool_calls(content_blocks)
 
             # Re-read room autonomy each iteration so a mid-run arm/revoke/expiry
@@ -1856,6 +1905,34 @@ async def run_agent_loop(
                 break
 
             # Continue the loop — LLM will see results and decide next step
+
+        elif stop_reason == "pause_turn":
+            # Anthropic paused while a server-side tool (its web search) is
+            # still running. Send the paused turn back (the assistant message
+            # was appended above) so the model finishes. A run of pauses is
+            # bounded: a provider that pauses forever must still end the turn.
+            consecutive_pauses += 1
+            if consecutive_pauses > MAX_CONSECUTIVE_PAUSES:
+                yield AgentEvent("error", {
+                    "message": "The model paused repeatedly and did not finish this request.",
+                })
+                break
+            continue
+
+        else:
+            # A stop reason we do not handle (a provider refusal, stop_sequence,
+            # ...). End the turn: re-sending the same messages would loop until
+            # the iteration cap and never answer. Any text the model already
+            # wrote was emitted above and is kept.
+            if stop_reason == "refusal":
+                yield AgentEvent("text_delta", {
+                    "text": "\n\n*(The model declined to answer this request.)*",
+                })
+            else:
+                yield AgentEvent("error", {
+                    "message": f"The model stopped for an unhandled reason ({stop_reason}).",
+                })
+            break
 
     # ---- Loop finished ----------------------------------------------- #
     if room_id and user_id:

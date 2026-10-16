@@ -601,57 +601,63 @@ class CalendarConnector(BaseConnector):
             return None
 
 
-class SearchConnector(BaseConnector):
-    """Web search fallback for classic pipeline. Agent loop uses Claude's native web_search tool instead."""
+# --------------------------------------------------------------------------- #
+#  Web search seam
+#  Kazi ships no web-search service of its own. Anthropic has a native
+#  server-side search tool (offered by agent_loop); other providers have none.
+#  Register a real backend here when one is chosen (self-hosted SearXNG, Brave,
+#  Tavily, ...): an async callable ``(query, context) -> connector result dict``.
+#  Until then SearchConnector answers honestly — it never asks the model to
+#  "search" and returns that prose as results.
+# --------------------------------------------------------------------------- #
+_search_backend = None
 
-    def __init__(self):
-        from .llm_client import get_llm_client
-        self.llm = get_llm_client()
+
+def register_search_backend(backend) -> None:
+    """Register the real web-search backend (async ``backend(query, context)``
+    returning a connector result dict). Choosing a service is then a one-file change."""
+    global _search_backend
+    _search_backend = backend
+
+
+def search_backend_available() -> bool:
+    """True when a real web-search backend is registered.
+
+    The agent loop uses this to decide whether ``search_info`` can really
+    search, and therefore whether to offer it instead of saying search is
+    unavailable.
+    """
+    return _search_backend is not None
+
+
+async def _run_search_backend(query: str, context: Dict) -> Optional[Dict]:
+    if _search_backend is None:
+        return None
+    return await _search_backend(query, context)
+
+
+class SearchConnector(BaseConnector):
+    """Web search action.
+
+    Runs a real backend when one is registered. With none registered it returns
+    an honest "cannot search" result: it no longer returns language-model text
+    as ``results``, which presented invented prose as search output.
+    """
 
     async def execute(self, parameters: Dict, context: Dict) -> Dict:
-        """Perform web search with strict rate limiting"""
-        from django.core.cache import cache
-
-        user_id = context.get("user_id")
         query = parameters.get("query")
-
         if not query:
             return {"status": "error", "message": "No search query provided"}
 
-        # RATE LIMIT CHECK — atomic increment
-        if user_id:
-            today = datetime.now().strftime("%Y-%m-%d")
-            limit_key = f"search_limit:{user_id}:{today}"
-            try:
-                # get-then-set with fresh TTL (see note above)
-                current_count = int(cache.get(limit_key) or 0) + 1
-                cache.set(limit_key, current_count, 86400)
-            except Exception:
-                cache.set(limit_key, 1, 86400)
-                current_count = 1
+        backend_result = await _run_search_backend(query, context)
+        if backend_result is not None:
+            return backend_result
 
-            if current_count > 10:
-                return {
-                    "status": "error",
-                    "message": "Daily search limit reached (10/10). Please try again tomorrow.",
-                }
-
-        if not self.llm.anthropic_key:
-            logger.warning("Search requested but Anthropic key missing.")
-            return {"results": [], "summary": "I cannot browse the live web right now.", "source": "system_fallback"}
-
-        try:
-            system_prompt = "You are a helpful research assistant."
-            response = await self.llm.generate_text(
-                system_prompt=system_prompt,
-                user_prompt=f"Search for: {query}",
-                temperature=0.7,
-                model_role="executor",
-            )
-            return {"status": "success", "results": [{"title": "Search Result", "snippet": response[:200] + "..."}], "summary": response, "source": "claude_search"}
-        except Exception as e:
-            logger.error("Search failed: %s", e)
-            return {"status": "error", "message": "Search functionality temporarily unavailable."}
+        return {
+            "status": "error",
+            "message": "I can't search the web in this environment.",
+            "results": [],
+        }
 
 
 class WeatherConnector(BaseConnector):

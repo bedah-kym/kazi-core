@@ -587,6 +587,9 @@ LLM_PLANNER_MODEL = os.environ.get('LLM_PLANNER_MODEL', '')
 LLM_EXECUTOR_MODEL = os.environ.get('LLM_EXECUTOR_MODEL', '')
 LLM_REVIEWER_PROVIDER = os.environ.get('LLM_REVIEWER_PROVIDER', 'anthropic')
 LLM_REVIEWER_MODEL = os.environ.get('LLM_REVIEWER_MODEL', '')
+# Provider that answers a chat turn when the room has no model override. Empty
+# falls back to the first configured provider (anthropic, deepseek, huggingface).
+LLM_DEFAULT_PROVIDER = os.environ.get('LLM_DEFAULT_PROVIDER', '')
 
 # LLM token quota
 LLM_TOKEN_QUOTA_ENABLED = os.environ.get('LLM_TOKEN_QUOTA_ENABLED', 'True').lower() in ('1', 'true', 'yes')

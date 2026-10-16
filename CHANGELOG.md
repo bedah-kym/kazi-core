@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The provider that answers a chat turn is the operator's choice, set with
+  `LLM_DEFAULT_PROVIDER`. Adding a second provider's key no longer silently makes
+  that provider the main model — the extra key only adds fallbacks and the models
+  the per-room picker can offer. With the setting unset, the first configured
+  provider in the order anthropic, deepseek, huggingface answers, and the boot
+  log states which provider is the default.
+- The harness no longer chooses a model from the message's words or length. A
+  turn uses the room's chosen model when one is set, otherwise the default
+  provider's own default model; a Claude model name is never sent to another
+  provider.
+- The LLM client reuses one `httpx.AsyncClient` per event loop instead of opening
+  a new client for every call, and closes it on ASGI shutdown. The per-call
+  timeout is unchanged.
+- The volatile date and time line now sits after the static system text on every
+  provider, not first. OpenAI-style providers cache the prompt prefix
+  automatically, so the previous order defeated the cache on DeepSeek.
 - A chat message is no longer refused because it contains a word such as
   "password", "secret" or "api key". It goes to the agent loop like any other
   turn, so "help me choose a strong password for my router" or "how do I create
@@ -37,6 +53,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A response whose stop reason the loop does not handle (a provider refusal,
+  `pause_turn`, `stop_sequence`, ...) now ends the turn after a single model
+  call. It used to re-send the same messages until the iteration cap and never
+  answer. A refusal reads as the provider declining, not as an error of Kazi, and
+  any text the model already wrote is kept.
+- The search action no longer asks the language model to "search" and returns
+  that prose as search results, which presented invented text as search output.
+  With no real search backend registered it answers that it cannot search the web
+  here; Claude's native web search is offered only on Anthropic.
 - An identical shell command in one turn now runs again instead of answering with the earlier output as if it were fresh. Any other identical call still does not run a second time, but its result is labelled as the earlier one. The message when the harness stops retrying now says the call can be tried again in a new message.
 - A turn the agent loop fails now ends with one error message ("Something went
   wrong on my side. Nothing further was run.") and one telemetry event instead

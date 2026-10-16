@@ -324,11 +324,11 @@ ACTION_CATALOG: List[Dict[str, Any]] = [
         "action": "search_info",
         "aliases": ["search", "lookup", "research"],
         "service": "search",
-        "description": "Search the web for information on any topic. Use this when you need to look up facts, current events, or answer knowledge questions.",
+        "description": "Look up information on a topic. Web search runs only when a backend is configured (Anthropic's native search, or a registered search backend); with none it reports that web search is unavailable.",
         "params": {
             "query": {"type": "string", "required": True, "description": "The search query to look up"},
         },
-        "return_description": "Returns search results with titles, snippets, and URLs",
+        "return_description": "Search results when a backend is configured, otherwise a notice that web search is unavailable",
         "risk_level": "low",
         "confirmation_policy": "never",
         "capability_gate": "allow_web_search",

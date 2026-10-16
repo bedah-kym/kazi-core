@@ -641,6 +641,16 @@ class SubAgentBudgetTests(SimpleTestCase):
         self.assertEqual(result["stopped_reason"], "token_budget")
         self.assertIn("token budget", result["summary"].lower())
 
+    def test_unknown_stop_reason_ends_sub_agent_after_one_call(self):
+        response = _make_llm_response(
+            [_text_block("Cannot continue.")], stop_reason="refusal",
+        )
+        result, _, create_message, _ = self._run(llm_return_value=response)
+
+        self.assertEqual(create_message.await_count, 1)
+        self.assertTrue(result["stopped_reason"].startswith("unhandled_stop"))
+        self.assertIn("Cannot continue.", result["summary"])
+
 
 # ---------------------------------------------------------------------------
 #  Scenario 12: An identical shell command runs again in the same turn
@@ -818,3 +828,274 @@ class Scenario13RepeatedNonShellCallTest(SimpleTestCase):
         self.assertEqual(len(results), 2)
         self.assertTrue(results[1].get("repeated"))
         self.assertIn("already ran in this turn", results[1].get("note", ""))
+
+
+# ---------------------------------------------------------------------------
+#  T-F4: an unhandled stop reason ends the turn after one model call
+# ---------------------------------------------------------------------------
+
+class UnknownStopReasonTests(SimpleTestCase):
+    """Re-sending the same messages on an unrecognised stop reason looped until
+    the iteration cap. The turn must end after a single call, keeping the text."""
+
+    @patch("orchestration.agent_loop.get_llm_client")
+    @patch("orchestration.agent_loop.cache")
+    def test_refusal_ends_turn_after_one_call(self, mock_cache, mock_get_llm):
+        mock_cache.get.return_value = None
+        mock_llm = MagicMock()
+        mock_llm.default_provider.return_value = "deepseek"
+        mock_llm.create_message = AsyncMock(return_value=_make_llm_response(
+            [_text_block("I can't help with that.")], stop_reason="refusal",
+        ))
+        mock_get_llm.return_value = mock_llm
+
+        from orchestration.agent_loop import run_agent_loop
+        events = run_async(collect_events(run_agent_loop(
+            user_message="do something disallowed",
+            context={"user_id": 1, "room_id": 1, "username": "test"},
+        )))
+
+        self.assertEqual(mock_llm.create_message.await_count, 1)
+        texts = "".join(e.data.get("text", "") for e in events if e.kind == "text_delta")
+        self.assertIn("I can't help with that.", texts)
+        self.assertIn("declined", texts)
+
+    @patch("orchestration.agent_loop.get_llm_client")
+    @patch("orchestration.agent_loop.cache")
+    def test_unrecognised_reason_ends_turn_after_one_call(self, mock_cache, mock_get_llm):
+        # "pause_turn" is handled (it continues); use another unhandled reason.
+        mock_cache.get.return_value = None
+        mock_llm = MagicMock()
+        mock_llm.default_provider.return_value = "deepseek"
+        mock_llm.create_message = AsyncMock(return_value=_make_llm_response(
+            [_text_block("Partial answer.")], stop_reason="stop_sequence",
+        ))
+        mock_get_llm.return_value = mock_llm
+
+        from orchestration.agent_loop import run_agent_loop
+        events = run_async(collect_events(run_agent_loop(
+            user_message="tell me something",
+            context={"user_id": 1, "room_id": 1, "username": "test"},
+        )))
+
+        self.assertEqual(mock_llm.create_message.await_count, 1)
+        self.assertIn("error", [e.kind for e in events])
+
+
+# ---------------------------------------------------------------------------
+#  T-F4 follow-up: stop_reason "pause_turn" continues (it is not unhandled)
+# ---------------------------------------------------------------------------
+
+class PauseTurnTests(SimpleTestCase):
+    """A provider's server-side tool (Anthropic web search) can pause the turn.
+    The paused turn is sent back so the model finishes, but a run of pauses is
+    bounded so a provider that pauses forever still ends the turn."""
+
+    @patch("orchestration.agent_loop.get_llm_client")
+    @patch("orchestration.agent_loop.cache")
+    def test_pause_turn_then_end_turn_answers_after_two_calls(self, mock_cache, mock_get_llm):
+        mock_cache.get.return_value = None
+        mock_llm = MagicMock()
+        mock_llm.default_provider.return_value = "anthropic"
+        mock_llm.create_message = AsyncMock(side_effect=[
+            _make_llm_response([_text_block("Searching the web.")], stop_reason="pause_turn"),
+            _make_llm_response([_text_block("Here is the answer.")], stop_reason="end_turn"),
+        ])
+        mock_get_llm.return_value = mock_llm
+
+        from orchestration.agent_loop import run_agent_loop
+        events = run_async(collect_events(run_agent_loop(
+            user_message="search the web for news",
+            context={"user_id": 1, "room_id": 1, "username": "test"},
+        )))
+
+        self.assertEqual(mock_llm.create_message.await_count, 2)
+        texts = "".join(e.data.get("text", "") for e in events if e.kind == "text_delta")
+        self.assertIn("Here is the answer.", texts)
+
+    @patch("orchestration.agent_loop.get_llm_client")
+    @patch("orchestration.agent_loop.cache")
+    def test_model_that_pauses_forever_stops_at_the_limit(self, mock_cache, mock_get_llm):
+        from orchestration.agent_loop import MAX_CONSECUTIVE_PAUSES, run_agent_loop
+
+        mock_cache.get.return_value = None
+        mock_llm = MagicMock()
+        mock_llm.default_provider.return_value = "anthropic"
+        mock_llm.create_message = AsyncMock(return_value=_make_llm_response(
+            [_text_block("Still working.")], stop_reason="pause_turn",
+        ))
+        mock_get_llm.return_value = mock_llm
+
+        events = run_async(collect_events(run_agent_loop(
+            user_message="search the web for news",
+            context={"user_id": 1, "room_id": 1, "username": "test"},
+        )))
+
+        self.assertEqual(mock_llm.create_message.await_count, MAX_CONSECUTIVE_PAUSES + 1)
+        self.assertIn("error", [e.kind for e in events])
+
+
+class SubAgentPauseTurnTests(SimpleTestCase):
+    """The delegated (sub-agent) loop continues a pause_turn the same way."""
+
+    def _run(self, side_effect):
+        from orchestration.agent_loop import _run_sub_agent
+
+        mock_llm = MagicMock()
+        mock_llm.create_message = AsyncMock(side_effect=side_effect)
+        with patch("orchestration.agent_loop.get_llm_client", return_value=mock_llm), \
+                patch("orchestration.agent_loop.update_memory_state", new=AsyncMock()), \
+                patch("orchestration.agent_loop._resolve_persona", new=AsyncMock(return_value=None)), \
+                patch("orchestration.agent_loop.record_event"):
+            result = run_async(_run_sub_agent(
+                {"task": "Do the thing"},
+                {"user_id": 1, "room_id": 1},
+                None,
+                "system prompt",
+                [{"name": "search_info", "input_schema": {}}],
+            ))
+        return result, mock_llm.create_message
+
+    def test_pause_turn_then_end_turn_finishes_after_two_calls(self):
+        result, create_message = self._run([
+            _make_llm_response([_text_block("Searching.")], stop_reason="pause_turn"),
+            _make_llm_response([_text_block("Done.")], stop_reason="end_turn"),
+        ])
+
+        self.assertEqual(create_message.await_count, 2)
+        self.assertIsNone(result["stopped_reason"])
+        self.assertIn("Done.", result["summary"])
+
+    def test_model_that_pauses_forever_stops_at_the_limit(self):
+        from orchestration.agent_loop import MAX_CONSECUTIVE_PAUSES
+
+        pauses = [
+            _make_llm_response([_text_block("Working.")], stop_reason="pause_turn")
+            for _ in range(MAX_CONSECUTIVE_PAUSES + 5)
+        ]
+        result, create_message = self._run(pauses)
+
+        self.assertEqual(create_message.await_count, MAX_CONSECUTIVE_PAUSES + 1)
+        self.assertEqual(result["stopped_reason"], "pause_limit")
+
+
+# ---------------------------------------------------------------------------
+#  T-F4 follow-up: a registered search backend makes search_info real
+# ---------------------------------------------------------------------------
+
+class SearchBackendOfferingTests(SimpleTestCase):
+    """With a search backend registered and a non-Anthropic provider, the agent
+    is offered search_info; with none it is excluded and the prompt says so.
+    The registered-backend path shares the daily search budget and taints."""
+
+    def setUp(self):
+        from orchestration.tool_router import register_search_backend
+        register_search_backend(None)
+        self.addCleanup(lambda: register_search_backend(None))
+
+    def _register_backend(self):
+        from orchestration.tool_router import register_search_backend
+
+        async def backend(query, context):
+            return {"status": "success", "results": [{"title": query}]}
+
+        register_search_backend(backend)
+
+    def _mock_llm(self, side_effect):
+        mock_llm = MagicMock()
+        mock_llm.default_provider.return_value = "deepseek"
+        mock_llm.create_message = AsyncMock(side_effect=side_effect)
+        return mock_llm
+
+    @patch("orchestration.agent_loop.get_llm_client")
+    @patch("orchestration.agent_loop.cache")
+    def test_registered_backend_offers_search_info_to_non_anthropic(self, mock_cache, mock_get_llm):
+        self._register_backend()
+        mock_cache.get.return_value = None
+        mock_llm = self._mock_llm([_make_llm_response([_text_block("ok")], stop_reason="end_turn")])
+        mock_get_llm.return_value = mock_llm
+
+        from orchestration.agent_loop import run_agent_loop
+        run_async(collect_events(run_agent_loop(
+            user_message="search the web for X",
+            context={"user_id": 1, "room_id": 1, "username": "test"},
+        )))
+
+        kwargs = mock_llm.create_message.await_args.kwargs
+        names = [t["name"] for t in kwargs["tools"]]
+        self.assertIn("search_info", names)
+        self.assertNotIn("cannot search the web here", kwargs["system"])
+
+    @patch("orchestration.agent_loop.get_llm_client")
+    @patch("orchestration.agent_loop.cache")
+    def test_no_backend_excludes_search_info_and_notes_unavailable(self, mock_cache, mock_get_llm):
+        mock_cache.get.return_value = None
+        mock_llm = self._mock_llm([_make_llm_response([_text_block("ok")], stop_reason="end_turn")])
+        mock_get_llm.return_value = mock_llm
+
+        from orchestration.agent_loop import run_agent_loop
+        run_async(collect_events(run_agent_loop(
+            user_message="search the web for X",
+            context={"user_id": 1, "room_id": 1, "username": "test"},
+        )))
+
+        kwargs = mock_llm.create_message.await_args.kwargs
+        names = [t["name"] for t in kwargs["tools"]]
+        self.assertNotIn("search_info", names)
+        self.assertIn("cannot search the web here", kwargs["system"])
+
+    @patch("orchestration.agent_loop.get_llm_client")
+    @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)
+    @patch("orchestration.agent_loop.cache")
+    def test_search_info_respects_the_daily_limit(self, mock_cache, mock_exec, mock_get_llm):
+        from orchestration.agent_loop import DAILY_SEARCH_LIMIT, run_agent_loop
+
+        self._register_backend()
+        mock_cache.get.side_effect = (
+            lambda key: DAILY_SEARCH_LIMIT if str(key).startswith("search_limit:") else None
+        )
+        mock_exec.return_value = {"status": "success", "results": [{"title": "X"}]}
+        mock_llm = self._mock_llm([
+            _make_llm_response(
+                [_tool_use_block("t1", "search_info", {"query": "X"})], stop_reason="tool_use",
+            ),
+            _make_llm_response([_text_block("done")], stop_reason="end_turn"),
+        ])
+        mock_get_llm.return_value = mock_llm
+
+        events = run_async(collect_events(run_agent_loop(
+            user_message="search the web for X",
+            context={"user_id": 1, "room_id": 1, "username": "test"},
+        )))
+
+        mock_exec.assert_not_awaited()
+        results = [e.data.get("result") for e in events if e.kind == "tool_result"]
+        self.assertTrue(any(
+            isinstance(r, dict) and "search limit" in r.get("message", "") for r in results
+        ))
+
+    @patch("orchestration.agent_loop.get_llm_client")
+    @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)
+    @patch("orchestration.agent_loop.cache")
+    def test_search_info_records_daily_usage_and_taints(self, mock_cache, mock_exec, mock_get_llm):
+        from orchestration.agent_loop import AGENT_TAINT_KEY, run_agent_loop
+
+        self._register_backend()
+        mock_cache.get.return_value = None
+        mock_exec.return_value = {"status": "success", "results": [{"title": "web text"}]}
+        mock_llm = self._mock_llm([
+            _make_llm_response(
+                [_tool_use_block("t1", "search_info", {"query": "X"})], stop_reason="tool_use",
+            ),
+            _make_llm_response([_text_block("done")], stop_reason="end_turn"),
+        ])
+        mock_get_llm.return_value = mock_llm
+
+        run_async(collect_events(run_agent_loop(
+            user_message="search the web for X",
+            context={"user_id": 1, "room_id": 1, "username": "test"},
+        )))
+
+        set_keys = [call.args[0] for call in mock_cache.set.call_args_list]
+        self.assertTrue(any(str(k).startswith("search_limit:") for k in set_keys))
+        self.assertIn(AGENT_TAINT_KEY.format(room_id=1), set_keys)

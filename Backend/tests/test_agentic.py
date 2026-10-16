@@ -197,33 +197,47 @@ class AgentLoopHelpersTests(SimpleTestCase):
 
 
 # ---------------------------------------------------------------------------
-#  Phase 6: Model Selection
+#  Phase 6: No keyword model router (T-F4)
 # ---------------------------------------------------------------------------
 
 class ModelSelectionTests(SimpleTestCase):
-    def test_simple_message_uses_haiku(self):
-        from orchestration.agent_loop import _select_model, MODEL_HAIKU
-        model = _select_model("What's the weather?", iteration=1)
-        self.assertEqual(model, MODEL_HAIKU)
+    """The harness no longer guesses the model from the message.
 
-    def test_complex_message_uses_sonnet(self):
-        from orchestration.agent_loop import _select_model, MODEL_SONNET
-        model = _select_model(
-            "Find flights to Mombasa and then email me the cheapest option",
-            iteration=1,
-        )
-        self.assertEqual(model, MODEL_SONNET)
+    With no per-room override the loop passes no provider and no model, so the
+    LLM client's default provider answers with its own default model. (The
+    keyword `_select_model` router this class used to cover was removed.)
+    """
 
-    def test_long_message_uses_sonnet(self):
-        from orchestration.agent_loop import _select_model, MODEL_SONNET
-        long_msg = " ".join(["word"] * 30)
-        model = _select_model(long_msg, iteration=1)
-        self.assertEqual(model, MODEL_SONNET)
+    def test_no_override_passes_no_model_to_the_client(self):
+        from unittest.mock import MagicMock, AsyncMock, patch
 
-    def test_multi_turn_always_sonnet(self):
-        from orchestration.agent_loop import _select_model, MODEL_SONNET
-        model = _select_model("ok", iteration=2)
-        self.assertEqual(model, MODEL_SONNET)
+        from orchestration.agent_loop import run_agent_loop
+
+        mock_llm = MagicMock()
+        mock_llm.default_provider.return_value = "deepseek"
+        mock_llm.create_message = AsyncMock(return_value={
+            "content": [{"type": "text", "text": "hi"}],
+            "stop_reason": "end_turn",
+            "usage": {},
+        })
+
+        async def run():
+            events = []
+            with patch("orchestration.agent_loop.get_llm_client", return_value=mock_llm), \
+                    patch("orchestration.agent_loop._resolve_model_override", return_value=(None, None)), \
+                    patch("orchestration.agent_loop.cache") as mock_cache:
+                mock_cache.get.return_value = None
+                async for event in run_agent_loop(
+                    user_message="Find flights and then email me the cheapest",
+                    context={"user_id": 1, "room_id": 1, "username": "test"},
+                ):
+                    events.append(event)
+            return events
+
+        async_to_sync(run)()
+        kwargs = mock_llm.create_message.await_args.kwargs
+        self.assertIsNone(kwargs.get("model"))
+        self.assertIsNone(kwargs.get("provider"))
 
 
 # ---------------------------------------------------------------------------

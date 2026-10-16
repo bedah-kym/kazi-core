@@ -9,8 +9,27 @@ class OrchestrationConfig(AppConfig):
     default_auto_field = 'django.db.models.BigAutoField'
     name = 'orchestration'
 
+    def _log_default_provider(self):
+        """Log which provider answers a chat turn with no room override."""
+        try:
+            from orchestration.llm_client import get_llm_client
+
+            provider = get_llm_client().default_provider()
+            if getattr(settings, "LLM_DEFAULT_PROVIDER", ""):
+                logger.info("LLM default provider: %s", provider or "none (no key configured)")
+            else:
+                logger.info(
+                    "LLM default provider: %s (LLM_DEFAULT_PROVIDER unset; "
+                    "first configured provider wins)",
+                    provider or "none (no key configured)",
+                )
+        except Exception as exc:
+            logger.warning("Could not resolve the LLM default provider: %s", exc)
+
     def ready(self):
         from orchestration.connector_registry import is_demo_mode
+
+        self._log_default_provider()
 
         if is_demo_mode():
             banner = (

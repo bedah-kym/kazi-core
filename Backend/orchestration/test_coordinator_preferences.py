@@ -70,7 +70,13 @@ class CoordinatorCapabilityLookupFailsClosedTests(SimpleTestCase):
     def test_tool_definitions_hide_email_but_keep_weather(self):
         from orchestration.tool_schemas import get_tool_definitions
 
-        names = {t["name"] for t in get_tool_definitions(user_capabilities=conservative_default_preferences())}
+        available = {"send_email", "get_weather"}
+        names = {
+            t["name"] for t in get_tool_definitions(
+                user_capabilities=conservative_default_preferences(),
+                available_actions=available,
+            )
+        }
 
         self.assertNotIn("send_email", names)
         self.assertIn("get_weather", names)

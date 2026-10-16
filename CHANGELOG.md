@@ -18,6 +18,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reply badge now shows the Kazi avatar with the model's name, so the chat no
   longer loads model avatars from robohash.org.
 
+- A turn now runs under **one work-token budget the model can see** (T-F3). The
+  budget counts what the model generates plus the input it newly reads — the
+  system prompt, tool list and history resent on every call are no longer
+  charged, so a long conversation stops burning the budget just by being
+  resent. It replaces the separate iteration, tool-call and shell-session caps
+  as the thing that ends a normal turn, and nothing sizes it from the kind of
+  task. The bound is configurable (`AGENT_TURN_TOKEN_BUDGET`, default 100,000,
+  largest value `AGENT_TURN_TOKEN_BUDGET_MAX`, 500,000); the all-or-nothing
+  "Enforce agent budget caps" switch is gone, and an install where it was off
+  maps to the largest bound. The model is told what is left from its first call (the note rides on
+  the new user message, so the cached system + tools prefix is untouched) and on
+  every call after, and can end a turn with "I need more budget to finish" (the
+  `request_more_budget` tool); the user grants more with a whole-message reply
+  (**more budget**, a plain **yes**/**ok**, or **continue**/**go on**/**carry
+  on**) and the work resumes where it stopped, without repeating a finished
+  step. A whole-message **no** or **stop** ends the paused turn; any other
+  message drops the paused work (the reply says so once) and starts a new turn.
+  A turn that reaches the bound without the model asking keeps its state too:
+  the harness note says plainly what ran and offers the same reply, and a grant
+  resumes from where it stopped.
+  Delegated runs get a share of what the parent has left, never more than the
+  parent still has; what a delegated run spends is charged back to the parent
+  turn, so a second delegation sees less and delegations cannot together
+  outrun the bound, and a parent with too little left refuses to delegate
+  rather than run on a fallback. A grant never raises the turn above
+  `AGENT_TURN_TOKEN_BUDGET_MAX`; when the turn is already at that maximum and
+  runs out again it ends for good, the harness note says so plainly and offers
+  no further grant, and no state is kept to resume. Hard runaway
+  backstops (10k iterations, 10k tool calls, a 30-minute wall clock) stay far
+  above the bound, and the native web-search tool is rebuilt from the live
+  daily allowance on every request so one turn cannot exceed the daily limit.
+- A turn is offered only the tools that can work for that user in that room. An
+  action whose connector did not load is no longer offered: a connector skipped
+  at boot (`TELEGRAM_BOT_TOKEN`, `SHELL_EXEC_TOKEN` unset, the IntaSend SDK not
+  installed) drops its actions from the list instead of the model calling one
+  that cannot run. An action outside the room persona's `tool_scope` is not
+  offered either; the execution-time refusal stays as a second line. Nothing
+  selects a tool from the words of the message. The prompt follows the tools:
+  the shell "Where you are running" section rides with `run_command` only (and
+  is its own prompt section, no longer part of "Conversation context"), and the
+  memory/contact/reminder/voice guidance is sent only when its group is offered.
+  `run_command` is described once, truly for the room's profile, and the model
+  can ask for network access through its `network` parameter.
+- Every connector now says whether it can serve, and one without a key,
+  credentials or its library is not offered. Weather, GIF, currency, calendar
+  (Calendly), WhatsApp and the email route (Gmail/Mailgun) join Telegram, the
+  shell and IntaSend; the weather, GIF, currency and calendar connectors now
+  declare their credentials as required, and WhatsApp, Mailgun and Gmail answer
+  `validate_config()`. A connector that can only mock a send without
+  credentials (Mailgun, WhatsApp) is offered only in `KAZI_DEMO_MODE`, so the
+  canonical demo keeps working and a production install never offers a send
+  that would only pretend. `get_skipped_connectors()` names each skipped
+  connector and the actions it would own.
+- With no search tool the prompt says only that the model has no web-search
+  tool; it no longer says the environment has no network, which had made the
+  model give up on a task one shell command could fetch. When `run_command` is
+  offered, the shell section now states the network its active profile gives it
+  (open: full; standard: none unless a command asks and is approved; locked:
+  none).
+- The Telegram actions and `generate_speech` now have capability gates
+  (`allow_telegram`, `allow_voice`), so a user can turn either group off. Both
+  default on, so an install already using them keeps them.
 - The provider that answers a chat turn is the operator's choice, set with
   `LLM_DEFAULT_PROVIDER`. Adding a second provider's key no longer silently makes
   that provider the main model — the extra key only adds fallbacks and the models
@@ -85,6 +147,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- An `open`-profile shell command no longer inherits the sidecar's environment, so values such as `DEEPSEEK_API_KEY`, `DJANGO_SECRET_KEY`, `ENCRYPTION_KEY` or `SHELL_EXEC_TOKEN` no longer reach it that way; the sidecar passes only a minimal allowlist (`PATH`, a home and temp directory, locale, and what `cmd.exe` needs), and a variable an operator added is dropped too. The `locked` profile's room workspace is mounted read-only again, so a command can read it but not create, change or delete anything in it. `open` still runs as the sidecar's operating-system user with that user's file access, so it can read any file that user can read, including `.env`: run an `open` sidecar as a separate user that cannot read the Kazi checkout, or do not enable `open`. (GHSA-ppxm-j4p7-9cw2)
 - Payment, email and WhatsApp actions are now refused when a user's capability preferences cannot be read, both in workflow steps and in chat turns. A failed lookup — or a workflow step with no owner — turns those three gates off instead of allowing the action; search, travel, reminders and calendar keep working. In the same failure, a standing grant no longer decides for the user (their "always ask" choice could not be read, so the workflow asks), and a chat turn applies no learned approval shortcut. A preferences object handed to a workflow step is reused only when it carries all three of those gates; an empty or partial one is reloaded, and a gate that is still missing is denied.
 - `/api/newreply/` requires a signed-in user with the reply model's permissions:
   `Api.view_kazireply` to list (`GET`, `HEAD`) and `Api.add_kazireply` to create.

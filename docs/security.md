@@ -30,11 +30,15 @@ through explicit linking, not by default. The access check is cached but
 unresolvable lookup denies access rather than allowing it.
 
 ### Agent budget caps
-The agent loop and its sub-agents run under hard budget caps (iterations, tool
-calls, token spend). An install-level **"Enforce agent budget caps"** toggle in
-settings (default on) gates these; when it's off, a hard backstop still prevents
-an unbounded loop. Sub-agents get tighter budgets than the parent loop and can
-never pause for confirmation.
+The agent loop and its sub-agents run under one **work-token budget** per turn
+(what the model generates plus the input it newly reads), configurable with
+`AGENT_TURN_TOKEN_BUDGET` and capped by `AGENT_TURN_TOKEN_BUDGET_MAX`. A former
+install-level **"Enforce agent budget caps"** toggle still maps off to the
+largest bound. Hard backstops — 10k iterations, 10k tool calls and a 30-minute
+wall clock — sit far above the bound so a runaway loop always terminates.
+Sub-agents get a share of the parent's remaining budget and can never pause for
+confirmation. The model sees what is left and may ask for more, which the user
+grants in chat.
 
 ### Encryption at rest
 Optional AES-256-GCM encryption for per-room messages. Turn it on where the
@@ -68,6 +72,26 @@ network off by default, memory/PID caps. The **sandbox is the boundary**; the
 command classifier is UX and a tripwire, so a classifier false negative costs
 nothing. The exact rules for what the environment may touch are in the
 [credential-scoping contract](contracts/credential-scoping.md).
+
+What a command may see and write depends on the room's profile:
+
+- **`standard`** runs in the container with a read-write `/workspace` and does
+  not inherit the sidecar's environment.
+- **`locked`** runs in the same container, but `/workspace` is mounted
+  read-only: a command can read the room workspace and cannot create, change or
+  delete anything in it.
+- **`open`** runs directly on the sidecar host. It is given only a minimal
+  allowlisted environment (`PATH`, a home and a temp directory, locale, and the
+  variables `cmd.exe` needs). The sidecar's `.env` — provider keys, database and
+  broker URLs, `DJANGO_SECRET_KEY`, `ENCRYPTION_KEY` and `SHELL_EXEC_TOKEN` — is
+  never passed through the environment, and neither is any variable an
+  operator added. `open` remains unsandboxed for the filesystem and network:
+  a command runs as the sidecar's operating-system user and can read any file
+  that user can read, including the `.env` file itself, and on Linux the
+  environment the sidecar was started with (`/proc/<pid>/environ`). If you
+  enable `open`, run the sidecar as a separate user that cannot read the Kazi
+  checkout, start it without secrets in its environment, and use it on
+  disposable boxes only.
 
 ## Where it lives
 

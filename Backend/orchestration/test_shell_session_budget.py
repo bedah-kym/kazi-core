@@ -1,41 +1,30 @@
+"""T-F3: the shell no longer raises a tool-call cap.
+
+On ``main`` a session that touched the shell got a higher tool-call cap than
+one that did not (D9). The single turn budget replaced that; these tests pin
+the removal.
+"""
 from __future__ import annotations
 
-import unittest
+from django.test import SimpleTestCase, override_settings
 
-from orchestration.agent_loop import (
-    HARD_CAP_TOOL_CALLS,
-    MAX_TOOL_CALLS,
-    SHELL_SESSION_MAX_TOOL_CALLS,
-    LoopState,
-    _session_tool_call_cap,
-)
+from orchestration.agent_loop import _turn_token_budget
 
 
-def _state(names):
-    return LoopState(messages=[], tool_call_log=[{"name": name} for name in names])
+class ShellCapRemovedTests(SimpleTestCase):
+    def test_shell_session_cap_helper_is_gone(self):
+        with self.assertRaises(ImportError):
+            from orchestration.agent_loop import _session_tool_call_cap  # noqa: F401
+
+    def test_shell_session_cap_constant_is_gone(self):
+        with self.assertRaises(ImportError):
+            from orchestration.agent_loop import SHELL_SESSION_MAX_TOOL_CALLS  # noqa: F401
 
 
-class SessionToolCapTests(unittest.TestCase):
-    def test_caps_off_uses_the_hard_backstop(self):
-        self.assertEqual(
-            _session_tool_call_cap(_state(["run_command"]), caps_enforced=False),
-            HARD_CAP_TOOL_CALLS,
-        )
-
-    def test_no_shell_uses_the_default_cap(self):
-        self.assertEqual(
-            _session_tool_call_cap(_state(["get_weather"]), caps_enforced=True),
-            MAX_TOOL_CALLS,
-        )
-
-    def test_shell_session_uses_the_raised_cap(self):
-        self.assertEqual(
-            _session_tool_call_cap(_state(["run_command"]), caps_enforced=True),
-            SHELL_SESSION_MAX_TOOL_CALLS,
-        )
-
-    def test_alias_counts_as_shell(self):
-        self.assertEqual(
-            _session_tool_call_cap(_state(["run_shell"]), caps_enforced=True),
-            SHELL_SESSION_MAX_TOOL_CALLS,
-        )
+class TurnBudgetMappingTests(SimpleTestCase):
+    @override_settings(AGENT_TURN_TOKEN_BUDGET=30000, AGENT_TURN_TOKEN_BUDGET_MAX=700000)
+    def test_one_bound_for_every_session(self):
+        # Caps on: the configured bound. Caps off (a legacy install): the largest
+        # bound. Neither depends on the tool the session used.
+        self.assertEqual(_turn_token_budget(True), 30000)
+        self.assertEqual(_turn_token_budget(False), 700000)

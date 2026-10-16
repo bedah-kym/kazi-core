@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import sys
 import tempfile
 import unittest
@@ -15,6 +17,37 @@ from orchestration.shell_exec.backends import (
 )
 
 _SUBPROCESS = "orchestration.shell_exec.backends.asyncio.create_subprocess_exec"
+
+# Every secret-bearing variable named in .env.example, with a distinct fake
+# value per variable. A command must never see any of them (GHSA-ppxm-j4p7-9cw2).
+_SECRET_ENV_VARS = {
+    "DJANGO_SECRET_KEY": "fake-django-secret-value",  # nosec B105 - fake test fixture
+    "ENCRYPTION_KEY": "fake-encryption-key-value",
+    "ANTHROPIC_API_KEY": "fake-anthropic-key-value",
+    "DEEPSEEK_API_KEY": "fake-deepseek-key-value",
+    "HF_API_TOKEN": "fake-hf-token-value",  # nosec B105 - fake test fixture
+    "OPENWEATHER_API_KEY": "fake-openweather-key-value",
+    "GIPHY_API_KEY": "fake-giphy-key-value",
+    "EXCHANGE_RATE_API_KEY": "fake-exchange-key-value",
+    "SHELL_EXEC_TOKEN": "fake-shell-exec-token-value",  # nosec B105 - fake test fixture
+    "POSTGRES_PASSWORD": "fake-postgres-password-value",  # nosec B105 - fake test fixture
+    "DATABASE_URL": "postgres://u:fake-db-password-value@db:5432/x",
+    "REDIS_URL": "redis://:fake-redis-password-value@redis:6379/0",
+    "CELERY_BROKER_URL": "redis://:fake-broker-password-value@redis:6379/1",
+    "CELERY_RESULT_BACKEND": "redis://:fake-result-password-value@redis:6379/2",
+}
+
+# A secret that is in the sidecar's environment but not in .env.example: an
+# operator may add keys of their own. The allowlist must drop these too.
+_UNKNOWN_OPERATOR_VAR = "KAZI_OPERATOR_PRIVATE_TOKEN"
+_UNKNOWN_OPERATOR_VALUE = "fake-operator-secret-value"
+
+_ENV_DUMP = "import os,json;print(json.dumps(dict(os.environ)))"
+_ENV_DUMP_AND_TEMP = (
+    "import os,json,tempfile;"
+    "print(json.dumps(dict(os.environ)));"
+    "print(tempfile.gettempdir())"
+)
 
 
 def _run(coro):
@@ -191,3 +224,106 @@ class LocalBackendTests(unittest.TestCase):
         self.assertEqual(get_backend("open", _config()).name, "local")
         self.assertEqual(get_backend("standard", _config()).name, "docker")
         self.assertEqual(get_backend("locked", _config()).name, "docker")
+
+
+class LocalBackendEnvironmentTests(unittest.TestCase):
+    """GHSA-ppxm-j4p7-9cw2 — an ``open`` command must not inherit server secrets."""
+
+    def _big_config(self) -> ShellExecConfig:
+        return _config(output_bytes_max=2_000_000, timeout_default=30)
+
+    def _child_env(self, backend: LocalBackend) -> dict:
+        command = f'"{sys.executable}" -c "{_ENV_DUMP}"'
+        result = _run(backend.execute(command, room_id="r"))
+        self.assertEqual(result.exit_code, 0, result.stderr)
+        return json.loads(result.stdout)
+
+    def test_open_does_not_leak_env_example_secrets(self):
+        backend = LocalBackend(self._big_config())
+        with patch.dict(os.environ, _SECRET_ENV_VARS, clear=False):
+            child = self._child_env(backend)
+        leaked = sorted(name for name in _SECRET_ENV_VARS if name in child)
+        self.assertEqual(leaked, [], f"server secrets reached an open command: {leaked}")
+
+    def test_open_drops_a_secret_only_the_operator_added(self):
+        backend = LocalBackend(self._big_config())
+        with patch.dict(os.environ, {_UNKNOWN_OPERATOR_VAR: _UNKNOWN_OPERATOR_VALUE}):
+            child = self._child_env(backend)
+        self.assertNotIn(_UNKNOWN_OPERATOR_VAR, child)
+
+    def test_open_keeps_programs_home_and_temp(self):
+        backend = LocalBackend(self._big_config())
+        with patch.dict(os.environ, {_UNKNOWN_OPERATOR_VAR: _UNKNOWN_OPERATOR_VALUE}):
+            command = f'"{sys.executable}" -c "{_ENV_DUMP_AND_TEMP}"'
+            result = _run(backend.execute(command, room_id="r"))
+        self.assertEqual(result.exit_code, 0, result.stderr)
+        first, second = result.stdout.splitlines()[:2]
+        child = json.loads(first)
+        self.assertTrue(child.get("PATH"), "PATH must reach the command")
+        self.assertTrue(child.get("HOME") or child.get("USERPROFILE"), "home must reach the command")
+        self.assertTrue(Path(second.strip()).is_dir(), "the temp directory must exist")
+        self.assertNotIn(_UNKNOWN_OPERATOR_VAR, child)
+
+    @unittest.skipUnless(sys.platform == "win32", "cmd.exe only starts on Windows")
+    def test_open_starts_cmd_exe(self):
+        backend = LocalBackend(self._big_config())
+        result = _run(backend.execute("echo open-works", room_id="r"))
+        self.assertEqual(result.exit_code, 0, result.stderr)
+        self.assertIn("open-works", result.stdout)
+
+    def test_local_environment_is_an_allowlist(self):
+        from orchestration.shell_exec.backends import LOCAL_ENV_ALLOWLIST, local_environment
+
+        with patch.dict(os.environ, {_UNKNOWN_OPERATOR_VAR: _UNKNOWN_OPERATOR_VALUE}):
+            env = local_environment()
+        self.assertTrue(set(env) <= set(LOCAL_ENV_ALLOWLIST))
+        self.assertNotIn(_UNKNOWN_OPERATOR_VAR, env)
+
+
+class ProfileWorkspaceMountTests(unittest.TestCase):
+    """GHSA-ppxm-j4p7-9cw2 — the ``locked`` workspace must be read-only."""
+
+    def _argv(self, backend, command: str = "ls") -> list:
+        workspace = backend.config.workspace("r")
+        return backend.build_argv(command, workspace, network="none")
+
+    def _workspace(self, backend) -> Path:
+        return backend.config.workspace("r")
+
+    def test_locked_mounts_the_workspace_read_only(self):
+        backend = get_backend("locked", _config())
+        self.assertEqual(backend.name, "docker")
+        self.assertIn(f"{self._workspace(backend)}:/workspace:ro", self._argv(backend))
+
+    def test_standard_keeps_a_writable_workspace(self):
+        backend = get_backend("standard", _config())
+        workspace = self._workspace(backend)
+        argv = self._argv(backend)
+        self.assertIn(f"{workspace}:/workspace", argv)
+        self.assertNotIn(f"{workspace}:/workspace:ro", argv)
+        for flag in ("--read-only", "--cap-drop=ALL", "--network=none"):
+            self.assertIn(flag, argv)
+        self.assertEqual(argv[-3:], ["sh", "-c", "ls"])
+
+    def test_locked_loosens_nothing_else(self):
+        argv = self._argv(get_backend("locked", _config()), "touch x")
+        self.assertIn("--read-only", argv)
+        self.assertIn("--cap-drop=ALL", argv)
+        self.assertIn("--network=none", argv)
+        self.assertIn("no-new-privileges", argv)
+        self.assertEqual(argv[-3:], ["sh", "-c", "touch x"])
+
+    def test_standard_and_locked_differ_only_in_workspace_writability(self):
+        standard = get_backend("standard", _config())
+        locked = get_backend("locked", standard.config)
+        std_argv = self._argv(standard)
+        locked_argv = self._argv(locked)
+
+        def mount_of(argv: list) -> str:
+            return argv[argv.index("-v") + 1]
+
+        self.assertEqual(mount_of(std_argv) + ":ro", mount_of(locked_argv))
+        self.assertEqual(
+            [a for a in std_argv if a != mount_of(std_argv)],
+            [a for a in locked_argv if a != mount_of(locked_argv)],
+        )

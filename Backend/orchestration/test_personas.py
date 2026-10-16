@@ -86,6 +86,51 @@ class PersonaBucketTests(SimpleTestCase):
         self.assertEqual(denied, [])
 
 
+class PersonaPromptAvailabilityTests(SimpleTestCase):
+    """The identity prompt names only scope tools that can run on this install (T-F2)."""
+
+    def _persona(self, scope):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            name="Night Hawk", description="", tool_scope=scope,
+            risk_ceiling="medium", approval_boundary=[], skills=[],
+        )
+
+    def test_unconfigured_scope_tool_is_named_as_unavailable(self):
+        from unittest.mock import patch
+
+        from orchestration.personas import persona_identity_prompt
+
+        with patch("orchestration.connector_registry.get_available_actions", return_value=["run_command"]):
+            prompt = persona_identity_prompt(self._persona(["get_weather", "run_command"]))
+        self.assertIn("Your tool scope: run_command.", prompt)
+        self.assertIn("not available here (not configured, or turned off in settings): get_weather.", prompt)
+
+    def test_scope_tool_turned_off_in_settings_is_unavailable(self):
+        from unittest.mock import patch
+
+        from orchestration.personas import persona_identity_prompt
+
+        with patch("orchestration.connector_registry.get_available_actions", return_value=["send_email", "run_command"]):
+            prompt = persona_identity_prompt(
+                self._persona(["send_email", "run_command"]),
+                user_capabilities={"allow_email": False},
+            )
+        self.assertIn("Your tool scope: run_command.", prompt)
+        self.assertIn("turned off in settings): send_email.", prompt)
+
+    def test_configured_scope_is_listed_as_before(self):
+        from unittest.mock import patch
+
+        from orchestration.personas import persona_identity_prompt
+
+        with patch("orchestration.connector_registry.get_available_actions", return_value=["get_weather", "run_command"]):
+            prompt = persona_identity_prompt(self._persona(["get_weather", "run_command"]))
+        self.assertIn("Your tool scope: get_weather, run_command.", prompt)
+        self.assertNotIn("not available", prompt)
+
+
 class PersonaModelTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(

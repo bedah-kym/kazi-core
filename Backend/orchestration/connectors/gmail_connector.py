@@ -25,6 +25,16 @@ class GmailConnector(BaseConnector):
         self.client_id = getattr(settings, "GMAIL_OAUTH_CLIENT_ID", None)
         self.client_secret = getattr(settings, "GMAIL_OAUTH_CLIENT_SECRET", None)
 
+    def validate_config(self):
+        """The Gmail route needs its OAuth app credentials to send at all.
+
+        ``_pick_send_email_connector`` only routes ``send_email`` here when both
+        are set; this keeps the connector's own answer consistent (T-F2).
+        """
+        if self.client_id and self.client_secret:
+            return True, ""
+        return False, "Gmail: set GMAIL_OAUTH_CLIENT_ID and GMAIL_OAUTH_CLIENT_SECRET"
+
     async def execute(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         action = parameters.get("action")
         if action != "send_email":

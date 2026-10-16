@@ -79,7 +79,7 @@ class TTSConnector(BaseConnector):
                 "return_description": "Returns base64 audio, its format, and byte size.",
                 "risk_level": "low",
                 "confirmation_policy": "never",
-                "capability_gate": None,
+                "capability_gate": "allow_voice",
             }
         ]
 

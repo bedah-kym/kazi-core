@@ -54,7 +54,6 @@ def settings(request):
         "allow_whatsapp": True,
         "allow_email": True,
         "allow_calendar": True,
-        "enforce_agent_caps": True,
     }
 
     capability_presets = {
@@ -223,9 +222,10 @@ def settings(request):
             else:
                 prefs.pop("proactive_snooze_until", None)
 
-            # Install-level kill switch for agent budget caps — applies
-            # regardless of mode so presets never silently re-enable it.
-            prefs["enforce_agent_caps"] = request.POST.get('enforce_agent_caps') == 'on'
+            # T-F3: the old all-or-nothing caps switch is gone; the per-turn
+            # bound is now an install setting (AGENT_TURN_TOKEN_BUDGET). A
+            # legacy stored value is deliberately left untouched so an install
+            # that once turned caps off still maps to the largest bound.
 
             profile.notification_preferences = prefs
             profile.save(update_fields=['notification_preferences'])

@@ -24,10 +24,13 @@ class EmailRoutingTests(TestCase):
 
         reset_registry()
 
+    @patch.dict("os.environ", {"KAZI_DEMO_MODE": "true"}, clear=False)
     def test_mailgun_wins_without_gmail_oauth(self):
         from orchestration.connector_registry import discover_connectors
         from orchestration.connectors.mailgun_connector import MailgunConnector
 
+        # Demo mode keeps Mailgun offered without keys (it mocks the send);
+        # outside demo mode an unconfigured route is dropped (T-F2 follow-up).
         connectors = discover_connectors()
         self.assertIsInstance(connectors["send_email"], MailgunConnector)
 

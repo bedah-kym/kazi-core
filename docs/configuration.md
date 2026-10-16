@@ -94,6 +94,49 @@ provider above.
 | `HISTORY_MAX_MESSAGES` | `50` | Max history turns kept per agent loop. |
 | `HISTORY_COMPACTION_ENABLED` | `True` | Trim the oldest turns when the budget is exceeded (opt-out). |
 
+## Turn budget (T-F3)
+
+One **work-token budget** ends a normal agent turn. "Work tokens" count what the
+model generates plus the input it newly reads (new messages, tool results); the
+system prompt, tool list and history resent on every call are *not* counted, so
+a long conversation does not spend the budget just by being resent.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `AGENT_TURN_TOKEN_BUDGET` | `100000` | Work-token bound for one agent turn. |
+| `AGENT_TURN_TOKEN_BUDGET_MAX` | `500000` | Largest bound an operator may choose; also the bound a legacy caps-off install maps to. |
+
+The model sees the budget used and left from its very first call (the note rides
+on the new user message; the cached system + tools prefix is untouched) and on
+every call after, and can end a turn by calling `request_more_budget` (which
+reads to the user as its own message). The user grants more with a whole-message
+reply — **more budget**, or a plain **yes**/**ok**, or **continue**,
+**go on**, **carry on** — and the work resumes where it stopped, without
+repeating a finished step. A whole-message **no** or **stop** ends the paused
+turn. Any other message drops the paused work (the reply says so once) and
+starts a new turn as usual.
+
+Reaching the bound without the model asking ends the turn the same way: the
+state is kept, the harness note says plainly what ran (how many tool calls and
+which tools) and offers the same reply, and a grant resumes from where it
+stopped. The note is the harness's words, separate from the model's, and claims
+no success.
+
+A delegated run gets a share of what the parent turn has left, and what the
+sub-run spends is charged back to the parent, so a second delegation sees less
+and the delegations cannot together exceed the bound. A parent with too little
+left refuses to delegate. A grant never raises the turn above
+`AGENT_TURN_TOKEN_BUDGET_MAX`; once the turn is at that maximum and runs out
+again it ends for good, the harness note says so plainly, no further grant is
+offered and no state is kept to resume.
+
+The old all-or-nothing **Enforce agent budget caps** switch (Settings >
+Capabilities) is gone; the per-turn bound is the setting above. A stored off
+value from an earlier install is left untouched and maps to
+`AGENT_TURN_TOKEN_BUDGET_MAX`, so a former caps-off install never silently gets
+a smaller bound. Hard runaway backstops remain far above the bound: 10k
+iterations, 10k tool calls and a 30-minute wall clock.
+
 ## Skills
 
 | Variable | Default | Purpose |
@@ -144,6 +187,54 @@ The server keeps the heartbeat; the page sends nothing.
 | `GMAIL_OAUTH_REDIRECT_URI` | empty | Gmail OAuth redirect. |
 | `INTASEND_WEBHOOK_SECRET` | — | IntaSend webhook verification. |
 | `GOOGLE_*` / `GITHUB_*` / `LINKEDIN_*` / `TWITTER_*` | — | Social login via django-allauth. |
+
+## Which tools are offered (T-F2)
+
+A turn is offered only the tools that can work for this user in this room. Three
+things cut the list, and nothing adds or removes a tool based on the words of a
+message.
+
+1. **Configured at boot.** An action whose connector did not load is never
+   offered. A connector is skipped when `validate_config()` fails — a missing
+   key (`TELEGRAM_BOT_TOKEN`, `SHELL_EXEC_TOKEN`, `OPENWEATHER_API_KEY`,
+   `GIPHY_API_KEY`, `EXCHANGE_RATE_API_KEY`, `CALENDLY_CLIENT_ID` /
+   `CALENDLY_CLIENT_SECRET`, `TWILIO_ACCOUNT_SID` /
+   `TWILIO_AUTH_TOKEN`, `MAILGUN_API_KEY` / `MAILGUN_DOMAIN`,
+   `GMAIL_OAUTH_CLIENT_ID` / `GMAIL_OAUTH_CLIENT_SECRET`), a missing library
+   (the IntaSend SDK), and so on. A connector that can only mock a send without
+   credentials (Mailgun, WhatsApp) is offered only when `KAZI_DEMO_MODE` is set;
+   outside demo mode a missing key means the group is not offered. In
+   `manage.py shell`: `get_skipped_connectors()` lists what was skipped (with
+   the actions it would own); `get_available_actions()` is the live set.
+2. **Capability flags.** Each group has a gate; turning it off removes its
+   tools. The sensitive gates fail closed: a missing flag means off, as at
+   execution. Every other gate keeps the old default — missing means on.
+
+   | Gate | Group | Default |
+   |---|---|---|
+   | `allow_email` | Email | on (sensitive) |
+   | `allow_whatsapp` | WhatsApp | on (sensitive) |
+   | `allow_payments` | Payments (wallet, invoices, IntaSend) | on (sensitive) |
+   | `allow_calendar` | Calendly | on |
+   | `allow_travel` | Travel search & itineraries | on |
+   | `allow_web_search` | Search, weather, GIF, currency | on |
+   | `allow_reminders` | Reminders & notifications | on |
+   | `allow_telegram` | Telegram | on (newly gated) |
+   | `allow_voice` | `generate_speech` | on (newly gated) |
+
+   Telegram and voice default **on**, so an install already using them keeps
+   them; the gates only let a user turn a group off.
+3. **Persona scope.** In a room whose active persona has a `tool_scope`, tools
+   outside it are not offered. The execution-time refusal stays as a second line.
+
+The prompt follows the tools: the shell "Where you are running" section is sent
+only with `run_command` (and says whether the room's profile is sandboxed, plus
+the network that profile gives the shell — open: full; standard: none unless a
+command asks and is approved; locked: none), and the memory/contact/reminder/
+voice guidance only when its group is offered. With no search tool the prompt
+says only that there is no web-search tool, not that the network is unreachable.
+The model sees one `run_command` description, with a `network` parameter,
+whichever shell profile the room uses.
 
 ## Voice / modality
 
@@ -231,11 +322,31 @@ default:
 |---|---|---|---|
 | Backend | direct subprocess | Docker | Docker |
 | Root filesystem | full | read-only | read-only |
-| Writable | full | `/workspace` | none |
+| Writable | full | `/workspace` (read-write) | none — `/workspace` is mounted read-only |
 | Network | full | off by default | none |
+| Environment | minimal allowlist (below) | none inherited from the sidecar | none inherited from the sidecar |
 
 `open` is never the default and logs a loud boot warning — it runs unsandboxed
 on the host, so only enable it on a disposable box.
+
+A command under `open` does **not** inherit the sidecar's environment. The
+sidecar passes only a fixed allowlist: `PATH`, `HOME` (or `USERPROFILE`), a temp
+directory (`TMPDIR`/`TEMP`/`TMP`), locale and terminal settings, and the Windows
+variables `cmd.exe` needs to start (`SystemRoot`, `COMSPEC`, `PATHEXT`, and the
+like). Every other variable is dropped, including every key in `.env` — provider
+keys, `DATABASE_URL`, `REDIS_URL`, `CELERY_*`, `DJANGO_SECRET_KEY`,
+`ENCRYPTION_KEY` and `SHELL_EXEC_TOKEN`. Because it is an allowlist and not a
+denylist, a variable an operator adds to the sidecar's environment is dropped
+too. There is no setting to widen it.
+
+This closes the environment, not the filesystem: an `open` command runs as the
+sidecar's operating-system user and can read any file that user can read,
+including `.env`. Run an `open` sidecar as a separate user that cannot read the
+Kazi checkout, and start it without secrets in its environment.
+
+A command under `locked` can read the room workspace but not change it: the
+workspace is mounted read-only, so create/change/delete fail. `standard` keeps
+the read-write `/workspace` mount.
 
 The per-room workspace (`<SHELL_EXEC_ROOT>/workspaces/<room_id>`) persists across
 commands. Before a **destructive** command the sidecar tars it to
@@ -247,7 +358,7 @@ commands. Before a **destructive** command the sidecar tars it to
 | `SHELL_EXEC_TOKEN` | empty | Shared bearer token between Kazi and the sidecar. **Empty disables `run_command`.** |
 | `SHELL_EXEC_HOST` | `127.0.0.1` | Sidecar bind host (and the host Kazi connects to). |
 | `SHELL_EXEC_PORT` | `8765` | Sidecar bind/connect port. |
-| `SHELL_EXEC_PROFILE` | `standard` | Default profile. `standard`/`locked` run in the Docker sandbox; `open` runs unsandboxed on the host (Phase 2 refines the per-profile rules). |
+| `SHELL_EXEC_PROFILE` | `standard` | Default profile. `standard`/`locked` run in the Docker sandbox; `open` runs unsandboxed on the host. See the profile table above for what each may see and write. |
 | `SHELL_EXEC_PROFILES` | the profile above | Comma-separated profiles the sidecar will serve. A request for any other profile is rejected with 400. Add `open` only on a disposable box. |
 | `SHELL_EXEC_ROOT` | `<repo>/shell_workspaces` | Root for per-room workspaces mounted at `/workspace`. |
 | `SHELL_EXEC_IMAGE` | `alpine:3.20` | Container image for the Docker backend. |

@@ -416,6 +416,12 @@ class CalendarConnector(BaseConnector):
     """Real Calendly connector using CalendlyProfile.
     Uses httpx.AsyncClient for non-blocking HTTP in ASGI."""
 
+    name = "calendar"
+    actions = ["schedule_meeting", "check_availability"]
+    # The OAuth app credentials are needed to connect (and to refresh a token),
+    # so without them the routing cannot serve and the actions are not offered.
+    required_credentials = ["CALENDLY_CLIENT_ID", "CALENDLY_CLIENT_SECRET"]
+
     CALENDLY_EVENTS_URL = 'https://api.calendly.com/scheduled_events'
     CALENDLY_TOKEN_URL = 'https://auth.calendly.com/oauth/token'  # nosec B105 — token URL, not a credential
 
@@ -663,6 +669,12 @@ class SearchConnector(BaseConnector):
 class WeatherConnector(BaseConnector):
     """Weather connector using OpenWeatherMap API"""
 
+    name = "weather"
+    actions = ["get_weather"]
+    # Without the key the call fails at runtime ("Weather service is not
+    # configured"), so report unavailable and let the registry drop the tool.
+    required_credentials = ["OPENWEATHER_API_KEY"]
+
     async def execute(self, parameters: Dict, context: Dict) -> Dict:
         """Get weather for a city"""
         from django.conf import settings
@@ -715,6 +727,10 @@ class WeatherConnector(BaseConnector):
 
 class GiphyConnector(BaseConnector):
     """GIPHY connector for searching and returning GIFs"""
+
+    name = "giphy"
+    actions = ["search_gif"]
+    required_credentials = ["GIPHY_API_KEY"]
 
     async def execute(self, parameters: Dict, context: Dict) -> Dict:
         """Search GIPHY for a GIF"""
@@ -770,6 +786,10 @@ class GiphyConnector(BaseConnector):
 
 class CurrencyConnector(BaseConnector):
     """Currency conversion connector using ExchangeRate-API"""
+
+    name = "currency"
+    actions = ["convert_currency"]
+    required_credentials = ["EXCHANGE_RATE_API_KEY"]
 
     async def execute(self, parameters: Dict, context: Dict) -> Dict:
         """Convert currency"""

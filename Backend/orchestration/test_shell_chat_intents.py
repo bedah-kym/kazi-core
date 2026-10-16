@@ -5,6 +5,7 @@ from django.test import SimpleTestCase
 from orchestration.agent_prompts import build_confirmation_prompt
 from orchestration.shell.chat_intents import (
     is_approval_reply,
+    is_budget_extend_reply,
     is_cancel_command,
     is_decline_reply,
     is_dismiss_suggestions_command,
@@ -168,6 +169,42 @@ class ExactCommandTests(SimpleTestCase):
             None,
         ):
             self.assertFalse(is_cancel_command(phrase), phrase)
+
+
+class BudgetExtendReplyTests(SimpleTestCase):
+    def test_exact_replies_grant_more_budget(self):
+        for phrase in (
+            "more budget", "More budget.", "give more budget", "give me more budget",
+            "extend budget", "extend the budget", "grant more budget", "yes more budget",
+        ):
+            self.assertTrue(is_budget_extend_reply(phrase), phrase)
+
+    def test_a_natural_yes_or_continue_also_grants_it(self):
+        # A whole-message yes/ok (the approval replies) or a continue phrase
+        # resumes the paused turn, so people are not punished for answering
+        # naturally (T-F3 follow-up).
+        for phrase in (
+            "yes", "Yes.", "y", "ok", "OK!", "okay", "sure", "yeah",
+            "continue", "Continue.", "go on", "carry on",
+        ):
+            self.assertTrue(is_budget_extend_reply(phrase), phrase)
+
+    def test_anything_else_is_not_a_grant(self):
+        for phrase in (
+            "can I have more budget?",
+            "give the model more budget if it needs it",
+            "budget",
+            "more",
+            "more money",
+            "keep going",
+            "yes but only the first part",
+            "continue with the other file",
+            "no",
+            "stop",
+            "",
+            None,
+        ):
+            self.assertFalse(is_budget_extend_reply(phrase), phrase)
 
 
 class ConfirmationPromptTests(SimpleTestCase):

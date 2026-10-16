@@ -36,6 +36,7 @@ from orchestration.security_policy import (
 )
 from orchestration.shell.chat_intents import (
     is_approval_reply,
+    is_budget_extend_reply,
     is_decline_reply,
     is_cancel_command,
     is_dismiss_suggestions_command,
@@ -46,8 +47,11 @@ from orchestration.shell.chat_intents import (
 from orchestration.agent_loop import (
     run_agent_loop,
     has_pending_agent_state,
+    has_pending_budget_state,
     resume_after_confirmation,
+    resume_with_more_budget,
     cancel_pending_action,
+    clear_loop_state,
     dismiss_pending_confirmation,
     _untrusted_source,
 )
@@ -286,24 +290,27 @@ class OrchestrationCoordinator:
 
                 persona = await sync_to_async(resolve_room_persona)(room_id, user_id)
                 if persona:
-                    return "\n\n".join([persona_identity_prompt(persona), ctx_prompt or ""]).strip()
+                    identity = persona_identity_prompt(persona, user_capabilities=user_preferences)
+                    return "\n\n".join([identity, ctx_prompt or ""]).strip()
             except Exception as exc:
                 logger.debug("Persona identity injection skipped: %s", exc)
             return ctx_prompt
 
-        async def _with_environment(ctx_prompt: str) -> str:
-            """Prepend where commands run, from the shell layer rather than a guess."""
+        async def _environment_block() -> str:
+            """Where commands run, from the shell layer rather than a guess.
+
+            Returned separately so it can be its own prompt section and ride
+            only with the shell tool (T-F2)."""
             try:
                 from orchestration.agent_prompts import build_environment_block
                 from orchestration.shell.environment import get_shell_environment
                 from orchestration.shell.profiles import resolve_profile
 
                 profile = await sync_to_async(resolve_profile)(room_id, user_preferences)
-                block = build_environment_block(await get_shell_environment(profile))
-                return "\n\n".join([block, ctx_prompt or ""]).strip()
+                return build_environment_block(await get_shell_environment(profile))
             except Exception as exc:
                 logger.debug("Environment block skipped: %s", exc)
-                return ctx_prompt
+                return ""
 
         # Set when this turn's message is a stop word: the window stays off for
         # the whole turn even if the store write failed.
@@ -362,7 +369,7 @@ class OrchestrationCoordinator:
                 "commands will still ask."
             )
 
-        async def _handle_agent_loop(query_text: str, history_msgs, ctx_prompt: str, mem_summary: str):
+        async def _handle_agent_loop(query_text: str, history_msgs, ctx_prompt: str, mem_summary: str, env_block: str = ""):
             """Run the agentic loop and map AgentEvents to WebSocket frames."""
             await emit_progress("planning", "started", "Thinking…")
             async for event in run_agent_loop(
@@ -379,6 +386,7 @@ class OrchestrationCoordinator:
                 preferences=user_preferences,
                 context_prompt=ctx_prompt,
                 memory_summary=mem_summary,
+                environment_block=env_block,
                 history=history_msgs or None,
                 history_tainted=_history_replays_untrusted(history_msgs),
             ):
@@ -401,13 +409,21 @@ class OrchestrationCoordinator:
                 elif event.kind == "confirmation":
                     await broadcast_chunk(event.data.get("message", "Please confirm.") + await _autopilot_hint(), harness=True)
                     await emit_progress("validating", "completed", "Waiting for confirmation.")
+                elif event.kind == "budget_request":
+                    await broadcast_chunk(
+                        "\n\nI've paused this turn because it needs more budget than it "
+                        "has left. Reply **more budget** and I'll continue from where I "
+                        "stopped.",
+                        harness=True,
+                    )
+                    await emit_progress("validating", "completed", "Waiting for more budget.")
                 elif event.kind == "error":
                     await broadcast_chunk(event.data.get("message", "Something went wrong."), harness=True)
                     await emit_progress("executing", "completed", "Error encountered.")
                 elif event.kind == "done":
                     await emit_progress("done", "completed", "Request complete.")
 
-        async def _handle_agent_resume(ctx_prompt: str, mem_summary: str):
+        async def _handle_agent_resume(ctx_prompt: str, mem_summary: str, env_block: str = ""):
             """Resume a paused agent loop after user confirms."""
             async for event in resume_after_confirmation(
                 context={
@@ -420,6 +436,7 @@ class OrchestrationCoordinator:
                 preferences=user_preferences,
                 context_prompt=ctx_prompt,
                 memory_summary=mem_summary,
+                environment_block=env_block,
             ):
                 if event.kind == "text":
                     await broadcast_chunk(event.data.get("text", ""))
@@ -439,6 +456,60 @@ class OrchestrationCoordinator:
                 elif event.kind == "confirmation":
                     await broadcast_chunk(event.data.get("message", "Please confirm.") + await _autopilot_hint(), harness=True)
                     await emit_progress("validating", "completed", "Waiting for confirmation.")
+                elif event.kind == "budget_request":
+                    await broadcast_chunk(
+                        "\n\nI've paused this turn because it needs more budget than it "
+                        "has left. Reply **more budget** and I'll continue from where I "
+                        "stopped.",
+                        harness=True,
+                    )
+                    await emit_progress("validating", "completed", "Waiting for more budget.")
+                elif event.kind == "error":
+                    await broadcast_chunk(event.data.get("message", "Something went wrong."), harness=True)
+                elif event.kind == "done":
+                    await emit_progress("done", "completed", "Request complete.")
+
+        async def _handle_agent_budget_resume(ctx_prompt: str, mem_summary: str, env_block: str = ""):
+            """Continue a turn after the user granted it more budget (T-F3)."""
+            async for event in resume_with_more_budget(
+                context={
+                    "user_id": user_id,
+                    "room_id": room_id,
+                    "username": username,
+                    "preferences": user_preferences,
+                    "refresh_shell_autonomy": _refresh_shell_autonomy,
+                },
+                preferences=user_preferences,
+                context_prompt=ctx_prompt,
+                memory_summary=mem_summary,
+                environment_block=env_block,
+            ):
+                if event.kind == "text":
+                    await broadcast_chunk(event.data.get("text", ""))
+                elif event.kind == "text_delta":
+                    await broadcast_chunk(event.data.get("text", ""))
+                elif event.kind == "thinking":
+                    await emit_progress("thinking", "started", "Reasoning…")
+                elif event.kind == "tool_start":
+                    tool = event.data.get("name", "action")
+                    await emit_progress("executing", "started", f"Running {tool.replace('_', ' ')}…")
+                elif event.kind == "tool_result":
+                    stream_state["tools"].append(_tool_record(event.data))
+                    tool = event.data.get("name", "action")
+                    result = event.data.get("result", {})
+                    status = result.get("status", "")
+                    await emit_progress("executing", "completed", f"{tool.replace('_', ' ')}: {status}")
+                elif event.kind == "confirmation":
+                    await broadcast_chunk(event.data.get("message", "Please confirm.") + await _autopilot_hint(), harness=True)
+                    await emit_progress("validating", "completed", "Waiting for confirmation.")
+                elif event.kind == "budget_request":
+                    await broadcast_chunk(
+                        "\n\nI've paused this turn because it needs more budget than it "
+                        "has left. Reply **more budget** and I'll continue from where I "
+                        "stopped.",
+                        harness=True,
+                    )
+                    await emit_progress("validating", "completed", "Waiting for more budget.")
                 elif event.kind == "error":
                     await broadcast_chunk(event.data.get("message", "Something went wrong."), harness=True)
                 elif event.kind == "done":
@@ -478,6 +549,7 @@ class OrchestrationCoordinator:
         from orchestration.shell.chat_intents import is_autopilot_disarm_request
         explicit_disarm = is_autopilot_disarm_request(query)
         pending_confirmation = await _has_pending_confirmation()
+        pending_budget = await has_pending_budget_state(room_id, user_id)
         cancel_request = is_cancel_request(query) if pending_confirmation else is_cancel_command(query)
         if explicit_disarm or cancel_request:
             was_armed = bool(user_preferences.get("_shell_autopilot"))
@@ -568,6 +640,8 @@ class OrchestrationCoordinator:
             if pending_confirmation:
                 await dismiss_pending_confirmation(room_id, user_id)
                 await broadcast_chunk("\n\nI did not run the pending action; it is cancelled.", harness=True)
+            if pending_budget:
+                clear_loop_state(room_id, user_id)
 
         # --- Agent loop confirmation resume ---
         if not pending_handled:
@@ -581,9 +655,9 @@ class OrchestrationCoordinator:
                     except Exception:
                         pass
                     ctx_prompt = await _with_persona_identity(room_id, user_id, ctx_prompt)
-                    ctx_prompt = await _with_environment(ctx_prompt)
+                    env_block = await _environment_block()
                     mem_sum = await load_memory_summary(adaptive_context) or ""
-                    await _handle_agent_resume(ctx_prompt, mem_sum)
+                    await _handle_agent_resume(ctx_prompt, mem_sum, env_block)
 
                 # Cancel is checked first: a refusal must never be read as consent.
                 if is_cancel_request(query) or is_decline_reply(query):
@@ -605,6 +679,37 @@ class OrchestrationCoordinator:
                     await dismiss_pending_confirmation(room_id, user_id)
                     await broadcast_chunk("I did not run the pending action; it is cancelled.\n\n", harness=True)
 
+        # --- Agent loop budget resume (T-F3) ---
+        if not pending_handled and pending_budget:
+            if is_budget_extend_reply(query):
+                ctx_prompt = ""
+                try:
+                    ctx_prompt = await get_context_prompt() or ""
+                except Exception:
+                    pass
+                ctx_prompt = await _with_persona_identity(room_id, user_id, ctx_prompt)
+                env_block = await _environment_block()
+                mem_sum = await load_memory_summary(adaptive_context) or ""
+                await broadcast_chunk("Continuing with more budget.\n\n", harness=True)
+                await _handle_agent_budget_resume(ctx_prompt, mem_sum, env_block)
+                pending_handled = True
+            elif is_decline_reply(query) or is_cancel_command(query):
+                # A whole-message no/stop ends the paused turn for good.
+                clear_loop_state(room_id, user_id)
+                await broadcast_chunk(
+                    "Okay, I've stopped there and dropped the paused work.\n\n",
+                    harness=True,
+                )
+                pending_handled = True
+            else:
+                # Anything else the user writes starts a new turn, as today; the
+                # paused budget turn is discarded, and the reply says so once.
+                clear_loop_state(room_id, user_id)
+                await broadcast_chunk(
+                    "I dropped the paused work and started fresh with this message.\n\n",
+                    harness=True,
+                )
+
         if not pending_handled:
             # --- Agentic loop path ---
             _log_telemetry("agent_loop_start", {
@@ -617,7 +722,7 @@ class OrchestrationCoordinator:
             except Exception:
                 pass
             ctx_prompt = await _with_persona_identity(room_id, user_id, ctx_prompt)
-            ctx_prompt = await _with_environment(ctx_prompt)
+            env_block = await _environment_block()
             mem_sum = memory_summary or ""
             try:
                 await _handle_agent_loop(
@@ -625,6 +730,7 @@ class OrchestrationCoordinator:
                     history_messages,
                     ctx_prompt,
                     mem_sum,
+                    env_block,
                 )
             except Exception as agent_exc:
                 logger.warning("Agent loop failed: %s", agent_exc.__class__.__name__)

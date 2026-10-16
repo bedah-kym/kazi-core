@@ -34,8 +34,11 @@ class ToolSchemaTests(SimpleTestCase):
 
     def test_capability_gate_filters_tools(self):
         from orchestration.tool_schemas import get_tool_definitions
-        all_tools = get_tool_definitions()
-        restricted = get_tool_definitions(user_capabilities={"allow_email": False})
+        available = {"send_email", "get_weather"}
+        all_tools = get_tool_definitions(available_actions=available)
+        restricted = get_tool_definitions(
+            user_capabilities={"allow_email": False}, available_actions=available,
+        )
         all_names = {t["name"] for t in all_tools}
         restricted_names = {t["name"] for t in restricted}
         self.assertIn("send_email", all_names)

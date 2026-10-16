@@ -31,6 +31,21 @@ class MailgunConnector(BaseConnector):
         self.base_url = f"{os.environ.get('MAILGUN_API_BASE', 'https://api.mailgun.net')}/v3/{self.domain}" if self.domain else None
         self.use_sandbox = use_sandbox
 
+    def validate_config(self):
+        """Available with Mailgun credentials, or in demo mode where sends mock.
+
+        Without keys ``send_email`` only mocks the send (the demo path). That is
+        intended for the demo install, so the action is offered only there.
+        Outside demo mode a missing key means the tool is not offered (T-F2).
+        """
+        if self.api_key and self.domain:
+            return True, ""
+        from orchestration.connector_registry import is_demo_mode
+
+        if is_demo_mode():
+            return True, "demo mode: mocking email sends"
+        return False, "Mailgun: set MAILGUN_API_KEY and MAILGUN_DOMAIN"
+
     async def execute(self, parameters: dict, context: dict) -> dict:
         """
         Execute Email actions.

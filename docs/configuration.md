@@ -153,10 +153,15 @@ message.
 
 1. **Configured at boot.** An action whose connector did not load is never
    offered. A connector is skipped when `validate_config()` fails — a missing
-   key (`TELEGRAM_BOT_TOKEN`, `SHELL_EXEC_TOKEN`), a missing library (the
-   IntaSend SDK), and so on. In `manage.py shell`:
-   `get_skipped_connectors()` lists what was skipped (with the actions it would
-   own); `get_available_actions()` is the live set.
+   key (`TELEGRAM_BOT_TOKEN`, `SHELL_EXEC_TOKEN`, `OPENWEATHER_API_KEY`,
+   `GIPHY_API_KEY`, `EXCHANGE_RATE_API_KEY`, `TWILIO_ACCOUNT_SID` /
+   `TWILIO_AUTH_TOKEN`, `MAILGUN_API_KEY` / `MAILGUN_DOMAIN`,
+   `GMAIL_OAUTH_CLIENT_ID` / `GMAIL_OAUTH_CLIENT_SECRET`), a missing library
+   (the IntaSend SDK), and so on. A connector that can only mock a send without
+   credentials (Mailgun, WhatsApp) is offered only when `KAZI_DEMO_MODE` is set;
+   outside demo mode a missing key means the group is not offered. In
+   `manage.py shell`: `get_skipped_connectors()` lists what was skipped (with
+   the actions it would own); `get_available_actions()` is the live set.
 2. **Capability flags.** Each group has a gate; turning it off removes its
    tools. The sensitive gates fail closed: a missing flag means off, as at
    execution. Every other gate keeps the old default — missing means on.
@@ -179,10 +184,13 @@ message.
    outside it are not offered. The execution-time refusal stays as a second line.
 
 The prompt follows the tools: the shell "Where you are running" section is sent
-only with `run_command` (and says whether the room's profile is sandboxed), and
-the memory/contact/reminder/voice guidance only when its group is offered. The
-model sees one `run_command` description, with a `network` parameter, whichever
-shell profile the room uses.
+only with `run_command` (and says whether the room's profile is sandboxed, plus
+the network that profile gives the shell — open: full; standard: none unless a
+command asks and is approved; locked: none), and the memory/contact/reminder/
+voice guidance only when its group is offered. With no search tool the prompt
+says only that there is no web-search tool, not that the network is unreachable.
+The model sees one `run_command` description, with a `network` parameter,
+whichever shell profile the room uses.
 
 ## Voice / modality
 

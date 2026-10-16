@@ -20,7 +20,11 @@ from django.conf import settings
 from django.core.cache import cache
 from django.utils import timezone
 
-from orchestration.agent_prompts import build_confirmation_prompt, build_system_prompt
+from orchestration.agent_prompts import (
+    NO_SEARCH_TOOL_NOTE,
+    build_confirmation_prompt,
+    build_system_prompt,
+)
 from orchestration.llm_client import get_llm_client
 from orchestration.memory_state import update_memory_state, save_memory_summary
 from orchestration.model_catalog import find_model, model_pref_key, parse_model_id, provider_configured
@@ -1495,10 +1499,7 @@ async def run_agent_loop(
         environment_block=environment_block,
     )
     if not web_search_tool and not backend_search:
-        system += (
-            "\n\nWeb search is not available in this environment. If the user asks "
-            "you to search the web, say plainly that you cannot search the web here."
-        )
+        system += "\n\n" + NO_SEARCH_TOOL_NOTE
 
     # ------------------------------------------------------------------ #
     #  Initialise or resume loop state                                    #

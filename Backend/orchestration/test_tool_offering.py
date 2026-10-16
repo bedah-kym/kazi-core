@@ -8,12 +8,35 @@ from __future__ import annotations
 
 import inspect
 import os
+from contextlib import contextmanager
 from unittest.mock import patch
 
 from django.conf import settings
 from django.test import SimpleTestCase
 
 from orchestration.connector_registry import reset_registry
+
+
+@contextmanager
+def _credentials_absent(env_names=(), setting_names=()):
+    """Make the named credentials absent, however the connector reads them.
+
+    Environment variables are popped and settings attributes blanked so a
+    developer's ``.env`` cannot make the availability tests non-deterministic.
+    """
+    with patch.dict(os.environ, {}, clear=False):
+        for name in env_names:
+            os.environ.pop(name, None)
+        patchers = [patch.object(settings, name, "") for name in setting_names]
+        for patcher in patchers:
+            patcher.start()
+        reset_registry()
+        try:
+            yield
+        finally:
+            reset_registry()
+            for patcher in reversed(patchers):
+                patcher.stop()
 
 
 ALL_GATES_ON = {
@@ -235,3 +258,97 @@ class PromptFollowsToolsTests(SimpleTestCase):
             environment_block=block,
         )
         self.assertNotIn("Where you are running", prompt)
+
+
+class ConnectorAvailabilityTests(SimpleTestCase):
+    """Deliverable G1: a connector with no key/library is not offered.
+
+    Each of these fails on the pre-follow-up branch, where these connectors
+    inherited ``BaseConnector.validate_config`` with no required credentials and
+    were therefore always counted as configured.
+    """
+
+    def test_weather_absent_without_a_key(self):
+        with _credentials_absent(
+            env_names=["OPENWEATHER_API_KEY"],
+            setting_names=["OPENWEATHER_API_KEY"],
+        ):
+            names = _names(user_capabilities=ALL_GATES_ON)
+        self.assertNotIn("get_weather", names)
+
+    def test_gif_absent_without_a_key(self):
+        with _credentials_absent(
+            env_names=["GIPHY_API_KEY"], setting_names=["GIPHY_API_KEY"],
+        ):
+            names = _names(user_capabilities=ALL_GATES_ON)
+        self.assertNotIn("search_gif", names)
+
+    def test_currency_absent_without_a_key(self):
+        with _credentials_absent(
+            env_names=["EXCHANGE_RATE_API_KEY"],
+            setting_names=["EXCHANGE_RATE_API_KEY"],
+        ):
+            names = _names(user_capabilities=ALL_GATES_ON)
+        self.assertNotIn("convert_currency", names)
+
+    def test_whatsapp_absent_without_credentials_outside_demo(self):
+        with _credentials_absent(
+            env_names=["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "KAZI_DEMO_MODE"],
+        ):
+            names = _names(user_capabilities=ALL_GATES_ON)
+        self.assertNotIn("send_message", names)
+        self.assertNotIn("send_whatsapp", names)
+
+    def test_email_absent_without_credentials_outside_demo(self):
+        with _credentials_absent(
+            env_names=[
+                "MAILGUN_API_KEY", "MAILGUN_DOMAIN", "MAILGUN_USE_SANDBOX",
+                "KAZI_DEMO_MODE", "GMAIL_OAUTH_CLIENT_ID", "GMAIL_OAUTH_CLIENT_SECRET",
+                "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET",
+            ],
+            setting_names=["GMAIL_OAUTH_CLIENT_ID", "GMAIL_OAUTH_CLIENT_SECRET"],
+        ):
+            names = _names(user_capabilities=ALL_GATES_ON)
+        self.assertNotIn("send_email", names)
+
+    def test_demo_mode_still_offers_email_without_credentials(self):
+        # The canonical demo sends through Mailgun's mock; it must stay offered.
+        with patch.dict(os.environ, {"KAZI_DEMO_MODE": "true"}, clear=False):
+            for name in ("MAILGUN_API_KEY", "MAILGUN_DOMAIN"):
+                os.environ.pop(name, None)
+            with patch.object(settings, "GMAIL_OAUTH_CLIENT_ID", ""), \
+                    patch.object(settings, "GMAIL_OAUTH_CLIENT_SECRET", ""):
+                reset_registry()
+                self.addCleanup(reset_registry)
+                names = _names(user_capabilities=ALL_GATES_ON)
+        self.assertIn("send_email", names)
+
+
+class ShellNetworkPromptTests(SimpleTestCase):
+    """Deliverable G2: the prompt gives an accurate picture of the network."""
+
+    def test_open_shell_section_states_full_network(self):
+        from orchestration.agent_prompts import build_environment_block
+
+        block = build_environment_block({"profile": "open", "platform": "Linux", "shell": "bash"})
+        self.assertIn("full network access", block)
+
+    def test_standard_shell_section_states_network_needs_approval(self):
+        from orchestration.agent_prompts import build_environment_block
+
+        block = build_environment_block({"profile": "standard", "platform": "Linux", "shell": "sh"})
+        self.assertIn("no network unless a command asks for it and the harness approves it", block)
+
+    def test_locked_shell_section_states_no_network(self):
+        from orchestration.agent_prompts import build_environment_block
+
+        block = build_environment_block({"profile": "locked", "platform": "Linux", "shell": "sh"})
+        self.assertIn("This room's shell has no network.", block)
+
+    def test_no_search_note_does_not_imply_the_network_is_down(self):
+        from orchestration.agent_prompts import NO_SEARCH_TOOL_NOTE
+
+        lowered = NO_SEARCH_TOOL_NOTE.lower()
+        self.assertIn("no web-search tool", lowered)
+        for misleading in ("network", "environment", "unreachable", "no fetch", "no curl"):
+            self.assertNotIn(misleading, lowered)

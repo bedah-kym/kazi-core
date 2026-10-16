@@ -166,6 +166,15 @@ _CONTACT_TOOL_NAMES = {"lookup_contact", "save_contact"}
 _REMINDER_TOOL_NAMES = {"set_reminder", "list_reminders", "list_notifications"}
 _VOICE_TOOL_NAMES = {"generate_speech"}
 
+# Sent only when no search tool is offered. It says what the model lacks (a
+# search tool) and nothing about the network: the shell may still fetch a page
+# when it is offered, and claiming "no network" was making the model give up
+# (T-F2 follow-up).
+NO_SEARCH_TOOL_NOTE = (
+    "You have no web-search tool this turn. If the user asks you to search the "
+    "web, say plainly that you have no web-search tool."
+)
+
 
 def _group_is_offered(tool_names: Optional[List[str]], group) -> bool:
     if tool_names is None:
@@ -198,6 +207,7 @@ def build_environment_block(env: Optional[Dict[str, Any]]) -> str:
             "- This room's shell is not sandboxed: commands run directly on the host, as the "
             "account that runs Kazi."
         )
+        lines.append("- This room's shell has full network access.")
         lines.append(
             f"- The harness asks the user before a command {recently}, when the command needs "
             "root, or when it is on the harness's short destructive list. Otherwise the command "
@@ -228,6 +238,10 @@ def build_environment_block(env: Optional[Dict[str, Any]]) -> str:
             "installed. Commands that need root are refused."
         )
         lines.append(
+            "- This room's shell has no network unless a command asks for it and the harness "
+            "approves it."
+        )
+        lines.append(
             "- A command the harness recognises as a network tool can run with network access, "
             "usually after asking the user. Any other command that needs the network just fails."
         )
@@ -248,6 +262,7 @@ def build_environment_block(env: Optional[Dict[str, Any]]) -> str:
             "Commands that need the network or root are refused. Do not assume bash, Python or "
             "a package manager is installed."
         )
+        lines.append("- This room's shell has no network.")
         lines.append("- Commands start in this room's workspace folder.")
         lines.append("- Replies the harness handles itself: `yes` or `no` to a pending action.")
     return "\n".join(lines)

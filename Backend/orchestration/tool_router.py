@@ -663,6 +663,12 @@ class SearchConnector(BaseConnector):
 class WeatherConnector(BaseConnector):
     """Weather connector using OpenWeatherMap API"""
 
+    name = "weather"
+    actions = ["get_weather"]
+    # Without the key the call fails at runtime ("Weather service is not
+    # configured"), so report unavailable and let the registry drop the tool.
+    required_credentials = ["OPENWEATHER_API_KEY"]
+
     async def execute(self, parameters: Dict, context: Dict) -> Dict:
         """Get weather for a city"""
         from django.conf import settings
@@ -715,6 +721,10 @@ class WeatherConnector(BaseConnector):
 
 class GiphyConnector(BaseConnector):
     """GIPHY connector for searching and returning GIFs"""
+
+    name = "giphy"
+    actions = ["search_gif"]
+    required_credentials = ["GIPHY_API_KEY"]
 
     async def execute(self, parameters: Dict, context: Dict) -> Dict:
         """Search GIPHY for a GIF"""
@@ -770,6 +780,10 @@ class GiphyConnector(BaseConnector):
 
 class CurrencyConnector(BaseConnector):
     """Currency conversion connector using ExchangeRate-API"""
+
+    name = "currency"
+    actions = ["convert_currency"]
+    required_credentials = ["EXCHANGE_RATE_API_KEY"]
 
     async def execute(self, parameters: Dict, context: Dict) -> Dict:
         """Convert currency"""

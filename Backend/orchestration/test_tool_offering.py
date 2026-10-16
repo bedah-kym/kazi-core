@@ -10,7 +10,8 @@ import inspect
 import os
 from unittest.mock import patch
 
-from django.test import SimpleTestCase, override_settings
+from django.conf import settings
+from django.test import SimpleTestCase
 
 from orchestration.connector_registry import reset_registry
 
@@ -47,9 +48,10 @@ class ConfiguredOnlyTests(SimpleTestCase):
         self.assertNotIn("set_reminder", names)
         self.assertNotIn("run_command", names)
 
-    @override_settings(TELEGRAM_BOT_TOKEN="", SHELL_EXEC_TOKEN="")
     def test_all_telegram_actions_are_absent_without_a_token(self):
-        with patch.dict(os.environ, {}, clear=False):
+        with patch.dict(os.environ, {}, clear=False), \
+                patch.object(settings, "TELEGRAM_BOT_TOKEN", ""), \
+                patch.object(settings, "SHELL_EXEC_TOKEN", ""):
             os.environ.pop("TELEGRAM_BOT_TOKEN", None)
             os.environ.pop("SHELL_EXEC_TOKEN", None)
             reset_registry()

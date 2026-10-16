@@ -46,7 +46,8 @@ routing pipeline to plan and act on the same message twice. A multi-step request
 the agent composes is handed to `execute_adhoc_workflow`, which starts and runs
 the ad-hoc workflow.
 
-Safety limits:
+Safety limits (on by default; an operator can switch them off in
+Settings > Capabilities):
 - Max 10 iterations per loop
 - Max 15 tool calls per loop
 - 2-minute loop timeout, 30 seconds per tool
@@ -76,8 +77,8 @@ The gateway between the agent and connectors. Before executing any tool:
 
 `run_command` reaches the host through a *deliberately dumb* sidecar
 (`python Backend/manage.py run_shell_exec`, run as its own uvicorn process) that
-holds no policy and no Kazi credentials — only a shared token and a workspace
-directory. All policy lives in Kazi's orchestration layer. The orchestrator
+holds no policy: it checks a shared token and runs the command in the room's
+workspace. All policy lives in Kazi's orchestration layer. The orchestrator
 fails closed: leaving `SHELL_EXEC_TOKEN` unset disables `run_command` entirely.
 
 On the Docker profiles (`standard`, `locked`) the sidecar runs each command in a
@@ -91,7 +92,6 @@ Isolation profiles, resolved per room (override) else the global default:
 |---|---|---|---|
 | Backend | direct subprocess | Docker | Docker |
 | Root filesystem | full | read-only | read-only |
-| Writable | full | `/workspace` | none |
 | Network | full | off by default | none |
 
 `open` is never the default and logs a loud boot warning — it runs unsandboxed

@@ -63,7 +63,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its extension count. Recordings are atomic, so concurrent calls from two rooms,
   parallel delegations or several worker processes are never dropped, and every
   usage bucket keeps a TTL so it ages out of the rolling hour. The check fails
-  closed: if usage cannot be read, a call that needs the quota is refused.
+  closed: if usage cannot be read, a call that needs the quota is refused. That
+  now holds under the production cache too, where `REDIS_CACHE_IGNORE_EXCEPTIONS`
+  (default on) makes a Redis outage read as an empty hour; the quota read
+  surfaces the outage instead, while every other cache user keeps ignoring it.
+  Replying **continue** while the hour is still full says it is still reached and
+  keeps the paused turn, rather than claiming it freed.
   `LLM_TOKEN_QUOTA_ENABLED` and the staff/superuser exemption are unchanged.
 - A turn is offered only the tools that can work for that user in that room. An
   action whose connector did not load is no longer offered: a connector skipped

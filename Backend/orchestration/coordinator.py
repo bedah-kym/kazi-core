@@ -57,11 +57,41 @@ from orchestration.agent_loop import (
     dismiss_pending_confirmation,
     _untrusted_source,
 )
+from orchestration.llm_client import TokenQuotaExceeded, _humanize_seconds, get_llm_client
 
 logger = logging.getLogger(__name__)
 
 MAX_TOOL_RECORDS = 10
 _SHOWN_LIMIT = 2000
+
+
+def _quota_resume_blocked_note(exc: TokenQuotaExceeded) -> str:
+    """The honest line when a resume finds the hourly limit still reached.
+
+    A resume must never claim the limit freed unless it was checked (T-F3b): say
+    the limit is still reached, roughly when it frees, and that the paused turn
+    is kept so a later ``continue`` picks up from where it stopped.
+    """
+    if getattr(exc, "reason", "limit") == "unreadable":
+        return (
+            "I still can't check this hour's token limit, so I've kept your paused "
+            "turn rather than risk overrunning it. Please try again shortly.\n\n"
+        )
+    when = _humanize_seconds(getattr(exc, "retry_after_seconds", 0))
+    return (
+        f"The hourly token limit is still reached; it frees up in {when}. "
+        "Your paused turn is kept — reply **continue** then and I'll pick up from "
+        "where it stopped.\n\n"
+    )
+
+
+async def _quota_resume_still_blocked(user_id: int) -> Optional[TokenQuotaExceeded]:
+    """The quota block still stopping this resume, or ``None`` if the hour has room.
+
+    The hourly limit is checked with a zero-work call before the harness says it
+    freed (T-F3b); the check fails closed, so a dead cache reads as blocked.
+    """
+    return await get_llm_client().check_hourly_quota(user_id)
 
 
 def _tool_record(data: Dict) -> Dict:
@@ -641,13 +671,24 @@ class OrchestrationCoordinator:
                 env_block = await _environment_block()
                 mem_sum = await load_memory_summary(adaptive_context) or ""
                 if pending_pause == "quota":
-                    # The hourly limit stopped the turn. Resuming it is not a
-                    # budget grant, and the wording is about the hour (T-F3b).
-                    await broadcast_chunk(
-                        "The hourly token limit has freed up. Continuing from where it stopped.\n\n",
-                        harness=True,
-                    )
-                    await _handle_agent_quota_resume(ctx_prompt, mem_sum, env_block)
+                    # The hourly limit stopped the turn. It must not be claimed to
+                    # have freed unless that was checked (T-F3b): a check that
+                    # still blocks keeps the paused turn and says so, so a resume
+                    # during a full hour never shows the "freed up" line.
+                    still_blocked = await _quota_resume_still_blocked(user_id)
+                    if still_blocked is not None:
+                        await broadcast_chunk(
+                            _quota_resume_blocked_note(still_blocked),
+                            harness=True,
+                        )
+                    else:
+                        # Resuming it is not a budget grant, and the wording is
+                        # about the hour (T-F3b).
+                        await broadcast_chunk(
+                            "The hourly token limit has freed up. Continuing from where it stopped.\n\n",
+                            harness=True,
+                        )
+                        await _handle_agent_quota_resume(ctx_prompt, mem_sum, env_block)
                 else:
                     await broadcast_chunk("Continuing with more budget.\n\n", harness=True)
                     await _handle_agent_budget_resume(ctx_prompt, mem_sum, env_block)

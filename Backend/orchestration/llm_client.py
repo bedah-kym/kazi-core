@@ -133,6 +133,22 @@ def _quota_buckets_for_window(user_id: int, now: float) -> List[Any]:
     return buckets
 
 
+def _read_cache_many(keys: List[str]) -> Dict[str, Any]:
+    """Read many cache keys, surfacing a dead cache even when the backend is
+    configured to ignore exceptions.
+
+    Production runs django-redis with ``IGNORE_EXCEPTIONS`` on, so an outage
+    makes the wrapped ``RedisCache.get_many`` return ``{}`` — which a quota read
+    would take for an empty hour and fail open. Reading through the underlying
+    client raises instead. Backends with no such client (LocMem in dev and
+    tests) already raise on their own, so they use the normal path (T-F3b).
+    """
+    client = getattr(cache, "client", None)
+    if client is not None and hasattr(client, "get_many"):
+        return client.get_many(keys)
+    return cache.get_many(keys)
+
+
 def _read_hourly_usage(user_id: int, now: Optional[float] = None):
     """The user's work tokens in the last rolling hour, and the buckets behind it.
 
@@ -143,7 +159,7 @@ def _read_hourly_usage(user_id: int, now: Optional[float] = None):
     now = time.time() if now is None else float(now)
     window = _quota_buckets_for_window(user_id, now)
     keys = [key for _, key in window]
-    values = cache.get_many(keys) if keys else {}
+    values = _read_cache_many(keys) if keys else {}
     buckets = [
         (start, int(values.get(key) or 0))
         for start, key in window
@@ -710,6 +726,20 @@ class LLMClient:
                 user_id, used, estimated_new_tokens, limit,
             )
             raise TokenQuotaExceeded(retry, reason="limit", user_id=user_id)
+
+    async def check_hourly_quota(self, user_id: Optional[int]) -> Optional["TokenQuotaExceeded"]:
+        """Whether a quota-bound call would be refused right now (T-F3b).
+
+        Returns the ``TokenQuotaExceeded`` a zero-work call would raise — the
+        hour is still full, or usage could not be read — or ``None`` when the
+        hour has room. Used before telling a user their limit has freed, so the
+        harness never claims a resume it has not checked.
+        """
+        try:
+            await self._check_token_quota(0, user_id)
+        except TokenQuotaExceeded as exc:
+            return exc
+        return None
 
     def _record_token_usage(self, tokens: int, user_id: Optional[int], now: Optional[float] = None) -> None:
         """Add work tokens to the user's rolling-hour quota.

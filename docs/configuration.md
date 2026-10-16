@@ -105,9 +105,19 @@ limit was reached and roughly when capacity frees up. A turn blocked mid-way end
 like a budget stop: its state is kept, so the user can reply **continue** once it
 frees up and pick up where it stopped without redoing finished work. Resuming a
 quota stop is **not** a budget grant: it never raises the turn's budget or its
-extension count (a turn stopped by its own budget still extends as before). The
-check **fails closed**: if usage cannot be read, a call that needs the quota is
-refused rather than allowed.
+extension count (a turn stopped by its own budget still extends as before).
+Replying **continue** while the hour is still full says so and keeps the paused
+turn, instead of claiming the limit freed.
+
+The check **fails closed**: if usage cannot be read, a call that needs the quota
+is refused rather than allowed. This matters for self-hosters because the
+production cache (`REDIS_CACHE_IGNORE_EXCEPTIONS`, default on) deliberately
+swallows cache errors so HTTP views keep serving during a Redis outage. The quota
+read bypasses that and surfaces the outage, so during a Redis outage a non-staff
+user's quota-bound calls are refused with a "could not be checked" message;
+every other cache user keeps today's ignore-and-serve behaviour. If Redis is down
+for an extended time and you would rather fail open for the quota too, set
+`LLM_TOKEN_QUOTA_ENABLED=False` — but that lifts the limit for everyone.
 
 ## Memory & context budgets
 

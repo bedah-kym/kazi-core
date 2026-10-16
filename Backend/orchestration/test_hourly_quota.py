@@ -122,6 +122,46 @@ class WorkTokenWindowTests(SimpleTestCase):
         self.assertEqual(ctx.exception.reason, "unreadable")
 
 
+class ProductionCacheFailClosedTests(SimpleTestCase):
+    """A dead cache with production options still refuses a quota-bound call.
+
+    Production runs django-redis with ``IGNORE_EXCEPTIONS`` on, so an outage
+    makes the wrapped cache read as empty. The quota must not take that for an
+    empty hour and let the call through (T-F3b, AGENTS.md rule 3).
+    """
+
+    def setUp(self):
+        self.client = LLMClient()
+
+    def _dead_redis_cache(self):
+        from django_redis.cache import RedisCache
+
+        # Same client and options production uses, pointed at a closed port.
+        return RedisCache(
+            "redis://127.0.0.1:1/0",
+            {"OPTIONS": {
+                "CLIENT_CLASS": "django_redis.client.DefaultClient",
+                "IGNORE_EXCEPTIONS": True,
+                "SOCKET_CONNECT_TIMEOUT": 0.2,
+                "SOCKET_TIMEOUT": 0.2,
+            }},
+        )
+
+    def test_production_cache_options_read_an_outage_as_empty(self):
+        # Proves the test really exercises the failure: the wrapped cache hides
+        # the outage, so a naive read would see an empty hour.
+        dead = self._dead_redis_cache()
+        self.assertEqual(dead.get_many(["llm_tokens:1:1"]), {})
+
+    def test_unreadable_usage_with_production_cache_options_fails_closed(self):
+        dead = self._dead_redis_cache()
+        with patch("orchestration.llm_client.cache", dead):
+            with self.assertRaises(TokenQuotaExceeded) as ctx:
+                run_async(self.client._check_token_quota(0, 4242))
+        self.assertEqual(ctx.exception.reason, "unreadable")
+        self.assertIn("could not be checked", str(ctx.exception))
+
+
 class QuotaEnforcementTests(TransactionTestCase):
     """The check refuses a full hour and exempts staff (T-F3b)."""
 

@@ -10,7 +10,7 @@ import inspect
 import os
 from unittest.mock import patch
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, override_settings
 
 from orchestration.connector_registry import reset_registry
 
@@ -47,6 +47,7 @@ class ConfiguredOnlyTests(SimpleTestCase):
         self.assertNotIn("set_reminder", names)
         self.assertNotIn("run_command", names)
 
+    @override_settings(TELEGRAM_BOT_TOKEN="", SHELL_EXEC_TOKEN="")
     def test_all_telegram_actions_are_absent_without_a_token(self):
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("TELEGRAM_BOT_TOKEN", None)
@@ -59,20 +60,28 @@ class ConfiguredOnlyTests(SimpleTestCase):
             self.assertNotIn(action, names)
         self.assertNotIn("run_command", names)
 
-    def test_a_payment_needing_the_missing_library_is_absent(self):
+    def test_unavailable_payment_connector_is_absent(self):
+        # Force the legacy IntaSend connector to report unavailable, whatever
+        # the SDK/key state on the machine, so the test is deterministic.
+        from orchestration.connectors.intersend_connector import IntersendPayConnector
+
         reset_registry()
         self.addCleanup(reset_registry)
-        from orchestration.connector_registry import (
-            discover_connectors,
-            get_available_actions,
-            get_skipped_connectors,
-        )
+        with patch.object(
+            IntersendPayConnector, "validate_config",
+            return_value=(False, "IntaSend is not available."),
+        ):
+            from orchestration.connector_registry import (
+                discover_connectors,
+                get_available_actions,
+                get_skipped_connectors,
+            )
 
-        discover_connectors()
-        skipped = {item["name"]: item for item in get_skipped_connectors()}
-        self.assertIn("IntersendPayConnector", skipped)
-        self.assertIn("create_payment_link", skipped["IntersendPayConnector"]["actions"])
-        self.assertNotIn("create_payment_link", get_available_actions())
+            discover_connectors()
+            skipped = {item["name"]: item for item in get_skipped_connectors()}
+            self.assertIn("IntersendPayConnector", skipped)
+            self.assertIn("create_payment_link", skipped["IntersendPayConnector"]["actions"])
+            self.assertNotIn("create_payment_link", get_available_actions())
 
     def test_remaining_tools_are_present(self):
         names = _names(

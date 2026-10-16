@@ -79,6 +79,11 @@ def _get_http_client() -> httpx.AsyncClient:
     client = _http_clients.get(loop)
     if client is None or getattr(client, "is_closed", False):
         with _http_clients_lock:
+            # A pooled connection holds its loop, so the weak key alone never
+            # frees a client made on a short-lived loop (async_to_sync in a
+            # Celery task, asyncio.run). Drop the ones whose loop has closed.
+            for old_loop in [key for key in list(_http_clients.keys()) if key.is_closed()]:
+                _http_clients.pop(old_loop, None)
             client = _http_clients.get(loop)
             if client is None or getattr(client, "is_closed", False):
                 client = httpx.AsyncClient(timeout=120.0)

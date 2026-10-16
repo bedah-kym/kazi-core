@@ -129,6 +129,39 @@ class DeepSeekPromptCacheTests(SimpleTestCase):
         )
 
 
+class _LoopHoldingClient:
+    """Stands in for httpx.AsyncClient: like a pooled connection, it holds its loop."""
+
+    is_closed = False
+
+    def __init__(self, *args, **kwargs):
+        self.loop = asyncio.get_running_loop()
+
+
+class SharedHttpClientTests(SimpleTestCase):
+    def test_short_lived_loops_do_not_accumulate_clients(self):
+        from orchestration import llm_client
+
+        async def borrow():
+            return llm_client._get_http_client()
+
+        llm_client._http_clients.clear()
+        with patch("orchestration.llm_client.httpx.AsyncClient", _LoopHoldingClient):
+            for _ in range(5):
+                asyncio.run(borrow())
+            kept = len(llm_client._http_clients)
+        llm_client._http_clients.clear()
+        self.assertLessEqual(kept, 1)
+
+    def test_one_loop_reuses_one_client(self):
+        from orchestration import llm_client
+
+        async def borrow_twice():
+            return llm_client._get_http_client() is llm_client._get_http_client()
+
+        self.assertTrue(asyncio.run(borrow_twice()))
+
+
 class SearchConnectorHonestyTests(SimpleTestCase):
     """T-F4: the search connector never returns language-model prose as results."""
 

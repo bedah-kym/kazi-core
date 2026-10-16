@@ -272,32 +272,31 @@
                     </ul>
                 </div>
 
-                <div class="listbottom d-flex justify-content-between align-items-center">
-                    <div class="d-flex align-items-center">
-                        <a href="{% url 'users:logout' %}" class="btn btn-outline-danger btn-sm">
-                            <i class="fas fa-sign-out-alt me-2"></i>Logout
-                        </a>
-                    </div>
-                    <div class="d-flex align-items-center">
-                        <!-- FIXED: Changed to use data-bs-toggle to open Bootstrap modal -->
-                        <button type="button" class="btn btn-link btn-calendar me-2" title="My Calendar"
-                            data-bs-toggle="modal" data-bs-target="#calendarModal">
-                            <i class="fas fa-calendar-days"></i>
+                <div class="listbottom">
+                    <button type="button" class="btn btn-link btn-calendar" title="My Calendar"
+                        aria-label="My Calendar" data-bs-toggle="modal" data-bs-target="#calendarModal">
+                        <i class="fas fa-calendar-days"></i>
+                    </button>
+                    <button id="openSettings" class="btn btn-link" title="Settings" aria-label="Settings">
+                        <i class="fas fa-cog"></i>
+                    </button>
+                    <button id="startTour" class="btn btn-link" title="Guided Tour" aria-label="Guided Tour">
+                        <i class="fas fa-wand-magic-sparkles"></i>
+                    </button>
+                    <button type="button" class="btn btn-link" title="Usage Quotas" aria-label="Usage Quotas"
+                        onclick="fetchQuotas()">
+                        <i class="fas fa-chart-pie"></i>
+                    </button>
+                    <button id="darkModeToggle" class="btn btn-link" aria-label="Toggle dark mode" title="Theme">
+                        <i class="fas fa-moon"></i>
+                    </button>
+                    <form method="post" action="{% url 'users:logout' %}" class="m-0 d-flex">
+                        {% csrf_token %}
+                        <button type="submit" class="btn btn-link listbottom-logout" title="Log out"
+                            aria-label="Log out">
+                            <i class="fas fa-right-from-bracket"></i>
                         </button>
-                        <button id="openSettings" class="btn btn-link">
-                            <i class="fas fa-cog"></i>
-                        </button>
-                        <button id="startTour" class="btn btn-link text-primary" title="Guided Tour">
-                            <i class="fas fa-wand-magic-sparkles"></i>
-                        </button>
-                        <button type="button" class="btn btn-link text-warning" title="Usage Quotas"
-                            onclick="fetchQuotas()">
-                            <i class="fas fa-chart-pie"></i>
-                        </button>
-                        <button id="darkModeToggle" class="btn btn-link" aria-label="Toggle dark mode" title="Theme">
-                            <i class="fas fa-moon"></i>
-                        </button>
-                    </div>
+                    </form>
                 </div>
             </div>
 
@@ -309,7 +308,8 @@
                     <div class="row align-items-center">
                         <div class="col-8">
                             <div class="d-flex align-items-center">
-                                <button class="toggle-btn d-md-none me-2" id="menuToggle">
+                                <button class="toggle-btn d-md-none me-2" id="menuToggle" type="button"
+                                    aria-label="Chats">
                                     <span class="hamburger"></span>
                                 </button>
                                 <img src="{{ room_avatar }}" class="avatar-img me-3" data-avatar-img
@@ -334,8 +334,8 @@
                             <!-- Single mobile menu — merges navigation + chat actions -->
                             <div class="dropdown d-lg-none me-2">
                                 <button class="btn btn-light" data-bs-toggle="dropdown" data-bs-auto-close="outside"
-                                    aria-label="Menu">
-                                    <i class="fas fa-bars"></i>
+                                    aria-label="More" title="More">
+                                    <i class="fas fa-ellipsis-vertical"></i>
                                 </button>
                                 <ul class="dropdown-menu dropdown-menu-end shadow-sm">
                                     <li>
@@ -1096,7 +1096,7 @@
 
             50% {
                 transform: scale(1.2) rotate(10deg);
-                color: #6c5ce7;
+                color: var(--clay, #A83C1E);
             }
 
             100% {

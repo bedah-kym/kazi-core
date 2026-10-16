@@ -57,9 +57,12 @@
                 <button class="app-icon-btn" id="darkModeToggle" aria-label="Toggle dark mode" title="Theme">
                     <i class="fas fa-moon"></i>
                 </button>
-                <a class="app-icon-btn" href="{% url 'users:logout' %}" title="Sign out" aria-label="Sign out">
-                    <i class="fas fa-sign-out-alt"></i>
-                </a>
+                <form method="post" action="{% url 'users:logout' %}" class="m-0 d-flex">
+                    {% csrf_token %}
+                    <button type="submit" class="app-icon-btn" title="Sign out" aria-label="Sign out">
+                        <i class="fas fa-sign-out-alt"></i>
+                    </button>
+                </form>
             </div>
         </aside>
 

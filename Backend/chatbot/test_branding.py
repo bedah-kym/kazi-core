@@ -51,3 +51,25 @@ class BrandingTests(TestCase):
     def test_marketing_page_uses_kazi_brand(self):
         self.client.logout()
         self.assert_branded(self.client.get(reverse("users:login")))
+
+
+class LogoutControlTests(TestCase):
+    """Django 5 logs out on POST only, so every logout control must submit a form."""
+
+    setUp = BrandingTests.setUp
+
+    def assert_logout_posts(self, response):
+        logout_url = reverse("users:logout")
+        self.assertContains(response, f'method="post" action="{logout_url}"')
+        self.assertNotContains(response, f'href="{logout_url}"')
+
+    def test_chat_page_logout_posts(self):
+        self.assert_logout_posts(
+            self.client.get(reverse("chatbot:bot-home", kwargs={"room_name": self.room.id})))
+
+    def test_app_shell_logout_posts(self):
+        self.assert_logout_posts(self.client.get(reverse("users:personas")))
+
+    def test_logout_by_post_ends_the_session(self):
+        self.client.post(reverse("users:logout"))
+        self.assertNotIn("_auth_user_id", self.client.session)

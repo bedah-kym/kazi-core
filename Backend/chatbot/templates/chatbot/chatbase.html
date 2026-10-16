@@ -21,11 +21,12 @@
     <link href="{% static 'css/context-panel.css'%}" rel="stylesheet">
     <!-- Message Actions Styles -->
     <link href="{% static 'css/message-actions.css'%}" rel="stylesheet">
-    <!-- Shared Claude-inspired theme (tokens + chatroom components) — loaded last -->
+    <!-- Shared Kazi theme (tokens + chatroom components) — loaded last -->
     <link href="{% static 'css/kazi-theme.css' %}" rel="stylesheet">
     <!--favicon-->
     {% include "brand/head_icons.html" %}
-    <script>window.KAZI_AVATAR_URL = "{% static 'img/kazi-avatar.svg' %}";</script>
+    {% static 'img/kazi-avatar.svg' as kazi_avatar_url %}
+    <script>window.KAZI_AVATAR_URL = "{{ kazi_avatar_url|escapejs }}";</script>
     <!-- Highlight.js CSS -->
     <link rel="stylesheet"
         href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
@@ -223,7 +224,7 @@
             <div class="col-md-4 col-lg-3 people-list">
                 <div class="sidebar-header">
                     <div class="sidebar-brand">
-                        <span class="sidebar-brand-mark">{% include "brand/kazi_mark.html" with size=20 %}</span>
+                        <span class="sidebar-brand-mark">{% include "brand/kazi_mark.html" with size=20 only %}</span>
                         <div>
                             <div class="sidebar-title">Chats</div>
                             <div class="sidebar-subtitle">Kazi workspace</div>
@@ -250,7 +251,7 @@
                                 <div class="room-item-meta">
                                     <div class="room-item-name">
                                         <span class="fw-bold room-item-title">{{ chatroom.name }}</span>
-                                        {% if 'AI' in chatroom.name %}<span class="room-ai-badge">{% include "brand/kazi_mark.html" with size=11 %}</span>{% endif %}
+                                        {% if 'AI' in chatroom.name %}<span class="room-ai-badge">{% include "brand/kazi_mark.html" with size=11 only %}</span>{% endif %}
                                     </div>
                                     <div class="room-item-sub">
                                         <span class="status-dot sidebar-dot" data-user="{{ chatroom.name }}"></span>
@@ -667,7 +668,7 @@
                                 <input type="hidden" name="room_type" value="general">
                                 <button type="submit" class="btn btn-outline-primary w-100 h-100 p-4 border-2">
                                     <div class="text-center">
-                                        <span class="d-inline-block mb-3" style="color: var(--clay-fg)">{% include "brand/kazi_mark.html" with size=48 %}</span>
+                                        <span class="d-inline-block mb-3">{% include "brand/kazi_mark.html" with size=48 only %}</span>
                                         <h5 class="mb-1">General Room</h5>
                                         <small class="text-muted">Chat with Kazi AI</small>
                                     </div>
@@ -884,10 +885,9 @@
                 return map[provider] || '#A83C1E';
             }
 
-            // Per-model chip for the picker: the provider's initial on its colour.
             function modelAvatarHtml(m) {
                 if (!m) return '<i class="fas fa-wand-magic-sparkles"></i>';
-                var initial = esc(providerName(m.provider).charAt(0).toUpperCase());
+                var initial = esc(String(providerName(m.provider) || '?').charAt(0).toUpperCase());
                 return '<span class="model-avatar" style="background:' + providerColor(m.provider) + '">' + initial + '</span>';
             }
 

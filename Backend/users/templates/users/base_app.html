@@ -21,7 +21,7 @@
     <div class="app-shell">
         <aside class="app-sidebar" id="appSidebar">
             <a href="{% url 'users:dashboard' %}" class="app-sidebar-brand text-decoration-none">
-                <span class="app-sidebar-brand-mark">{% include "brand/kazi_mark.html" with size=20 %}</span>
+                <span class="app-sidebar-brand-mark">{% include "brand/kazi_mark.html" with size=20 only %}</span>
                 <span>
                     <span class="app-sidebar-brand-name d-block">Kazi</span>
                     <span class="app-sidebar-brand-sub d-block">{{ workspace.name|default:"Workspace" }}</span>

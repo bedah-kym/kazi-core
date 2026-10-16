@@ -3,8 +3,9 @@ from __future__ import annotations
 
 from django.contrib.auth import get_user_model
 from django.templatetags.static import static
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
+from django.utils.html import escapejs
 
 from chatbot.models import Chatroom, Member
 
@@ -38,9 +39,11 @@ class BrandingTests(TestCase):
         self.assertContains(response, static("img/kazi-avatar.svg"))
         self.assertNotContains(response, "robohash.org")
 
-    def test_ai_room_avatar_is_the_kazi_avatar(self):
+    @override_settings(STATIC_URL="/cdn/")
+    def test_ai_room_avatar_follows_static_url(self):
         response = self.client.get(reverse("chatbot:bot-home", kwargs={"room_name": self.room.id}))
-        self.assertEqual(response.context["room_avatar"], static("img/kazi-avatar.svg"))
+        self.assertEqual(response.context["room_avatar"], "/cdn/img/kazi-avatar.svg")
+        self.assertContains(response, f'window.KAZI_AVATAR_URL = "{escapejs("/cdn/img/kazi-avatar.svg")}"')
 
     def test_app_shell_uses_kazi_brand(self):
         self.assert_branded(self.client.get(reverse("users:personas")))

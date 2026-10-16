@@ -34,7 +34,7 @@
 <body>
     <nav>
         <div class="row">
-            <a class="logo" href="/">{% include "brand/kazi_mark.html" with size=22 gate='#A83C1E' %} Kazi.OS</a>
+            <a class="logo" href="/">{% include "brand/kazi_mark.html" with size=22 gate='#A83C1E' only %} Kazi.OS</a>
             <div style="display:flex; gap:10px; flex-wrap:wrap;">
                 <a class="btn btn-ghost" href="{% url 'users:pricing' %}">Pricing</a>
                 <a class="btn btn-primary" href="{% url 'users:trial_apply' %}">Request invite</a>

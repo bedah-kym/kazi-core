@@ -49,7 +49,7 @@ The wordmark is drawn as shapes, so it needs no font.
 | Stone | `#F5F2ED` | Light surfaces and text on dark | |
 | Dust | `#6B6159` / `#A69C92` | Muted text, light / dark | 5.4:1 on Stone / 6.7:1 on Ink |
 
-Ratios are WCAG 2.x relative-luminance contrast. Murram is deliberately deeper and redder than the current app accent (`#D97757` in `claude-theme.css`), which sits in the same orange family Anthropic uses for Claude.
+Ratios are WCAG 2.x relative-luminance contrast. Murram is deliberately deeper and redder than the previous app accent (`#D97757`), which sits in the same orange family Anthropic uses for Claude.
 
 ## Type
 

@@ -1192,29 +1192,8 @@ body.dark-mode .model-avatar-auto {
     font-size: 0.78rem;
 }
 
-.model-avatar-img {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 22px;
-    border-radius: 7px;
-    object-fit: cover;
-    flex-shrink: 0;
-    background: rgba(61, 57, 41, 0.18);
-}
 
-.kazi-badge .model-avatar-img {
-    width: 26px;
-    height: 26px;
-    border-radius: 7px;
-}
 
-.model-selector-avatar .model-avatar-img {
-    width: 20px;
-    height: 20px;
-    border-radius: 6px;
-}
 
 /* ---------- Contact avatars ---------- */
 .chat-list li.room-item .avatar-img {

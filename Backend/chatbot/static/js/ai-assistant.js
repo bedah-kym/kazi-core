@@ -3,8 +3,7 @@
 // ============================================
 
 function kaziIconHtml() {
-    const src = window.KAZI_AVATAR_URL || '/static/img/kazi-avatar.svg';
-    return '<img class="kazi-icon" src="' + src + '" alt="">';
+    return window.KAZI_AVATAR_URL ? '<img class="kazi-icon" src="' + window.KAZI_AVATAR_URL + '" alt="">' : '';
 }
 
 class KaziAssistant {

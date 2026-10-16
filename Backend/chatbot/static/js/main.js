@@ -479,12 +479,10 @@ function createMessage(data, roomId, prepend = false) {
 
     if (isKazi) {
         msgTextTag.classList.add('kazi-message');
-        // Add Badge to the bubble — reflects the selected model's own avatar
-        const badge = document.createElement('div');
-        badge.className = 'kazi-badge';
-        badge.innerHTML = (window.kaziBadgeHtml && window.kaziBadgeHtml())
-            || '<img class="kazi-icon" src="' + (window.KAZI_AVATAR_URL || '/static/img/kazi-avatar.svg') + '" alt=""> <span>Kazi</span>';
-        msgTextTag.insertBefore(badge, msgTextTag.firstChild);
+        // kaziBadgeHtml returns the whole badge element; wrapping it again doubles .kazi-badge styles.
+        const icon = window.KAZI_AVATAR_URL ? '<img class="kazi-icon" src="' + window.KAZI_AVATAR_URL + '" alt=""> ' : '';
+        msgTextTag.insertAdjacentHTML('afterbegin', (window.kaziBadgeHtml && window.kaziBadgeHtml())
+            || '<div class="kazi-badge">' + icon + '<span>Kazi</span></div>');
     }
 
     msgListTag.appendChild(msgDivTag);

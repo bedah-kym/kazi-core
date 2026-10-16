@@ -171,9 +171,9 @@ def _read_hourly_usage(user_id: int, now: Optional[float] = None):
 def _seconds_until_under(limit: int, buckets: List[Any], now: float) -> int:
     """Rough seconds until enough of the hour rolls out to fit under ``limit``.
 
-    Buckets are dropped oldest first (each leaves the window one hour after it
-    started); the first drop that puts the hour under the limit is when a new
-    call can start.
+    Buckets are dropped oldest first. A bucket leaves the window one hour after
+    it ends, the same boundary ``_quota_buckets_for_window`` reads; the first
+    drop that puts the hour under the limit is when a new call can start.
     """
     now = float(now)
     total = sum(tokens for _, tokens in buckets)
@@ -183,7 +183,7 @@ def _seconds_until_under(limit: int, buckets: List[Any], now: float) -> int:
     for start, tokens in sorted(buckets):
         remaining -= tokens
         if remaining < limit:
-            return max(0, int(round(start + QUOTA_WINDOW_SECONDS - now)))
+            return max(0, int(round(start + QUOTA_BUCKET_SECONDS + QUOTA_WINDOW_SECONDS - now)))
     return QUOTA_WINDOW_SECONDS
 
 
@@ -815,14 +815,13 @@ class LLMClient:
         Raises:
             Exception: If token quota exceeded or all LLM providers fail
         """
-        # A single-shot call has nothing resent, so the whole prompt is new
-        # work: estimate it before the request and refuse if it would overrun.
-        estimated_tokens = self._estimate_tokens(system_prompt) + self._estimate_tokens(user_prompt)
-        await self._check_token_quota(estimated_tokens, user_id)
-
         max_tokens = min(max_tokens, getattr(settings, 'LLM_MAX_TOKENS', 700))
         user_prompt = self._truncate(user_prompt)
         system_prompt = self._truncate(system_prompt, is_system=True)
+        # A single-shot call has nothing resent, so the whole prompt is new
+        # work: estimate what is actually sent and refuse if it would overrun.
+        estimated_tokens = self._estimate_tokens(system_prompt) + self._estimate_tokens(user_prompt)
+        await self._check_token_quota(estimated_tokens, user_id)
         cache_key = None
         if self._should_cache(json_mode=json_mode, temperature=temperature):
             # Key from the timestamp-free prompt: the date line changes every

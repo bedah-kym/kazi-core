@@ -29,6 +29,7 @@ from orchestration.llm_client import (
     TokenQuotaExceeded,
     _quota_bucket_key,
     _read_hourly_usage,
+    _seconds_until_under,
 )
 from orchestration.test_agentic_scenarios import (
     _make_llm_response,
@@ -179,7 +180,9 @@ class QuotaEnforcementTests(TransactionTestCase):
             run_async(self.client._check_token_quota(0, user.pk))
         self.assertEqual(ctx.exception.reason, "limit")
         self.assertGreaterEqual(ctx.exception.retry_after_seconds, 0)
-        self.assertLessEqual(ctx.exception.retry_after_seconds, QUOTA_WINDOW_SECONDS)
+        self.assertLessEqual(
+            ctx.exception.retry_after_seconds, QUOTA_WINDOW_SECONDS + QUOTA_BUCKET_SECONDS,
+        )
         self.assertIn("frees up", str(ctx.exception))
         self.assertIn("hour", str(ctx.exception).lower())
 
@@ -518,3 +521,38 @@ class QuotaResumeTests(SimpleTestCase):
         done = next(e for e in events if e.kind == "done")
         self.assertEqual(done.data["end_reason"], "finished")
         self.assertEqual(done.data["budget"], budget_at_stop)
+
+
+class CodeRabbitFollowUpTests(SimpleTestCase):
+    """The stop time matches the read path; single-shot calls count what was sent."""
+
+    def setUp(self):
+        cache.clear()
+        self.addCleanup(cache.clear)
+        self.client = LLMClient()
+
+    def test_retry_time_is_when_the_bucket_really_stops_counting(self):
+        start = 1_000_200.0
+        self.assertEqual(start % QUOTA_BUCKET_SECONDS, 0)
+        self.client._record_token_usage(1000, 88, now=start)
+        for now in (start + 60, start + QUOTA_WINDOW_SECONDS + 100):
+            used, buckets = _read_hourly_usage(88, now=now)
+            self.assertEqual(used, 1000)
+            wait = _seconds_until_under(500, buckets, now)
+            self.assertEqual(_read_hourly_usage(88, now=now + wait - 1)[0], 1000)
+            self.assertEqual(_read_hourly_usage(88, now=now + wait)[0], 0)
+
+    @override_settings(LLM_PROMPT_CHAR_LIMIT=4000, LLM_TOKEN_QUOTA_ENABLED=True)
+    def test_single_shot_call_counts_the_truncated_prompt(self):
+        self.client.hf_key = "test-key"  # nosec B105 - test fixture
+        self.client.anthropic_key = ""
+        self.client.deepseek_key = ""
+        with patch.object(self.client, "_call_huggingface", new=AsyncMock(return_value="ok")), \
+                patch.object(self.client, "_should_cache", return_value=False), \
+                patch.object(self.client, "_provider_order", return_value=["huggingface"]):
+            run_async(self.client.generate_text(
+                system_prompt="system", user_prompt="x" * 400_000, user_id=4343,
+            ))
+        used, _ = _read_hourly_usage(4343)
+        self.assertGreater(used, 0)
+        self.assertLess(used, 2_000)

@@ -93,16 +93,21 @@ single-shot call has nothing resent, so it counts what it actually sent and
 received. Staff and superusers are exempt.
 
 Usage is kept in short-lived buckets and read back over a true **rolling hour**:
-usage older than an hour stops counting even while the user keeps calling. The
-default limit is at least twice the default turn budget, so a user can finish
-one full default turn and start another within the hour.
+usage older than an hour stops counting even while the user keeps calling.
+Recordings are atomic, so concurrent calls (two rooms, parallel delegations,
+several worker processes for one user) are never dropped, and every bucket keeps
+a TTL so it always ages out. The default limit is at least twice the default turn
+budget, so a user can finish one full default turn and start another within the
+hour.
 
 When the hour is full, a call is refused with a message that says the hourly
-limit was reached and roughly when capacity frees up. A turn blocked mid-way
-ends like a budget stop: its state is kept, so the user can reply **more budget**
-(or **continue**) once it frees up and pick up where it stopped without redoing
-finished work. The check **fails closed**: if usage cannot be read, a call that
-needs the quota is refused rather than allowed.
+limit was reached and roughly when capacity frees up. A turn blocked mid-way ends
+like a budget stop: its state is kept, so the user can reply **continue** once it
+frees up and pick up where it stopped without redoing finished work. Resuming a
+quota stop is **not** a budget grant: it never raises the turn's budget or its
+extension count (a turn stopped by its own budget still extends as before). The
+check **fails closed**: if usage cannot be read, a call that needs the quota is
+refused rather than allowed.
 
 ## Memory & context budgets
 

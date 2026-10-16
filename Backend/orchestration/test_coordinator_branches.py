@@ -181,6 +181,25 @@ class CoordinatorBranchTests(SimpleTestCase):
             resume.assert_called_once()
             self.assertTrue(any(c.args[1] == "ok" for c in send_chunk.await_args_list), query)
 
+    def test_a_quota_pause_resumes_without_granting_more_budget(self):
+        budget_resume = MagicMock(side_effect=AssertionError("must not grant budget"))
+        quota_resume = MagicMock(side_effect=_event_stream)
+        result, mocks, send_chunk = self._run(
+            "continue",
+            patches={
+                "orchestration.coordinator.has_pending_budget_state": AsyncMock(return_value=True),
+                "orchestration.coordinator.pending_resume_kind": AsyncMock(return_value="quota"),
+                "orchestration.coordinator.resume_with_more_budget": budget_resume,
+                "orchestration.coordinator.resume_after_quota": quota_resume,
+                "orchestration.coordinator.clear_loop_state": MagicMock(),
+            },
+        )
+        quota_resume.assert_called_once()
+        budget_resume.assert_not_called()
+        sent = "".join(c.args[1] for c in send_chunk.await_args_list)
+        self.assertIn("hourly", sent.lower())
+        self.assertNotIn("more budget", sent.lower())
+
     def test_a_whole_message_stop_ends_the_budget_pause(self):
         for query in ("no", "stop"):
             resume = MagicMock(side_effect=AssertionError("must not resume"))

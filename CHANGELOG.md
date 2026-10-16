@@ -57,11 +57,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   200,000, at least twice the default turn budget, so a user can finish one full
   default turn and start another within the hour. A blocked call is refused with
   a message that says the hourly limit was reached and roughly when capacity
-  frees up; a turn blocked mid-way keeps its state, so the user can reply **more
-  budget** (or **continue**) once it frees up and resume without redoing
-  finished work. The check fails closed: if usage cannot be read, a call that
-  needs the quota is refused. `LLM_TOKEN_QUOTA_ENABLED` and the
-  staff/superuser exemption are unchanged.
+  frees up; a turn blocked mid-way keeps its state, so the user can reply
+  **continue** once it frees up and resume without redoing finished work — this
+  resumption is **not** a budget grant, so it never raises the turn's budget or
+  its extension count. Recordings are atomic, so concurrent calls from two rooms,
+  parallel delegations or several worker processes are never dropped, and every
+  usage bucket keeps a TTL so it ages out of the rolling hour. The check fails
+  closed: if usage cannot be read, a call that needs the quota is refused.
+  `LLM_TOKEN_QUOTA_ENABLED` and the staff/superuser exemption are unchanged.
 - A turn is offered only the tools that can work for that user in that room. An
   action whose connector did not load is no longer offered: a connector skipped
   at boot (`TELEGRAM_BOT_TOKEN`, `SHELL_EXEC_TOKEN` unset, the IntaSend SDK not

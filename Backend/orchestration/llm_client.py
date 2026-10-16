@@ -714,10 +714,14 @@ class LLMClient:
     def _record_token_usage(self, tokens: int, user_id: Optional[int], now: Optional[float] = None) -> None:
         """Add work tokens to the user's rolling-hour quota.
 
-        We never use cache.incr() here: django-redis INCRBY on a fresh key
-        creates it WITHOUT a TTL, so the counter would never expire. Each fixed
-        window has its own key with a bounded TTL, so usage ages out of the
-        rolling hour even while the user keeps calling.
+        The add/incr pair is atomic on the backend, so concurrent recordings
+        (two rooms, parallel delegations, several worker processes) never lose
+        an increment the way a read-modify-write would. ``add`` creates the
+        bucket with its TTL when it is absent; every bucket therefore has a
+        bounded TTL and usage ages out of the rolling hour even while the user
+        keeps calling. A fresh ``incr`` on some backends creates a key WITHOUT
+        a TTL, so a ``touch`` after the increment re-arms it; a counter is never
+        left immortal.
         """
         if not user_id or tokens <= 0:
             return
@@ -727,13 +731,23 @@ class LLMClient:
         cache_key = _quota_bucket_key(user_id, bucket)
         ttl = QUOTA_WINDOW_SECONDS + QUOTA_BUCKET_SECONDS
         try:
-            current = int(cache.get(cache_key) or 0)
-            cache.set(cache_key, current + tokens, ttl)
-        except Exception:
+            if cache.add(cache_key, tokens, ttl):
+                return
             try:
-                cache.set(cache_key, tokens, ttl)
-            except Exception:
-                logger.warning("Could not record token usage for user %s", user_id)
+                cache.incr(cache_key, tokens)
+            except ValueError:
+                # The bucket expired between add() and incr(); recreate it, and
+                # with it the TTL that keeps the counter from living forever.
+                if cache.add(cache_key, tokens, ttl):
+                    return
+                cache.incr(cache_key, tokens)
+        except Exception:
+            logger.warning("Could not record token usage for user %s", user_id)
+            return
+        try:
+            cache.touch(cache_key, ttl)
+        except Exception:
+            pass
 
     def record_work_tokens(self, tokens: int, user_id: Optional[int]) -> None:
         """Record work tokens for a user against the hourly quota (T-F3b).

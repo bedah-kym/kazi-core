@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A turn now runs under **one work-token budget the model can see** (T-F3). The
+  budget counts what the model generates plus the input it newly reads — the
+  system prompt, tool list and history resent on every call are no longer
+  charged, so a long conversation stops burning the budget just by being
+  resent. It replaces the separate iteration, tool-call and shell-session caps
+  as the thing that ends a normal turn, and nothing sizes it from the kind of
+  task. The bound is configurable (`AGENT_TURN_TOKEN_BUDGET`, largest value
+  `AGENT_TURN_TOKEN_BUDGET_MAX`); the all-or-nothing "Enforce agent budget
+  caps" switch is gone, and an install where it was off maps to the largest
+  bound. The model is told what is left on every call after the first and can
+  end a turn with "I need more budget to finish" (the `request_more_budget`
+  tool); the user grants more with the whole-message reply **more budget** and
+  the work resumes where it stopped, without repeating a finished step.
+  Delegated runs get a share of what the parent has left. Hard runaway
+  backstops (10k iterations, 10k tool calls, a 30-minute wall clock) stay far
+  above the bound, and the native web-search tool is rebuilt from the live
+  daily allowance on every request so one turn cannot exceed the daily limit.
 - A turn is offered only the tools that can work for that user in that room. An
   action whose connector did not load is no longer offered: a connector skipped
   at boot (`TELEGRAM_BOT_TOKEN`, `SHELL_EXEC_TOKEN` unset, the IntaSend SDK not

@@ -40,23 +40,33 @@ logger = logging.getLogger(__name__)
 #  Constants                                                                  #
 # --------------------------------------------------------------------------- #
 
-MAX_ITERATIONS = 10
-MAX_TOOL_CALLS = 15
+# T-F3: one work-token budget per turn. "Work tokens" count what the model
+# generates plus the input it newly reads (a new user message, tool results,
+# anything appended since the previous call). The system prompt, the tool list
+# and the history that are resent on every call are *not* work, so a long
+# conversation no longer spends the budget just by being resent.
+#
+# These replace the old separate iteration, tool-call, shell-session and token
+# caps as the thing that ends a normal turn. Remaining constants are hard
+# runaway backstops, far above the bound; a healthy turn never reaches them.
+DEFAULT_TURN_TOKEN_BUDGET = 50000
+# The largest bound an operator may configure; a legacy install whose operator
+# had the old caps switch off maps here, so it never silently shrinks.
+DEFAULT_TURN_TOKEN_BUDGET_MAX = 500000
+HARD_CAP_ITERATIONS = 10000
+HARD_CAP_TOOL_CALLS = 10000
+HARD_TURN_TIMEOUT_SECONDS = 1800  # wall-clock runaway guard (30 min)
+TURN_TOKEN_WARNING_RATIO = 0.80  # tell the user once we pass this share
+# A delegated run gets a share of what its parent has left, never a fixed table.
+DELEGATED_BUDGET_SHARE = 0.5
+MIN_DELEGATED_BUDGET = 5000
 # Anthropic returns stop_reason "pause_turn" while a server-side tool (its web
 # search) is still running; the documented contract is to send the paused turn
 # back unchanged so the model can finish. A provider that pauses forever must
 # still end, so cap the run of consecutive pauses.
 MAX_CONSECUTIVE_PAUSES = 3
-# Backstop when the install-level caps toggle is OFF (Settings > Capabilities):
-# "unlimited" means 10k, never infinite — a runaway loop must always terminate.
-HARD_CAP_ITERATIONS = 10000
-HARD_CAP_TOOL_CALLS = 10000
-# D9: a session that touches the shell gets a modestly higher tool-call cap so
-# it can chain a real investigation; the hard backstop above is unchanged.
-SHELL_SESSION_MAX_TOOL_CALLS = 25
 MAX_RETRIES_PER_TOOL = 2
 TOOL_TIMEOUT_SECONDS = 30
-LOOP_TIMEOUT_SECONDS = 120
 RETRY_BACKOFF_CAP_SECONDS = 300
 CIRCUIT_BREAKER_FAILURE_THRESHOLD = 3
 CIRCUIT_BREAKER_COOLDOWN_SECONDS = 60
@@ -68,9 +78,8 @@ AGENT_LOOP_APPROVAL_KIND = "agent_loop"
 DAILY_SEARCH_LIMIT = 10
 MAX_SEARCHES_PER_REQUEST = 5
 
-# Token budget per loop
-LOOP_TOKEN_BUDGET = 50000  # hard cap per single agent loop invocation
-LOOP_TOKEN_WARNING_RATIO = 0.80  # warn user at 80%
+# The meta-tool the model calls to ask the user for more of the turn's budget.
+REQUEST_MORE_BUDGET_TOOL = "request_more_budget"
 
 
 # --------------------------------------------------------------------------- #
@@ -90,7 +99,7 @@ class LoopState:
     messages: List[Dict[str, Any]]
     iteration: int = 0
     tool_call_count: int = 0
-    tokens_used: int = 0  # cumulative input + output tokens this loop
+    tokens_used: int = 0  # cumulative *work* tokens this turn (T-F3)
     start_time: float = 0.0
     tool_call_log: List[Dict[str, Any]] = field(default_factory=list)
     retry_counts: Dict[str, int] = field(default_factory=dict)  # tool_name -> retry count
@@ -98,6 +107,14 @@ class LoopState:
     pending_tool: Optional[Dict[str, Any]] = None
     pending_tier: Optional[str] = None
     budget_warning_sent: bool = False
+    # T-F3: the single work-token bound for this turn, the baseline total input
+    # of the previous call (so only newly-read input counts), how the turn
+    # ended, and whether it is paused waiting for the user to grant more budget.
+    token_budget: int = 0
+    prev_input_tokens: int = 0
+    end_reason: str = ""
+    awaiting_budget: bool = False
+    budget_extensions: int = 0
     # v0.7 (#170): set once output from an untrusted source (shell, web
     # search) enters context. Tainted runs escalate external-write and
     # credential-scoped actions to a durable approval one tier up.
@@ -125,6 +142,11 @@ def save_loop_state(room_id: int, user_id: int, state: LoopState) -> None:
         "pending_tier": state.pending_tier,
         "budget_warning_sent": state.budget_warning_sent,
         "tainted": state.tainted,
+        "token_budget": state.token_budget,
+        "prev_input_tokens": state.prev_input_tokens,
+        "end_reason": state.end_reason,
+        "awaiting_budget": state.awaiting_budget,
+        "budget_extensions": state.budget_extensions,
     }
     cache.set(
         _state_key(room_id, user_id),
@@ -153,6 +175,11 @@ def load_loop_state(room_id: int, user_id: int) -> Optional[LoopState]:
         pending_tier=data.get("pending_tier"),
         budget_warning_sent=data.get("budget_warning_sent", False),
         tainted=bool(data.get("tainted", False)),
+        token_budget=data.get("token_budget", 0),
+        prev_input_tokens=data.get("prev_input_tokens", 0),
+        end_reason=data.get("end_reason", ""),
+        awaiting_budget=bool(data.get("awaiting_budget", False)),
+        budget_extensions=data.get("budget_extensions", 0),
     )
     return state
 
@@ -340,15 +367,53 @@ def _shell_approval_basis(tc: Dict[str, Any], preferences: Optional[Dict[str, An
     return str(risk.get("approval_basis") or "")
 
 
-def _session_tool_call_cap(state: LoopState, caps_enforced: bool) -> int:
-    """D9: a shell-touching session gets a modestly higher tool-call cap."""
+def _turn_token_budget(caps_enforced: bool) -> int:
+    """The single per-turn work-token bound for this install (T-F3).
+
+    The bound is configurable (``AGENT_TURN_TOKEN_BUDGET``) and clamped to the
+    largest bound an operator may choose (``AGENT_TURN_TOKEN_BUDGET_MAX``). A
+    legacy install whose operator once turned the old caps switch off maps to
+    the largest bound, so it never silently gets a small budget. Nothing here
+    sizes the bound from the kind of task.
+    """
+    try:
+        normal = int(getattr(settings, "AGENT_TURN_TOKEN_BUDGET", DEFAULT_TURN_TOKEN_BUDGET))
+    except (TypeError, ValueError):
+        normal = DEFAULT_TURN_TOKEN_BUDGET
+    try:
+        ceiling = int(getattr(settings, "AGENT_TURN_TOKEN_BUDGET_MAX", DEFAULT_TURN_TOKEN_BUDGET_MAX))
+    except (TypeError, ValueError):
+        ceiling = DEFAULT_TURN_TOKEN_BUDGET_MAX
+    if ceiling < 1:
+        ceiling = DEFAULT_TURN_TOKEN_BUDGET_MAX
     if not caps_enforced:
-        return HARD_CAP_TOOL_CALLS
-    shell_used = any(
-        isinstance(entry, dict) and entry.get("name") in _SHELL_TOOL_NAMES
-        for entry in (state.tool_call_log or [])
-    )
-    return SHELL_SESSION_MAX_TOOL_CALLS if shell_used else MAX_TOOL_CALLS
+        return ceiling
+    if normal < 1:
+        normal = DEFAULT_TURN_TOKEN_BUDGET
+    return min(normal, ceiling)
+
+
+def _delegated_budget(state: "LoopState") -> int:
+    """The work-token budget a delegated run may spend (T-F3).
+
+    A share of what the parent has left, with a floor, so a sub-task can do
+    real work but never outspend its parent's remaining turn.
+    """
+    remaining = max(0, state.token_budget - state.tokens_used)
+    return max(MIN_DELEGATED_BUDGET, int(remaining * DELEGATED_BUDGET_SHARE))
+
+
+def _meta_tool_context(
+    tool_name: str,
+    context: Dict[str, Any],
+    state: "LoopState",
+) -> Dict[str, Any]:
+    """Context for a meta-tool call, granting a delegated run its budget share."""
+    if tool_name != "delegate_task":
+        return context
+    child = dict(context)
+    child["sub_agent_budget"] = _delegated_budget(state)
+    return child
 
 
 def _is_policy_block(output: Any) -> bool:
@@ -604,6 +669,110 @@ def _get_response_tokens(response: Dict[str, Any]) -> int:
     """Total tokens used in a single LLM response."""
     usage = response.get("usage", {})
     return int(usage.get("input_tokens", 0)) + int(usage.get("output_tokens", 0))
+
+
+def _total_input_tokens(response: Dict[str, Any]) -> int:
+    """Every input token the provider processed for one call.
+
+    Anthropic splits the prompt across ``input_tokens`` (uncached),
+    ``cache_creation_input_tokens`` and ``cache_read_input_tokens``; the sum is
+    the whole prompt regardless of cache state. OpenAI-compatible providers
+    report the whole prompt in ``input_tokens``, so the extra fields are zero.
+    """
+    usage = response.get("usage", {}) or {}
+    return (
+        int(usage.get("input_tokens", 0) or 0)
+        + int(usage.get("cache_read_input_tokens", 0) or 0)
+        + int(usage.get("cache_creation_input_tokens", 0) or 0)
+    )
+
+
+def _work_tokens(response: Dict[str, Any], prev_input_tokens: int) -> Tuple[int, int]:
+    """Work done by one call: generated tokens + newly-read input tokens (T-F3).
+
+    The resent prefix — system prompt, tools and history sent again on every
+    call — is not work, so only the *growth* in total input since the previous
+    call counts. The first call of a turn (``prev_input_tokens == 0``)
+    establishes the baseline and adds no input. Returns
+    ``(work_tokens, total_input_tokens)``; the second value is the next
+    baseline. Provider-agnostic: it reads only the reported input totals.
+    """
+    usage = response.get("usage", {}) or {}
+    output = int(usage.get("output_tokens", 0) or 0)
+    total_input = _total_input_tokens(response)
+    new_input = max(0, total_input - prev_input_tokens) if prev_input_tokens else 0
+    return output + new_input, total_input
+
+
+def _harness_budget_note(used: int, total: int) -> str:
+    """A short, prefix-safe note telling the model what it has left (T-F3)."""
+    remaining = max(0, total - used)
+    return (
+        f"[Harness: turn budget {used}/{total} work tokens used; {remaining} left. "
+        f"If you cannot finish within it, call {REQUEST_MORE_BUDGET_TOOL} to ask the "
+        "user for more instead of stopping silently.]"
+    )
+
+
+def _with_budget_note(
+    content_blocks: List[Dict[str, Any]],
+    state: "LoopState",
+) -> List[Dict[str, Any]]:
+    """Append the harness budget note to a user message of tool results.
+
+    Appended, never prepended to the system prompt, so the cached prompt prefix
+    (system + tools) is untouched and the model still sees its own results in
+    order.
+    """
+    if state.token_budget:
+        content_blocks = list(content_blocks)
+        content_blocks.append({
+            "type": "text",
+            "text": _harness_budget_note(state.tokens_used, state.token_budget),
+        })
+    return content_blocks
+
+
+def _append_note_to_last_user(messages: List[Dict[str, Any]], note: str) -> None:
+    """Append a harness note as a text block on the newest user message.
+
+    Keeping it on the existing user message (never a new same-role message, and
+    never the system prompt) keeps the message contract valid and leaves the
+    cached prompt prefix untouched.
+    """
+    for message in reversed(messages):
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, list):
+            content.append({"type": "text", "text": note})
+        else:
+            message["content"] = [{"type": "text", "text": str(content or "")}, {"type": "text", "text": note}]
+        return
+
+
+def _rebuild_search_tool(
+    tools: List[Dict[str, Any]],
+    user_id: Optional[int],
+    user_location: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    """Rebuild the native search tool from the live allowance, or drop it (T-F3).
+
+    The allowance is read at the start of every request, not once at the start
+    of the turn, so one turn can no longer exceed the daily limit. Only acts
+    when a search tool was already offered; a tool list without one is returned
+    unchanged.
+    """
+    if not any(isinstance(t, dict) and t.get("name") == "web_search" for t in tools):
+        return tools
+    rebuilt = [
+        t for t in tools
+        if not (isinstance(t, dict) and t.get("name") == "web_search")
+    ]
+    fresh = _build_web_search_tool(user_id, user_location)
+    if fresh:
+        rebuilt.append(fresh)
+    return rebuilt
 
 
 # Max characters for a single tool result injected into the conversation
@@ -942,12 +1111,35 @@ META_TOOL_DEFINITIONS = [
             "required": ["name", "description", "sequence"],
         },
     },
+    {
+        "name": REQUEST_MORE_BUDGET_TOOL,
+        "description": (
+            "Ask the user for more budget when you cannot finish this turn within "
+            "the work-token budget the harness shows you. Use it *instead of* "
+            "stopping silently: also write your normal reply saying what you have "
+            "done and what is left. The user can then grant more and you continue "
+            "from where you stopped. Do not use it on a turn you can finish."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": "What is left to do and why it needs more budget.",
+                },
+            },
+            "required": ["reason"],
+        },
+    },
 ]
 
-# Sub-agent limits (tighter than parent)
-SUB_AGENT_MAX_ITERATIONS = 5
-SUB_AGENT_MAX_TOOL_CALLS = 8
+# A delegated run is bounded by the same work-token rule as its parent: the
+# parent grants a share of what it has left via ``context["sub_agent_budget"]``.
+# The constants below are fallbacks only — for a run spawned without a parent
+# budget, and a tool-call ceiling so a degenerate provider whose results add no
+# tokens cannot spin.
 SUB_AGENT_TOKEN_BUDGET = 20000
+SUB_AGENT_MAX_TOOL_CALLS = 8
 
 
 async def _execute_meta_tool(
@@ -966,6 +1158,13 @@ async def _execute_meta_tool(
         )
     elif tool_name == "handoff_to_workflow":
         return await _create_workflow_handoff(tool_input, context)
+    elif tool_name == REQUEST_MORE_BUDGET_TOOL:
+        # Intercepted by the main loop before execution; reaching here means it
+        # was replayed outside that path.
+        return {
+            "status": "error",
+            "message": "The budget request was already handled by the harness.",
+        }
     elif tool_name == "list_skills":
         return _list_skills()
     elif tool_name == "load_skill":
@@ -1064,8 +1263,7 @@ async def _execute_scoped_tool_calls(
     blow far past the limit. Returns (result_blocks, capped).
     """
     result_blocks = []
-    caps_enforced = context.get("caps_enforced", True)
-    effective_cap = tool_call_cap or (SUB_AGENT_MAX_TOOL_CALLS if caps_enforced else HARD_CAP_TOOL_CALLS)
+    effective_cap = tool_call_cap or SUB_AGENT_MAX_TOOL_CALLS
     # A sub-agent inherits the parent's taint and taints itself the same way,
     # so delegation can never be a way around the tainted-egress gate.
     tainted = bool(isinstance(preferences, dict) and preferences.get("_shell_tainted")) or any(
@@ -1142,6 +1340,8 @@ async def _run_sub_agent(
         scoped_tools = [t for t in parent_tools if t["name"] in allowed]
     else:
         scoped_tools = parent_tools
+    # A sub-agent cannot ask the user for budget; only its parent can.
+    scoped_tools = [t for t in scoped_tools if t.get("name") != REQUEST_MORE_BUDGET_TOOL]
 
     # Run a sub-loop with tighter limits
     llm = get_llm_client()
@@ -1157,35 +1357,47 @@ async def _run_sub_agent(
     completed = False
     consecutive_pauses = 0
 
-    caps_enforced = context.get("caps_enforced", True)
-    max_iterations = SUB_AGENT_MAX_ITERATIONS if caps_enforced else HARD_CAP_ITERATIONS
-    # The cap is granted by the harness (a handoff budget, via context). Tool
-    # input is written by the model and never sets it.
+    # The work-token budget is a share of the parent's remaining (or a handoff's
+    # grant), handed to us through context. A run spawned without one falls back
+    # to the default. Tool input is written by the model and never sets any of
+    # this. The tool-call ceiling is a secondary guard so a degenerate provider
+    # whose results add no tokens cannot spin.
+    try:
+        sub_budget = int(context.get("sub_agent_budget") or 0)
+    except (TypeError, ValueError, OverflowError):
+        sub_budget = 0
+    if sub_budget <= 0:
+        sub_budget = SUB_AGENT_TOKEN_BUDGET
     try:
         granted_cap = int(context.get("sub_agent_tool_call_cap") or 0)
     except (TypeError, ValueError, OverflowError):
         granted_cap = 0
-    tool_call_cap = min(granted_cap, HARD_CAP_TOOL_CALLS) if granted_cap > 0 else (
-        SUB_AGENT_MAX_TOOL_CALLS if caps_enforced else HARD_CAP_TOOL_CALLS
-    )
+    tool_call_cap = min(granted_cap, HARD_CAP_TOOL_CALLS) if granted_cap > 0 else SUB_AGENT_MAX_TOOL_CALLS
     persona = await _resolve_persona(context.get("room_id"), context.get("user_id"))
+    prev_input_tokens = 0
 
-    while iteration < max_iterations:
+    while iteration < HARD_CAP_ITERATIONS:
         if len(sub_tool_log) >= tool_call_cap:
             stopped_reason = "max_tool_calls"
             break
 
-        if caps_enforced and tokens_used >= SUB_AGENT_TOKEN_BUDGET:
+        if tokens_used >= sub_budget:
             stopped_reason = "token_budget"
             break
 
         iteration += 1
 
+        # Rebuild the native search tool from the live allowance on every call
+        # so a delegated run cannot exceed the daily limit either (T-F3).
+        tools_this_call = (
+            _rebuild_search_tool(scoped_tools, context.get("user_id"))
+            if scoped_tools else scoped_tools
+        )
         try:
             response = await llm.create_message(
                 messages=sub_messages,
                 system=parent_system,
-                tools=scoped_tools if scoped_tools else None,
+                tools=tools_this_call if tools_this_call else None,
                 temperature=0.3,
                 max_tokens=4096,
                 user_id=context.get("user_id"),
@@ -1197,7 +1409,8 @@ async def _run_sub_agent(
         content_blocks = response.get("content", [])
         stop_reason = response.get("stop_reason", "end_turn")
         sub_messages.append({"role": "assistant", "content": content_blocks})
-        tokens_used += _get_response_tokens(response)
+        work, prev_input_tokens = _work_tokens(response, prev_input_tokens)
+        tokens_used += work
         searches = _count_search_uses(response)
         if searches > 0:
             # A server-side search brings in untrusted text; the main loop taints on it too.
@@ -1407,6 +1620,7 @@ async def run_agent_loop(
     history_tainted: bool = False,
     resumed_state: Optional[LoopState] = None,
     confirmed_tool: bool = False,
+    budget_extended: bool = False,
 ) -> AsyncGenerator[AgentEvent, None]:
     """
     Run the agentic loop. Yields AgentEvent objects for the consumer to handle.
@@ -1419,8 +1633,9 @@ async def run_agent_loop(
         memory_summary: Entity/action memory summary.
         environment_block: Where commands run (only sent with run_command).
         history: Previous conversation messages in Anthropic format.
-        resumed_state: If resuming after a confirmation pause.
+        resumed_state: If resuming after a confirmation or budget pause.
         confirmed_tool: True if the user just confirmed a pending tool.
+        budget_extended: True if the user just granted the turn more budget.
     """
     llm = get_llm_client()
     if user_message:
@@ -1430,15 +1645,16 @@ async def run_agent_loop(
     room_id = context.get("room_id")
     user_caps = preferences or {}
 
-    # Install-level kill switch (Settings > Capabilities). Sub-agents inherit
-    # it via context so delegate_task never re-reads the flag.
+    # One work-token bound per turn (T-F3). The old all-or-nothing caps switch
+    # no longer turns caps off; a legacy install where it was off maps to the
+    # largest bound (_turn_token_budget). Sub-agents inherit the flag via
+    # context so delegate_task never re-reads it.
     caps_enforced = context.get(
         "caps_enforced",
         await sync_to_async(enforce_agent_caps)(user_id),
     )
     context["caps_enforced"] = caps_enforced
-    max_iterations = MAX_ITERATIONS if caps_enforced else HARD_CAP_ITERATIONS
-    timeout_cap = LOOP_TIMEOUT_SECONDS if caps_enforced else None
+    default_budget = _turn_token_budget(caps_enforced)
 
     # Claude native web search is an Anthropic server-side tool. No other
     # provider has one. `search_info` (SearchConnector) is a real search only
@@ -1473,9 +1689,14 @@ async def run_agent_loop(
     else:
         tools.extend(META_TOOL_DEFINITIONS)
 
+    # The budget tool is harness machinery, not a room action, so it is offered
+    # even under a persona scope that would filter the other meta-tools (T-F3).
+    if not any(t.get("name") == REQUEST_MORE_BUDGET_TOOL for t in tools):
+        tools.append(next(t for t in META_TOOL_DEFINITIONS if t["name"] == REQUEST_MORE_BUDGET_TOOL))
+
     web_search_tool = None
+    user_location_hint = None
     if native_search:
-        user_location_hint = None
         if preferences:
             loc = preferences.get("location")
             tz = preferences.get("timezone")
@@ -1508,6 +1729,8 @@ async def run_agent_loop(
         state = resumed_state
         state.start_time = time.monotonic()
         state.paused_for_confirmation = False
+        # A state saved before the single bound existed has no budget yet.
+        state.token_budget = state.token_budget or default_budget
         # Another member may have tainted the room while this run was paused.
         state.tainted = state.tainted or await sync_to_async(_conversation_tainted)(room_id)
 
@@ -1520,7 +1743,8 @@ async def run_agent_loop(
             # The main path hands it the turn's taint, so a delegated run
             # paused in a tainted turn does not resume as if it were clean.
             result = await _execute_meta_tool(
-                pending["name"], pending["input"], context,
+                pending["name"], pending["input"],
+                _meta_tool_context(pending["name"], context, state),
                 _taint_preferences(preferences, state.tainted), system, tools,
             )
         else:
@@ -1554,15 +1778,31 @@ async def run_agent_loop(
             pass
         await _record_receipt(pending["name"], pending["input"], result, context, basis="human")
 
-        # Append tool result to messages
+        # Append tool result to messages (with the live budget note).
         state.messages.append({
             "role": "user",
-            "content": [{
+            "content": _with_budget_note([{
                 "type": "tool_result",
                 "tool_use_id": pending["id"],
                 "content": _sanitize_tool_result(json.dumps(result, default=str)),
-            }],
+            }], state),
         })
+
+    elif resumed_state and budget_extended:
+        # The user granted more budget after the model asked for it. Continue
+        # from exactly where the turn stopped: the tool log is intact, so no
+        # finished call repeats. The bound grows by one base budget per grant.
+        state = resumed_state
+        state.start_time = time.monotonic()
+        state.awaiting_budget = False
+        state.budget_extensions += 1
+        state.token_budget = (state.token_budget or default_budget) + default_budget
+        state.tainted = state.tainted or await sync_to_async(_conversation_tainted)(room_id)
+        _append_note_to_last_user(
+            state.messages,
+            "[Harness: the user granted more budget. Continue from where you "
+            "stopped; do not repeat work already done.]",
+        )
 
     else:
         # Fresh loop
@@ -1592,6 +1832,7 @@ async def run_agent_loop(
             messages=messages,
             start_time=time.monotonic(),
             tainted=(history_tainted or await sync_to_async(_conversation_tainted)(room_id)),
+            token_budget=default_budget,
         )
 
     # Track seen tool calls for dedup
@@ -1605,21 +1846,32 @@ async def run_agent_loop(
     # ------------------------------------------------------------------ #
     #  Main ReAct loop                                                    #
     # ------------------------------------------------------------------ #
-    while state.iteration < max_iterations:
-        # Timeout check (hard backstop only when caps are enforced)
+    while state.iteration < HARD_CAP_ITERATIONS:
+        # Wall-clock runaway backstop; a healthy turn ends on its budget first.
         elapsed = time.monotonic() - state.start_time
-        if timeout_cap is not None and elapsed > timeout_cap:
+        if elapsed > HARD_TURN_TIMEOUT_SECONDS:
+            state.end_reason = "backstop"
             yield AgentEvent("error", {
                 "message": "I ran out of time on this request. "
                            "Here's what I managed so far.",
             })
             break
 
-        # Tool call budget check (D9: shell sessions get a higher cap)
-        if state.tool_call_count >= _session_tool_call_cap(state, caps_enforced):
+        # Tool-call runaway backstop. The turn's budget normally ends it first.
+        if state.tool_call_count >= HARD_CAP_TOOL_CALLS:
+            state.end_reason = "backstop"
             yield AgentEvent("error", {
-                "message": "I've reached the maximum number of tool calls "
-                           "for this request.",
+                "message": "I've reached the safety limit on tool calls for "
+                           "this request. Here's what I managed so far.",
+            })
+            break
+
+        # The one bound: work done this turn, in work tokens (T-F3).
+        if state.tokens_used >= state.token_budget:
+            state.end_reason = "budget"
+            yield AgentEvent("error", {
+                "message": "I've used up this turn's budget. Here's what I "
+                           "managed so far; nothing further was run.",
             })
             break
 
@@ -1628,23 +1880,21 @@ async def run_agent_loop(
         # Emit thinking event so frontend shows reasoning in timeline
         yield AgentEvent("thinking", {"text": ""})
 
-        # Token budget check
-        if caps_enforced and state.tokens_used >= LOOP_TOKEN_BUDGET:
-            yield AgentEvent("error", {
-                "message": "I've used up my thinking budget for this request. "
-                           "Here's what I managed so far.",
-            })
-            break
-
         # ---- Call LLM ------------------------------------------------ #
         # No keyword router picks the model: the room's chosen model when one is
         # set, else the operator's default provider resolves its own default.
+        # The native search tool is rebuilt from the live daily allowance on
+        # every request, so one turn cannot exceed the limit (T-F3).
+        call_tools = (
+            _rebuild_search_tool(tools, user_id, user_location_hint)
+            if native_search else tools
+        )
         override_provider, override_model = _resolve_model_override(room_id)
         try:
             response = await llm.create_message(
                 messages=state.messages,
                 system=system,
-                tools=tools if tools else None,
+                tools=call_tools if call_tools else None,
                 temperature=0.3,
                 max_tokens=4096,
                 user_id=user_id,
@@ -1654,24 +1904,25 @@ async def run_agent_loop(
             )
         except Exception as exc:
             logger.error("Agent loop LLM call failed: %s", exc, exc_info=True)
+            state.end_reason = "error"
             yield AgentEvent("error", {"message": f"LLM error: {exc}"})
             break
 
         content_blocks = response.get("content", [])
         stop_reason = response.get("stop_reason", "end_turn")
 
-        # Track token usage
-        iter_tokens = _get_response_tokens(response)
-        state.tokens_used += iter_tokens
+        # Count only work: generated tokens plus the input newly read since the
+        # previous call. The resent prefix is not charged (T-F3).
+        iter_work, state.prev_input_tokens = _work_tokens(response, state.prev_input_tokens)
+        state.tokens_used += iter_work
 
         if (
-            caps_enforced
-            and not state.budget_warning_sent
-            and state.tokens_used >= LOOP_TOKEN_BUDGET * LOOP_TOKEN_WARNING_RATIO
+            not state.budget_warning_sent
+            and state.tokens_used >= state.token_budget * TURN_TOKEN_WARNING_RATIO
         ):
             state.budget_warning_sent = True
             yield AgentEvent("text_delta", {
-                "text": "\n\n*(Running low on my thinking budget for this request.)*\n\n",
+                "text": "\n\n*(Running low on this request's budget.)*\n\n",
             })
 
         # Track web search usage
@@ -1696,9 +1947,11 @@ async def run_agent_loop(
 
         # ---- If LLM is done talking, exit the loop ------------------- #
         if stop_reason == "end_turn":
+            state.end_reason = "finished"
             break
 
         if stop_reason == "max_tokens":
+            state.end_reason = "error"
             yield AgentEvent("error", {
                 "message": "My response was cut short due to length limits.",
             })
@@ -1708,6 +1961,52 @@ async def run_agent_loop(
         if stop_reason == "tool_use":
             consecutive_pauses = 0
             tool_calls = _extract_tool_calls(content_blocks)
+
+            # The model asking for more budget ends the turn honestly: answer
+            # every call so the message contract stays valid, save the state,
+            # and wait for the user. Nothing else in the batch runs (T-F3).
+            if any(tc["name"] == REQUEST_MORE_BUDGET_TOOL for tc in tool_calls):
+                state.messages.append({
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tc["id"],
+                            "content": (
+                                "Budget request received; the user has been asked. "
+                                "Waiting for their reply."
+                                if tc["name"] == REQUEST_MORE_BUDGET_TOOL
+                                else "Skipped: the model asked for more budget first."
+                            ),
+                            "is_error": tc["name"] != REQUEST_MORE_BUDGET_TOOL,
+                        }
+                        for tc in tool_calls
+                    ],
+                })
+                state.awaiting_budget = True
+                state.end_reason = "asked_for_more"
+                if room_id and user_id:
+                    save_loop_state(room_id, user_id, state)
+                if not text:
+                    reason = next(
+                        (tc["input"].get("reason") for tc in tool_calls
+                         if tc["name"] == REQUEST_MORE_BUDGET_TOOL
+                         and isinstance(tc.get("input"), dict)
+                         and tc["input"].get("reason")),
+                        "",
+                    ) or "I need more budget to finish this."
+                    yield AgentEvent("text_delta", {"text": reason})
+                record_event("agent_budget_requested", {
+                    "user_id": user_id,
+                    "room_id": room_id,
+                    "used": state.tokens_used,
+                    "budget": state.token_budget,
+                })
+                yield AgentEvent("budget_request", {
+                    "used": state.tokens_used,
+                    "budget": state.token_budget,
+                })
+                break
 
             # Re-read room autonomy each iteration so a mid-run arm/revoke/expiry
             # is honored (the coordinator injects this refresher).
@@ -1778,7 +2077,8 @@ async def run_agent_loop(
                         # Meta-tools use their own executor
                         if tc["name"] in _META_TOOL_NAMES:
                             result = await _execute_meta_tool(
-                                tc["name"], tc["input"], context,
+                                tc["name"], tc["input"],
+                                _meta_tool_context(tc["name"], context, state),
                                 _taint_preferences(preferences, run_tainted), system, tools,
                             )
                         else:
@@ -1913,7 +2213,7 @@ async def run_agent_loop(
             if tool_result_blocks:
                 state.messages.append({
                     "role": "user",
-                    "content": tool_result_blocks,
+                    "content": _with_budget_note(tool_result_blocks, state),
                 })
 
             # If the safety policy blocked several tools in a row, stop — don't
@@ -1956,8 +2256,13 @@ async def run_agent_loop(
             break
 
     # ---- Loop finished ----------------------------------------------- #
-    if room_id and user_id:
+    # A budget pause keeps its state so the user can extend it; every other
+    # ending clears it.
+    if room_id and user_id and not state.awaiting_budget:
         clear_loop_state(room_id, user_id)
+
+    if not state.end_reason:
+        state.end_reason = "finished"
 
     elapsed = round(time.monotonic() - state.start_time, 2)
 
@@ -1990,6 +2295,10 @@ async def run_agent_loop(
         "iterations": state.iteration,
         "tool_calls": state.tool_call_count,
         "tokens_used": state.tokens_used,
+        "budget": state.token_budget,
+        "budget_used": state.tokens_used,
+        "end_reason": state.end_reason,
+        "budget_extensions": state.budget_extensions,
         "elapsed": elapsed,
         "tools_used": list({e["name"] for e in state.tool_call_log}),
         "transcript": transcript,
@@ -1999,6 +2308,9 @@ async def run_agent_loop(
         "iterations": state.iteration,
         "tool_calls": state.tool_call_count,
         "elapsed": elapsed,
+        "budget": state.token_budget,
+        "budget_used": state.tokens_used,
+        "end_reason": state.end_reason,
     })
 
 
@@ -2089,6 +2401,47 @@ async def resume_after_confirmation(
         environment_block=environment_block,
         resumed_state=state,
         confirmed_tool=True,
+    ):
+        yield event
+
+
+async def has_pending_budget_state(room_id: int, user_id: int) -> bool:
+    """Whether a turn is paused waiting for the user to grant more budget."""
+    state = await sync_to_async(load_loop_state)(room_id, user_id)
+    return bool(state and state.awaiting_budget)
+
+
+async def resume_with_more_budget(
+    *,
+    context: Dict[str, Any],
+    preferences: Optional[Dict[str, Any]] = None,
+    context_prompt: str = "",
+    memory_summary: str = "",
+    environment_block: str = "",
+) -> AsyncGenerator[AgentEvent, None]:
+    """Continue a turn whose model asked for more budget, from where it stopped.
+
+    The saved loop state carries the conversation and the tool log, so a tool
+    call that already finished is not repeated; only the bound grows.
+    """
+    room_id = context.get("room_id")
+    user_id = context.get("user_id")
+    state = await sync_to_async(load_loop_state)(room_id, user_id)
+    if not state or not state.awaiting_budget:
+        yield AgentEvent("error", {
+            "message": "There is no paused turn waiting for more budget.",
+        })
+        return
+    clear_loop_state(room_id, user_id)
+    async for event in run_agent_loop(
+        user_message="",  # Not used on resume
+        context=context,
+        preferences=preferences,
+        context_prompt=context_prompt,
+        memory_summary=memory_summary,
+        environment_block=environment_block,
+        resumed_state=state,
+        budget_extended=True,
     ):
         yield event
 

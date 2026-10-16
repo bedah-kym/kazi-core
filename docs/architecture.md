@@ -46,13 +46,20 @@ routing pipeline to plan and act on the same message twice. A multi-step request
 the agent composes is handed to `execute_adhoc_workflow`, which starts and runs
 the ad-hoc workflow.
 
-Safety limits (on by default; an operator can switch them off in
-Settings > Capabilities):
-- Max 10 iterations per loop
-- Max 15 tool calls per loop
-- 2-minute loop timeout, 30 seconds per tool
-- 50k token budget
-- 2 retries per failed tool, with exponential backoff and a per-service circuit breaker
+One bound ends a normal turn — a **work-token budget** the model can see:
+
+- The turn's budget counts what the model generates plus the input it newly
+  reads (new messages and tool results). The system prompt, tool list and
+  history resent on every call are not work, so the bound (default 50k,
+  `AGENT_TURN_TOKEN_BUDGET`) does not shrink as a conversation grows.
+- The model is shown what is left on every call after the first, and can end a
+  turn with "I need more budget to finish" (the `request_more_budget` tool). The
+  user can then grant more in chat and the work resumes where it stopped.
+- A delegated run gets a share of what its parent has left, not a fixed table.
+- Hard runaway backstops remain, far above the bound: 10k iterations, 10k tool
+  calls, a 30-minute wall clock, and a `AGENT_TURN_TOKEN_BUDGET_MAX` ceiling.
+- 30 seconds per tool, 2 retries per failed tool with exponential backoff and a
+  per-service circuit breaker.
 
 ### OrchestrationCoordinator (`orchestration/coordinator.py`)
 

@@ -38,6 +38,7 @@ class CoordinatorBranchTests(SimpleTestCase):
             "orchestration.coordinator.load_memory_summary": AsyncMock(return_value=None),
             "orchestration.coordinator.get_user_preferences": _empty_preferences,
             "orchestration.coordinator.has_pending_agent_state": AsyncMock(return_value=False),
+            "orchestration.coordinator.has_pending_budget_state": AsyncMock(return_value=False),
             "orchestration.coordinator.cache": MagicMock(),
             "orchestration.coordinator.record_event": MagicMock(),
         }
@@ -150,6 +151,47 @@ class CoordinatorBranchTests(SimpleTestCase):
         mocks["resume_after_confirmation"].assert_not_called()
         mocks["cancel_pending_action"].assert_awaited_once()
         mocks["dismiss_pending_confirmation"].assert_not_called()
+
+    # -- agent loop budget (T-F3) ----------------------------------------- #
+
+    def test_budget_extend_reply_resumes_the_turn(self):
+        resume = MagicMock(side_effect=_event_stream)
+        result, mocks, send_chunk = self._run(
+            "more budget",
+            patches={
+                "orchestration.coordinator.has_pending_budget_state": AsyncMock(return_value=True),
+                "orchestration.coordinator.resume_with_more_budget": resume,
+                "orchestration.coordinator.clear_loop_state": MagicMock(),
+            },
+        )
+        resume.assert_called_once()
+        self.assertTrue(any(c.args[1] == "ok" for c in send_chunk.await_args_list))
+
+    def test_a_different_message_discards_the_paused_budget_turn(self):
+        resume = MagicMock(side_effect=AssertionError("must not resume"))
+        result, mocks, send_chunk = self._run(
+            "what is the weather?",
+            patches={
+                "orchestration.coordinator.has_pending_budget_state": AsyncMock(return_value=True),
+                "orchestration.coordinator.resume_with_more_budget": resume,
+                "orchestration.coordinator.clear_loop_state": MagicMock(),
+                "orchestration.coordinator.run_agent_loop": _event_stream,
+            },
+        )
+        resume.assert_not_called()
+        mocks["clear_loop_state"].assert_called_once()
+
+    def test_a_directive_reply_discards_the_paused_budget_turn(self):
+        result, mocks, send_chunk = self._run(
+            "receipts",
+            patches={
+                "orchestration.coordinator.has_pending_budget_state": AsyncMock(return_value=True),
+                "orchestration.coordinator.clear_loop_state": MagicMock(),
+                "orchestration.coordinator.fetch_recent_receipts": AsyncMock(return_value=[]),
+                "orchestration.coordinator.format_receipt_list": lambda r: "No receipts.",
+            },
+        )
+        mocks["clear_loop_state"].assert_called_once()
 
     def test_a_directive_reply_does_not_leave_the_pending_action_armed(self):
         for query in ("receipts", "undo", "dismiss suggestions"):

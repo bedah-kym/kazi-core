@@ -458,13 +458,52 @@ def _meta_tool_context(
     tool_name: str,
     context: Dict[str, Any],
     state: "LoopState",
+    delegated_grant: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Context for a meta-tool call, granting a delegated run its budget share."""
+    """Context for a meta-tool call, granting a delegated run its budget share.
+
+    ``delegated_grant`` is the exact share a batch planner already set aside for
+    this call; when it is omitted (a lone call, a resume) the call computes its
+    own share of what is left.
+    """
     if tool_name != "delegate_task":
         return context
     child = dict(context)
-    child["sub_agent_budget"] = _delegated_budget(state)
+    if delegated_grant is None:
+        child["sub_agent_budget"] = _delegated_budget(state)
+    else:
+        child["sub_agent_budget"] = int(delegated_grant)
     return child
+
+
+def _batch_delegated_grants(
+    state: "LoopState",
+    safe_calls: List[Dict[str, Any]],
+) -> Dict[int, int]:
+    """Grants for the ``delegate_task`` calls that share one parallel batch (T-F3).
+
+    The calls in a batch run together, so each would compute its share from the
+    same untouched remainder and N calls could be granted several times what the
+    parent has left. Divide one delegated share of the remainder among them
+    instead, so the grants together never exceed the turn's bound. A batch too
+    large to give every call a real share refuses the excess (grant 0) rather
+    than handing each a sliver below the minimum. A lone call keeps its share.
+    """
+    positions = [
+        index for index, tc in enumerate(safe_calls)
+        if tc.get("name") == "delegate_task"
+    ]
+    if not positions:
+        return {}
+    total = _delegated_budget(state)
+    if total <= 0:
+        return {index: 0 for index in positions}
+    fundable = max(1, total // MIN_DELEGATED_BUDGET)
+    funded = min(len(positions), fundable)
+    per_call = total // funded
+    grants = {index: per_call for index in positions[:funded]}
+    grants.update({index: 0 for index in positions[funded:]})
+    return grants
 
 
 def _is_policy_block(output: Any) -> bool:
@@ -2198,7 +2237,10 @@ async def run_agent_loop(
             tool_results: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
 
             if safe_calls:
-                async def _run_safe(tc: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any], Optional[int]]:
+                async def _run_safe(
+                    tc: Dict[str, Any],
+                    delegated_grant: Optional[int] = None,
+                ) -> Tuple[Dict[str, Any], Dict[str, Any], Optional[int]]:
                     dedup = _dedup_key(tc["name"], tc["input"])
                     is_retry = dedup in seen_calls
                     if is_retry:
@@ -2248,7 +2290,9 @@ async def run_agent_loop(
                     try:
                         # Meta-tools use their own executor
                         if tc["name"] in _META_TOOL_NAMES:
-                            meta_context = _meta_tool_context(tc["name"], context, state)
+                            meta_context = _meta_tool_context(
+                                tc["name"], context, state, delegated_grant,
+                            )
                             granted = _granted_sub_budget(meta_context)
                             result = await _execute_meta_tool(
                                 tc["name"], tc["input"], meta_context,
@@ -2269,8 +2313,13 @@ async def run_agent_loop(
                         _record_tool_success(service)
                     return tc, result, granted
 
-                # Run in parallel
-                tasks = [_run_safe(tc) for tc in safe_calls]
+                # Run in parallel. Delegations in one batch share a single
+                # delegated share, so they cannot together outspend the parent.
+                batch_grants = _batch_delegated_grants(state, safe_calls)
+                tasks = [
+                    _run_safe(tc, batch_grants.get(index))
+                    for index, tc in enumerate(safe_calls)
+                ]
                 completed = await asyncio.gather(*tasks, return_exceptions=True)
 
                 for item in completed:

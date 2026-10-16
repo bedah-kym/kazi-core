@@ -675,6 +675,212 @@ class DelegatedSpendTests(_LoopHarness):
         self.assertEqual(done.data["budget_used"], 50115)
 
 
+class BatchDelegatedGrantTests(SimpleTestCase):
+    """Delegations in one parallel batch share a single delegated budget (T-F3)."""
+
+    def _state(self, budget, used=0):
+        from orchestration.agent_loop import LoopState
+
+        return LoopState(messages=[], token_budget=budget, tokens_used=used)
+
+    def _calls(self, count):
+        return [
+            {"name": "delegate_task", "input": {"task": f"task {i}"}}
+            for i in range(count)
+        ]
+
+    def test_a_lone_call_keeps_todays_share(self):
+        from orchestration.agent_loop import _batch_delegated_grants, _delegated_budget
+
+        state = self._state(100000, 20000)
+        self.assertEqual(
+            _batch_delegated_grants(state, self._calls(1)),
+            {0: _delegated_budget(state)},
+        )
+
+    def test_parallel_calls_split_one_share_and_never_exceed_it(self):
+        from orchestration.agent_loop import _batch_delegated_grants
+
+        state = self._state(100000, 20000)  # 80000 left, one share is 40000
+        grants = _batch_delegated_grants(state, self._calls(4))
+        self.assertEqual(sum(grants.values()), 40000)
+        self.assertEqual(set(grants.values()), {10000})
+
+    def test_a_batch_too_large_refuses_the_excess_not_a_sliver(self):
+        from orchestration.agent_loop import (
+            MIN_DELEGATED_BUDGET, _batch_delegated_grants,
+        )
+
+        state = self._state(100000, 20000)  # one share of 40000 funds 8
+        grants = _batch_delegated_grants(state, self._calls(10))
+        funded = [grant for grant in grants.values() if grant > 0]
+        refused = [grant for grant in grants.values() if grant == 0]
+        self.assertEqual(len(funded), 8)
+        self.assertEqual(len(refused), 2)
+        self.assertTrue(all(grant >= MIN_DELEGATED_BUDGET for grant in funded))
+        self.assertLessEqual(sum(grants.values()), 40000)
+
+    def test_non_delegate_calls_get_no_grant(self):
+        from orchestration.agent_loop import _batch_delegated_grants
+
+        state = self._state(100000, 20000)
+        calls = [
+            {"name": "get_weather", "input": {}},
+            {"name": "delegate_task", "input": {"task": "A"}},
+        ]
+        self.assertEqual(_batch_delegated_grants(state, calls), {1: 40000})
+
+
+class ParallelDelegationBatchTests(_LoopHarness):
+    """Several delegations in one tool batch cannot outspend the parent (T-F3)."""
+
+    def _fake_sub(self, grants, spend=None):
+        async def _run(task_input, context, *args, **kwargs):
+            granted = int(context.get("sub_agent_budget") or 0)
+            grants.append(granted)
+            return {
+                "status": "success",
+                "summary": "sub-task done",
+                "tokens_used": granted if spend is None else spend,
+            }
+
+        return _run
+
+    @override_settings(AGENT_TURN_TOKEN_BUDGET=50000, AGENT_TURN_TOKEN_BUDGET_MAX=500000)
+    def test_eight_parallel_delegations_cannot_together_exceed_the_parent_remaining(self):
+        from orchestration.agent_loop import MIN_DELEGATED_BUDGET, run_agent_loop
+
+        patches = self._patch_stack()
+        mocks = [p.start() for p in patches]
+        self.addCleanup(lambda: [p.stop() for p in patches])
+        mock_cache, mock_exec, mock_llm_client = mocks[4], mocks[3], mocks[2]
+        mock_cache.get.return_value = None
+        mock_exec.return_value = {"status": "success"}
+        grants = []
+        batch = [
+            _tool_use_block(f"t{i}", "delegate_task", {"task": f"task {i}"})
+            for i in range(8)
+        ]
+        llm = self._llm(side_effect=[
+            _make_llm_response(
+                batch,
+                stop_reason="tool_use",
+                usage={"input_tokens": 6000, "output_tokens": 10},
+            ),
+            _make_llm_response(
+                [_text_block("Done.")],
+                stop_reason="end_turn",
+                usage={"input_tokens": 6100, "output_tokens": 10},
+            ),
+        ])
+        mock_llm_client.return_value = llm
+
+        with patch(
+            "orchestration.agent_loop._run_sub_agent",
+            new=AsyncMock(side_effect=self._fake_sub(grants)),
+        ):
+            self._run(collect_events(run_agent_loop(
+                user_message="delegate to eight",
+                context={"user_id": 1, "room_id": 1, "username": "t"},
+            )))
+
+        # One share of the parent's remainder (50000 - 10 left) is all the batch
+        # may hand out; on the old code each of the eight took a full share.
+        self.assertTrue(grants)
+        self.assertTrue(all(grant >= MIN_DELEGATED_BUDGET for grant in grants))
+        self.assertLessEqual(sum(grants), 50000 - 10)
+
+    @override_settings(AGENT_TURN_TOKEN_BUDGET=30000, AGENT_TURN_TOKEN_BUDGET_MAX=500000)
+    def test_a_batch_too_large_for_the_budget_refuses_the_excess_honestly(self):
+        from orchestration.agent_loop import MIN_DELEGATED_BUDGET, run_agent_loop
+
+        patches = self._patch_stack()
+        mocks = [p.start() for p in patches]
+        self.addCleanup(lambda: [p.stop() for p in patches])
+        mock_cache, mock_exec, mock_llm_client = mocks[4], mocks[3], mocks[2]
+        mock_cache.get.return_value = None
+        mock_exec.return_value = {"status": "success"}
+        grants = []
+        batch = [
+            _tool_use_block(f"t{i}", "delegate_task", {"task": f"task {i}"})
+            for i in range(5)
+        ]
+        llm = self._llm(side_effect=[
+            _make_llm_response(
+                batch,
+                stop_reason="tool_use",
+                usage={"input_tokens": 6000, "output_tokens": 10},
+            ),
+            _make_llm_response(
+                [_text_block("Done.")],
+                stop_reason="end_turn",
+                usage={"input_tokens": 6400, "output_tokens": 10},
+            ),
+        ])
+        mock_llm_client.return_value = llm
+        mock_run_sub = AsyncMock(side_effect=self._fake_sub(grants))
+
+        with patch("orchestration.agent_loop._run_sub_agent", new=mock_run_sub):
+            events = self._run(collect_events(run_agent_loop(
+                user_message="delegate to five",
+                context={"user_id": 1, "room_id": 1, "username": "t"},
+            )))
+
+        # 29990 left, one share is 14995, which funds two calls of at least the
+        # minimum; the other three are refused, not handed a sliver.
+        self.assertEqual(mock_run_sub.await_count, 2)
+        self.assertTrue(all(grant >= MIN_DELEGATED_BUDGET for grant in grants))
+        self.assertLessEqual(sum(grants), 30000 - 10)
+        delegations = [
+            e for e in events
+            if e.kind == "tool_result" and e.data["name"] == "delegate_task"
+        ]
+        refused = [
+            e for e in delegations
+            if e.data["result"].get("status") == "error"
+        ]
+        self.assertEqual(len(refused), 3)
+        for event in refused:
+            self.assertIn("budget", event.data["result"]["message"].lower())
+
+    @override_settings(AGENT_TURN_TOKEN_BUDGET=100000, AGENT_TURN_TOKEN_BUDGET_MAX=500000)
+    def test_a_single_delegation_keeps_its_share(self):
+        from orchestration.agent_loop import run_agent_loop
+
+        patches = self._patch_stack()
+        mocks = [p.start() for p in patches]
+        self.addCleanup(lambda: [p.stop() for p in patches])
+        mock_cache, mock_exec, mock_llm_client = mocks[4], mocks[3], mocks[2]
+        mock_cache.get.return_value = None
+        mock_exec.return_value = {"status": "success"}
+        grants = []
+        llm = self._llm(side_effect=[
+            _make_llm_response(
+                [_tool_use_block("t1", "delegate_task", {"task": "A"})],
+                stop_reason="tool_use",
+                usage={"input_tokens": 6000, "output_tokens": 10},
+            ),
+            _make_llm_response(
+                [_text_block("Done.")],
+                stop_reason="end_turn",
+                usage={"input_tokens": 6100, "output_tokens": 10},
+            ),
+        ])
+        mock_llm_client.return_value = llm
+
+        with patch(
+            "orchestration.agent_loop._run_sub_agent",
+            new=AsyncMock(side_effect=self._fake_sub(grants)),
+        ):
+            self._run(collect_events(run_agent_loop(
+                user_message="delegate once",
+                context={"user_id": 1, "room_id": 1, "username": "t"},
+            )))
+
+        # One delegation still gets its half of the 99990 left after call 1.
+        self.assertEqual(grants, [49995])
+
+
 class GrantCeilingTests(_LoopHarness):
     """A grant never raises the turn above the configured maximum (T-F3)."""
 

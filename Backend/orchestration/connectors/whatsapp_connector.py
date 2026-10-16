@@ -27,6 +27,24 @@ class WhatsAppConnector(BaseConnector):
         else:
             self.client = None
 
+    def validate_config(self):
+        """Available with Twilio credentials, or in demo mode where sends mock.
+
+        Without a client the only path is the in-process mock (see
+        ``_send_message_sync``); that is intended for the demo install, so the
+        actions are offered only there. Outside demo mode a missing key means
+        the tool is not offered (T-F2).
+        """
+        if self.client:
+            return True, ""
+        from orchestration.connector_registry import is_demo_mode
+
+        # The mock in _send_message_sync runs only under DEBUG, so offer the
+        # keyless path only where it can actually answer.
+        if is_demo_mode() and settings.DEBUG:
+            return True, "demo mode: mocking WhatsApp sends"
+        return False, "WhatsApp: set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN"
+
     def validate_credentials(self, account_sid, auth_token):
         """
         Validate credentials by initializing a temporary client and fetching account info.

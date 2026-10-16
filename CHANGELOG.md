@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A turn is offered only the tools that can work for that user in that room. An
+  action whose connector did not load is no longer offered: a connector skipped
+  at boot (`TELEGRAM_BOT_TOKEN`, `SHELL_EXEC_TOKEN` unset, the IntaSend SDK not
+  installed) drops its actions from the list instead of the model calling one
+  that cannot run. An action outside the room persona's `tool_scope` is not
+  offered either; the execution-time refusal stays as a second line. Nothing
+  selects a tool from the words of the message. The prompt follows the tools:
+  the shell "Where you are running" section rides with `run_command` only (and
+  is its own prompt section, no longer part of "Conversation context"), and the
+  memory/contact/reminder/voice guidance is sent only when its group is offered.
+  `run_command` is described once, truly for the room's profile, and the model
+  can ask for network access through its `network` parameter.
+- Every connector now says whether it can serve, and one without a key,
+  credentials or its library is not offered. Weather, GIF, currency, calendar
+  (Calendly), WhatsApp and the email route (Gmail/Mailgun) join Telegram, the
+  shell and IntaSend; the weather, GIF, currency and calendar connectors now
+  declare their credentials as required, and WhatsApp, Mailgun and Gmail answer
+  `validate_config()`. A connector that can only mock a send without
+  credentials (Mailgun, WhatsApp) is offered only in `KAZI_DEMO_MODE`, so the
+  canonical demo keeps working and a production install never offers a send
+  that would only pretend. `get_skipped_connectors()` names each skipped
+  connector and the actions it would own.
+- With no search tool the prompt says only that the model has no web-search
+  tool; it no longer says the environment has no network, which had made the
+  model give up on a task one shell command could fetch. When `run_command` is
+  offered, the shell section now states the network its active profile gives it
+  (open: full; standard: none unless a command asks and is approved; locked:
+  none).
+- The Telegram actions and `generate_speech` now have capability gates
+  (`allow_telegram`, `allow_voice`), so a user can turn either group off. Both
+  default on, so an install already using them keeps them.
 - The provider that answers a chat turn is the operator's choice, set with
   `LLM_DEFAULT_PROVIDER`. Adding a second provider's key no longer silently makes
   that provider the main model — the extra key only adds fallbacks and the models

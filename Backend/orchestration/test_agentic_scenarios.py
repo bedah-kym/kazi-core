@@ -1024,7 +1024,7 @@ class SearchBackendOfferingTests(SimpleTestCase):
         kwargs = mock_llm.create_message.await_args.kwargs
         names = [t["name"] for t in kwargs["tools"]]
         self.assertIn("search_info", names)
-        self.assertNotIn("cannot search the web here", kwargs["system"])
+        self.assertNotIn("no web-search tool", kwargs["system"])
 
     @patch("orchestration.agent_loop.get_llm_client")
     @patch("orchestration.agent_loop.cache")
@@ -1042,7 +1042,10 @@ class SearchBackendOfferingTests(SimpleTestCase):
         kwargs = mock_llm.create_message.await_args.kwargs
         names = [t["name"] for t in kwargs["tools"]]
         self.assertNotIn("search_info", names)
-        self.assertIn("cannot search the web here", kwargs["system"])
+        self.assertIn("no web-search tool", kwargs["system"])
+        # It says the tool is missing, not that the network is unreachable
+        # (T-F2 follow-up: the shell may still fetch a page).
+        self.assertNotIn("not available in this environment", kwargs["system"])
 
     @patch("orchestration.agent_loop.get_llm_client")
     @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)

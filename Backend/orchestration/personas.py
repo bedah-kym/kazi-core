@@ -102,7 +102,37 @@ def persona_bounds(persona) -> Dict[str, Any]:
     }
 
 
-def persona_identity_prompt(persona) -> str:
+def _split_scope_by_availability(scope, user_capabilities=None) -> Tuple[List[str], List[str]]:
+    """Split a persona's scope into tools that can run here and catalog tools that
+    cannot: their connector is not configured, or the user's capability flag
+    turns them off (the same rule the tool list applies).
+
+    Internal and meta tools are not catalog actions and always stay. If the
+    registry cannot be read, nothing is dropped.
+    """
+    try:
+        from orchestration.action_catalog import iter_action_definitions, resolve_action_alias
+        from orchestration.connector_registry import get_available_actions
+        from orchestration.tool_schemas import _gate_allows
+
+        gates = {item["action"]: item.get("capability_gate") for item in iter_action_definitions()}
+        available = set(get_available_actions())
+    except Exception:
+        return list(scope), []
+    capabilities = user_capabilities or {}
+    usable, missing = [], []
+    for name in scope:
+        action = resolve_action_alias(str(name))
+        if action not in gates:
+            usable.append(name)
+            continue
+        gate = gates[action]
+        gate_off = bool(gate) and not _gate_allows(gate, capabilities, user_capabilities is not None)
+        (missing if action not in available or gate_off else usable).append(name)
+    return usable, missing
+
+
+def persona_identity_prompt(persona, user_capabilities=None) -> str:
     """System-prompt block so the agent knows who it is and what it may do."""
     from orchestration.skill_registry import get_skill
 
@@ -110,7 +140,14 @@ def persona_identity_prompt(persona) -> str:
     if persona.description:
         parts.append(persona.description.strip())
     if persona.tool_scope:
-        parts.append("Your tool scope: " + ", ".join(persona.tool_scope) + ".")
+        usable, missing = _split_scope_by_availability(persona.tool_scope, user_capabilities)
+        if usable:
+            parts.append("Your tool scope: " + ", ".join(usable) + ".")
+        if missing:
+            parts.append(
+                "In your scope but not available here (not configured, or turned off in settings): "
+                + ", ".join(missing) + "."
+            )
         parts.append("Anything outside that scope is refused, not attempted.")
     parts.append(
         f"Your risk ceiling is '{persona.risk_ceiling}'; anything above it, or on "

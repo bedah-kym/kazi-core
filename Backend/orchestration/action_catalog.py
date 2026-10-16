@@ -436,7 +436,7 @@ ACTION_CATALOG: List[Dict[str, Any]] = [
         "return_description": "Returns message_id, chat_id, and sent status",
         "risk_level": "low",
         "confirmation_policy": "never",
-        "capability_gate": None,
+        "capability_gate": "allow_telegram",
     },
     {
         "action": "send_telegram_media",
@@ -451,7 +451,7 @@ ACTION_CATALOG: List[Dict[str, Any]] = [
         "return_description": "Returns message_id, chat_id, and media_type",
         "risk_level": "low",
         "confirmation_policy": "never",
-        "capability_gate": None,
+        "capability_gate": "allow_telegram",
     },
     {
         "action": "send_telegram_keyboard",
@@ -466,7 +466,7 @@ ACTION_CATALOG: List[Dict[str, Any]] = [
         "return_description": "Returns message_id, chat_id, and button count",
         "risk_level": "low",
         "confirmation_policy": "never",
-        "capability_gate": None,
+        "capability_gate": "allow_telegram",
     },
     {
         "action": "edit_telegram_message",
@@ -481,7 +481,7 @@ ACTION_CATALOG: List[Dict[str, Any]] = [
         "return_description": "Returns message_id and edited status",
         "risk_level": "low",
         "confirmation_policy": "never",
-        "capability_gate": None,
+        "capability_gate": "allow_telegram",
     },
     {
         "action": "delete_telegram_message",
@@ -495,7 +495,7 @@ ACTION_CATALOG: List[Dict[str, Any]] = [
         "return_description": "Returns deleted status",
         "risk_level": "medium",
         "confirmation_policy": "high_risk",
-        "capability_gate": None,
+        "capability_gate": "allow_telegram",
     },
     {
         "action": "telegram_health",
@@ -506,20 +506,19 @@ ACTION_CATALOG: List[Dict[str, Any]] = [
         "return_description": "Returns bot username, ID, and status",
         "risk_level": "low",
         "confirmation_policy": "never",
-        "capability_gate": None,
+        "capability_gate": "allow_telegram",
     },
     {
         "action": "run_command",
         "aliases": ["run_shell", "shell_command"],
         "service": "shell",
         "description": (
-            "Run a shell command on the shell-exec host inside a sandboxed container "
-            "(non-root, read-only, network off by default). Use for diagnostics and "
-            "system tasks: ping, dig, nslookup, ps, df, cat, etc."
+            "Run a shell command in this room's workspace. The system prompt states "
+            "the operating system, shell and sandbox profile in use."
         ),
         "params": {
             "command": {"type": "string", "required": True, "description": "The command line to run."},
-            "cwd": {"type": "string", "required": False, "description": "Working directory relative to /workspace."},
+            "cwd": {"type": "string", "required": False, "description": "Working directory, relative to the workspace root."},
             "timeout_s": {"type": "integer", "required": False, "description": "Timeout in seconds (capped by the sidecar)."},
             "network": {"type": "string", "required": False, "description": "Set to 'bridge' when the command or a script it runs needs the network (ping, DNS, fetch)."},
         },
@@ -545,7 +544,7 @@ ACTION_CATALOG: List[Dict[str, Any]] = [
         "return_description": "Returns base64 audio, its format, and byte size.",
         "risk_level": "low",
         "confirmation_policy": "never",
-        "capability_gate": None,
+        "capability_gate": "allow_voice",
         "router_required": False,
     },
 ]

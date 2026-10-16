@@ -158,6 +158,30 @@ tool (generate_speech) so they get a voice note rather than lyrics as text.
 """
 
 
+# Tool-name -> guidance section. A section is sent only when at least one of
+# its tools is offered (T-F2 deliverable 6). ``tool_names=None`` means the
+# caller did not filter, so every section is sent (catalog callers/tests).
+_MEMORY_TOOL_NAMES = {"create_note", "complete_note", "update_note", "archive_note", "search_notes"}
+_CONTACT_TOOL_NAMES = {"lookup_contact", "save_contact"}
+_REMINDER_TOOL_NAMES = {"set_reminder", "list_reminders", "list_notifications"}
+_VOICE_TOOL_NAMES = {"generate_speech"}
+
+# Sent only when no search tool is offered. It says what the model lacks (a
+# search tool) and nothing about the network: the shell may still fetch a page
+# when it is offered, and claiming "no network" was making the model give up
+# (T-F2 follow-up).
+NO_SEARCH_TOOL_NOTE = (
+    "You have no web-search tool this turn. If the user asks you to search the "
+    "web, say plainly that you have no web-search tool."
+)
+
+
+def _group_is_offered(tool_names: Optional[List[str]], group) -> bool:
+    if tool_names is None:
+        return True
+    return bool(group & set(tool_names))
+
+
 def build_environment_block(env: Optional[Dict[str, Any]]) -> str:
     """Tell the model where its commands run. ``env`` comes from the shell layer."""
     lines = ["## Where you are running"]
@@ -183,6 +207,7 @@ def build_environment_block(env: Optional[Dict[str, Any]]) -> str:
             "- This room's shell is not sandboxed: commands run directly on the host, as the "
             "account that runs Kazi."
         )
+        lines.append("- This room's shell has full network access.")
         lines.append(
             f"- The harness asks the user before a command {recently}, when the command needs "
             "root, or when it is on the harness's short destructive list. Otherwise the command "
@@ -213,6 +238,10 @@ def build_environment_block(env: Optional[Dict[str, Any]]) -> str:
             "installed. Commands that need root are refused."
         )
         lines.append(
+            "- This room's shell has no network unless a command asks for it and the harness "
+            "approves it."
+        )
+        lines.append(
             "- A command the harness recognises as a network tool can run with network access, "
             "usually after asking the user. Any other command that needs the network just fails."
         )
@@ -233,6 +262,7 @@ def build_environment_block(env: Optional[Dict[str, Any]]) -> str:
             "Commands that need the network or root are refused. Do not assume bash, Python or "
             "a package manager is installed."
         )
+        lines.append("- This room's shell has no network.")
         lines.append("- Commands start in this room's workspace folder.")
         lines.append("- Replies the harness handles itself: `yes` or `no` to a pending action.")
     return "\n".join(lines)
@@ -244,6 +274,7 @@ def build_system_prompt(
     context_prompt: str = "",
     memory_summary: str = "",
     tool_names: Optional[List[str]] = None,
+    environment_block: str = "",
 ) -> str:
     """
     Assemble the full system prompt for the agent loop.
@@ -252,7 +283,10 @@ def build_system_prompt(
         preferences: Normalised user preferences dict (tone, verbosity, locale, …).
         context_prompt: Room context string from ContextManager.get_context_prompt().
         memory_summary: Entity/action memory from build_memory_summary().
-        tool_names: Optional list of available tool names (informational).
+        tool_names: Tool names actually offered this turn. When given, guidance
+            about a tool group is sent only if that group is present.
+        environment_block: Where commands run (build_environment_block). Rendered
+            as its own section, and only when run_command is offered.
 
     Returns:
         Complete system prompt string.
@@ -269,10 +303,20 @@ def build_system_prompt(
     sections.append(_TOOL_RULES)
     sections.append(_SAFETY_RULES)
     sections.append(_RESPONSE_RULES)
-    sections.append(_MEMORY_RULES)
-    sections.append(_CONTACT_RULES)
-    sections.append(_REMINDER_RULES)
-    sections.append(_MODALITY_RULES)
+
+    if _group_is_offered(tool_names, _MEMORY_TOOL_NAMES):
+        sections.append(_MEMORY_RULES)
+    if _group_is_offered(tool_names, _CONTACT_TOOL_NAMES):
+        sections.append(_CONTACT_RULES)
+    if _group_is_offered(tool_names, _REMINDER_TOOL_NAMES):
+        sections.append(_REMINDER_RULES)
+    if _group_is_offered(tool_names, _VOICE_TOOL_NAMES):
+        sections.append(_MODALITY_RULES)
+
+    # The shell rules travel with the shell tool, and only with it.
+    shell_offered = tool_names is None or "run_command" in set(tool_names)
+    if environment_block and shell_offered:
+        sections.append(environment_block)
 
     # Contextual memory
     if context_prompt:

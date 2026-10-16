@@ -286,24 +286,27 @@ class OrchestrationCoordinator:
 
                 persona = await sync_to_async(resolve_room_persona)(room_id, user_id)
                 if persona:
-                    return "\n\n".join([persona_identity_prompt(persona), ctx_prompt or ""]).strip()
+                    identity = persona_identity_prompt(persona, user_capabilities=user_preferences)
+                    return "\n\n".join([identity, ctx_prompt or ""]).strip()
             except Exception as exc:
                 logger.debug("Persona identity injection skipped: %s", exc)
             return ctx_prompt
 
-        async def _with_environment(ctx_prompt: str) -> str:
-            """Prepend where commands run, from the shell layer rather than a guess."""
+        async def _environment_block() -> str:
+            """Where commands run, from the shell layer rather than a guess.
+
+            Returned separately so it can be its own prompt section and ride
+            only with the shell tool (T-F2)."""
             try:
                 from orchestration.agent_prompts import build_environment_block
                 from orchestration.shell.environment import get_shell_environment
                 from orchestration.shell.profiles import resolve_profile
 
                 profile = await sync_to_async(resolve_profile)(room_id, user_preferences)
-                block = build_environment_block(await get_shell_environment(profile))
-                return "\n\n".join([block, ctx_prompt or ""]).strip()
+                return build_environment_block(await get_shell_environment(profile))
             except Exception as exc:
                 logger.debug("Environment block skipped: %s", exc)
-                return ctx_prompt
+                return ""
 
         # Set when this turn's message is a stop word: the window stays off for
         # the whole turn even if the store write failed.
@@ -362,7 +365,7 @@ class OrchestrationCoordinator:
                 "commands will still ask."
             )
 
-        async def _handle_agent_loop(query_text: str, history_msgs, ctx_prompt: str, mem_summary: str):
+        async def _handle_agent_loop(query_text: str, history_msgs, ctx_prompt: str, mem_summary: str, env_block: str = ""):
             """Run the agentic loop and map AgentEvents to WebSocket frames."""
             await emit_progress("planning", "started", "Thinking…")
             async for event in run_agent_loop(
@@ -379,6 +382,7 @@ class OrchestrationCoordinator:
                 preferences=user_preferences,
                 context_prompt=ctx_prompt,
                 memory_summary=mem_summary,
+                environment_block=env_block,
                 history=history_msgs or None,
                 history_tainted=_history_replays_untrusted(history_msgs),
             ):
@@ -407,7 +411,7 @@ class OrchestrationCoordinator:
                 elif event.kind == "done":
                     await emit_progress("done", "completed", "Request complete.")
 
-        async def _handle_agent_resume(ctx_prompt: str, mem_summary: str):
+        async def _handle_agent_resume(ctx_prompt: str, mem_summary: str, env_block: str = ""):
             """Resume a paused agent loop after user confirms."""
             async for event in resume_after_confirmation(
                 context={
@@ -420,6 +424,7 @@ class OrchestrationCoordinator:
                 preferences=user_preferences,
                 context_prompt=ctx_prompt,
                 memory_summary=mem_summary,
+                environment_block=env_block,
             ):
                 if event.kind == "text":
                     await broadcast_chunk(event.data.get("text", ""))
@@ -581,9 +586,9 @@ class OrchestrationCoordinator:
                     except Exception:
                         pass
                     ctx_prompt = await _with_persona_identity(room_id, user_id, ctx_prompt)
-                    ctx_prompt = await _with_environment(ctx_prompt)
+                    env_block = await _environment_block()
                     mem_sum = await load_memory_summary(adaptive_context) or ""
-                    await _handle_agent_resume(ctx_prompt, mem_sum)
+                    await _handle_agent_resume(ctx_prompt, mem_sum, env_block)
 
                 # Cancel is checked first: a refusal must never be read as consent.
                 if is_cancel_request(query) or is_decline_reply(query):
@@ -617,7 +622,7 @@ class OrchestrationCoordinator:
             except Exception:
                 pass
             ctx_prompt = await _with_persona_identity(room_id, user_id, ctx_prompt)
-            ctx_prompt = await _with_environment(ctx_prompt)
+            env_block = await _environment_block()
             mem_sum = memory_summary or ""
             try:
                 await _handle_agent_loop(
@@ -625,6 +630,7 @@ class OrchestrationCoordinator:
                     history_messages,
                     ctx_prompt,
                     mem_sum,
+                    env_block,
                 )
             except Exception as agent_exc:
                 logger.warning("Agent loop failed: %s", agent_exc.__class__.__name__)

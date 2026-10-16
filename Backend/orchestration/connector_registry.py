@@ -24,6 +24,34 @@ logger = logging.getLogger(__name__)
 _discovered_connectors: Optional[Dict[str, Any]] = None
 _registered_catalog_entries: List[Dict[str, Any]] = []
 _contract_violations: List[Dict[str, Any]] = []
+# Connectors that were found but could not serve: missing key, missing library,
+# failed validate_config. Their actions are not offered to the model (T-F2).
+_skipped_connectors: List[Dict[str, Any]] = []
+
+
+def _record_skip(name: str, actions: Optional[List[str]], reason: str) -> None:
+    _skipped_connectors.append({
+        "name": name or "<unknown>",
+        "actions": sorted(a for a in (actions or []) if a),
+        "reason": reason,
+    })
+
+
+def _connector_is_available(connector) -> tuple:
+    """Ask a connector whether it can serve, without ever raising.
+
+    A connector with no ``validate_config`` is assumed ready (legacy
+    connectors that never reported availability keep working). A failure is
+    treated as unavailable — offering a tool that cannot run wastes a turn.
+    """
+    validate = getattr(connector, "validate_config", None)
+    if not callable(validate):
+        return True, ""
+    try:
+        ok, msg = validate()
+    except Exception as exc:  # noqa: BLE001 - availability must never raise
+        return False, f"validate_config raised {exc.__class__.__name__}"
+    return bool(ok), str(msg or "")
 
 
 def _env_flag_enabled(name: str, default: bool = False) -> bool:
@@ -207,6 +235,7 @@ def discover_connectors() -> Dict[str, Any]:
         ok, msg = connector.validate_config()
         if not ok:
             logger.warning("Connector %s skipped: %s", connector.name, msg)
+            _record_skip(connector.name, list(connector.actions), msg or "not available")
             continue
 
         entries = _register_actions_and_entries(connector_map, connector)
@@ -248,6 +277,7 @@ def discover_connectors() -> Dict[str, Any]:
         ok, msg = connector.validate_config()
         if not ok:
             logger.warning("Entry-point connector %s skipped: %s", connector.name, msg)
+            _record_skip(connector.name, list(connector.actions), msg or "not available")
             continue
         entries = _register_actions_and_entries(
             connector_map, connector, allow_override=False,
@@ -273,6 +303,20 @@ def get_registered_catalog_entries() -> List[Dict[str, Any]]:
     return list(_registered_catalog_entries)
 
 
+def get_available_actions() -> List[str]:
+    """Actions whose connector actually loaded (configured at boot), sorted.
+
+    A connector skipped by ``validate_config`` contributes nothing here, so
+    callers can refuse to offer a tool that cannot run (T-F2).
+    """
+    return sorted(discover_connectors().keys())
+
+
+def get_skipped_connectors() -> List[Dict[str, Any]]:
+    """Connectors found but unavailable, with the actions they would own."""
+    return [dict(item) for item in _skipped_connectors]
+
+
 def get_contract_violations() -> List[Dict[str, Any]]:
     """Return contract violations recorded during the last discovery."""
     return list(_contract_violations)
@@ -280,10 +324,11 @@ def get_contract_violations() -> List[Dict[str, Any]]:
 
 def reset_registry() -> None:
     """Clear the registry (useful for testing)."""
-    global _discovered_connectors, _registered_catalog_entries, _contract_violations
+    global _discovered_connectors, _registered_catalog_entries, _contract_violations, _skipped_connectors
     _discovered_connectors = None
     _registered_catalog_entries = []
     _contract_violations = []
+    _skipped_connectors = []
 
 
 def _pick_send_email_connector():
@@ -302,7 +347,13 @@ def _pick_send_email_connector():
 
 
 def _load_legacy_connectors() -> Dict[str, Any]:
-    """Load the existing hardcoded connector map for backward compatibility."""
+    """Load the existing hardcoded connector map for backward compatibility.
+
+    Each connector is asked once whether it can serve (``validate_config``).
+    Actions owned by an unavailable connector (e.g. the IntaSend SDK is not
+    installed) are dropped here so they are never offered; the connector is
+    recorded in ``_skipped_connectors`` for the operator.
+    """
     try:
         from orchestration.connectors.whatsapp_connector import WhatsAppConnector
         from orchestration.connectors.intersend_connector import IntersendPayConnector
@@ -324,7 +375,7 @@ def _load_legacy_connectors() -> Dict[str, Any]:
             ReminderConnector,
         )
 
-        return {
+        raw = {
             "schedule_meeting": CalendarConnector(),
             "check_availability": CalendarConnector(),
             "check_payments": ReadOnlyPaymentConnector(),
@@ -360,6 +411,27 @@ def _load_legacy_connectors() -> Dict[str, Any]:
     except Exception as exc:
         logger.warning("Failed to load legacy connectors: %s", exc)
         return {}
+
+    availability: Dict[str, tuple] = {}
+    actions_by_connector: Dict[str, List[str]] = {}
+    for action, connector in raw.items():
+        key = getattr(connector, "name", None) or connector.__class__.__name__
+        actions_by_connector.setdefault(key, []).append(action)
+        if key not in availability:
+            availability[key] = _connector_is_available(connector)
+
+    available: Dict[str, Any] = {}
+    for action, connector in raw.items():
+        key = getattr(connector, "name", None) or connector.__class__.__name__
+        ok, reason = availability[key]
+        if ok:
+            available[action] = connector
+
+    for name, actions in actions_by_connector.items():
+        ok, reason = availability[name]
+        if not ok:
+            _record_skip(name, actions, reason or "not available")
+    return available
 
 
 def _scan_connectors_directory() -> list:

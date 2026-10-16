@@ -16,7 +16,7 @@
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
 
     <!-- Favicon -->
-    <link rel="icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
+    {% include "brand/head_icons.html" %}
 
     <script>
         document.documentElement.classList.add('js');
@@ -735,7 +735,7 @@
     <nav>
         <div class="nav-container">
             <a href="/" class="logo">
-                <span style="font-size: 20px;"><i class="fas fa-robot"></i></span> Kazi.OS
+                {% include "brand/kazi_mark.html" with size=22 gate='#A83C1E' only %} Kazi.OS
             </a>
             <button class="mobile-toggle" aria-label="Toggle menu"
                 style="background: none; border: none; font-size: 24px; cursor: pointer;">

@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- New Kazi identity, the "Lango" mark: a K whose upper arm is a gate a person
+  lifts. It replaces the robot icon and the old mascot in the app, the chat, the
+  docs site and the README, and comes with favicons, a web manifest and a round
+  chat avatar. The kit, palette and usage rules are in `assets/brand/`. The app
+  accent moves from `#D97757` to Murram (`#A83C1E`, with `#EF8460` for text on
+  dark surfaces), and `claude-theme.css` is renamed `kazi-theme.css`. Kazi's
+  reply badge now shows the Kazi avatar with the model's name, so the chat no
+  longer loads model avatars from robohash.org.
+
 - A turn now runs under **one work-token budget the model can see** (T-F3). The
   budget counts what the model generates plus the input it newly reads — the
   system prompt, tool list and history resent on every call are no longer

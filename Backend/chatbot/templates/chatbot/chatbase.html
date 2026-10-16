@@ -21,10 +21,12 @@
     <link href="{% static 'css/context-panel.css'%}" rel="stylesheet">
     <!-- Message Actions Styles -->
     <link href="{% static 'css/message-actions.css'%}" rel="stylesheet">
-    <!-- Shared Claude-inspired theme (tokens + chatroom components) — loaded last -->
-    <link href="{% static 'css/claude-theme.css' %}" rel="stylesheet">
+    <!-- Shared Kazi theme (tokens + chatroom components) — loaded last -->
+    <link href="{% static 'css/kazi-theme.css' %}" rel="stylesheet">
     <!--favicon-->
-    <link rel="icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
+    {% include "brand/head_icons.html" %}
+    {% static 'img/kazi-avatar.svg' as kazi_avatar_url %}
+    <script>window.KAZI_AVATAR_URL = "{{ kazi_avatar_url|escapejs }}";</script>
     <!-- Highlight.js CSS -->
     <link rel="stylesheet"
         href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
@@ -222,7 +224,7 @@
             <div class="col-md-4 col-lg-3 people-list">
                 <div class="sidebar-header">
                     <div class="sidebar-brand">
-                        <span class="sidebar-brand-mark"><i class="fas fa-robot"></i></span>
+                        <span class="sidebar-brand-mark">{% include "brand/kazi_mark.html" with size=20 only %}</span>
                         <div>
                             <div class="sidebar-title">Chats</div>
                             <div class="sidebar-subtitle">Kazi workspace</div>
@@ -249,7 +251,7 @@
                                 <div class="room-item-meta">
                                     <div class="room-item-name">
                                         <span class="fw-bold room-item-title">{{ chatroom.name }}</span>
-                                        {% if 'AI' in chatroom.name %}<span class="room-ai-badge"><i class="fas fa-robot"></i></span>{% endif %}
+                                        {% if 'AI' in chatroom.name %}<span class="room-ai-badge">{% include "brand/kazi_mark.html" with size=11 only %}</span>{% endif %}
                                     </div>
                                     <div class="room-item-sub">
                                         <span class="status-dot sidebar-dot" data-user="{{ chatroom.name }}"></span>
@@ -270,32 +272,31 @@
                     </ul>
                 </div>
 
-                <div class="listbottom d-flex justify-content-between align-items-center">
-                    <div class="d-flex align-items-center">
-                        <a href="{% url 'users:logout' %}" class="btn btn-outline-danger btn-sm">
-                            <i class="fas fa-sign-out-alt me-2"></i>Logout
-                        </a>
-                    </div>
-                    <div class="d-flex align-items-center">
-                        <!-- FIXED: Changed to use data-bs-toggle to open Bootstrap modal -->
-                        <button type="button" class="btn btn-link btn-calendar me-2" title="My Calendar"
-                            data-bs-toggle="modal" data-bs-target="#calendarModal">
-                            <i class="fas fa-calendar-days"></i>
+                <div class="listbottom">
+                    <button type="button" class="btn btn-link btn-calendar" title="My Calendar"
+                        aria-label="My Calendar" data-bs-toggle="modal" data-bs-target="#calendarModal">
+                        <i class="fas fa-calendar-days"></i>
+                    </button>
+                    <button id="openSettings" class="btn btn-link" title="Settings" aria-label="Settings">
+                        <i class="fas fa-cog"></i>
+                    </button>
+                    <button id="startTour" class="btn btn-link" title="Guided Tour" aria-label="Guided Tour">
+                        <i class="fas fa-wand-magic-sparkles"></i>
+                    </button>
+                    <button type="button" class="btn btn-link" title="Usage Quotas" aria-label="Usage Quotas"
+                        onclick="fetchQuotas()">
+                        <i class="fas fa-chart-pie"></i>
+                    </button>
+                    <button id="darkModeToggle" class="btn btn-link" aria-label="Toggle dark mode" title="Theme">
+                        <i class="fas fa-moon"></i>
+                    </button>
+                    <form method="post" action="{% url 'users:logout' %}" class="m-0 d-flex">
+                        {% csrf_token %}
+                        <button type="submit" class="btn btn-link listbottom-logout" title="Log out"
+                            aria-label="Log out">
+                            <i class="fas fa-right-from-bracket"></i>
                         </button>
-                        <button id="openSettings" class="btn btn-link">
-                            <i class="fas fa-cog"></i>
-                        </button>
-                        <button id="startTour" class="btn btn-link text-primary" title="Guided Tour">
-                            <i class="fas fa-wand-magic-sparkles"></i>
-                        </button>
-                        <button type="button" class="btn btn-link text-warning" title="Usage Quotas"
-                            onclick="fetchQuotas()">
-                            <i class="fas fa-chart-pie"></i>
-                        </button>
-                        <button id="darkModeToggle" class="btn btn-link" aria-label="Toggle dark mode" title="Theme">
-                            <i class="fas fa-moon"></i>
-                        </button>
-                    </div>
+                    </form>
                 </div>
             </div>
 
@@ -307,7 +308,8 @@
                     <div class="row align-items-center">
                         <div class="col-8">
                             <div class="d-flex align-items-center">
-                                <button class="toggle-btn d-md-none me-2" id="menuToggle">
+                                <button class="toggle-btn d-md-none me-2" id="menuToggle" type="button"
+                                    aria-label="Chats">
                                     <span class="hamburger"></span>
                                 </button>
                                 <img src="{{ room_avatar }}" class="avatar-img me-3" data-avatar-img
@@ -332,8 +334,8 @@
                             <!-- Single mobile menu — merges navigation + chat actions -->
                             <div class="dropdown d-lg-none me-2">
                                 <button class="btn btn-light" data-bs-toggle="dropdown" data-bs-auto-close="outside"
-                                    aria-label="Menu">
-                                    <i class="fas fa-bars"></i>
+                                    aria-label="More" title="More">
+                                    <i class="fas fa-ellipsis-vertical"></i>
                                 </button>
                                 <ul class="dropdown-menu dropdown-menu-end shadow-sm">
                                     <li>
@@ -666,7 +668,7 @@
                                 <input type="hidden" name="room_type" value="general">
                                 <button type="submit" class="btn btn-outline-primary w-100 h-100 p-4 border-2">
                                     <div class="text-center">
-                                        <i class="fas fa-robot fa-3x mb-3 text-primary"></i>
+                                        <span class="d-inline-block mb-3">{% include "brand/kazi_mark.html" with size=48 only %}</span>
                                         <h5 class="mb-1">General Room</h5>
                                         <small class="text-muted">Chat with Kazi AI</small>
                                     </div>
@@ -879,32 +881,15 @@
             }
 
             function providerColor(provider) {
-                var map = { deepseek: '#D97757', anthropic: '#C08A5E', huggingface: '#8FA471' };
-                return map[provider] || '#D97757';
+                var map = { deepseek: '#A83C1E', anthropic: '#C08A5E', huggingface: '#8FA471' };
+                return map[provider] || '#A83C1E';
             }
 
-            function clayRobotHtml(provider) {
-                return '<span class="model-avatar" style="background:' + providerColor(provider) + '"><i class="fas fa-robot"></i></span>';
-            }
-
-            // Each LLM gets its own online character persona (RoboHash robot),
-            // falling back to the clay robot icon when the image can't load.
             function modelAvatarHtml(m) {
                 if (!m) return '<i class="fas fa-wand-magic-sparkles"></i>';
-                var seed = encodeURIComponent(m.id);
-                var color = providerColor(m.provider);
-                return '<img class="model-avatar-img" src="https://robohash.org/' + seed + '.png?size=64x64&bgset=bg1" '
-                    + 'alt="' + esc(m.label) + '" data-color="' + color + '" '
-                    + 'onerror="window.__modelAvatarError(this)">';
+                var initial = esc(String(providerName(m.provider) || '?').charAt(0).toUpperCase());
+                return '<span class="model-avatar" style="background:' + providerColor(m.provider) + '">' + initial + '</span>';
             }
-
-            window.__modelAvatarError = function (img) {
-                var span = document.createElement('span');
-                span.className = 'model-avatar';
-                span.style.background = img.getAttribute('data-color') || '#D97757';
-                span.innerHTML = '<i class="fas fa-robot"></i>';
-                if (img && img.parentNode) img.parentNode.replaceChild(span, img);
-            };
 
             function currentModel() {
                 if (!selected) return null;
@@ -934,9 +919,8 @@
             window.getRoomModel = currentModel;
             window.kaziBadgeHtml = function () {
                 var m = currentModel();
-                return '<div class="Kazi-badge">'
-                    + (m ? modelAvatarHtml(m) : '<i class="fas fa-robot"></i>')
-                    + '<span>' + (m ? esc(m.label) : 'Kazi AI') + '</span></div>';
+                return '<div class="kazi-badge"><img class="kazi-badge-avatar" src="' + window.KAZI_AVATAR_URL + '" alt="">'
+                    + '<span>' + (m ? esc(m.label) : 'Kazi') + '</span></div>';
             };
 
             function renderMenus() {
@@ -1112,7 +1096,7 @@
 
             50% {
                 transform: scale(1.2) rotate(10deg);
-                color: #6c5ce7;
+                color: var(--clay, #A83C1E);
             }
 
             100% {

@@ -2,6 +2,7 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.urls import reverse
 from django.contrib.auth.decorators import login_required
 from django.utils.safestring import mark_safe
+from django.templatetags.static import static
 from .models import Chatroom, Message, Member, RoomReadState, Reminder
 import json
 from django.http import JsonResponse, StreamingHttpResponse
@@ -112,7 +113,7 @@ def home(request, room_name):
             )
         elif kazi_member and len(members) <= 2:
             display_name = "General (AI)"
-            avatar_url = "/static/img/kazi-avatar.svg"
+            avatar_url = static("img/kazi-avatar.svg")
         elif len(other_members) == 0:
             display_name = "Private Room (You)"
         elif len(other_members) == 1:
@@ -159,7 +160,7 @@ def home(request, room_name):
             f"https://ui-avatars.com/api/?name={urllib.parse.quote(current_persona.name[:2])}&background=4f8cff&color=fff&size=128"
         )
     elif other_member and other_member.User.username == 'kazi':
-        current_room_avatar = "/static/img/kazi-avatar.svg"
+        current_room_avatar = static("img/kazi-avatar.svg")
     elif other_member:
         try:
             current_room_avatar = other_member.User.profile.get_avatar_url()

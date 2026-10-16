@@ -1,0 +1,37 @@
+/* Kazi brand for the docs site. Palette and type: assets/brand/README.md */
+@import url("https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&display=swap");
+
+:root {
+  --md-primary-fg-color: #1b1613;
+  --md-primary-fg-color--light: #3a2f29;
+  --md-primary-fg-color--dark: #000000;
+  --md-primary-bg-color: #f5f2ed;
+  --md-accent-fg-color: #a83c1e;
+  --md-accent-fg-color--transparent: rgba(168, 60, 30, 0.1);
+}
+
+[data-md-color-scheme="default"] {
+  --md-typeset-a-color: #a83c1e;
+  --md-default-bg-color: #fdfcfa;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-hue: 25;
+  --md-default-bg-color: #1b1613;
+  --md-primary-fg-color: #241e1a;
+  --md-accent-fg-color: #ef8460;
+  --md-accent-fg-color--transparent: rgba(239, 132, 96, 0.1);
+  --md-typeset-a-color: #ef8460;
+}
+
+.md-header__title,
+.md-typeset h1,
+.md-typeset h2,
+.md-typeset h3 {
+  font-family: "Bricolage Grotesque", var(--md-text-font-family), sans-serif;
+}
+
+.md-typeset h1 {
+  font-weight: 700;
+  color: var(--md-default-fg-color);
+}

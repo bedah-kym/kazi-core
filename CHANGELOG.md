@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- New Kazi identity, the "Lango" mark: a K whose upper arm is a gate a person
+  lifts. It replaces the robot icon and the old mascot in the app, the chat, the
+  docs site and the README, and comes with favicons, a web manifest and a round
+  chat avatar. The kit, palette and usage rules are in `assets/brand/`. The app
+  accent moves from `#D97757` to Murram (`#A83C1E`, with `#EF8460` for text on
+  dark surfaces), and `claude-theme.css` is renamed `kazi-theme.css`. Kazi's
+  reply badge now shows the Kazi avatar with the model's name, so the chat no
+  longer loads model avatars from robohash.org.
+
 - The provider that answers a chat turn is the operator's choice, set with
   `LLM_DEFAULT_PROVIDER`. Adding a second provider's key no longer silently makes
   that provider the main model — the extra key only adds fallbacks and the models

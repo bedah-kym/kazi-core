@@ -6,20 +6,23 @@ edit_uri: edit/main/docs/
 
 theme:
   name: material
-  logo: assets/kazi-core.png
-  favicon: assets/kazi-core.png
+  logo: assets/brand/kazi-mark-reversed.svg
+  favicon: assets/brand/favicon.svg
+  font:
+    text: IBM Plex Sans
+    code: IBM Plex Mono
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      primary: indigo
-      accent: indigo
+      primary: custom
+      accent: custom
       toggle:
         icon: material/weather-night
         name: Switch to dark mode
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
-      primary: indigo
-      accent: indigo
+      primary: custom
+      accent: custom
       toggle:
         icon: material/weather-sunny
         name: Switch to light mode
@@ -32,6 +35,9 @@ theme:
     - search.highlight
     - search.suggest
     - toc.follow
+
+extra_css:
+  - stylesheets/kazi.css
 
 nav:
   - Home: index.md

@@ -1,6 +1,17 @@
 # Kazi brand kit
 
-Status: proposal. The repo still uses the old robot avatar and `kazi-core.png`; nothing here is wired in yet.
+Status: adopted.
+
+## Where it's used
+
+- App favicons and web manifest: `Backend/chatbot/static/` (`favicon.*`, `icon-*.png`, `site.webmanifest`), linked from `Backend/users/templates/brand/head_icons.html`.
+- Inline mark in templates: `Backend/users/templates/brand/kazi_mark.html` (body is `currentColor`, gate is `--kazi-gate` or the `gate` argument).
+- Kazi's chat avatar: `Backend/users/static/img/kazi-avatar.svg` (a copy of `kazi-avatar.svg`).
+- App colours: `Backend/chatbot/static/css/kazi-theme.css` (`--clay` is Murram; `--clay-fg` is the dark-mode-safe foreground).
+- Docs site: `docs/assets/brand/` and `docs/stylesheets/kazi.css`.
+- GitHub README header: `kazi-lockup.svg` and `kazi-lockup-reversed.svg`.
+
+When an asset changes here, update its copy in those places too.
 
 ## The mark: Lango
 

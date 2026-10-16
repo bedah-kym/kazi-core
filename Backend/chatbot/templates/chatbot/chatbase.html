@@ -22,9 +22,10 @@
     <!-- Message Actions Styles -->
     <link href="{% static 'css/message-actions.css'%}" rel="stylesheet">
     <!-- Shared Claude-inspired theme (tokens + chatroom components) — loaded last -->
-    <link href="{% static 'css/claude-theme.css' %}" rel="stylesheet">
+    <link href="{% static 'css/kazi-theme.css' %}" rel="stylesheet">
     <!--favicon-->
-    <link rel="icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
+    {% include "brand/head_icons.html" %}
+    <script>window.KAZI_AVATAR_URL = "{% static 'img/kazi-avatar.svg' %}";</script>
     <!-- Highlight.js CSS -->
     <link rel="stylesheet"
         href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
@@ -222,7 +223,7 @@
             <div class="col-md-4 col-lg-3 people-list">
                 <div class="sidebar-header">
                     <div class="sidebar-brand">
-                        <span class="sidebar-brand-mark"><i class="fas fa-robot"></i></span>
+                        <span class="sidebar-brand-mark">{% include "brand/kazi_mark.html" with size=20 %}</span>
                         <div>
                             <div class="sidebar-title">Chats</div>
                             <div class="sidebar-subtitle">Kazi workspace</div>
@@ -249,7 +250,7 @@
                                 <div class="room-item-meta">
                                     <div class="room-item-name">
                                         <span class="fw-bold room-item-title">{{ chatroom.name }}</span>
-                                        {% if 'AI' in chatroom.name %}<span class="room-ai-badge"><i class="fas fa-robot"></i></span>{% endif %}
+                                        {% if 'AI' in chatroom.name %}<span class="room-ai-badge">{% include "brand/kazi_mark.html" with size=11 %}</span>{% endif %}
                                     </div>
                                     <div class="room-item-sub">
                                         <span class="status-dot sidebar-dot" data-user="{{ chatroom.name }}"></span>
@@ -666,7 +667,7 @@
                                 <input type="hidden" name="room_type" value="general">
                                 <button type="submit" class="btn btn-outline-primary w-100 h-100 p-4 border-2">
                                     <div class="text-center">
-                                        <i class="fas fa-robot fa-3x mb-3 text-primary"></i>
+                                        <span class="d-inline-block mb-3" style="color: var(--clay-fg)">{% include "brand/kazi_mark.html" with size=48 %}</span>
                                         <h5 class="mb-1">General Room</h5>
                                         <small class="text-muted">Chat with Kazi AI</small>
                                     </div>
@@ -879,32 +880,16 @@
             }
 
             function providerColor(provider) {
-                var map = { deepseek: '#D97757', anthropic: '#C08A5E', huggingface: '#8FA471' };
-                return map[provider] || '#D97757';
+                var map = { deepseek: '#A83C1E', anthropic: '#C08A5E', huggingface: '#8FA471' };
+                return map[provider] || '#A83C1E';
             }
 
-            function clayRobotHtml(provider) {
-                return '<span class="model-avatar" style="background:' + providerColor(provider) + '"><i class="fas fa-robot"></i></span>';
-            }
-
-            // Each LLM gets its own online character persona (RoboHash robot),
-            // falling back to the clay robot icon when the image can't load.
+            // Per-model chip for the picker: the provider's initial on its colour.
             function modelAvatarHtml(m) {
                 if (!m) return '<i class="fas fa-wand-magic-sparkles"></i>';
-                var seed = encodeURIComponent(m.id);
-                var color = providerColor(m.provider);
-                return '<img class="model-avatar-img" src="https://robohash.org/' + seed + '.png?size=64x64&bgset=bg1" '
-                    + 'alt="' + esc(m.label) + '" data-color="' + color + '" '
-                    + 'onerror="window.__modelAvatarError(this)">';
+                var initial = esc(providerName(m.provider).charAt(0).toUpperCase());
+                return '<span class="model-avatar" style="background:' + providerColor(m.provider) + '">' + initial + '</span>';
             }
-
-            window.__modelAvatarError = function (img) {
-                var span = document.createElement('span');
-                span.className = 'model-avatar';
-                span.style.background = img.getAttribute('data-color') || '#D97757';
-                span.innerHTML = '<i class="fas fa-robot"></i>';
-                if (img && img.parentNode) img.parentNode.replaceChild(span, img);
-            };
 
             function currentModel() {
                 if (!selected) return null;
@@ -934,9 +919,8 @@
             window.getRoomModel = currentModel;
             window.kaziBadgeHtml = function () {
                 var m = currentModel();
-                return '<div class="Kazi-badge">'
-                    + (m ? modelAvatarHtml(m) : '<i class="fas fa-robot"></i>')
-                    + '<span>' + (m ? esc(m.label) : 'Kazi AI') + '</span></div>';
+                return '<div class="kazi-badge"><img class="kazi-badge-avatar" src="' + window.KAZI_AVATAR_URL + '" alt="">'
+                    + '<span>' + (m ? esc(m.label) : 'Kazi') + '</span></div>';
             };
 
             function renderMenus() {

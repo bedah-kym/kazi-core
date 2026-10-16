@@ -10,7 +10,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-    <link rel="icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
+    {% include "brand/head_icons.html" %}
     <style>
         :root {
             --notion-bg: #ffffff;
@@ -141,7 +141,7 @@
 <body>
     <nav>
         <div class="row">
-            <a class="logo" href="/"><i class="fas fa-robot"></i> Kazi.OS</a>
+            <a class="logo" href="/">{% include "brand/kazi_mark.html" with size=22 gate='#A83C1E' %} Kazi.OS</a>
             <a class="btn btn-ghost" href="{% url 'users:trial_apply' %}">Request invite</a>
         </div>
     </nav>

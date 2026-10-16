@@ -172,7 +172,7 @@ class VoiceAssistant {
                 const height = this.waveformCanvas.height;
                 this.waveformCtx.clearRect(0, 0, width, height);
                 this.waveformCtx.lineWidth = 2;
-                this.waveformCtx.strokeStyle = '#d97757';
+                this.waveformCtx.strokeStyle = '#a83c1e';
                 this.waveformCtx.beginPath();
                 const sliceWidth = width / bufferLength;
                 let x = 0;

@@ -483,7 +483,7 @@ function createMessage(data, roomId, prepend = false) {
         const badge = document.createElement('div');
         badge.className = 'kazi-badge';
         badge.innerHTML = (window.kaziBadgeHtml && window.kaziBadgeHtml())
-            || '<i class="fas fa-robot"></i> <span>Kazi AI</span>';
+            || '<img class="kazi-icon" src="' + (window.KAZI_AVATAR_URL || '/static/img/kazi-avatar.svg') + '" alt=""> <span>Kazi</span>';
         msgTextTag.insertBefore(badge, msgTextTag.firstChild);
     }
 

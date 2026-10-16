@@ -138,6 +138,62 @@ class _LoopHoldingClient:
         self.loop = asyncio.get_running_loop()
 
 
+class AnthropicPromptCacheTests(SimpleTestCase):
+    def test_cached_system_puts_the_breakpoint_on_static_text(self):
+        from orchestration.llm_client import _anthropic_system
+
+        blocks = _anthropic_system(_inject_current_datetime("STATIC SYSTEM TEXT"), True)
+        self.assertEqual(blocks[0]["text"], "STATIC SYSTEM TEXT")
+        self.assertIn("cache_control", blocks[0])
+        self.assertTrue(blocks[1]["text"].startswith("Current date and time:"))
+
+    def test_uncached_system_has_static_text_first(self):
+        from orchestration.llm_client import _anthropic_system
+
+        system = _anthropic_system(_inject_current_datetime("STATIC SYSTEM TEXT"), False)
+        self.assertTrue(system.startswith("STATIC SYSTEM TEXT"))
+
+    def test_streaming_path_splits_the_stamp_too(self):
+        client = _client(anthropic="a-key")  # nosec B106 - test fixture
+        sent = {}
+
+        class _Stream:
+            status_code = 200
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            async def aiter_lines(self):
+                if False:
+                    yield ""
+
+        class _Client:
+            is_closed = False
+
+            def stream(self, method, url, headers=None, json=None, timeout=None):
+                sent["body"] = json
+                return _Stream()
+
+        async def drain():
+            async for _ in client._stream_anthropic_events(
+                messages=[{"role": "user", "content": "hi"}],
+                system=_inject_current_datetime("STATIC SYSTEM TEXT"),
+                use_prompt_cache=True,
+            ):
+                pass
+
+        with patch("orchestration.llm_client._get_http_client", return_value=_Client()):
+            try:
+                _run(drain())
+            except Exception:  # nosec B110 - only the request body matters here
+                pass
+        self.assertEqual(sent["body"]["system"][0]["text"], "STATIC SYSTEM TEXT")
+        self.assertTrue(sent["body"]["system"][1]["text"].startswith("Current date and time:"))
+
+
 class SharedHttpClientTests(SimpleTestCase):
     def test_short_lived_loops_do_not_accumulate_clients(self):
         from orchestration import llm_client

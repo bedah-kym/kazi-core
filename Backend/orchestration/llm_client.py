@@ -62,6 +62,24 @@ def _static_first(system: Optional[str]) -> str:
     return system or ""
 
 
+def _anthropic_system(system: str, use_prompt_cache: bool):
+    """The Anthropic ``system`` field with the static text ahead of the date stamp.
+
+    With prompt caching, the breakpoint sits on the static text and the stamp
+    follows it as its own block, so the cached prefix does not change every
+    minute. Used by the create and the streaming paths alike.
+    """
+    if not use_prompt_cache:
+        return _static_first(system)
+    if system.startswith(_DATE_MARKER):
+        stamp, _, static = system.partition("\n")
+        return [
+            {"type": "text", "text": static, "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": stamp},
+        ]
+    return [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+
+
 # --------------------------------------------------------------------------- #
 #  Shared HTTP client                                                          #
 #  One httpx.AsyncClient per running event loop, reused across calls. A client  #
@@ -819,30 +837,7 @@ class LLMClient:
             "messages": messages,
         }
         if system:
-            if use_prompt_cache:
-                # Structured system prompt with cache_control for prompt caching.
-                # The date stamp is volatile: keep it AFTER the breakpoint so
-                # the static system text stays a cacheable exact prefix.
-                if system.startswith(_DATE_MARKER):
-                    stamp, _, static = system.partition("\n")
-                    body["system"] = [
-                        {
-                            "type": "text",
-                            "text": static,
-                            "cache_control": {"type": "ephemeral"},
-                        },
-                        {"type": "text", "text": stamp},
-                    ]
-                else:
-                    body["system"] = [
-                        {
-                            "type": "text",
-                            "text": system,
-                            "cache_control": {"type": "ephemeral"},
-                        }
-                    ]
-            else:
-                body["system"] = system
+            body["system"] = _anthropic_system(system, use_prompt_cache)
         if tools:
             if use_prompt_cache and tools:
                 # Mark the last tool with cache_control so the entire
@@ -1230,16 +1225,7 @@ class LLMClient:
             "stream": True,
         }
         if system:
-            if use_prompt_cache:
-                body["system"] = [
-                    {
-                        "type": "text",
-                        "text": system,
-                        "cache_control": {"type": "ephemeral"},
-                    }
-                ]
-            else:
-                body["system"] = system
+            body["system"] = _anthropic_system(system, use_prompt_cache)
         if tools:
             if use_prompt_cache and tools:
                 cached_tools = [dict(t) for t in tools]
@@ -1363,7 +1349,7 @@ class LLMClient:
                 "model": model_name or self.claude_model,
                 "max_tokens": max_tokens,
                 "temperature": temperature,
-                "system": system_prompt,
+                "system": _static_first(system_prompt),
                 "messages": [
                     {"role": "user", "content": user_prompt}
                 ]
@@ -1395,7 +1381,7 @@ class LLMClient:
                 "model": model_name or self.claude_model,
                 "max_tokens": max_tokens,
                 "temperature": temperature,
-                "system": system_prompt,
+                "system": _static_first(system_prompt),
                 "messages": [
                     {"role": "user", "content": user_prompt}
                 ],

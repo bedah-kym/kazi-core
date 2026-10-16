@@ -286,7 +286,8 @@ class OrchestrationCoordinator:
 
                 persona = await sync_to_async(resolve_room_persona)(room_id, user_id)
                 if persona:
-                    return "\n\n".join([persona_identity_prompt(persona), ctx_prompt or ""]).strip()
+                    identity = persona_identity_prompt(persona, user_capabilities=user_preferences)
+                    return "\n\n".join([identity, ctx_prompt or ""]).strip()
             except Exception as exc:
                 logger.debug("Persona identity injection skipped: %s", exc)
             return ctx_prompt

@@ -39,7 +39,9 @@ class WhatsAppConnector(BaseConnector):
             return True, ""
         from orchestration.connector_registry import is_demo_mode
 
-        if is_demo_mode():
+        # The mock in _send_message_sync runs only under DEBUG, so offer the
+        # keyless path only where it can actually answer.
+        if is_demo_mode() and settings.DEBUG:
             return True, "demo mode: mocking WhatsApp sends"
         return False, "WhatsApp: set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN"
 

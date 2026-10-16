@@ -308,6 +308,15 @@ class ConnectorAvailabilityTests(SimpleTestCase):
         self.assertNotIn("send_message", names)
         self.assertNotIn("send_whatsapp", names)
 
+    def test_whatsapp_absent_in_demo_mode_when_its_mock_cannot_run(self):
+        from django.test import override_settings
+
+        with _credentials_absent(env_names=["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN"]), \
+                patch("orchestration.connector_registry.is_demo_mode", return_value=True), \
+                override_settings(DEBUG=False):
+            names = _names(user_capabilities=ALL_GATES_ON)
+        self.assertNotIn("send_message", names)
+
     def test_email_absent_without_credentials_outside_demo(self):
         with _credentials_absent(
             env_names=[

@@ -105,7 +105,20 @@ class PersonaPromptAvailabilityTests(SimpleTestCase):
         with patch("orchestration.connector_registry.get_available_actions", return_value=["run_command"]):
             prompt = persona_identity_prompt(self._persona(["get_weather", "run_command"]))
         self.assertIn("Your tool scope: run_command.", prompt)
-        self.assertIn("not configured on this install, so not available: get_weather.", prompt)
+        self.assertIn("not available here (not configured, or turned off in settings): get_weather.", prompt)
+
+    def test_scope_tool_turned_off_in_settings_is_unavailable(self):
+        from unittest.mock import patch
+
+        from orchestration.personas import persona_identity_prompt
+
+        with patch("orchestration.connector_registry.get_available_actions", return_value=["send_email", "run_command"]):
+            prompt = persona_identity_prompt(
+                self._persona(["send_email", "run_command"]),
+                user_capabilities={"allow_email": False},
+            )
+        self.assertIn("Your tool scope: run_command.", prompt)
+        self.assertIn("turned off in settings): send_email.", prompt)
 
     def test_configured_scope_is_listed_as_before(self):
         from unittest.mock import patch

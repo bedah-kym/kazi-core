@@ -1,5 +1,8 @@
 <div align="center">
-  <img src="assets/kazi-core.png" alt="Kazi Core Engine Mascot" width="200"/>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/kazi-lockup-reversed.svg">
+    <img src="assets/brand/kazi-lockup.svg" alt="Kazi" width="280">
+  </picture>
   <h1>Kazi Core</h1>
 
   <p>

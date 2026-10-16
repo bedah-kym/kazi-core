@@ -66,6 +66,8 @@ Backend/
   payments/                # Double-entry ledger, invoices, wallets (showcase module)
   users/                   # Auth, profiles, quotas, encryption keys
   tests/                   # Cross-cutting test scripts (see Section 6)
+assets/
+  brand/                   # Logo, favicons, palette, usage rules (see its README)
 examples/
   connectors/echo/         # The "copy this to start" connector (auto-loaded in demo mode)
   workflows/follow_up_email/  # The canonical end-to-end demo workflow

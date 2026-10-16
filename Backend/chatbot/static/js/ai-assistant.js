@@ -2,6 +2,10 @@
 // KAZI AI ASSISTANT - Frontend Integration
 // ============================================
 
+function kaziIconHtml() {
+    return window.KAZI_AVATAR_URL ? '<img class="kazi-icon" src="' + window.KAZI_AVATAR_URL + '" alt="">' : '';
+}
+
 class KaziAssistant {
     constructor(username) {
         this.username = username;
@@ -54,7 +58,7 @@ class KaziAssistant {
         suggestion.className = 'kazi-autocomplete';
         suggestion.innerHTML = `
             <div class="autocomplete-item">
-                <i class="fas fa-robot"></i>
+                ${kaziIconHtml()}
                 <span><strong>@kazi</strong> - Ask AI assistant</span>
             </div>
         `;
@@ -183,7 +187,7 @@ class KaziAssistant {
         promptsContainer.className = 'kazi-quick-prompts';
         promptsContainer.innerHTML = `
             <div class="quick-prompts-header">
-                <i class="fas fa-robot"></i>
+                ${kaziIconHtml()}
                 <span>Quick Actions (live)</span>
                 <button class="btn-close-prompts" title="Hide">
                     <i class="fas fa-times"></i>
@@ -324,7 +328,7 @@ class KaziAssistant {
             </div>
             <div class="message other-message kazi-message">
                 <div class="ai-thinking-animation">
-                    <i class="fas fa-robot"></i>
+                    ${kaziIconHtml()}
                     <span class="thinking-text">Kazi is thinking</span>
                     <div class="thinking-dots">
                         <span></span><span></span><span></span>
@@ -605,7 +609,7 @@ class KaziAssistant {
                 <div class="time-label">${new Date().toLocaleTimeString()}</div>
             </div>
             <div class="message other-message kazi-message">
-                ${window.kaziBadgeHtml ? window.kaziBadgeHtml() : '<div class="kazi-badge"><i class="fas fa-robot"></i><span>Kazi AI</span></div>'}
+                ${window.kaziBadgeHtml ? window.kaziBadgeHtml() : '<div class="kazi-badge">' + kaziIconHtml() + '<span>Kazi</span></div>'}
                 <div class="kazi-content stream-content"></div>
             </div>
         `;
@@ -666,7 +670,7 @@ class KaziAssistant {
                 <div class="time-label">${formattedTime}</div>
             </div>
             <div class="message other-message kazi-message">
-                ${window.kaziBadgeHtml ? window.kaziBadgeHtml() : '<div class="kazi-badge"><i class="fas fa-robot"></i><span>Kazi AI</span></div>'}
+                ${window.kaziBadgeHtml ? window.kaziBadgeHtml() : '<div class="kazi-badge">' + kaziIconHtml() + '<span>Kazi</span></div>'}
                 <div class="kazi-content">${messageData.content}</div>
             </div>
         `;

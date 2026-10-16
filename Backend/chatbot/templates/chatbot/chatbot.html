@@ -6,6 +6,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Kazi Chat</title>
+    {% include "brand/head_icons.html" %}
     <!-- Bootstrap CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <!-- Font Awesome -->
@@ -302,7 +303,7 @@
         <!-- Header -->
         <div class="chat-header">
             <h4 class="m-0">
-                <i class="fas fa-robot me-2 text-primary"></i>
+                <span class="me-2" style="color: #A83C1E">{% include "brand/kazi_mark.html" with size=22 only %}</span>
                 Kazi Chat
             </h4>
             <button class="btn btn-outline-primary btn-sm rounded-pill px-3" onclick="fetchQuotas()">

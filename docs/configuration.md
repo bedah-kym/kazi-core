@@ -240,6 +240,11 @@ keys, `DATABASE_URL`, `REDIS_URL`, `CELERY_*`, `DJANGO_SECRET_KEY`,
 denylist, a variable an operator adds to the sidecar's environment is dropped
 too. There is no setting to widen it.
 
+This closes the environment, not the filesystem: an `open` command runs as the
+sidecar's operating-system user and can read any file that user can read,
+including `.env`. Run an `open` sidecar as a separate user that cannot read the
+Kazi checkout, and start it without secrets in its environment.
+
 A command under `locked` can read the room workspace but not change it: the
 workspace is mounted read-only, so create/change/delete fail. `standard` keeps
 the read-write `/workspace` mount.

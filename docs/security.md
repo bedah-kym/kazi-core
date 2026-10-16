@@ -80,9 +80,14 @@ What a command may see and write depends on the room's profile:
   allowlisted environment (`PATH`, a home and a temp directory, locale, and the
   variables `cmd.exe` needs). The sidecar's `.env` — provider keys, database and
   broker URLs, `DJANGO_SECRET_KEY`, `ENCRYPTION_KEY` and `SHELL_EXEC_TOKEN` — is
-  never passed, and neither is any variable an operator added. `open` remains
-  unsandboxed for the filesystem and network, so it is for disposable boxes
-  only.
+  never passed through the environment, and neither is any variable an
+  operator added. `open` remains unsandboxed for the filesystem and network:
+  a command runs as the sidecar's operating-system user and can read any file
+  that user can read, including the `.env` file itself, and on Linux the
+  environment the sidecar was started with (`/proc/<pid>/environ`). If you
+  enable `open`, run the sidecar as a separate user that cannot read the Kazi
+  checkout, start it without secrets in its environment, and use it on
+  disposable boxes only.
 
 ## Where it lives
 

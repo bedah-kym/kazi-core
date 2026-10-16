@@ -46,14 +46,14 @@ run a task body inline and never reach a broker.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | — | Claude API key (primary provider). |
-| `HF_API_TOKEN` | — | Hugging Face token (fallback provider). |
+| `ANTHROPIC_API_KEY` | — | Claude API key. |
+| `HF_API_TOKEN` | — | Hugging Face token. |
 | `DEEPSEEK_API_KEY` | — | DeepSeek API key (OpenAI-compatible, full tool-calling). |
 | `DEEPSEEK_MODEL` | `deepseek-chat` | Model name for DeepSeek. |
 | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com/v1/chat/completions` | DeepSeek endpoint. |
-| `LLM_PLANNER_PROVIDER` | `anthropic` | Provider for the planner. |
+| `LLM_DEFAULT_PROVIDER` | empty | Provider that answers a chat turn when the room has no model override. |
 | `LLM_EXECUTOR_PROVIDER` | `huggingface` | Provider for tool execution. |
-| `LLM_PLANNER_MODEL` / `LLM_EXECUTOR_MODEL` | empty | Override the model per role. |
+| `LLM_EXECUTOR_MODEL` | empty | Override the model used for tool execution. |
 | `LLM_REVIEWER_PROVIDER` | `anthropic` | Provider for the workflow reviewer. |
 | `LLM_REVIEWER_MODEL` | empty | Reviewer model. The scheduled reviewer runs only when this names a model different from the authoring models; empty keeps it off. |
 | `LLM_MAX_TOKENS` | `700` | Hard per-call token ceiling. |
@@ -61,14 +61,22 @@ run a task body inline and never reach a broker.
 | `LLM_CACHE_ENABLED` | `True` | Response caching toggle. |
 | `LLM_CACHE_TTL_SECONDS` | `600` | Cache TTL. |
 | `LLM_CACHE_MIN_TEMP` | `0.3` | Don't cache calls below this temperature. |
-| `MANAGER_LLM_ENABLED` | `True` | Manager-verifier LLM passes. |
+
+A chat turn is answered by the **operator's default provider**: set
+`LLM_DEFAULT_PROVIDER=deepseek` (or `anthropic` / `huggingface`) and adding a
+second provider's key later does not change which provider answers — the extra
+key only adds fallbacks and the models the per-room picker can offer. With
+`LLM_DEFAULT_PROVIDER` unset, the first configured provider in the order
+anthropic, deepseek, huggingface answers, and the boot log states which one. The
+harness never picks a model from the message shape; the provider resolves its own
+default model unless the room chose one.
 
 The **model catalog** (`orchestration/model_catalog.py`) is a fixed list of
 models the chatroom picker offers; which ones are available is gated purely by
 which provider keys are set. Users override the model **per room** from the
 chatroom header (or `GET/POST /api/rooms/<id>/model/`) — the override is stored
-as a Redis preference, not an env var. Leave it on *Auto* to use the provider
-fallback above.
+as a Redis preference, not an env var. Leave it on *Auto* to use the default
+provider above.
 
 ## Quotas
 

@@ -63,10 +63,6 @@ MAX_SEARCHES_PER_REQUEST = 5
 LOOP_TOKEN_BUDGET = 50000  # hard cap per single agent loop invocation
 LOOP_TOKEN_WARNING_RATIO = 0.80  # warn user at 80%
 
-# Model selection
-MODEL_SONNET = "claude-sonnet-4-6"
-MODEL_HAIKU = "claude-haiku-4-5-20251001"
-
 
 # --------------------------------------------------------------------------- #
 #  Data structures                                                            #
@@ -645,30 +641,6 @@ def _sanitize_tool_result(result_json: str) -> str:
 #  Model routing                                                              #
 # --------------------------------------------------------------------------- #
 
-def _select_model(user_message: str, iteration: int) -> str:
-    """
-    Pick Haiku for simple single-tool requests, Sonnet for everything else.
-
-    Heuristic: use Haiku on the FIRST iteration if the message is short and
-    looks like a straightforward single action. Once we're in multi-turn
-    (iteration > 1) always use Sonnet for better reasoning.
-    """
-    if iteration > 1:
-        return MODEL_SONNET
-
-    words = user_message.split()
-    if len(words) > 25:
-        return MODEL_SONNET
-
-    # Multi-step indicators → Sonnet
-    multi_step_words = {"then", "after", "next", "also", "and then", "both", "compare"}
-    lowered = user_message.lower()
-    if any(w in lowered for w in multi_step_words):
-        return MODEL_SONNET
-
-    return MODEL_HAIKU
-
-
 def _resolve_model_override(room_id: Optional[int]) -> Tuple[Optional[str], Optional[str]]:
     """
     Read the per-room model preference (``model_pref:{room_id}``) and return a
@@ -1210,6 +1182,14 @@ async def _run_sub_agent(
             if capped:
                 stopped_reason = "max_tool_calls"
                 break
+            continue
+
+        # A stop reason we do not handle. End the run rather than re-sending the
+        # same messages until the iteration cap.
+        stopped_reason = f"unhandled_stop:{stop_reason}"
+        if not collected_text:
+            collected_text.append("The model declined to continue this task.")
+        break
 
     if stopped_reason is None and not completed:
         stopped_reason = "max_iterations"
@@ -1414,18 +1394,25 @@ async def run_agent_loop(
     # Add meta-tools (delegate_task, handoff_to_workflow)
     tools.extend(META_TOOL_DEFINITIONS)
 
-    # Add Claude native web search (server-side tool) with rate-limited budget
-    user_location_hint = None
-    if preferences:
-        loc = preferences.get("location")
-        tz = preferences.get("timezone")
-        if loc or tz:
-            user_location_hint = {"type": "approximate"}
-            if loc:
-                user_location_hint["city"] = loc
-            if tz:
-                user_location_hint["timezone"] = tz
-    web_search_tool = _build_web_search_tool(user_id, user_location_hint)
+    # Claude native web search is an Anthropic server-side tool: no other
+    # provider has one, and Kazi has no substitute service (SearchConnector
+    # refuses rather than inventing results). Offer it only on Anthropic. When
+    # it is not offered the prompt says so, or the model invents a search.
+    override_provider, _ = _resolve_model_override(room_id)
+    effective_provider = override_provider or llm.default_provider()
+    web_search_tool = None
+    if effective_provider == "anthropic":
+        user_location_hint = None
+        if preferences:
+            loc = preferences.get("location")
+            tz = preferences.get("timezone")
+            if loc or tz:
+                user_location_hint = {"type": "approximate"}
+                if loc:
+                    user_location_hint["city"] = loc
+                if tz:
+                    user_location_hint["timezone"] = tz
+        web_search_tool = _build_web_search_tool(user_id, user_location_hint)
     if web_search_tool:
         tools.append(web_search_tool)
 
@@ -1435,6 +1422,11 @@ async def run_agent_loop(
         context_prompt=context_prompt,
         memory_summary=memory_summary,
     )
+    if not web_search_tool:
+        system += (
+            "\n\nWeb search is not available in this environment. If the user asks "
+            "you to search the web, say plainly that you cannot search the web here."
+        )
 
     # ------------------------------------------------------------------ #
     #  Initialise or resume loop state                                    #
@@ -1569,7 +1561,8 @@ async def run_agent_loop(
             break
 
         # ---- Call LLM ------------------------------------------------ #
-        selected_model = _select_model(user_message, state.iteration)
+        # No keyword router picks the model: the room's chosen model when one is
+        # set, else the operator's default provider resolves its own default.
         override_provider, override_model = _resolve_model_override(room_id)
         try:
             response = await llm.create_message(
@@ -1579,7 +1572,7 @@ async def run_agent_loop(
                 temperature=0.3,
                 max_tokens=4096,
                 user_id=user_id,
-                model=override_model if override_model else selected_model,
+                model=override_model,
                 provider=override_provider,
                 use_prompt_cache=True,
             )
@@ -1856,6 +1849,21 @@ async def run_agent_loop(
                 break
 
             # Continue the loop — LLM will see results and decide next step
+
+        else:
+            # A stop reason we do not handle (a provider refusal, pause_turn,
+            # stop_sequence, ...). End the turn: re-sending the same messages
+            # would loop until the iteration cap and never answer. Any text the
+            # model already wrote was emitted above and is kept.
+            if stop_reason == "refusal":
+                yield AgentEvent("text_delta", {
+                    "text": "\n\n*(The model declined to answer this request.)*",
+                })
+            else:
+                yield AgentEvent("error", {
+                    "message": f"The model stopped for an unhandled reason ({stop_reason}).",
+                })
+            break
 
     # ---- Loop finished ----------------------------------------------- #
     if room_id and user_id:

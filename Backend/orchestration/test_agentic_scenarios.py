@@ -641,6 +641,16 @@ class SubAgentBudgetTests(SimpleTestCase):
         self.assertEqual(result["stopped_reason"], "token_budget")
         self.assertIn("token budget", result["summary"].lower())
 
+    def test_unknown_stop_reason_ends_sub_agent_after_one_call(self):
+        response = _make_llm_response(
+            [_text_block("Cannot continue.")], stop_reason="refusal",
+        )
+        result, _, create_message, _ = self._run(llm_return_value=response)
+
+        self.assertEqual(create_message.await_count, 1)
+        self.assertTrue(result["stopped_reason"].startswith("unhandled_stop"))
+        self.assertIn("Cannot continue.", result["summary"])
+
 
 # ---------------------------------------------------------------------------
 #  Scenario 12: An identical shell command runs again in the same turn
@@ -818,3 +828,54 @@ class Scenario13RepeatedNonShellCallTest(SimpleTestCase):
         self.assertEqual(len(results), 2)
         self.assertTrue(results[1].get("repeated"))
         self.assertIn("already ran in this turn", results[1].get("note", ""))
+
+
+# ---------------------------------------------------------------------------
+#  T-F4: an unhandled stop reason ends the turn after one model call
+# ---------------------------------------------------------------------------
+
+class UnknownStopReasonTests(SimpleTestCase):
+    """Re-sending the same messages on an unrecognised stop reason looped until
+    the iteration cap. The turn must end after a single call, keeping the text."""
+
+    @patch("orchestration.agent_loop.get_llm_client")
+    @patch("orchestration.agent_loop.cache")
+    def test_refusal_ends_turn_after_one_call(self, mock_cache, mock_get_llm):
+        mock_cache.get.return_value = None
+        mock_llm = MagicMock()
+        mock_llm.default_provider.return_value = "deepseek"
+        mock_llm.create_message = AsyncMock(return_value=_make_llm_response(
+            [_text_block("I can't help with that.")], stop_reason="refusal",
+        ))
+        mock_get_llm.return_value = mock_llm
+
+        from orchestration.agent_loop import run_agent_loop
+        events = run_async(collect_events(run_agent_loop(
+            user_message="do something disallowed",
+            context={"user_id": 1, "room_id": 1, "username": "test"},
+        )))
+
+        self.assertEqual(mock_llm.create_message.await_count, 1)
+        texts = "".join(e.data.get("text", "") for e in events if e.kind == "text_delta")
+        self.assertIn("I can't help with that.", texts)
+        self.assertIn("declined", texts)
+
+    @patch("orchestration.agent_loop.get_llm_client")
+    @patch("orchestration.agent_loop.cache")
+    def test_unrecognised_reason_ends_turn_after_one_call(self, mock_cache, mock_get_llm):
+        mock_cache.get.return_value = None
+        mock_llm = MagicMock()
+        mock_llm.default_provider.return_value = "deepseek"
+        mock_llm.create_message = AsyncMock(return_value=_make_llm_response(
+            [_text_block("Partial answer.")], stop_reason="pause_turn",
+        ))
+        mock_get_llm.return_value = mock_llm
+
+        from orchestration.agent_loop import run_agent_loop
+        events = run_async(collect_events(run_agent_loop(
+            user_message="tell me something",
+            context={"user_id": 1, "room_id": 1, "username": "test"},
+        )))
+
+        self.assertEqual(mock_llm.create_message.await_count, 1)
+        self.assertIn("error", [e.kind for e in events])

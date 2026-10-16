@@ -53,22 +53,26 @@ and the **encryption key**.
 
 ### 1a. Pick an LLM provider
 
-Set *one* of these (leave the others empty). Kazi falls back automatically if
-you set more than one, in this order: Anthropic → DeepSeek → Hugging Face.
+Set *one* of these. `LLM_DEFAULT_PROVIDER` names the provider that answers a chat
+turn; with it unset, the first one you configured wins in this order:
+Anthropic → DeepSeek → Hugging Face. Adding a second key later does **not** change
+which provider answers — the extra key only adds a fallback and more models for
+the per-room picker.
 
 === "Anthropic (recommended)"
 
     ```ini
     ANTHROPIC_API_KEY=sk-ant-...
+    LLM_DEFAULT_PROVIDER=anthropic
     ```
 
-    Best reasoning quality. Set `LLM_PLANNER_PROVIDER=anthropic` to route
-    planning here (it's the default).
+    Best reasoning quality.
 
 === "DeepSeek"
 
     ```ini
     DEEPSEEK_API_KEY=sk-...
+    LLM_DEFAULT_PROVIDER=deepseek
     ```
 
     Good balance of cost and quality. OpenAI-compatible with full tool-calling.
@@ -77,10 +81,10 @@ you set more than one, in this order: Anthropic → DeepSeek → Hugging Face.
 
     ```ini
     HF_API_TOKEN=hf_...
+    LLM_DEFAULT_PROVIDER=huggingface
     ```
 
-    Free tier available. The default executor provider. Some models require
-    router access on your HF token.
+    Free tier available. Some models require router access on your HF token.
 
 ### 1b. Leave `ENCRYPTION_KEY` blank (for dev)
 

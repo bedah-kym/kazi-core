@@ -258,33 +258,35 @@ class AgentLoopHelpersTests(SimpleTestCase):
 
 
 # ---------------------------------------------------------------------------
-#  Phase 6: Model Selection
+#  Phase 6: No keyword model router (T-F4)
 # ---------------------------------------------------------------------------
 
 class ModelSelectionTests(SimpleTestCase):
-    def test_simple_message_uses_haiku(self):
-        from orchestration.agent_loop import _select_model, MODEL_HAIKU
-        model = _select_model("What's the weather?", iteration=1)
-        self.assertEqual(model, MODEL_HAIKU)
+    """The keyword router is removed. The provider that answers is the operator's
+    LLM_DEFAULT_PROVIDER, not the first provider key that happens to be set."""
 
-    def test_complex_message_uses_sonnet(self):
-        from orchestration.agent_loop import _select_model, MODEL_SONNET
-        model = _select_model(
-            "Find flights to Mombasa and then email me the cheapest option",
-            iteration=1,
+    @override_settings(LLM_DEFAULT_PROVIDER="deepseek")
+    def test_default_provider_answers_with_both_keys_set(self):
+        from unittest.mock import AsyncMock
+
+        from orchestration.llm_client import LLMClient
+
+        client = LLMClient()
+        client.anthropic_key = "a-key"  # nosec B106 - test fixture
+        client.deepseek_key = "d-key"  # nosec B106 - test fixture
+        client._create_openai_message = AsyncMock(
+            return_value={"content": [], "stop_reason": "end_turn", "usage": {}}
         )
-        self.assertEqual(model, MODEL_SONNET)
+        client._call_anthropic_create = AsyncMock(
+            return_value={"content": [], "stop_reason": "end_turn", "usage": {}}
+        )
 
-    def test_long_message_uses_sonnet(self):
-        from orchestration.agent_loop import _select_model, MODEL_SONNET
-        long_msg = " ".join(["word"] * 30)
-        model = _select_model(long_msg, iteration=1)
-        self.assertEqual(model, MODEL_SONNET)
+        asyncio.run(client.create_message(
+            messages=[{"role": "user", "content": "hi"}], system="s",
+        ))
 
-    def test_multi_turn_always_sonnet(self):
-        from orchestration.agent_loop import _select_model, MODEL_SONNET
-        model = _select_model("ok", iteration=2)
-        self.assertEqual(model, MODEL_SONNET)
+        client._create_openai_message.assert_awaited_once()
+        client._call_anthropic_create.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

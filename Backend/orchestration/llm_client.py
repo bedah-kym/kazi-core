@@ -5,8 +5,10 @@ with fallback logic. Includes rate limiting and token budget enforcement.
 """
 import os
 import json
+import asyncio
 import threading
 import logging
+import weakref
 import httpx
 import hashlib
 from typing import Dict, List, Optional, Any
@@ -15,9 +17,20 @@ from django.conf import settings
 from django.core.cache import cache
 from django.utils import timezone
 
+from orchestration.model_catalog import find_model
+
 logger = logging.getLogger(__name__)
 
 _DATE_MARKER = "Current date and time:"
+
+# Which providers this client can speak to, and the settings attribute that
+# holds each one's key. Order is the documented fallback order.
+PROVIDER_ORDER = ("anthropic", "deepseek", "huggingface")
+_PROVIDER_KEY_ATTR = {
+    "anthropic": "anthropic_key",
+    "deepseek": "deepseek_key",
+    "huggingface": "hf_key",
+}
 
 
 def _inject_current_datetime(system_prompt: str, now=None) -> str:
@@ -32,6 +45,60 @@ def _inject_current_datetime(system_prompt: str, now=None) -> str:
     now = now or timezone.localtime()
     stamp = f"{_DATE_MARKER} {now.strftime('%Y-%m-%d %H:%M %A %Z')}."
     return f"{stamp}\n{system_prompt}"
+
+
+def _static_first(system: Optional[str]) -> str:
+    """Move the volatile date stamp after the static system text.
+
+    `_inject_current_datetime` puts the stamp first. Anthropic gets an explicit
+    `cache_control` breakpoint around the static part (see
+    `_call_anthropic_create`); OpenAI-style endpoints match a cached prefix
+    automatically, so there the stamp must come last or the static prefix
+    changes every minute and prompt caching never hits.
+    """
+    if system and system.startswith(_DATE_MARKER):
+        stamp, _, static = system.partition("\n")
+        return f"{static}\n{stamp}"
+    return system or ""
+
+
+# --------------------------------------------------------------------------- #
+#  Shared HTTP client                                                          #
+#  One httpx.AsyncClient per running event loop, reused across calls. A client  #
+#  is bound to the loop that created its transport, so keying by loop keeps      #
+#  tests (each with its own loop) and the ASGI server (one long-lived loop)     #
+#  both correct. Timeouts are passed per request.                               #
+# --------------------------------------------------------------------------- #
+_http_clients: "weakref.WeakKeyDictionary[Any, httpx.AsyncClient]" = weakref.WeakKeyDictionary()
+_http_clients_lock = threading.Lock()
+
+
+def _get_http_client() -> httpx.AsyncClient:
+    """Return the shared AsyncClient for the running loop, creating it lazily."""
+    loop = asyncio.get_running_loop()
+    client = _http_clients.get(loop)
+    if client is None or getattr(client, "is_closed", False):
+        with _http_clients_lock:
+            client = _http_clients.get(loop)
+            if client is None or getattr(client, "is_closed", False):
+                client = httpx.AsyncClient(timeout=120.0)
+                _http_clients[loop] = client
+    return client
+
+
+async def aclose_llm_clients() -> None:
+    """Close every shared HTTP client. Called on ASGI shutdown."""
+    with _http_clients_lock:
+        clients = list(_http_clients.values())
+        _http_clients.clear()
+    for client in clients:
+        close = getattr(client, "aclose", None)
+        if close is None:
+            continue
+        try:
+            await close()
+        except Exception:  # nosec B110 - best-effort close at shutdown
+            pass
 
 
 class LLMClient:
@@ -69,6 +136,43 @@ class LLMClient:
             return self.deepseek_url, self.deepseek_key, (model_name or self.deepseek_model)
         return self.hf_url, self.hf_key, (model_name or self.hf_model)
 
+    def _configured_providers(self) -> List[str]:
+        """Providers whose API key is set, in the documented fallback order."""
+        return [p for p in PROVIDER_ORDER if getattr(self, _PROVIDER_KEY_ATTR[p], None)]
+
+    def default_provider(self) -> Optional[str]:
+        """The provider that answers a chat turn when the room states no preference.
+
+        ``LLM_DEFAULT_PROVIDER`` names it. If that setting is unset (or names a
+        provider with no key), the first configured provider in the documented
+        order (anthropic, deepseek, huggingface) is used. Returns None when no
+        provider key is configured.
+        """
+        configured = self._configured_providers()
+        preferred = str(getattr(settings, "LLM_DEFAULT_PROVIDER", "") or "").strip().lower()
+        if preferred:
+            if preferred in configured:
+                return preferred
+            logger.warning(
+                "LLM_DEFAULT_PROVIDER=%r has no configured API key; using %r instead.",
+                preferred, configured[0] if configured else None,
+            )
+        return configured[0] if configured else None
+
+    def _auto_provider_order(self) -> List[str]:
+        """Default provider first, then the other configured providers.
+
+        Only the caller-visible behavior of ``create_message``/``stream_message``
+        with no explicit provider: the operator's default answers, the rest are
+        fallbacks if it errors.
+        """
+        default = self.default_provider()
+        order = [default] if default else []
+        for provider in self._configured_providers():
+            if provider not in order:
+                order.append(provider)
+        return order
+
     def _provider_order(self, model_role: str, provider_preference: Optional[str]) -> List[str]:
         role = (model_role or "default").lower()
         preference = (provider_preference or "").lower().strip()
@@ -81,7 +185,8 @@ class LLMClient:
         elif role == "reviewer":
             ordered = [getattr(settings, "LLM_REVIEWER_PROVIDER", "anthropic").lower(), "deepseek", "anthropic", "huggingface"]
         else:
-            ordered = ["anthropic", "deepseek", "huggingface"]
+            default = self.default_provider()
+            ordered = [default, "anthropic", "deepseek", "huggingface"] if default else ["anthropic", "deepseek", "huggingface"]
         # De-dup while preserving order
         seen = set()
         result: List[str] = []
@@ -220,10 +325,8 @@ class LLMClient:
     def _anthropic_to_openai_messages(self, system: str, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
         if system:
-            out.append({
-                "role": "system",
-                "content": system if isinstance(system, str) else self._message_content_to_text(system),
-            })
+            content = system if isinstance(system, str) else self._message_content_to_text(system)
+            out.append({"role": "system", "content": _static_first(content)})
         for m in messages:
             role = m.get("role")
             content = m.get("content")
@@ -365,15 +468,16 @@ class LLMClient:
         if oai_tools:
             body["tools"] = oai_tools
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.post(
-                url,
-                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                json=body,
-            )
-            if response.status_code != 200:
-                raise Exception(f"{provider} create_message Error {response.status_code}: {response.text}")
-            data = response.json()
+        client = _get_http_client()
+        response = await client.post(
+            url,
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json=body,
+            timeout=120.0,
+        )
+        if response.status_code != 200:
+            raise Exception(f"{provider} create_message Error {response.status_code}: {response.text}")
+        data = response.json()
 
         result = self._openai_response_to_anthropic(data)
         usage = result.get("usage", {})
@@ -747,20 +851,21 @@ class LLMClient:
             else:
                 body["tools"] = tools
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.post(
-                self.anthropic_url,
-                headers={
-                    "x-api-key": self.anthropic_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                json=body,
-            )
-            if response.status_code != 200:
-                raise Exception(f"Anthropic Error {response.status_code}: {response.text}")
+        client = _get_http_client()
+        response = await client.post(
+            self.anthropic_url,
+            headers={
+                "x-api-key": self.anthropic_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json=body,
+            timeout=120.0,
+        )
+        if response.status_code != 200:
+            raise Exception(f"Anthropic Error {response.status_code}: {response.text}")
 
-            data = response.json()
+        data = response.json()
 
         output_tokens = data.get("usage", {}).get("output_tokens", 0)
         input_tokens = data.get("usage", {}).get("input_tokens", 0)
@@ -785,10 +890,12 @@ class LLMClient:
         Call the Anthropic Messages API with full tool_use support.
 
         Args:
-            model: Override model (e.g. "claude-haiku-4-5-20251001" for simple tasks).
+            model: Override model (a catalog model for `provider`). A name that
+                does not belong to the provider it is sent to is dropped and the
+                provider's own default model is used instead.
             provider: If set ("anthropic" | "deepseek" | "huggingface"), route
-                directly to that provider using `model`; when None, fall back to
-                the provider ordering heuristic.
+                directly to that provider using `model`; when None, the operator's
+                default provider answers, with the others as fallbacks.
             use_prompt_cache: If True, wraps the system prompt with cache_control
                 for Anthropic prompt caching (~90% cost reduction on cached tokens).
 
@@ -815,6 +922,84 @@ class LLMClient:
                 f"Please try again later."
             )
 
+        if provider:
+            if provider == "anthropic" and not self.anthropic_key:
+                raise Exception("Anthropic API key is not configured.")
+            return await self._create_with_provider(
+                provider,
+                model=self._model_for_provider(provider, model),
+                messages=messages,
+                system=system,
+                tools=tools,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                user_id=user_id,
+                use_prompt_cache=use_prompt_cache,
+            )
+
+        # Auto routing: the operator's default provider answers first; the other
+        # configured providers are fallbacks only if it errors. A caller-supplied
+        # model is forwarded only when it belongs to the provider that answers,
+        # so a Claude model name never reaches DeepSeek/Hugging Face.
+        order = self._auto_provider_order()
+        if not order:
+            raise Exception("No valid API keys configured for DeepSeek, Anthropic, or Hugging Face.")
+        last_error: Optional[Exception] = None
+        for candidate in order:
+            try:
+                return await self._create_with_provider(
+                    candidate,
+                    model=self._model_for_provider(candidate, model),
+                    messages=messages,
+                    system=system,
+                    tools=tools,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    user_id=user_id,
+                    use_prompt_cache=use_prompt_cache,
+                )
+            except Exception as exc:
+                last_error = exc
+                logger.warning("%s create_message failed; trying fallback: %s", candidate, exc)
+        raise last_error if last_error else Exception("No LLM provider available.")
+
+    def _model_for_provider(self, provider: str, model: Optional[str]) -> Optional[str]:
+        """Forward a caller-supplied model only when it belongs to `provider`.
+
+        Keeps an Anthropic model name out of a DeepSeek/Hugging Face request; the
+        provider resolves its own default model instead.
+        """
+        if model and find_model(provider, model) is not None:
+            return model
+        return None
+
+    async def _create_with_provider(
+        self,
+        provider: str,
+        *,
+        model: Optional[str],
+        messages: List[Dict[str, Any]],
+        system: str,
+        tools: Optional[List[Dict[str, Any]]],
+        temperature: float,
+        max_tokens: int,
+        user_id: Optional[int],
+        use_prompt_cache: bool,
+    ) -> Dict[str, Any]:
+        """Dispatch one create_message to a named provider."""
+        if provider == "anthropic":
+            if not self.anthropic_key:
+                raise Exception("Anthropic API key is not configured.")
+            return await self._call_anthropic_create(
+                messages=messages,
+                system=system,
+                tools=tools,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                user_id=user_id,
+                model=model or self._model_for("anthropic", "default"),
+                use_prompt_cache=use_prompt_cache,
+            )
         if provider == "deepseek":
             return await self._create_openai_message(
                 provider="deepseek",
@@ -837,63 +1022,7 @@ class LLMClient:
                 tools=tools,
                 provider="huggingface",
             )
-        if provider == "anthropic":
-            if not self.anthropic_key:
-                raise Exception("Anthropic API key is not configured.")
-            return await self._call_anthropic_create(
-                messages=messages,
-                system=system,
-                tools=tools,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                user_id=user_id,
-                model=model or self.claude_model,
-                use_prompt_cache=use_prompt_cache,
-            )
-
-        # Auto routing (provider is None)
-        if self.anthropic_key:
-            try:
-                return await self._call_anthropic_create(
-                    messages=messages,
-                    system=system,
-                    tools=tools,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    user_id=user_id,
-                    model=model or self.claude_model,
-                    use_prompt_cache=use_prompt_cache,
-                )
-            except Exception as exc:
-                if not self.hf_key and not self.deepseek_key:
-                    raise
-                logger.warning(
-                    "Anthropic create_message failed; using OpenAI-compatible fallback: %s",
-                    exc,
-                )
-
-        # Fallback path (no Anthropic key or Anthropic call failed).
-        if self.deepseek_key:
-            return await self._create_openai_message(
-                provider="deepseek",
-                messages=messages,
-                system=system,
-                tools=tools,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                user_id=user_id,
-                model=None,
-            )
-        return await self._create_hf_fallback_message(
-            messages=messages,
-            system=system,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            user_id=user_id,
-            model=None,
-            tools=tools,
-            provider="huggingface",
-        )
+        raise Exception(f"Unknown LLM provider: {provider}")
 
     async def _stream_openai_fallback(
         self,
@@ -975,7 +1104,7 @@ class LLMClient:
                 max_tokens=max_tokens,
                 user_id=user_id,
                 provider="deepseek",
-                model=model,
+                model=self._model_for_provider("deepseek", model),
             ):
                 yield event
             return
@@ -988,7 +1117,7 @@ class LLMClient:
                 max_tokens=max_tokens,
                 user_id=user_id,
                 provider="huggingface",
-                model=model,
+                model=self._model_for_provider("huggingface", model),
             ):
                 yield event
             return
@@ -1007,7 +1136,9 @@ class LLMClient:
                 yield event
             return
 
-        if self.anthropic_key:
+        # Auto routing: the operator's default provider answers.
+        default = self.default_provider()
+        if default == "anthropic":
             emitted = False
             try:
                 async for event in self._stream_anthropic_events(
@@ -1016,7 +1147,7 @@ class LLMClient:
                     tools=tools,
                     temperature=temperature,
                     max_tokens=max_tokens,
-                    model=model,
+                    model=self._model_for_provider("anthropic", model),
                     use_prompt_cache=use_prompt_cache,
                 ):
                     emitted = True
@@ -1035,19 +1166,36 @@ class LLMClient:
                     exc,
                 )
 
-        # Fallback stream: text-only (no tool_use blocks)
-        fallback_provider = "deepseek" if self.deepseek_key else "huggingface"
-        async for event in self._stream_openai_fallback(
-            messages=messages,
-            system=system,
-            tools=tools,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            user_id=user_id,
-            provider=fallback_provider,
-            model=None,
-        ):
-            yield event
+            # Fallback stream: text-only (no tool_use blocks)
+            fallback_provider = "deepseek" if self.deepseek_key else "huggingface"
+            async for event in self._stream_openai_fallback(
+                messages=messages,
+                system=system,
+                tools=tools,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                user_id=user_id,
+                provider=fallback_provider,
+                model=None,
+            ):
+                yield event
+            return
+
+        if default in ("deepseek", "huggingface"):
+            async for event in self._stream_openai_fallback(
+                messages=messages,
+                system=system,
+                tools=tools,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                user_id=user_id,
+                provider=default,
+                model=self._model_for_provider(default, model),
+            ):
+                yield event
+            return
+
+        raise Exception("No valid API keys configured for DeepSeek, Anthropic, or Hugging Face.")
 
     async def _stream_anthropic_events(
         self,
@@ -1097,99 +1245,100 @@ class LLMClient:
             else:
                 body["tools"] = tools
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            async with client.stream(
-                "POST",
-                self.anthropic_url,
-                headers={
-                    "x-api-key": self.anthropic_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                json=body,
-            ) as response:
-                if response.status_code != 200:
-                    error_body = await response.aread()
-                    raise Exception(
-                        f"Anthropic Stream Error {response.status_code}: {error_body}"
-                    )
+        client = _get_http_client()
+        async with client.stream(
+            "POST",
+            self.anthropic_url,
+            headers={
+                "x-api-key": self.anthropic_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json=body,
+            timeout=120.0,
+        ) as response:
+            if response.status_code != 200:
+                error_body = await response.aread()
+                raise Exception(
+                    f"Anthropic Stream Error {response.status_code}: {error_body}"
+                )
 
-                # Track active content blocks by index
-                active_blocks: Dict[int, Dict[str, Any]] = {}
-                accumulated_json: Dict[int, str] = {}
+            # Track active content blocks by index
+            active_blocks: Dict[int, Dict[str, Any]] = {}
+            accumulated_json: Dict[int, str] = {}
 
-                async for line in response.aiter_lines():
-                    if not line or not line.startswith("data: "):
-                        continue
-                    payload = line[6:]
-                    if payload.strip() == "[DONE]":
-                        break
+            async for line in response.aiter_lines():
+                if not line or not line.startswith("data: "):
+                    continue
+                payload = line[6:]
+                if payload.strip() == "[DONE]":
+                    break
 
-                    try:
-                        event = json.loads(payload)
-                    except json.JSONDecodeError:
-                        continue
+                try:
+                    event = json.loads(payload)
+                except json.JSONDecodeError:
+                    continue
 
-                    event_type = event.get("type", "")
+                event_type = event.get("type", "")
 
-                    if event_type == "content_block_start":
-                        idx = event.get("index", 0)
-                        block = event.get("content_block", {})
-                        active_blocks[idx] = block
-                        if block.get("type") == "tool_use":
-                            accumulated_json[idx] = ""
-                            yield {
-                                "type": "tool_use_start",
-                                "id": block.get("id", ""),
-                                "name": block.get("name", ""),
-                            }
-
-                    elif event_type == "content_block_delta":
-                        idx = event.get("index", 0)
-                        delta = event.get("delta", {})
-                        delta_type = delta.get("type", "")
-
-                        if delta_type == "text_delta":
-                            text = delta.get("text", "")
-                            if text:
-                                yield {"type": "text", "text": text}
-
-                        elif delta_type == "input_json_delta":
-                            partial = delta.get("partial_json", "")
-                            if idx in accumulated_json:
-                                accumulated_json[idx] += partial
-                            yield {
-                                "type": "tool_use_input",
-                                "partial_json": partial,
-                            }
-
-                    elif event_type == "content_block_stop":
-                        idx = event.get("index", 0)
-                        block = active_blocks.get(idx, {})
-                        if block.get("type") == "tool_use":
-                            raw_json = accumulated_json.pop(idx, "{}")
-                            try:
-                                parsed_input = json.loads(raw_json)
-                            except Exception:
-                                parsed_input = {}
-                            yield {
-                                "type": "tool_use_end",
-                                "id": block.get("id", ""),
-                                "name": block.get("name", ""),
-                                "input": parsed_input,
-                            }
-
-                    elif event_type == "message_delta":
-                        delta = event.get("delta", {})
-                        usage = event.get("usage", {})
+                if event_type == "content_block_start":
+                    idx = event.get("index", 0)
+                    block = event.get("content_block", {})
+                    active_blocks[idx] = block
+                    if block.get("type") == "tool_use":
+                        accumulated_json[idx] = ""
                         yield {
-                            "type": "message_done",
-                            "stop_reason": delta.get("stop_reason", ""),
-                            "usage": usage,
+                            "type": "tool_use_start",
+                            "id": block.get("id", ""),
+                            "name": block.get("name", ""),
                         }
 
-                    elif event_type == "message_stop":
-                        pass  # Already handled via message_delta
+                elif event_type == "content_block_delta":
+                    idx = event.get("index", 0)
+                    delta = event.get("delta", {})
+                    delta_type = delta.get("type", "")
+
+                    if delta_type == "text_delta":
+                        text = delta.get("text", "")
+                        if text:
+                            yield {"type": "text", "text": text}
+
+                    elif delta_type == "input_json_delta":
+                        partial = delta.get("partial_json", "")
+                        if idx in accumulated_json:
+                            accumulated_json[idx] += partial
+                        yield {
+                            "type": "tool_use_input",
+                            "partial_json": partial,
+                        }
+
+                elif event_type == "content_block_stop":
+                    idx = event.get("index", 0)
+                    block = active_blocks.get(idx, {})
+                    if block.get("type") == "tool_use":
+                        raw_json = accumulated_json.pop(idx, "{}")
+                        try:
+                            parsed_input = json.loads(raw_json)
+                        except Exception:
+                            parsed_input = {}
+                        yield {
+                            "type": "tool_use_end",
+                            "id": block.get("id", ""),
+                            "name": block.get("name", ""),
+                            "input": parsed_input,
+                        }
+
+                elif event_type == "message_delta":
+                    delta = event.get("delta", {})
+                    usage = event.get("usage", {})
+                    yield {
+                        "type": "message_done",
+                        "stop_reason": delta.get("stop_reason", ""),
+                        "usage": usage,
+                    }
+
+                elif event_type == "message_stop":
+                    pass  # Already handled via message_delta
 
     # ------------------------------------------------------------------ #
     #  Original methods (kept for backward compatibility)                 #
@@ -1197,76 +1346,78 @@ class LLMClient:
 
     async def _call_claude(self, system_prompt: str, user_prompt: str, temperature: float, max_tokens: int, model_name: Optional[str] = None) -> str:
         """Call Anthropic API"""
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                self.anthropic_url,
-                headers={
-                    "x-api-key": self.anthropic_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json"
-                },
-                json={
-                    "model": model_name or self.claude_model,
-                    "max_tokens": max_tokens,
-                    "temperature": temperature,
-                    "system": system_prompt,
-                    "messages": [
-                        {"role": "user", "content": user_prompt}
-                    ]
-                }
-            )
+        client = _get_http_client()
+        response = await client.post(
+            self.anthropic_url,
+            headers={
+                "x-api-key": self.anthropic_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json"
+            },
+            json={
+                "model": model_name or self.claude_model,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "system": system_prompt,
+                "messages": [
+                    {"role": "user", "content": user_prompt}
+                ]
+            },
+            timeout=30.0,
+        )
 
-            if response.status_code != 200:
-                raise Exception(f"Anthropic Error {response.status_code}: {response.text}")
+        if response.status_code != 200:
+            raise Exception(f"Anthropic Error {response.status_code}: {response.text}")
 
-            data = response.json()
-            return data["content"][0]["text"]
+        data = response.json()
+        return data["content"][0]["text"]
 
     async def _call_claude_stream(self, system_prompt: str, user_prompt: str, temperature: float, max_tokens: int, model_name: Optional[str] = None):
         """
         Stream from Anthropic Messages API.
         Yields small text deltas to reduce perceived latency and token waste.
         """
-        async with httpx.AsyncClient(timeout=40.0) as client:
-            async with client.stream(
-                "POST",
-                self.anthropic_url,
-                headers={
-                    "x-api-key": self.anthropic_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json"
-                },
-                json={
-                    "model": model_name or self.claude_model,
-                    "max_tokens": max_tokens,
-                    "temperature": temperature,
-                    "system": system_prompt,
-                    "messages": [
-                        {"role": "user", "content": user_prompt}
-                    ],
-                    "stream": True
-                }
-            ) as response:
-                if response.status_code != 200:
-                    body = await response.aread()
-                    raise Exception(f"Anthropic Stream Error {response.status_code}: {body}")
+        client = _get_http_client()
+        async with client.stream(
+            "POST",
+            self.anthropic_url,
+            headers={
+                "x-api-key": self.anthropic_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json"
+            },
+            json={
+                "model": model_name or self.claude_model,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "system": system_prompt,
+                "messages": [
+                    {"role": "user", "content": user_prompt}
+                ],
+                "stream": True
+            },
+            timeout=40.0,
+        ) as response:
+            if response.status_code != 200:
+                body = await response.aread()
+                raise Exception(f"Anthropic Stream Error {response.status_code}: {body}")
 
-                async for line in response.aiter_lines():
-                    if not line or not line.startswith("data: "):
-                        continue
-                    payload = line[6:]
-                    if payload.strip() == "[DONE]":
-                        break
-                    try:
-                        event = json.loads(payload)
-                        # content_block_delta carries the text diff
-                        if event.get("type") == "content_block_delta":
-                            delta = event.get("delta", {})
-                            text = delta.get("text")
-                            if text:
-                                yield text
-                    except (json.JSONDecodeError, KeyError, IndexError, TypeError):
-                        continue
+            async for line in response.aiter_lines():
+                if not line or not line.startswith("data: "):
+                    continue
+                payload = line[6:]
+                if payload.strip() == "[DONE]":
+                    break
+                try:
+                    event = json.loads(payload)
+                    # content_block_delta carries the text diff
+                    if event.get("type") == "content_block_delta":
+                        delta = event.get("delta", {})
+                        text = delta.get("text")
+                        if text:
+                            yield text
+                except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+                    continue
 
     async def _call_huggingface(
         self,
@@ -1281,10 +1432,11 @@ class LLMClient:
         """Call an OpenAI-compatible /v1/chat/completions API (Hugging Face or DeepSeek)."""
         url, key, model = self._openai_config(provider, model_name)
 
-        # Build messages array in OpenAI/ChatML style
+        # Build messages array in OpenAI/ChatML style. The volatile date stamp
+        # goes last so the static system prefix is stable for prompt caching.
         messages = []
         if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "system", "content": _static_first(system_prompt)})
 
         user_content = user_prompt
         if json_mode:
@@ -1293,47 +1445,48 @@ class LLMClient:
 
         messages.append({"role": "user", "content": user_content})
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                url,
-                headers={
-                    "Authorization": f"Bearer {key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": model,
-                    "messages": messages,
-                    "max_tokens": max_tokens,
-                    "temperature": temperature,
-                },
+        client = _get_http_client()
+        response = await client.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model,
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+            },
+            timeout=60.0,
+        )
+
+        if response.status_code != 200:
+            raise Exception(f"{provider} Error {response.status_code}: {response.text}")
+
+        data = response.json()
+
+        # HF's OpenAI-compatible response format:
+        # {
+        #   "choices": [
+        #       {
+        #           "message": {
+        #               "role": "assistant",
+        #               "content": "..."
+        #           },
+        #           ...
+        #       }
+        #   ],
+        #   ...
+        # }
+        try:
+            return (
+                data["choices"][0]["message"]["content"]
+                .strip()
             )
-
-            if response.status_code != 200:
-                raise Exception(f"{provider} Error {response.status_code}: {response.text}")
-
-            data = response.json()
-
-            # HF's OpenAI-compatible response format:
-            # {
-            #   "choices": [
-            #       {
-            #           "message": {
-            #               "role": "assistant",
-            #               "content": "..."
-            #           },
-            #           ...
-            #       }
-            #   ],
-            #   ...
-            # }
-            try:
-                return (
-                    data["choices"][0]["message"]["content"]
-                    .strip()
-                )
-            except Exception:
-                # Fallback: just return the raw data stringified
-                return str(data)
+        except Exception:
+            # Fallback: just return the raw data stringified
+            return str(data)
 
     async def _stream_huggingface(self, system_prompt: str, user_prompt: str, temperature: float, max_tokens: int, model_name: Optional[str] = None, provider: str = "huggingface"):
         """Stream from an OpenAI-compatible SSE endpoint (Hugging Face or DeepSeek)."""
@@ -1341,41 +1494,42 @@ class LLMClient:
 
         messages = []
         if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "system", "content": _static_first(system_prompt)})
         messages.append({"role": "user", "content": user_prompt})
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            async with client.stream(
-                "POST",
-                url,
-                headers={
-                    "Authorization": f"Bearer {key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": model,
-                    "messages": messages,
-                    "max_tokens": max_tokens,
-                    "temperature": temperature,
-                    "stream": True,
-                },
-            ) as response:
-                if response.status_code != 200:
-                    error_text = await response.aread()
-                    raise Exception(f"{provider} Stream Error {response.status_code}: {error_text}")
+        client = _get_http_client()
+        async with client.stream(
+            "POST",
+            url,
+            headers={
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model,
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "stream": True,
+            },
+            timeout=60.0,
+        ) as response:
+            if response.status_code != 200:
+                error_text = await response.aread()
+                raise Exception(f"{provider} Stream Error {response.status_code}: {error_text}")
 
-                async for line in response.aiter_lines():
-                    if line.startswith("data: "):
-                        data_str = line[6:]
-                        if data_str.strip() == "[DONE]":
-                            break
-                        try:
-                            data = json.loads(data_str)
-                            delta = data["choices"][0]["delta"]
-                            if "content" in delta:
-                                yield delta["content"]
-                        except (json.JSONDecodeError, KeyError, IndexError, TypeError):
-                            continue
+            async for line in response.aiter_lines():
+                if line.startswith("data: "):
+                    data_str = line[6:]
+                    if data_str.strip() == "[DONE]":
+                        break
+                    try:
+                        data = json.loads(data_str)
+                        delta = data["choices"][0]["delta"]
+                        if "content" in delta:
+                            yield delta["content"]
+                    except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+                        continue
 
     def extract_json(self, text: str) -> Dict:
         """

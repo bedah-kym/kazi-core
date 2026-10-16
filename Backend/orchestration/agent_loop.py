@@ -714,6 +714,29 @@ def _harness_budget_note(used: int, total: int) -> str:
     )
 
 
+def _bound_reached_note(state: "LoopState") -> str:
+    """The harness line shown when the turn's budget runs out (T-F3).
+
+    It says plainly what ran, so "here's what I managed" is never a promise it
+    does not keep, and offers the same reply a budget request does so the user
+    can extend the turn (deliverable 6). It is the harness's words, not the
+    model's, and claims no success.
+    """
+    ran = state.tool_call_count
+    tools = list(dict.fromkeys(
+        entry.get("name") for entry in state.tool_call_log if entry.get("name")
+    ))
+    if ran:
+        detail = f"{ran} tool call{'s' if ran != 1 else ''} ran"
+        detail += f" ({', '.join(tools)})" if tools else ""
+    else:
+        detail = "no tool calls had run yet"
+    return (
+        f"I've used up this turn's budget: {detail}. "
+        "Reply **more budget** and I'll continue from where it stopped."
+    )
+
+
 def _with_budget_note(
     content_blocks: List[Dict[str, Any]],
     state: "LoopState",
@@ -1796,7 +1819,13 @@ async def run_agent_loop(
         state.start_time = time.monotonic()
         state.awaiting_budget = False
         state.budget_extensions += 1
-        state.token_budget = (state.token_budget or default_budget) + default_budget
+        # One base budget per grant, and always a full base budget of headroom
+        # from where the turn stopped: a bound that was reached has already
+        # overspent the old bound, so adding alone could leave no room to work.
+        state.token_budget = max(
+            (state.token_budget or default_budget) + default_budget,
+            state.tokens_used + default_budget,
+        )
         state.tainted = state.tainted or await sync_to_async(_conversation_tainted)(room_id)
         _append_note_to_last_user(
             state.messages,
@@ -1834,6 +1863,14 @@ async def run_agent_loop(
             tainted=(history_tainted or await sync_to_async(_conversation_tainted)(room_id)),
             token_budget=default_budget,
         )
+        # The model sees what it has from the very first call (T-F3 follow-up),
+        # not only after the first tool batch. The note rides on the new user
+        # message, so the cached prompt prefix (system + tools) is untouched.
+        if user_message:
+            _append_note_to_last_user(
+                state.messages,
+                _harness_budget_note(state.tokens_used, state.token_budget),
+            )
 
     # Track seen tool calls for dedup
     seen_calls: set = set()
@@ -1866,12 +1903,16 @@ async def run_agent_loop(
             })
             break
 
-        # The one bound: work done this turn, in work tokens (T-F3).
+        # The one bound: work done this turn, in work tokens (T-F3). Reaching
+        # it without the model asking keeps the state exactly like a budget
+        # request does, so the user can extend the turn in chat (T-F3 follow-up).
         if state.tokens_used >= state.token_budget:
             state.end_reason = "budget"
+            state.awaiting_budget = True
+            if room_id and user_id:
+                save_loop_state(room_id, user_id, state)
             yield AgentEvent("error", {
-                "message": "I've used up this turn's budget. Here's what I "
-                           "managed so far; nothing further was run.",
+                "message": _bound_reached_note(state),
             })
             break
 

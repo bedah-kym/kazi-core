@@ -179,6 +179,16 @@ class BudgetExtendReplyTests(SimpleTestCase):
         ):
             self.assertTrue(is_budget_extend_reply(phrase), phrase)
 
+    def test_a_natural_yes_or_continue_also_grants_it(self):
+        # A whole-message yes/ok (the approval replies) or a continue phrase
+        # resumes the paused turn, so people are not punished for answering
+        # naturally (T-F3 follow-up).
+        for phrase in (
+            "yes", "Yes.", "y", "ok", "OK!", "okay", "sure", "yeah",
+            "continue", "Continue.", "go on", "carry on",
+        ):
+            self.assertTrue(is_budget_extend_reply(phrase), phrase)
+
     def test_anything_else_is_not_a_grant(self):
         for phrase in (
             "can I have more budget?",
@@ -186,9 +196,11 @@ class BudgetExtendReplyTests(SimpleTestCase):
             "budget",
             "more",
             "more money",
-            "yes",
-            "ok",
             "keep going",
+            "yes but only the first part",
+            "continue with the other file",
+            "no",
+            "stop",
             "",
             None,
         ):

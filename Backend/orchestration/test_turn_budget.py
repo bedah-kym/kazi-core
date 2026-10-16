@@ -194,7 +194,7 @@ class SingleBoundTests(_LoopHarness):
 
 class BudgetVisibilityTests(_LoopHarness):
     @override_settings(AGENT_TURN_TOKEN_BUDGET=50000, AGENT_TURN_TOKEN_BUDGET_MAX=500000)
-    def test_model_sees_the_budget_on_the_next_call_only(self):
+    def test_model_sees_the_budget_on_the_first_call_and_after(self):
         from orchestration.agent_loop import run_agent_loop
 
         patches = self._patch_stack()
@@ -234,7 +234,11 @@ class BudgetVisibilityTests(_LoopHarness):
         )))
 
         first, second = snapshots[0], snapshots[1]
-        self.assertNotIn("[Harness: turn budget", json.dumps(first["messages"]))
+        # The model now sees the budget on the very first call, on the new user
+        # message; the system prompt (the cached prefix) is never touched.
+        first_text = json.dumps(first["messages"])
+        self.assertIn("[Harness: turn budget", first_text)
+        self.assertIn("left", first_text)
         self.assertNotIn("[Harness: turn budget", first["system"])
         self.assertNotIn("[Harness: turn budget", second["system"])
         second_text = json.dumps(second["messages"])
@@ -333,6 +337,66 @@ class RequestMoreBudgetTests(_LoopHarness):
             context={"user_id": 7, "room_id": 9, "username": "t"},
         )))
 
+        self.assertEqual(mock_exec.await_count, 1)
+        done = next(e for e in events if e.kind == "done")
+        self.assertEqual(done.data["end_reason"], "finished")
+
+    @override_settings(AGENT_TURN_TOKEN_BUDGET=1000, AGENT_TURN_TOKEN_BUDGET_MAX=100000)
+    def test_a_bound_reached_turn_resumes_on_a_grant_without_repeating(self):
+        from orchestration.agent_loop import (
+            load_loop_state, resume_with_more_budget, run_agent_loop,
+        )
+
+        patches = self._patch_stack()
+        mocks = [p.start() for p in patches]
+        self.addCleanup(lambda: [p.stop() for p in patches])
+        mock_cache, mock_exec, mock_llm_client = mocks[4], mocks[3], mocks[2]
+        self._dict_cache(mock_cache)
+        mock_exec.return_value = {"status": "success"}
+        llm = self._llm(side_effect=[
+            _make_llm_response(
+                [_tool_use_block("t1", "get_weather", {"city": "Nairobi"})],
+                stop_reason="tool_use",
+                usage={"input_tokens": 6000, "output_tokens": 1200},
+            ),
+        ])
+        mock_llm_client.return_value = llm
+
+        events = self._run(collect_events(run_agent_loop(
+            user_message="long task",
+            context={"user_id": 7, "room_id": 9, "username": "t"},
+        )))
+
+        # The bound is reached without the model asking, but the state is kept
+        # and the harness line says plainly what ran.
+        errors = [e for e in events if e.kind == "error"]
+        self.assertTrue(errors)
+        self.assertIn("budget", errors[-1].data["message"].lower())
+        self.assertIn("tool call", errors[-1].data["message"].lower())
+        done = next(e for e in events if e.kind == "done")
+        self.assertEqual(done.data["end_reason"], "budget")
+        self.assertEqual(mock_exec.await_count, 1)
+        state = load_loop_state(9, 7)
+        self.assertTrue(state and state.awaiting_budget)
+
+        # A grant resumes from where it stopped; the finished call is answered
+        # from its earlier result, not run a second time.
+        llm.create_message = AsyncMock(side_effect=[
+            _make_llm_response(
+                [_text_block("Resuming."),
+                 _tool_use_block("t2", "get_weather", {"city": "Nairobi"})],
+                stop_reason="tool_use",
+                usage={"input_tokens": 6200, "output_tokens": 20},
+            ),
+            _make_llm_response(
+                [_text_block("All done.")],
+                stop_reason="end_turn",
+                usage={"input_tokens": 6400, "output_tokens": 10},
+            ),
+        ])
+        events = self._run(collect_events(resume_with_more_budget(
+            context={"user_id": 7, "room_id": 9, "username": "t"},
+        )))
         self.assertEqual(mock_exec.await_count, 1)
         done = next(e for e in events if e.kind == "done")
         self.assertEqual(done.data["end_reason"], "finished")

@@ -18,10 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   task. The bound is configurable (`AGENT_TURN_TOKEN_BUDGET`, largest value
   `AGENT_TURN_TOKEN_BUDGET_MAX`); the all-or-nothing "Enforce agent budget
   caps" switch is gone, and an install where it was off maps to the largest
-  bound. The model is told what is left on every call after the first and can
-  end a turn with "I need more budget to finish" (the `request_more_budget`
-  tool); the user grants more with the whole-message reply **more budget** and
-  the work resumes where it stopped, without repeating a finished step.
+  bound. The model is told what is left from its first call (the note rides on
+  the new user message, so the cached system + tools prefix is untouched) and on
+  every call after, and can end a turn with "I need more budget to finish" (the
+  `request_more_budget` tool); the user grants more with a whole-message reply
+  (**more budget**, a plain **yes**/**ok**, or **continue**/**go on**/**carry
+  on**) and the work resumes where it stopped, without repeating a finished
+  step. A whole-message **no** or **stop** ends the paused turn; any other
+  message drops the paused work (the reply says so once) and starts a new turn.
+  A turn that reaches the bound without the model asking keeps its state too:
+  the harness note says plainly what ran and offers the same reply, and a grant
+  resumes from where it stopped.
   Delegated runs get a share of what the parent has left. Hard runaway
   backstops (10k iterations, 10k tool calls, a 30-minute wall clock) stay far
   above the bound, and the native web-search tool is rebuilt from the live

@@ -167,6 +167,37 @@ class CoordinatorBranchTests(SimpleTestCase):
         resume.assert_called_once()
         self.assertTrue(any(c.args[1] == "ok" for c in send_chunk.await_args_list))
 
+    def test_a_whole_message_yes_during_a_budget_pause_resumes_the_turn(self):
+        for query in ("yes", "ok", "continue", "go on", "carry on"):
+            resume = MagicMock(side_effect=_event_stream)
+            result, mocks, send_chunk = self._run(
+                query,
+                patches={
+                    "orchestration.coordinator.has_pending_budget_state": AsyncMock(return_value=True),
+                    "orchestration.coordinator.resume_with_more_budget": resume,
+                    "orchestration.coordinator.clear_loop_state": MagicMock(),
+                },
+            )
+            resume.assert_called_once()
+            self.assertTrue(any(c.args[1] == "ok" for c in send_chunk.await_args_list), query)
+
+    def test_a_whole_message_stop_ends_the_budget_pause(self):
+        for query in ("no", "stop"):
+            resume = MagicMock(side_effect=AssertionError("must not resume"))
+            result, mocks, send_chunk = self._run(
+                query,
+                patches={
+                    "orchestration.coordinator.has_pending_budget_state": AsyncMock(return_value=True),
+                    "orchestration.coordinator.resume_with_more_budget": resume,
+                    "orchestration.coordinator.clear_loop_state": MagicMock(),
+                    "orchestration.coordinator.run_agent_loop": _event_stream,
+                },
+            )
+            resume.assert_not_called()
+            mocks["clear_loop_state"].assert_called_once()
+            sent = "".join(c.args[1] for c in send_chunk.await_args_list)
+            self.assertIn("stopped", sent.lower(), query)
+
     def test_a_different_message_discards_the_paused_budget_turn(self):
         resume = MagicMock(side_effect=AssertionError("must not resume"))
         result, mocks, send_chunk = self._run(
@@ -180,6 +211,11 @@ class CoordinatorBranchTests(SimpleTestCase):
         )
         resume.assert_not_called()
         mocks["clear_loop_state"].assert_called_once()
+        # The reply says once that the paused work was dropped, then the new turn
+        # runs as today.
+        sent = "".join(c.args[1] for c in send_chunk.await_args_list)
+        self.assertIn("dropped", sent.lower())
+        self.assertTrue(any(c.args[1] == "ok" for c in send_chunk.await_args_list))
 
     def test_a_directive_reply_discards_the_paused_budget_turn(self):
         result, mocks, send_chunk = self._run(

@@ -106,11 +106,21 @@ a long conversation does not spend the budget just by being resent.
 | `AGENT_TURN_TOKEN_BUDGET` | `50000` | Work-token bound for one agent turn. |
 | `AGENT_TURN_TOKEN_BUDGET_MAX` | `500000` | Largest bound an operator may choose; also the bound a legacy caps-off install maps to. |
 
-The model sees the budget used and left on every call after the first, and can
-end a turn by calling `request_more_budget` (which reads to the user as its own
-message). The user grants more with the whole-message reply **more budget** and
-the work resumes where it stopped. Reaching the bound ends the turn with a plain
-harness note and no success claim.
+The model sees the budget used and left from its very first call (the note rides
+on the new user message; the cached system + tools prefix is untouched) and on
+every call after, and can end a turn by calling `request_more_budget` (which
+reads to the user as its own message). The user grants more with a whole-message
+reply — **more budget**, or a plain **yes**/**ok**, or **continue**,
+**go on**, **carry on** — and the work resumes where it stopped, without
+repeating a finished step. A whole-message **no** or **stop** ends the paused
+turn. Any other message drops the paused work (the reply says so once) and
+starts a new turn as usual.
+
+Reaching the bound without the model asking ends the turn the same way: the
+state is kept, the harness note says plainly what ran (how many tool calls and
+which tools) and offers the same reply, and a grant resumes from where it
+stopped. The note is the harness's words, separate from the model's, and claims
+no success.
 
 The old all-or-nothing **Enforce agent budget caps** switch (Settings >
 Capabilities) is gone; the per-turn bound is the setting above. A stored off

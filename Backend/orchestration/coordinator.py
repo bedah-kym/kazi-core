@@ -693,10 +693,22 @@ class OrchestrationCoordinator:
                 await broadcast_chunk("Continuing with more budget.\n\n", harness=True)
                 await _handle_agent_budget_resume(ctx_prompt, mem_sum, env_block)
                 pending_handled = True
+            elif is_decline_reply(query) or is_cancel_command(query):
+                # A whole-message no/stop ends the paused turn for good.
+                clear_loop_state(room_id, user_id)
+                await broadcast_chunk(
+                    "Okay, I've stopped there and dropped the paused work.\n\n",
+                    harness=True,
+                )
+                pending_handled = True
             else:
                 # Anything else the user writes starts a new turn, as today; the
-                # paused budget turn is discarded rather than resumed by accident.
+                # paused budget turn is discarded, and the reply says so once.
                 clear_loop_state(room_id, user_id)
+                await broadcast_chunk(
+                    "I dropped the paused work and started fresh with this message.\n\n",
+                    harness=True,
+                )
 
         if not pending_handled:
             # --- Agentic loop path ---

@@ -614,7 +614,7 @@ LLM_CACHE_MIN_TEMP = float(os.environ.get('LLM_CACHE_MIN_TEMP', 0.3))
 # raise AGENT_TURN_TOKEN_BUDGET up to AGENT_TURN_TOKEN_BUDGET_MAX; a legacy
 # install whose operator had the old caps switch off maps to the max, so it
 # never silently gets a smaller budget.
-AGENT_TURN_TOKEN_BUDGET = int(os.environ.get('AGENT_TURN_TOKEN_BUDGET', 50000))
+AGENT_TURN_TOKEN_BUDGET = int(os.environ.get('AGENT_TURN_TOKEN_BUDGET', 100000))
 AGENT_TURN_TOKEN_BUDGET_MAX = int(os.environ.get('AGENT_TURN_TOKEN_BUDGET_MAX', 500000))
 
 # Manager agent LLM fallback

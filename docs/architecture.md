@@ -50,7 +50,7 @@ One bound ends a normal turn — a **work-token budget** the model can see:
 
 - The turn's budget counts what the model generates plus the input it newly
   reads (new messages and tool results). The system prompt, tool list and
-  history resent on every call are not work, so the bound (default 50k,
+  history resent on every call are not work, so the bound (default 100k,
   `AGENT_TURN_TOKEN_BUDGET`) does not shrink as a conversation grows.
 - The model is shown what is left on every call after the first, and can end a
   turn with "I need more budget to finish" (the `request_more_budget` tool). The

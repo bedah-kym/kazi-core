@@ -1168,6 +1168,20 @@ class CapsOffMappingTests(SimpleTestCase):
         self.assertEqual(_turn_token_budget(True), 100000)
 
 
+class DefaultTurnBudgetTests(SimpleTestCase):
+    def test_default_bound_is_100000_when_the_setting_is_not_overridden(self):
+        from django.conf import settings as django_settings
+
+        from orchestration.agent_loop import (
+            DEFAULT_TURN_TOKEN_BUDGET,
+            _turn_token_budget,
+        )
+
+        self.assertEqual(DEFAULT_TURN_TOKEN_BUDGET, 100000)
+        self.assertEqual(django_settings.AGENT_TURN_TOKEN_BUDGET, 100000)
+        self.assertEqual(_turn_token_budget(True), 100000)
+
+
 class SearchAllowanceTests(_LoopHarness):
     @staticmethod
     def _search_uses(kwargs):

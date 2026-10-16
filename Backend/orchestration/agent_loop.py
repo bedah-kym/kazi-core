@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 # These replace the old separate iteration, tool-call, shell-session and token
 # caps as the thing that ends a normal turn. Remaining constants are hard
 # runaway backstops, far above the bound; a healthy turn never reaches them.
-DEFAULT_TURN_TOKEN_BUDGET = 50000
+DEFAULT_TURN_TOKEN_BUDGET = 100000
 # The largest bound an operator may configure; a legacy install whose operator
 # had the old caps switch off maps here, so it never silently shrinks.
 DEFAULT_TURN_TOKEN_BUDGET_MAX = 500000

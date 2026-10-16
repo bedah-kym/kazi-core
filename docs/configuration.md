@@ -103,7 +103,7 @@ a long conversation does not spend the budget just by being resent.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `AGENT_TURN_TOKEN_BUDGET` | `50000` | Work-token bound for one agent turn. |
+| `AGENT_TURN_TOKEN_BUDGET` | `100000` | Work-token bound for one agent turn. |
 | `AGENT_TURN_TOKEN_BUDGET_MAX` | `500000` | Largest bound an operator may choose; also the bound a legacy caps-off install maps to. |
 
 The model sees the budget used and left from its very first call (the note rides

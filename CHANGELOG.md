@@ -15,10 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   charged, so a long conversation stops burning the budget just by being
   resent. It replaces the separate iteration, tool-call and shell-session caps
   as the thing that ends a normal turn, and nothing sizes it from the kind of
-  task. The bound is configurable (`AGENT_TURN_TOKEN_BUDGET`, largest value
-  `AGENT_TURN_TOKEN_BUDGET_MAX`); the all-or-nothing "Enforce agent budget
-  caps" switch is gone, and an install where it was off maps to the largest
-  bound. The model is told what is left from its first call (the note rides on
+  task. The bound is configurable (`AGENT_TURN_TOKEN_BUDGET`, default 100,000,
+  largest value `AGENT_TURN_TOKEN_BUDGET_MAX`, 500,000); the all-or-nothing
+  "Enforce agent budget caps" switch is gone, and an install where it was off
+  maps to the largest bound. The model is told what is left from its first call (the note rides on
   the new user message, so the cached system + tools prefix is untouched) and on
   every call after, and can end a turn with "I need more budget to finish" (the
   `request_more_budget` tool); the user grants more with a whole-message reply

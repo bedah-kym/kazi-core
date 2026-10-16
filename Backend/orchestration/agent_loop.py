@@ -25,7 +25,7 @@ from orchestration.agent_prompts import (
     build_confirmation_prompt,
     build_system_prompt,
 )
-from orchestration.llm_client import get_llm_client
+from orchestration.llm_client import TokenQuotaExceeded, _humanize_seconds, get_llm_client
 from orchestration.memory_state import update_memory_state, save_memory_summary
 from orchestration.model_catalog import find_model, model_pref_key, parse_model_id, provider_configured
 from orchestration.security_policy import redact_sensitive_text
@@ -129,8 +129,13 @@ def _state_key(room_id: int, user_id: int) -> str:
     return AGENT_STATE_KEY.format(room_id=room_id, user_id=user_id)
 
 
-def save_loop_state(room_id: int, user_id: int, state: LoopState) -> None:
-    """Persist the loop state to Redis so it survives a confirmation pause."""
+def save_loop_state(room_id: int, user_id: int, state: LoopState, ttl: Optional[int] = None) -> None:
+    """Persist the loop state to Redis so it survives a confirmation pause.
+
+    ``ttl`` overrides the default window. A quota pause uses it to outlive the
+    wait until enough of the hour rolls out, so the paused work can resume
+    (T-F3b).
+    """
     serialisable = {
         "messages": state.messages,
         "iteration": state.iteration,
@@ -151,7 +156,7 @@ def save_loop_state(room_id: int, user_id: int, state: LoopState) -> None:
     cache.set(
         _state_key(room_id, user_id),
         json.dumps(serialisable, default=str),
-        CONFIRMATION_STATE_TTL,
+        ttl or CONFIRMATION_STATE_TTL,
     )
 
 
@@ -855,6 +860,40 @@ def _maximum_budget_note(state: "LoopState") -> str:
     return (
         f"I've used the maximum budget for this turn: {_budget_end_detail(state)}. "
         "I can't extend it further; send a new message to continue."
+    )
+
+
+def _quota_pause_ttl(retry_after_seconds: Any) -> int:
+    """How long a quota-paused turn is kept so it can resume (T-F3b).
+
+    The rolling hour can free up to an hour out, so the default 10-minute
+    confirmation window is too short. Keep the state for the wait plus a margin,
+    never less than the default window.
+    """
+    try:
+        retry = int(retry_after_seconds or 0)
+    except (TypeError, ValueError, OverflowError):
+        retry = 0
+    return max(CONFIRMATION_STATE_TTL, retry + 300)
+
+
+def _quota_reached_note(state: "LoopState", exc: "TokenQuotaExceeded") -> str:
+    """The harness line shown when the hourly work-token quota blocks a turn.
+
+    It says plainly what ran, that the limit is the hour's, roughly when enough
+    frees up, and how to continue from where it stopped without redoing finished
+    work. It is the harness's words, not the model's, and claims no success.
+    """
+    detail = _budget_end_detail(state)
+    if getattr(exc, "reason", "limit") == "unreadable":
+        return (
+            f"I couldn't check this hour's token limit, so I stopped rather than "
+            f"risk overrunning it: {detail}. Please try again shortly."
+        )
+    when = _humanize_seconds(getattr(exc, "retry_after_seconds", 0))
+    return (
+        f"I've reached this hour's token limit: {detail}. It frees up in {when}. "
+        "Reply **more budget** then and I'll continue from where it stopped."
     )
 
 
@@ -1600,6 +1639,10 @@ async def _run_sub_agent(
         sub_messages.append({"role": "assistant", "content": content_blocks})
         work, prev_input_tokens = _work_tokens(response, prev_input_tokens)
         tokens_used += work
+        # Charge the delegated run's work to the user's rolling-hour quota too:
+        # it is the user's work, and only this run knows what it newly read
+        # (T-F3b).
+        llm.record_work_tokens(work, context.get("user_id"))
         searches = _count_search_uses(response)
         if searches > 0:
             # A server-side search brings in untrusted text; the main loop taints on it too.
@@ -2127,6 +2170,22 @@ async def run_agent_loop(
                 provider=override_provider,
                 use_prompt_cache=True,
             )
+        except TokenQuotaExceeded as quota_exc:
+            # The hour's work-token quota blocked the call. End the turn the
+            # same way a budget stop does: keep the state so the user can
+            # resume from where it stopped without redoing finished work, and
+            # say plainly that the hourly limit was reached and roughly when
+            # enough frees up (T-F3b).
+            logger.warning("Agent loop stopped by hourly token quota: %s", quota_exc)
+            state.end_reason = "quota"
+            state.awaiting_budget = True
+            if room_id and user_id:
+                save_loop_state(
+                    room_id, user_id, state,
+                    ttl=_quota_pause_ttl(quota_exc.retry_after_seconds),
+                )
+            yield AgentEvent("error", {"message": _quota_reached_note(state, quota_exc)})
+            break
         except Exception as exc:
             logger.error("Agent loop LLM call failed: %s", exc, exc_info=True)
             state.end_reason = "error"
@@ -2140,6 +2199,9 @@ async def run_agent_loop(
         # previous call. The resent prefix is not charged (T-F3).
         iter_work, state.prev_input_tokens = _work_tokens(response, state.prev_input_tokens)
         state.tokens_used += iter_work
+        # Charge the same work to the rolling-hour quota, so a long conversation
+        # does not spend the hour's limit just by being resent (T-F3b).
+        llm.record_work_tokens(iter_work, user_id)
 
         if (
             not state.budget_warning_sent

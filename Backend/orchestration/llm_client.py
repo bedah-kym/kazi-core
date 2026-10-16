@@ -5,6 +5,7 @@ with fallback logic. Includes rate limiting and token budget enforcement.
 """
 import os
 import json
+import time
 import asyncio
 import threading
 import logging
@@ -45,6 +46,129 @@ def _inject_current_datetime(system_prompt: str, now=None) -> str:
     now = now or timezone.localtime()
     stamp = f"{_DATE_MARKER} {now.strftime('%Y-%m-%d %H:%M %A %Z')}."
     return f"{stamp}\n{system_prompt}"
+
+
+# --------------------------------------------------------------------------- #
+#  Hourly work-token quota (T-F3b)                                            #
+# --------------------------------------------------------------------------- #
+#
+# The quota counts *work tokens* — what the model generates plus the input it
+# newly reads — not the whole prompt resent on every call. The agent loop
+# measures its own work (agent_loop._work_tokens) and records it here; a
+# single-shot call has nothing resent, so it records what it sent and received.
+#
+# Usage lives in fixed 5-minute buckets. A read sums the buckets that still
+# overlap the last hour, so usage ages out even while a user keeps calling — a
+# single counter with a refreshed TTL never expired for an active user.
+QUOTA_WINDOW_SECONDS = 3600
+QUOTA_BUCKET_SECONDS = 300
+
+
+def _humanize_seconds(seconds: Any) -> str:
+    """A rough, human duration for the stop message ("about 42 minutes")."""
+    try:
+        seconds = max(0, int(seconds))
+    except (TypeError, ValueError):
+        seconds = 0
+    if seconds < 60:
+        return "less than a minute"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"about {minutes} minute{'s' if minutes != 1 else ''}"
+    hours = minutes / 60
+    if hours < 2:
+        return "about an hour"
+    return f"about {int(round(hours))} hours"
+
+
+def _quota_message(retry_after_seconds: int, reason: str) -> str:
+    """The refusal text a caller sees when the hourly quota blocks a call."""
+    if reason == "unreadable":
+        return (
+            "The hourly token limit could not be checked just now, so this call "
+            "was refused rather than risk overrunning it. Please try again shortly."
+        )
+    when = _humanize_seconds(retry_after_seconds)
+    return (
+        f"You've reached this hour's token limit. It frees up in {when}; "
+        "please try again then."
+    )
+
+
+class TokenQuotaExceeded(Exception):
+    """A call broke the hourly work-token quota (T-F3b).
+
+    ``reason`` is ``"limit"`` when the hour's usage is known and full, or
+    ``"unreadable"`` when usage could not be read (fail closed: a cache
+    failure must never silently lift the limit). ``retry_after_seconds`` is a
+    rough wait before enough of the hour rolls out for another call.
+    """
+
+    def __init__(self, retry_after_seconds: int = 0, *, reason: str = "limit", user_id=None):
+        try:
+            self.retry_after_seconds = max(0, int(retry_after_seconds or 0))
+        except (TypeError, ValueError):
+            self.retry_after_seconds = QUOTA_WINDOW_SECONDS
+        self.reason = reason
+        self.user_id = user_id
+        super().__init__(_quota_message(self.retry_after_seconds, reason))
+
+
+def _quota_bucket_key(user_id: int, bucket: int) -> str:
+    return f"llm_tokens:{user_id}:{bucket}"
+
+
+def _quota_buckets_for_window(user_id: int, now: float) -> List[Any]:
+    """The ``(bucket_start_seconds, cache_key)`` buckets that overlap the last hour."""
+    now = int(now)
+    window_start = now - QUOTA_WINDOW_SECONDS
+    first = window_start // QUOTA_BUCKET_SECONDS
+    last = now // QUOTA_BUCKET_SECONDS
+    buckets = []
+    for bucket in range(first, last + 1):
+        start = bucket * QUOTA_BUCKET_SECONDS
+        # A bucket counts until its end leaves the window.
+        if start + QUOTA_BUCKET_SECONDS > window_start:
+            buckets.append((start, _quota_bucket_key(user_id, bucket)))
+    return buckets
+
+
+def _read_hourly_usage(user_id: int, now: Optional[float] = None):
+    """The user's work tokens in the last rolling hour, and the buckets behind it.
+
+    Returns ``(used, buckets)`` where ``buckets`` is a list of
+    ``(start_seconds, tokens)`` sorted oldest first. Raises if the cache cannot
+    be read, so a caller can fail closed rather than treat the hour as empty.
+    """
+    now = time.time() if now is None else float(now)
+    window = _quota_buckets_for_window(user_id, now)
+    keys = [key for _, key in window]
+    values = cache.get_many(keys) if keys else {}
+    buckets = [
+        (start, int(values.get(key) or 0))
+        for start, key in window
+    ]
+    buckets.sort()
+    return sum(tokens for _, tokens in buckets), buckets
+
+
+def _seconds_until_under(limit: int, buckets: List[Any], now: float) -> int:
+    """Rough seconds until enough of the hour rolls out to fit under ``limit``.
+
+    Buckets are dropped oldest first (each leaves the window one hour after it
+    started); the first drop that puts the hour under the limit is when a new
+    call can start.
+    """
+    now = float(now)
+    total = sum(tokens for _, tokens in buckets)
+    if total < limit:
+        return 0
+    remaining = total
+    for start, tokens in sorted(buckets):
+        remaining -= tokens
+        if remaining < limit:
+            return max(0, int(round(start + QUOTA_WINDOW_SECONDS - now)))
+    return QUOTA_WINDOW_SECONDS
 
 
 def _static_first(system: Optional[str]) -> str:
@@ -325,7 +449,6 @@ class LLMClient:
 
         input_tokens = self._estimate_tokens(fallback_system) + self._estimate_tokens(prompt)
         output_tokens = self._estimate_tokens(response_text)
-        self._record_token_usage(input_tokens + output_tokens, user_id)
 
         return {
             "id": f"{provider}-fallback-message",
@@ -503,20 +626,22 @@ class LLMClient:
         data = response.json()
 
         result = self._openai_response_to_anthropic(data)
-        usage = result.get("usage", {})
-        self._record_token_usage(usage.get("input_tokens", 0) + usage.get("output_tokens", 0), user_id)
         return result
 
-    async def _get_user_token_budget(self, user_id: Optional[int]) -> Dict[str, int]:
+    async def _get_user_token_budget(
+        self, user_id: Optional[int], now: Optional[float] = None,
+    ) -> Dict[str, Any]:
         """
-        Get token budget and current usage for a user.
-        Staff/superuser accounts are exempt.
-        Returns {"limit": N, "used": M}
+        Get the hourly work-token limit and the user's usage in the last hour.
+
+        Staff/superuser accounts are exempt. ``used`` is None when usage could
+        not be read, so the caller can fail closed instead of treating the hour
+        as empty. Returns {"limit": N, "used": M | None, "exempt": bool}.
         """
         if not user_id:
-            return {"limit": 999999, "used": 0}
+            return {"limit": 999999, "used": 0, "exempt": False}
 
-        limit = int(getattr(settings, "LLM_TOKEN_LIMIT_PER_USER_PER_HOUR", 50000))
+        limit = int(getattr(settings, "LLM_TOKEN_LIMIT_PER_USER_PER_HOUR", 200000))
 
         # Staff / superusers are exempt from the token quota (owner debugging, support).
         # Must run via sync_to_async: a sync ORM query inside the async agent
@@ -529,55 +654,95 @@ class LLMClient:
                 lambda: User.objects.filter(pk=user_id).only('is_staff', 'is_superuser').first()
             )()
             if user and (user.is_staff or user.is_superuser):
-                return {"limit": 10_000_000, "used": 0}
+                return {"limit": 10_000_000, "used": 0, "exempt": True}
         except Exception:
             pass
 
-        cache_key = f"llm_tokens:{user_id}"
-        used = cache.get(cache_key, 0)
-        return {
-            "limit": limit,
-            "used": int(used),
-        }
+        try:
+            used, _ = _read_hourly_usage(user_id, now)
+        except Exception:
+            used = None
+        return {"limit": limit, "used": used, "exempt": False}
 
-    async def _check_token_quota(self, estimated_tokens: int, user_id: Optional[int]) -> bool:
-        """
-        Check if user has enough token budget remaining.
-        Returns True if under quota, False if exceeded.
+    async def _check_token_quota(
+        self, estimated_new_tokens: int, user_id: Optional[int],
+    ) -> None:
+        """Refuse a call that breaks the hourly work-token quota (T-F3b).
+
+        ``estimated_new_tokens`` is the work about to be done: an estimate for a
+        single-shot call, or 0 for an agent-loop call (whose work is only known
+        after it runs and is recorded separately). Raises ``TokenQuotaExceeded``
+        when the hour is already full or this call would overrun it. Fails
+        closed: if usage cannot be read, the call is refused.
         """
         if not user_id:
-            return True  # No tracking for anonymous
+            return  # No tracking for anonymous
 
         if not getattr(settings, "LLM_TOKEN_QUOTA_ENABLED", True):
-            return True  # Quota disabled (dev) — don't starve batch jobs
+            return  # Quota disabled (dev) — don't starve batch jobs
 
         budget = await self._get_user_token_budget(user_id)
-        if budget["used"] + estimated_tokens > budget["limit"]:
-            logger.warning(
-                f"Token quota exceeded for user {user_id}: "
-                f"used {budget['used']} + {estimated_tokens} > limit {budget['limit']}"
-            )
-            return False
-        return True
+        if budget.get("exempt"):
+            return
 
-    def _record_token_usage(self, tokens: int, user_id: Optional[int]) -> None:
-        """
-        Record token usage for rate limiting.
+        used = budget.get("used")
+        limit = int(budget.get("limit") or 0)
+        if used is None:
+            logger.warning("Token quota unreadable for user %s; failing closed", user_id)
+            raise TokenQuotaExceeded(
+                QUOTA_WINDOW_SECONDS, reason="unreadable", user_id=user_id,
+            )
+
+        try:
+            estimated_new_tokens = max(0, int(estimated_new_tokens or 0))
+        except (TypeError, ValueError):
+            estimated_new_tokens = 0
+
+        if used >= limit or used + estimated_new_tokens > limit:
+            now = time.time()
+            try:
+                _, buckets = _read_hourly_usage(user_id, now)
+                retry = _seconds_until_under(limit, buckets, now)
+            except Exception:
+                retry = QUOTA_WINDOW_SECONDS
+            logger.warning(
+                "Token quota exceeded for user %s: used %s + %s >= limit %s",
+                user_id, used, estimated_new_tokens, limit,
+            )
+            raise TokenQuotaExceeded(retry, reason="limit", user_id=user_id)
+
+    def _record_token_usage(self, tokens: int, user_id: Optional[int], now: Optional[float] = None) -> None:
+        """Add work tokens to the user's rolling-hour quota.
 
         We never use cache.incr() here: django-redis INCRBY on a fresh key
-        creates it WITHOUT a TTL, so the counter would never expire. Use
-        get-then-set with a fresh TTL to get a proper sliding 1-hour window.
+        creates it WITHOUT a TTL, so the counter would never expire. Each fixed
+        window has its own key with a bounded TTL, so usage ages out of the
+        rolling hour even while the user keeps calling.
         """
         if not user_id or tokens <= 0:
             return
 
-        cache_key = f"llm_tokens:{user_id}"
-        ttl = 3600  # 1 hour sliding window
+        now = time.time() if now is None else float(now)
+        bucket = int(now) // QUOTA_BUCKET_SECONDS
+        cache_key = _quota_bucket_key(user_id, bucket)
+        ttl = QUOTA_WINDOW_SECONDS + QUOTA_BUCKET_SECONDS
         try:
             current = int(cache.get(cache_key) or 0)
             cache.set(cache_key, current + tokens, ttl)
         except Exception:
-            cache.set(cache_key, tokens, ttl)
+            try:
+                cache.set(cache_key, tokens, ttl)
+            except Exception:
+                logger.warning("Could not record token usage for user %s", user_id)
+
+    def record_work_tokens(self, tokens: int, user_id: Optional[int]) -> None:
+        """Record work tokens for a user against the hourly quota (T-F3b).
+
+        The agent loop measures its own work (generated + newly-read input) and
+        calls this after each model call, so the resent prompt prefix is never
+        charged.
+        """
+        self._record_token_usage(tokens, user_id)
 
     async def generate_text(
         self,
@@ -606,13 +771,10 @@ class LLMClient:
         Raises:
             Exception: If token quota exceeded or all LLM providers fail
         """
-        # Estimate token cost BEFORE making request
+        # A single-shot call has nothing resent, so the whole prompt is new
+        # work: estimate it before the request and refuse if it would overrun.
         estimated_tokens = self._estimate_tokens(system_prompt) + self._estimate_tokens(user_prompt)
-        if not await self._check_token_quota(estimated_tokens, user_id):
-            raise Exception(
-                f"LLM token quota exceeded for user {user_id}. "
-                f"Please try again later or contact support."
-            )
+        await self._check_token_quota(estimated_tokens, user_id)
 
         max_tokens = min(max_tokens, getattr(settings, 'LLM_MAX_TOKENS', 700))
         user_prompt = self._truncate(user_prompt)
@@ -647,7 +809,7 @@ class LLMClient:
                         system_prompt, user_prompt, temperature, max_tokens,
                         json_mode, model_name, provider="deepseek",
                     )
-                    self._record_token_usage(estimated_tokens, user_id)
+                    self._record_token_usage(estimated_tokens + self._estimate_tokens(response), user_id)
                     self._store_cache(cache_key, response)
                     return response
                 except Exception as e:
@@ -657,7 +819,7 @@ class LLMClient:
                 try:
                     model_name = self._model_for("anthropic", model_role)
                     response = await self._call_claude(system_prompt, user_prompt, temperature, max_tokens, model_name)
-                    self._record_token_usage(estimated_tokens, user_id)
+                    self._record_token_usage(estimated_tokens + self._estimate_tokens(response), user_id)
                     self._store_cache(cache_key, response)
                     return response
                 except Exception as e:
@@ -667,7 +829,7 @@ class LLMClient:
                 try:
                     model_name = self._model_for("huggingface", model_role)
                     response = await self._call_huggingface(system_prompt, user_prompt, temperature, max_tokens, json_mode, model_name)
-                    self._record_token_usage(estimated_tokens, user_id)
+                    self._record_token_usage(estimated_tokens + self._estimate_tokens(response), user_id)
                     self._store_cache(cache_key, response)
                     return response
                 except Exception as e:
@@ -867,10 +1029,6 @@ class LLMClient:
 
         data = response.json()
 
-        output_tokens = data.get("usage", {}).get("output_tokens", 0)
-        input_tokens = data.get("usage", {}).get("input_tokens", 0)
-        self._record_token_usage(input_tokens + output_tokens, user_id)
-
         return data
 
     async def create_message(
@@ -909,18 +1067,12 @@ class LLMClient:
 
         system = _inject_current_datetime(system)
 
-        estimated_tokens = sum(
-            self._estimate_tokens(
-                m.get("content") if isinstance(m.get("content"), str) else str(m.get("content", ""))
-            )
-            for m in messages
-        ) + self._estimate_tokens(system)
-
-        if not await self._check_token_quota(estimated_tokens, user_id):
-            raise Exception(
-                f"LLM token quota exceeded for user {user_id}. "
-                f"Please try again later."
-            )
+        # An agent-loop call's work is generated + newly-read input, which the
+        # loop measures after the call and records through record_work_tokens.
+        # The whole prompt is resent every call, so charging it here would bill
+        # the cached prefix over and over (T-F3b). Just refuse a call that
+        # starts once the hour is already spent.
+        await self._check_token_quota(0, user_id)
 
         if provider:
             if provider == "anthropic" and not self.anthropic_key:

@@ -83,7 +83,26 @@ provider above.
 | Variable | Default | Purpose |
 |---|---|---|
 | `LLM_TOKEN_QUOTA_ENABLED` | `True` | Per-user token quota enforcement. |
-| `LLM_TOKEN_LIMIT_PER_USER_PER_HOUR` | `50000` | Hourly token budget per user. |
+| `LLM_TOKEN_LIMIT_PER_USER_PER_HOUR` | `200000` | Rolling-hour **work-token** budget per user. |
+
+The hourly quota counts **work tokens** — what the model generates plus the
+input it newly reads — in the same unit as `AGENT_TURN_TOKEN_BUDGET` (T-F3b). The
+system prompt, tool list and history resent on every call are *not* charged, so
+a long conversation does not spend the hour's limit just by being resent. A
+single-shot call has nothing resent, so it counts what it actually sent and
+received. Staff and superusers are exempt.
+
+Usage is kept in short-lived buckets and read back over a true **rolling hour**:
+usage older than an hour stops counting even while the user keeps calling. The
+default limit is at least twice the default turn budget, so a user can finish
+one full default turn and start another within the hour.
+
+When the hour is full, a call is refused with a message that says the hourly
+limit was reached and roughly when capacity frees up. A turn blocked mid-way
+ends like a budget stop: its state is kept, so the user can reply **more budget**
+(or **continue**) once it frees up and pick up where it stopped without redoing
+finished work. The check **fails closed**: if usage cannot be read, a call that
+needs the quota is refused rather than allowed.
 
 ## Memory & context budgets
 

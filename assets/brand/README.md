@@ -45,6 +45,13 @@ Ratios are WCAG 2.x relative-luminance contrast. Murram is deliberately deeper a
 - Wordmark: custom shapes (in the SVGs).
 - Docs headings: **Bricolage Grotesque**. Body: **IBM Plex Sans**. Code: **IBM Plex Mono**. All three are on Google Fonts under the SIL Open Font License.
 
+## Merchandise
+
+- Print in flat spot colours (screen print, vinyl, embroidery), never gradients. Match Murram to a physical swatch from the printer.
+- Smallest safe sizes: 20 mm printed, 45 mm embroidered, 25 mm for an enamel pin. Below that the gate gap fills in.
+- Dark garments take the reversed mark. Murram or busy fabric takes a one-colour version.
+- Keep the copy short: "You approve. Kazi does the work." or "Karibu". Avoid "Hapa kazi tu" and "Kazi iendelee", which are tied to Tanzanian political campaigns.
+
 ## Usage
 
 - **Clear space:** keep a margin of at least the stem width on every side of the mark. For the lockup, keep at least the height of the wordmark's "i" dot ×2.

@@ -145,6 +145,45 @@ The server keeps the heartbeat; the page sends nothing.
 | `INTASEND_WEBHOOK_SECRET` | — | IntaSend webhook verification. |
 | `GOOGLE_*` / `GITHUB_*` / `LINKEDIN_*` / `TWITTER_*` | — | Social login via django-allauth. |
 
+## Which tools are offered (T-F2)
+
+A turn is offered only the tools that can work for this user in this room. Three
+things cut the list, and nothing adds or removes a tool based on the words of a
+message.
+
+1. **Configured at boot.** An action whose connector did not load is never
+   offered. A connector is skipped when `validate_config()` fails — a missing
+   key (`TELEGRAM_BOT_TOKEN`, `SHELL_EXEC_TOKEN`), a missing library (the
+   IntaSend SDK), and so on. In `manage.py shell`:
+   `get_skipped_connectors()` lists what was skipped (with the actions it would
+   own); `get_available_actions()` is the live set.
+2. **Capability flags.** Each group has a gate; turning it off removes its
+   tools. The sensitive gates fail closed: a missing flag means off, as at
+   execution. Every other gate keeps the old default — missing means on.
+
+   | Gate | Group | Default |
+   |---|---|---|
+   | `allow_email` | Email | on (sensitive) |
+   | `allow_whatsapp` | WhatsApp | on (sensitive) |
+   | `allow_payments` | Payments (wallet, invoices, IntaSend) | on (sensitive) |
+   | `allow_calendar` | Calendly | on |
+   | `allow_travel` | Travel search & itineraries | on |
+   | `allow_web_search` | Search, weather, GIF, currency | on |
+   | `allow_reminders` | Reminders & notifications | on |
+   | `allow_telegram` | Telegram | on (newly gated) |
+   | `allow_voice` | `generate_speech` | on (newly gated) |
+
+   Telegram and voice default **on**, so an install already using them keeps
+   them; the gates only let a user turn a group off.
+3. **Persona scope.** In a room whose active persona has a `tool_scope`, tools
+   outside it are not offered. The execution-time refusal stays as a second line.
+
+The prompt follows the tools: the shell "Where you are running" section is sent
+only with `run_command` (and says whether the room's profile is sandboxed), and
+the memory/contact/reminder/voice guidance only when its group is offered. The
+model sees one `run_command` description, with a `network` parameter, whichever
+shell profile the room uses.
+
 ## Voice / modality
 
 `generate_speech` turns text into a voice note (v0.6 §4.2). Per-channel flags

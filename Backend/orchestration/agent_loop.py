@@ -1398,6 +1398,7 @@ async def run_agent_loop(
     preferences: Optional[Dict[str, Any]] = None,
     context_prompt: str = "",
     memory_summary: str = "",
+    environment_block: str = "",
     history: Optional[List[Dict[str, Any]]] = None,
     history_tainted: bool = False,
     resumed_state: Optional[LoopState] = None,
@@ -1412,6 +1413,7 @@ async def run_agent_loop(
         preferences: Normalised user preferences.
         context_prompt: Room context string from ContextManager.
         memory_summary: Entity/action memory summary.
+        environment_block: Where commands run (only sent with run_command).
         history: Previous conversation messages in Anthropic format.
         resumed_state: If resuming after a confirmation pause.
         confirmed_tool: True if the user just confirmed a pending tool.
@@ -1444,13 +1446,28 @@ async def run_agent_loop(
     native_search = effective_provider == "anthropic"
     backend_search = (not native_search) and _search_backend_available()
 
-    # Build tool definitions (filtered by user capabilities)
+    # Build tool definitions (connector-configured, capability-gated, and
+    # bounded by a room persona's scope — T-F2). The persona is resolved once
+    # and reused for the execution bounds below.
+    persona = await _resolve_persona(room_id, user_id)
+    persona_tool_scope = list(persona.tool_scope) if persona is not None and persona.tool_scope else None
+
     tools = get_tool_definitions(
         user_capabilities=user_caps,
         exclude_actions=[] if backend_search else ["search_info"],
+        tool_scope=persona_tool_scope,
     )
-    # Add meta-tools (delegate_task, handoff_to_workflow)
-    tools.extend(META_TOOL_DEFINITIONS)
+    # Add meta-tools (delegate_task, handoff_to_workflow, skills).
+    if persona_tool_scope:
+        from orchestration.action_catalog import resolve_action_alias
+
+        scope_set = {resolve_action_alias(name) for name in persona_tool_scope}
+        tools.extend(
+            tool for tool in META_TOOL_DEFINITIONS
+            if resolve_action_alias(tool["name"]) in scope_set
+        )
+    else:
+        tools.extend(META_TOOL_DEFINITIONS)
 
     web_search_tool = None
     if native_search:
@@ -1469,10 +1486,13 @@ async def run_agent_loop(
         tools.append(web_search_tool)
 
     # Build system prompt
+    tool_names = [tool["name"] for tool in tools]
     system = build_system_prompt(
         preferences=preferences,
         context_prompt=context_prompt,
         memory_summary=memory_summary,
+        tool_names=tool_names,
+        environment_block=environment_block,
     )
     if not web_search_tool and not backend_search:
         system += (
@@ -1699,7 +1719,7 @@ async def run_agent_loop(
             run_tainted = state.tainted
             safe_calls, pause_calls, denied_calls = _bucket_tool_calls(
                 tool_calls, preferences,
-                persona=await _resolve_persona(room_id, user_id),
+                persona=persona,
                 tainted=run_tainted,
             )
 
@@ -1997,6 +2017,7 @@ async def resume_after_confirmation(
     preferences: Optional[Dict[str, Any]] = None,
     context_prompt: str = "",
     memory_summary: str = "",
+    environment_block: str = "",
 ) -> AsyncGenerator[AgentEvent, None]:
     """
     Resume a paused agent loop after the user confirms a high-risk action.
@@ -2023,6 +2044,7 @@ async def resume_after_confirmation(
                 preferences=preferences,
                 context_prompt=context_prompt,
                 memory_summary=memory_summary,
+                environment_block=environment_block,
                 resumed_state=state,
                 confirmed_tool=True,
             ):
@@ -2063,6 +2085,7 @@ async def resume_after_confirmation(
         preferences=preferences,
         context_prompt=context_prompt,
         memory_summary=memory_summary,
+        environment_block=environment_block,
         resumed_state=state,
         confirmed_tool=True,
     ):

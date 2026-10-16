@@ -70,7 +70,11 @@ class EnvironmentBlockTests(SimpleTestCase):
 
 class SystemPromptTests(SimpleTestCase):
     def test_prompt_no_longer_describes_another_product_or_asks_for_narration(self):
-        prompt = build_system_prompt(preferences={}, context_prompt=build_environment_block(WINDOWS_OPEN))
+        prompt = build_system_prompt(
+            preferences={},
+            environment_block=build_environment_block(WINDOWS_OPEN),
+            tool_names=["run_command"],
+        )
 
         self.assertIn("Prefer the specific tool when one fits the job", prompt)
         self.assertIn("Where you are running", prompt)
@@ -228,13 +232,14 @@ class CoordinatorEnvironmentTests(SimpleTestCase):
     def test_the_agent_loop_is_told_where_commands_run(self):
         captured = self._run(AsyncMock(return_value=WINDOWS_OPEN))
 
-        self.assertIn("Where you are running", captured["context_prompt"])
-        self.assertIn("Windows through cmd.exe", captured["context_prompt"])
+        self.assertIn("Where you are running", captured["environment_block"])
+        self.assertIn("Windows through cmd.exe", captured["environment_block"])
         self.assertIn("notes here", captured["context_prompt"])
+        self.assertNotIn("Where you are running", captured["context_prompt"])
 
     def test_a_failure_describing_the_shell_never_reaches_the_turn(self):
         captured = self._run(AsyncMock(side_effect=RuntimeError("boom")))
 
         self.assertEqual(captured["user_message"], "list the files")
         self.assertIn("notes here", captured["context_prompt"])
-        self.assertNotIn("Where you are running", captured["context_prompt"])
+        self.assertEqual(captured["environment_block"], "")

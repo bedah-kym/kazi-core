@@ -109,6 +109,7 @@ class TelegramBotConnector(BaseConnector):
                 "return_description": "Returns message_id, chat_id, and status",
                 "risk_level": "low",
                 "confirmation_policy": "never",
+                "capability_gate": "allow_telegram",
             },
             {
                 "action": "send_telegram_media",
@@ -143,6 +144,7 @@ class TelegramBotConnector(BaseConnector):
                 "return_description": "Returns message_id, chat_id, media_type, and status",
                 "risk_level": "low",
                 "confirmation_policy": "never",
+                "capability_gate": "allow_telegram",
             },
             {
                 "action": "send_telegram_keyboard",
@@ -176,6 +178,7 @@ class TelegramBotConnector(BaseConnector):
                 "return_description": "Returns message_id, chat_id, and status",
                 "risk_level": "low",
                 "confirmation_policy": "never",
+                "capability_gate": "allow_telegram",
             },
             {
                 "action": "edit_telegram_message",
@@ -202,6 +205,7 @@ class TelegramBotConnector(BaseConnector):
                 "return_description": "Returns message_id, chat_id, and status",
                 "risk_level": "low",
                 "confirmation_policy": "never",
+                "capability_gate": "allow_telegram",
             },
             {
                 "action": "delete_telegram_message",
@@ -223,6 +227,7 @@ class TelegramBotConnector(BaseConnector):
                 "return_description": "Returns success status",
                 "risk_level": "medium",
                 "confirmation_policy": "high_risk",
+                "capability_gate": "allow_telegram",
             },
             {
                 "action": "telegram_health",
@@ -233,6 +238,7 @@ class TelegramBotConnector(BaseConnector):
                 "return_description": "Returns bot username, can_read, can_send status",
                 "risk_level": "low",
                 "confirmation_policy": "never",
+                "capability_gate": "allow_telegram",
             },
         ]
 

@@ -236,6 +236,10 @@ def normalize_preferences(
         "allow_whatsapp": _coerce_bool(_pull_pref(raw_prefs, "allow_whatsapp"), True),
         "allow_email": _coerce_bool(_pull_pref(raw_prefs, "allow_email"), True),
         "allow_calendar": _coerce_bool(_pull_pref(raw_prefs, "allow_calendar"), True),
+        # Ungated groups now have a gate so a user can turn them off. Both
+        # default ON so an install already using Telegram or voice keeps it.
+        "allow_telegram": _coerce_bool(_pull_pref(raw_prefs, "allow_telegram"), True),
+        "allow_voice": _coerce_bool(_pull_pref(raw_prefs, "allow_voice"), True),
         # Approval overrides for confirmation policy (e.g. {"send_email": "auto"})
         "approval_overrides": approval_overrides,
         # Per-user shell isolation profile override (open/standard/locked)

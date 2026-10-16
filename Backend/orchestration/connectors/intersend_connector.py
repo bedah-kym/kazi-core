@@ -37,6 +37,17 @@ class IntersendPayConnector(BaseConnector):
             logger.warning("intasend-python not installed.")
             self.intasend = None
 
+    def validate_config(self):
+        """Unavailable when the SDK is missing or the keys are unset.
+
+        The connector still loads (the import guard above keeps the process
+        alive), but it cannot serve: the registry drops its actions so the
+        model is never offered a payment it cannot make (T-F2).
+        """
+        if not getattr(self, "intasend", None):
+            return False, self.config_error or "IntaSend is not configured."
+        return True, ""
+
     async def execute(self, parameters: dict, context: dict) -> dict:
         """
         Execute Payment actions.

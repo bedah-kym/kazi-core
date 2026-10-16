@@ -61,6 +61,14 @@ class ShellConnector(BaseConnector):
                         "required": False,
                         "description": "Timeout in seconds (capped by the sidecar).",
                     },
+                    "network": {
+                        "type": "string",
+                        "required": False,
+                        "description": (
+                            "Set to 'bridge' when the command or a script it runs "
+                            "needs the network (ping, DNS, fetch)."
+                        ),
+                    },
                 },
                 "return_description": "Returns stdout, stderr, and exit_code.",
                 "risk_level": "high",

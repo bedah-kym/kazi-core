@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A turn now runs under **one work-token budget the model can see** (T-F3). The
+  budget counts what the model generates plus the input it newly reads — the
+  system prompt, tool list and history resent on every call are no longer
+  charged, so a long conversation stops burning the budget just by being
+  resent. It replaces the separate iteration, tool-call and shell-session caps
+  as the thing that ends a normal turn, and nothing sizes it from the kind of
+  task. The bound is configurable (`AGENT_TURN_TOKEN_BUDGET`, default 100,000,
+  largest value `AGENT_TURN_TOKEN_BUDGET_MAX`, 500,000); the all-or-nothing
+  "Enforce agent budget caps" switch is gone, and an install where it was off
+  maps to the largest bound. The model is told what is left from its first call (the note rides on
+  the new user message, so the cached system + tools prefix is untouched) and on
+  every call after, and can end a turn with "I need more budget to finish" (the
+  `request_more_budget` tool); the user grants more with a whole-message reply
+  (**more budget**, a plain **yes**/**ok**, or **continue**/**go on**/**carry
+  on**) and the work resumes where it stopped, without repeating a finished
+  step. A whole-message **no** or **stop** ends the paused turn; any other
+  message drops the paused work (the reply says so once) and starts a new turn.
+  A turn that reaches the bound without the model asking keeps its state too:
+  the harness note says plainly what ran and offers the same reply, and a grant
+  resumes from where it stopped.
+  Delegated runs get a share of what the parent has left, never more than the
+  parent still has; what a delegated run spends is charged back to the parent
+  turn, so a second delegation sees less and delegations cannot together
+  outrun the bound, and a parent with too little left refuses to delegate
+  rather than run on a fallback. A grant never raises the turn above
+  `AGENT_TURN_TOKEN_BUDGET_MAX`; when the turn is already at that maximum and
+  runs out again it ends for good, the harness note says so plainly and offers
+  no further grant, and no state is kept to resume. Hard runaway
+  backstops (10k iterations, 10k tool calls, a 30-minute wall clock) stay far
+  above the bound, and the native web-search tool is rebuilt from the live
+  daily allowance on every request so one turn cannot exceed the daily limit.
 - A turn is offered only the tools that can work for that user in that room. An
   action whose connector did not load is no longer offered: a connector skipped
   at boot (`TELEGRAM_BOT_TOKEN`, `SHELL_EXEC_TOKEN` unset, the IntaSend SDK not

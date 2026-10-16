@@ -297,10 +297,10 @@ def _end_turn():
     return _make_llm_response([_text_block("Done.")], stop_reason="end_turn")
 
 
-class AgentCapsToggleLoopTests(SimpleTestCase):
-    """The install-level caps switch must actually lift budget checks in the
-    agent loops (parent iteration/tool/token caps, sub-agent caps) when
-    disabled from Settings > Capabilities."""
+class TurnBudgetReplacedCapsTests(SimpleTestCase):
+    """T-F3: the single work-token budget replaced the old iteration, tool-call
+    and shell-session caps. A legacy install whose caps switch was off maps to
+    the largest bound; nothing sizes the bound from the kind of task."""
 
     def _run(self, coro):
         import asyncio
@@ -333,72 +333,74 @@ class AgentCapsToggleLoopTests(SimpleTestCase):
                 context={"user_id": 1, "room_id": 1, "username": "test"},
             )]
 
-        return [e.kind for e in self._run(_collect())]
+        return self._run(_collect())
 
-    @patch("orchestration.agent_loop.enforce_agent_caps")
-    @patch("orchestration.agent_loop.MAX_TOOL_CALLS", 1)
+    @override_settings(AGENT_TURN_TOKEN_BUDGET=50000, AGENT_TURN_TOKEN_BUDGET_MAX=500000)
+    @patch("orchestration.agent_loop.enforce_agent_caps", return_value=False)
+    @patch("orchestration.agent_loop._search_backend_available", return_value=False)
     @patch("orchestration.agent_loop.get_llm_client")
     @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)
     @patch("orchestration.agent_loop.cache")
-    def test_parent_loop_skips_tool_cap_when_disabled(self, mock_cache, mock_exec, mock_llm_client, mock_caps):
+    def test_legacy_caps_off_uses_the_largest_bound(self, mock_cache, mock_exec, mock_llm_client, _sb, _caps):
         mock_cache.get.return_value = None
         mock_exec.return_value = {"status": "success"}
-        mock_caps.return_value = False
         mock_llm = MagicMock()
+        mock_llm.default_provider = MagicMock(return_value="deepseek")
         mock_llm.create_message = AsyncMock(side_effect=[
             self._tool_use_response(1),
-            self._tool_use_response(2),
             _end_turn(),
         ])
         mock_llm_client.return_value = mock_llm
 
-        kinds = self._collect_loop_events()
-        self.assertEqual(kinds.count("tool_result"), 2)
+        events = self._collect_loop_events()
+        done = next(e for e in events if e.kind == "done")
+        self.assertEqual(done.data["budget"], 500000)
 
-    @patch("orchestration.agent_loop.enforce_agent_caps")
-    @patch("orchestration.agent_loop.MAX_TOOL_CALLS", 1)
+    @override_settings(AGENT_TURN_TOKEN_BUDGET=50000, AGENT_TURN_TOKEN_BUDGET_MAX=500000)
+    @patch("orchestration.agent_loop.enforce_agent_caps", return_value=True)
+    @patch("orchestration.agent_loop._search_backend_available", return_value=False)
     @patch("orchestration.agent_loop.get_llm_client")
     @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)
     @patch("orchestration.agent_loop.cache")
-    def test_parent_loop_keeps_tool_cap_when_enabled(self, mock_cache, mock_exec, mock_llm_client, mock_caps):
+    def test_the_old_tool_call_cap_no_longer_ends_a_turn(self, mock_cache, mock_exec, mock_llm_client, _sb, _caps):
+        # 20 calls, well past the old MAX_TOOL_CALLS=15.
         mock_cache.get.return_value = None
         mock_exec.return_value = {"status": "success"}
-        mock_caps.return_value = True
         mock_llm = MagicMock()
+        mock_llm.default_provider = MagicMock(return_value="deepseek")
         mock_llm.create_message = AsyncMock(side_effect=[
-            self._tool_use_response(1),
-            self._tool_use_response(2),
-            _end_turn(),
-        ])
+            self._tool_use_response(i) for i in range(20)
+        ] + [_end_turn()])
         mock_llm_client.return_value = mock_llm
 
-        kinds = self._collect_loop_events()
-        self.assertEqual(kinds.count("tool_result"), 1)
+        events = self._collect_loop_events()
+        self.assertEqual([e.kind for e in events].count("tool_result"), 20)
 
+    @override_settings(AGENT_TURN_TOKEN_BUDGET=50000, AGENT_TURN_TOKEN_BUDGET_MAX=500000)
     @patch("orchestration.agent_loop.HARD_CAP_ITERATIONS", 3)
-    @patch("orchestration.agent_loop.enforce_agent_caps")
+    @patch("orchestration.agent_loop.enforce_agent_caps", return_value=False)
+    @patch("orchestration.agent_loop._search_backend_available", return_value=False)
     @patch("orchestration.agent_loop.get_llm_client")
     @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)
     @patch("orchestration.agent_loop.cache")
-    def test_hard_cap_terminates_loop_even_when_caps_disabled(self, mock_cache, mock_exec, mock_llm_client, mock_caps):
-        # Regression: an infinite-LLM mock plus a cached disabled-caps value
-        # used to produce a truly unbounded loop (hermetic CI hang).
+    def test_hard_cap_terminates_loop_even_when_caps_disabled(self, mock_cache, mock_exec, mock_llm_client, _sb, _caps):
+        # Regression: an infinite-LLM mock plus a large bound must still end.
         mock_cache.get.return_value = None
         mock_exec.return_value = {"status": "success"}
-        mock_caps.return_value = False
         mock_llm = MagicMock()
+        mock_llm.default_provider = MagicMock(return_value="deepseek")
         mock_llm.create_message = AsyncMock(return_value=self._tool_use_response(1))
         mock_llm_client.return_value = mock_llm
 
-        kinds = self._collect_loop_events()
-        self.assertEqual(kinds.count("tool_result"), 3)
+        events = self._collect_loop_events()
+        self.assertEqual([e.kind for e in events].count("tool_result"), 3)
 
     @patch("orchestration.agent_loop.SUB_AGENT_MAX_TOOL_CALLS", 1)
     @patch("orchestration.agent_loop.get_llm_client")
     @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)
     @patch("orchestration.agent_loop.update_memory_state", new=AsyncMock())
     @patch("orchestration.agent_loop._resolve_persona", new=AsyncMock(return_value=None))
-    def test_sub_agent_skips_cap_when_parent_caps_disabled(self, mock_exec, mock_llm_client):
+    def test_sub_agent_stops_at_its_tool_ceiling(self, mock_exec, mock_llm_client):
         from orchestration.agent_loop import _run_sub_agent
 
         mock_exec.return_value = {"status": "success"}
@@ -420,9 +422,6 @@ class AgentCapsToggleLoopTests(SimpleTestCase):
                 "system prompt",
                 [{"name": "get_weather", "input_schema": {}}],
             ))
-
-        result = _run_sub(caps_enforced=False)
-        self.assertEqual(len(result["tools_used"]), 2)
 
         result = _run_sub()
         self.assertEqual(len(result["tools_used"]), 1)

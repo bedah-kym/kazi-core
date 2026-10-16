@@ -145,6 +145,24 @@ _CANCEL_COMMANDS = {
     "disarm autopilot",
     "stop autopilot",
 }
+# Whole-message replies that grant a paused turn more budget (T-F3). Kept tight
+# so an ordinary sentence is never read as a grant. A plain "yes"/"ok" and the
+# continue phrases are added to the set below, but only whole-message.
+_BUDGET_EXTEND_COMMANDS = {
+    "more budget",
+    "give more budget",
+    "give me more budget",
+    "grant more budget",
+    "extend budget",
+    "extend the budget",
+    "more reasoning budget",
+    "yes more budget",
+}
+_BUDGET_CONTINUE_COMMANDS = {
+    "continue",
+    "go on",
+    "carry on",
+}
 
 
 def is_reset_command(text: Any) -> bool:
@@ -174,3 +192,18 @@ def is_cancel_command(text: Any) -> bool:
     the strict form that may disarm autopilot with nothing pending.
     """
     return _normalized(text) in _CANCEL_COMMANDS
+
+
+def is_budget_extend_reply(text: Any) -> bool:
+    """True only when the whole message grants a paused turn more budget.
+
+    Whole-message only, like the approval replies: "can I have more budget?"
+    and "give the model more budget if it needs it" are not grants. A plain
+    whole-message "yes"/"ok" (the approval replies) or a continue phrase such
+    as "continue", "go on" or "carry on" grants it too, so a natural reply does
+    not throw the paused work away. An ordinary sentence is never a grant.
+    """
+    value = _normalized(text)
+    if value in _BUDGET_EXTEND_COMMANDS or value in _BUDGET_CONTINUE_COMMANDS:
+        return True
+    return is_approval_reply(text)

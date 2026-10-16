@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, patch, MagicMock
 from asgiref.sync import async_to_sync, sync_to_async
 from django.contrib.auth import get_user_model
 from django.db import connections
-from django.test import SimpleTestCase, TransactionTestCase
+from django.test import SimpleTestCase, TransactionTestCase, override_settings
 
 
 def run_async(coro):
@@ -215,9 +215,9 @@ class Scenario3ErrorRecoveryTest(SimpleTestCase):
 # ---------------------------------------------------------------------------
 
 class Scenario4IterationLimitTest(SimpleTestCase):
-    """Agent hits MAX_ITERATIONS and stops gracefully."""
+    """The iteration backstop ends a runaway tool loop gracefully."""
 
-    @patch("orchestration.agent_loop.MAX_ITERATIONS", 2)
+    @patch("orchestration.agent_loop.HARD_CAP_ITERATIONS", 2)
     @patch("orchestration.agent_loop.get_llm_client")
     @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)
     @patch("orchestration.agent_loop.cache")
@@ -249,9 +249,9 @@ class Scenario4IterationLimitTest(SimpleTestCase):
 # ---------------------------------------------------------------------------
 
 class Scenario5TokenBudgetTest(SimpleTestCase):
-    """Agent hits token budget and warns then stops."""
+    """The turn's work-token budget ends the loop with a harness note."""
 
-    @patch("orchestration.agent_loop.LOOP_TOKEN_BUDGET", 500)
+    @override_settings(AGENT_TURN_TOKEN_BUDGET=500, AGENT_TURN_TOKEN_BUDGET_MAX=500)
     @patch("orchestration.agent_loop.get_llm_client")
     @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)
     @patch("orchestration.agent_loop.cache")
@@ -259,16 +259,12 @@ class Scenario5TokenBudgetTest(SimpleTestCase):
         mock_cache.get.return_value = None
         mock_exec.return_value = {"status": "success"}
         mock_llm = MagicMock()
+        # One response already exceeds the bound (output tokens are work).
         mock_llm.create_message = AsyncMock(side_effect=[
             _make_llm_response(
                 [_tool_use_block("t1", "check_balance", {})],
                 stop_reason="tool_use",
-                usage={"input_tokens": 300, "output_tokens": 300},
-            ),
-            _make_llm_response(
-                [_text_block("Done.")],
-                stop_reason="end_turn",
-                usage={"input_tokens": 200, "output_tokens": 200},
+                usage={"input_tokens": 6000, "output_tokens": 600},
             ),
         ])
         mock_get_llm.return_value = mock_llm
@@ -279,12 +275,9 @@ class Scenario5TokenBudgetTest(SimpleTestCase):
             context={"user_id": 1, "room_id": 1, "username": "test-user"},
         )))
 
-        kinds = [e.kind for e in events]
-        # Should have a budget warning or error
-        text_events = [e for e in events if e.kind == "text"]
-        all_text = " ".join(e.data.get("text", "") for e in text_events)
-        has_budget_mention = "budget" in all_text.lower() or "error" in kinds
-        self.assertTrue(has_budget_mention)
+        errors = [e for e in events if e.kind == "error"]
+        self.assertTrue(errors)
+        self.assertIn("budget", errors[-1].data["message"].lower())
 
 
 # ---------------------------------------------------------------------------

@@ -94,6 +94,49 @@ provider above.
 | `HISTORY_MAX_MESSAGES` | `50` | Max history turns kept per agent loop. |
 | `HISTORY_COMPACTION_ENABLED` | `True` | Trim the oldest turns when the budget is exceeded (opt-out). |
 
+## Turn budget (T-F3)
+
+One **work-token budget** ends a normal agent turn. "Work tokens" count what the
+model generates plus the input it newly reads (new messages, tool results); the
+system prompt, tool list and history resent on every call are *not* counted, so
+a long conversation does not spend the budget just by being resent.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `AGENT_TURN_TOKEN_BUDGET` | `100000` | Work-token bound for one agent turn. |
+| `AGENT_TURN_TOKEN_BUDGET_MAX` | `500000` | Largest bound an operator may choose; also the bound a legacy caps-off install maps to. |
+
+The model sees the budget used and left from its very first call (the note rides
+on the new user message; the cached system + tools prefix is untouched) and on
+every call after, and can end a turn by calling `request_more_budget` (which
+reads to the user as its own message). The user grants more with a whole-message
+reply — **more budget**, or a plain **yes**/**ok**, or **continue**,
+**go on**, **carry on** — and the work resumes where it stopped, without
+repeating a finished step. A whole-message **no** or **stop** ends the paused
+turn. Any other message drops the paused work (the reply says so once) and
+starts a new turn as usual.
+
+Reaching the bound without the model asking ends the turn the same way: the
+state is kept, the harness note says plainly what ran (how many tool calls and
+which tools) and offers the same reply, and a grant resumes from where it
+stopped. The note is the harness's words, separate from the model's, and claims
+no success.
+
+A delegated run gets a share of what the parent turn has left, and what the
+sub-run spends is charged back to the parent, so a second delegation sees less
+and the delegations cannot together exceed the bound. A parent with too little
+left refuses to delegate. A grant never raises the turn above
+`AGENT_TURN_TOKEN_BUDGET_MAX`; once the turn is at that maximum and runs out
+again it ends for good, the harness note says so plainly, no further grant is
+offered and no state is kept to resume.
+
+The old all-or-nothing **Enforce agent budget caps** switch (Settings >
+Capabilities) is gone; the per-turn bound is the setting above. A stored off
+value from an earlier install is left untouched and maps to
+`AGENT_TURN_TOKEN_BUDGET_MAX`, so a former caps-off install never silently gets
+a smaller bound. Hard runaway backstops remain far above the bound: 10k
+iterations, 10k tool calls and a 30-minute wall clock.
+
 ## Skills
 
 | Variable | Default | Purpose |

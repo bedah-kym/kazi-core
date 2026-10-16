@@ -244,9 +244,9 @@ class Scenario3ErrorRecoveryTest(SimpleTestCase):
 # ---------------------------------------------------------------------------
 
 class Scenario4IterationLimitTest(SimpleTestCase):
-    """Agent hits MAX_ITERATIONS and stops gracefully."""
+    """The iteration backstop ends a runaway tool loop gracefully."""
 
-    @patch("orchestration.agent_loop.MAX_ITERATIONS", 2)
+    @patch("orchestration.agent_loop.HARD_CAP_ITERATIONS", 2)
     @patch("orchestration.agent_loop.get_llm_client")
     @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)
     @patch("orchestration.agent_loop.cache")
@@ -278,9 +278,9 @@ class Scenario4IterationLimitTest(SimpleTestCase):
 # ---------------------------------------------------------------------------
 
 class Scenario5TokenBudgetTest(SimpleTestCase):
-    """Agent hits token budget and warns then stops."""
+    """The turn's work-token budget ends the loop with a harness note."""
 
-    @patch("orchestration.agent_loop.LOOP_TOKEN_BUDGET", 500)
+    @override_settings(AGENT_TURN_TOKEN_BUDGET=500, AGENT_TURN_TOKEN_BUDGET_MAX=500)
     @patch("orchestration.agent_loop.get_llm_client")
     @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)
     @patch("orchestration.agent_loop.cache")
@@ -288,16 +288,12 @@ class Scenario5TokenBudgetTest(SimpleTestCase):
         mock_cache.get.return_value = None
         mock_exec.return_value = {"status": "success"}
         mock_llm = MagicMock()
+        # One response already exceeds the bound (output tokens are work).
         mock_llm.create_message = AsyncMock(side_effect=[
             _make_llm_response(
                 [_tool_use_block("t1", "check_balance", {})],
                 stop_reason="tool_use",
-                usage={"input_tokens": 300, "output_tokens": 300},
-            ),
-            _make_llm_response(
-                [_text_block("Done.")],
-                stop_reason="end_turn",
-                usage={"input_tokens": 200, "output_tokens": 200},
+                usage={"input_tokens": 6000, "output_tokens": 600},
             ),
         ])
         mock_get_llm.return_value = mock_llm
@@ -308,12 +304,9 @@ class Scenario5TokenBudgetTest(SimpleTestCase):
             context={"user_id": 1, "room_id": 1, "username": "test"},
         )))
 
-        kinds = [e.kind for e in events]
-        # Should have a budget warning or error
-        text_events = [e for e in events if e.kind == "text"]
-        all_text = " ".join(e.data.get("text", "") for e in text_events)
-        has_budget_mention = "budget" in all_text.lower() or "error" in kinds
-        self.assertTrue(has_budget_mention)
+        errors = [e for e in events if e.kind == "error"]
+        self.assertTrue(errors)
+        self.assertIn("budget", errors[-1].data["message"].lower())
 
 
 # ---------------------------------------------------------------------------
@@ -572,14 +565,13 @@ class SubAgentBudgetTests(SimpleTestCase):
 
     @patch("orchestration.agent_loop.SUB_AGENT_TOKEN_BUDGET", 200)
     def test_token_budget_stops_sub_agent(self):
-        # Each iteration costs ~150 tokens; the budget must stop the loop
-        # before the third LLM call.
+        # Output is work: two responses of 120 work tokens exceed the 200 bound.
         side_effect = [
             _make_llm_response(
                 [_text_block("Working."),
                  _tool_use_block(f"t{i}", "get_weather", {})],
                 stop_reason="tool_use",
-                usage={"input_tokens": 100, "output_tokens": 50},
+                usage={"input_tokens": 100, "output_tokens": 120},
             )
             for i in range(4)
         ]
@@ -589,8 +581,8 @@ class SubAgentBudgetTests(SimpleTestCase):
         self.assertGreaterEqual(result["tokens_used"], 200)
         self.assertEqual(create_message.await_count, 2)
 
-    @patch("orchestration.agent_loop.SUB_AGENT_MAX_ITERATIONS", 2)
-    def test_iteration_cap_reports_max_iterations(self):
+    @patch("orchestration.agent_loop.HARD_CAP_ITERATIONS", 2)
+    def test_iteration_backstop_reports_max_iterations(self):
         response = _make_llm_response(
             [_tool_use_block("t1", "get_weather", {})],
             stop_reason="tool_use",
@@ -622,7 +614,8 @@ class SubAgentBudgetTests(SimpleTestCase):
         self.assertIsNone(result["stopped_reason"])
         self.assertEqual(result["iterations"], 2)
         self.assertEqual(result["tool_calls"], 1)
-        self.assertEqual(result["tokens_used"], 100)
+        # Work only: 30 generated + 10 generated (the resent input is not charged).
+        self.assertEqual(result["tokens_used"], 40)
         self.assertIn("All done.", result["summary"])
         mock_record.assert_not_called()
 
@@ -633,7 +626,7 @@ class SubAgentBudgetTests(SimpleTestCase):
             _make_llm_response(
                 [_tool_use_block("t0", "get_weather", {})],
                 stop_reason="tool_use",
-                usage={"input_tokens": SUB_AGENT_TOKEN_BUDGET, "output_tokens": 0},
+                usage={"input_tokens": 0, "output_tokens": SUB_AGENT_TOKEN_BUDGET},
             ),
         ]
         result, _, _, _ = self._run(llm_side_effect=side_effect)

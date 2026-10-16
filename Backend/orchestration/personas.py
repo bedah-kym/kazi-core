@@ -102,6 +102,28 @@ def persona_bounds(persona) -> Dict[str, Any]:
     }
 
 
+def _split_scope_by_availability(scope) -> Tuple[List[str], List[str]]:
+    """Split a persona's scope into tools that can run here and catalog tools whose
+    connector is not configured on this install.
+
+    Internal and meta tools are not catalog actions and always stay. If the
+    registry cannot be read, nothing is dropped.
+    """
+    try:
+        from orchestration.action_catalog import iter_action_definitions, resolve_action_alias
+        from orchestration.connector_registry import get_available_actions
+
+        catalog = {item["action"] for item in iter_action_definitions()}
+        available = set(get_available_actions())
+    except Exception:
+        return list(scope), []
+    usable, missing = [], []
+    for name in scope:
+        action = resolve_action_alias(str(name))
+        (missing if action in catalog and action not in available else usable).append(name)
+    return usable, missing
+
+
 def persona_identity_prompt(persona) -> str:
     """System-prompt block so the agent knows who it is and what it may do."""
     from orchestration.skill_registry import get_skill
@@ -110,7 +132,14 @@ def persona_identity_prompt(persona) -> str:
     if persona.description:
         parts.append(persona.description.strip())
     if persona.tool_scope:
-        parts.append("Your tool scope: " + ", ".join(persona.tool_scope) + ".")
+        usable, missing = _split_scope_by_availability(persona.tool_scope)
+        if usable:
+            parts.append("Your tool scope: " + ", ".join(usable) + ".")
+        if missing:
+            parts.append(
+                "In your scope but not configured on this install, so not available: "
+                + ", ".join(missing) + "."
+            )
         parts.append("Anything outside that scope is refused, not attempted.")
     parts.append(
         f"Your risk ceiling is '{persona.risk_ceiling}'; anything above it, or on "

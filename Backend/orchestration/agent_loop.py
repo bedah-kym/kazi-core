@@ -515,6 +515,19 @@ def _is_policy_block(output: Any) -> bool:
     )
 
 
+HARNESS_REFUSAL_KEY = "harness_refusal"
+
+
+def _is_harness_refusal(output: Any) -> bool:
+    """True when the harness itself refused to run a call (T-F3).
+
+    A budget refusal is the harness declining to spend, not the service
+    failing, so it must not count toward the retry cap or the circuit breaker.
+    Any result the harness marks with ``harness_refusal`` is treated the same.
+    """
+    return isinstance(output, dict) and bool(output.get(HARNESS_REFUSAL_KEY))
+
+
 # --------------------------------------------------------------------------- #
 #  Durable approval records (WorkflowApprovalRecord)                          #
 # --------------------------------------------------------------------------- #
@@ -1078,6 +1091,28 @@ def _circuit_open_message(service: str) -> str:
     )
 
 
+def _account_tool_result(
+    state: "LoopState",
+    tool_name: str,
+    service: str,
+    result: Any,
+) -> None:
+    """Update retry + circuit-breaker state after a tool call (T-F3).
+
+    A harness refusal (e.g. a budget refusal) is the harness declining to run
+    the call, not the service failing: it leaves the retry count and the
+    breaker untouched, so a refused batch cannot open the circuit.
+    """
+    if _is_harness_refusal(result):
+        return
+    if isinstance(result, dict) and result.get("status") == "error":
+        state.retry_counts[tool_name] = state.retry_counts.get(tool_name, 0) + 1
+        _record_tool_failure(service)
+    else:
+        state.retry_counts[tool_name] = 0
+        _record_tool_success(service)
+
+
 async def _record_receipt(
     tool_name: str,
     tool_input: Dict[str, Any],
@@ -1294,6 +1329,7 @@ async def _execute_meta_tool(
                     "Not enough of this turn's budget is left to delegate this "
                     "task. I'll continue here or ask the user for more budget."
                 ),
+                HARNESS_REFUSAL_KEY: True,
             }
         return await _run_sub_agent(
             tool_input, context, preferences, parent_system, parent_tools,
@@ -1306,6 +1342,7 @@ async def _execute_meta_tool(
         return {
             "status": "error",
             "message": "The budget request was already handled by the harness.",
+            HARNESS_REFUSAL_KEY: True,
         }
     elif tool_name == "list_skills":
         return _list_skills()
@@ -2304,13 +2341,10 @@ async def run_agent_loop(
                         logger.error("Tool %s raised unexpectedly: %s", tc["name"], exc)
                         result = {"status": "error", "message": str(exc)}
 
-                    # Track retries + circuit breaker state
-                    if result.get("status") == "error":
-                        state.retry_counts[tc["name"]] = state.retry_counts.get(tc["name"], 0) + 1
-                        _record_tool_failure(service)
-                    else:
-                        state.retry_counts[tc["name"]] = 0
-                        _record_tool_success(service)
+                    # Track retries + circuit breaker state. A harness refusal
+                    # (e.g. a budget refusal) is not a service failure and never
+                    # counts toward the retry cap or the breaker (T-F3).
+                    _account_tool_result(state, tc["name"], service, result)
                     return tc, result, granted
 
                 # Run in parallel. Delegations in one batch share a single

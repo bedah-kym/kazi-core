@@ -881,6 +881,128 @@ class ParallelDelegationBatchTests(_LoopHarness):
         self.assertEqual(grants, [49995])
 
 
+class HarnessRefusalCircuitTests(_LoopHarness):
+    """A budget refusal is not a service failure and must not trip the breaker."""
+
+    def _fake_sub(self, grants):
+        async def _run(task_input, context, *args, **kwargs):
+            granted = int(context.get("sub_agent_budget") or 0)
+            grants.append(granted)
+            return {
+                "status": "success",
+                "summary": "sub-task done",
+                "tokens_used": granted,
+            }
+
+        return _run
+
+    @override_settings(AGENT_TURN_TOKEN_BUDGET=20000, AGENT_TURN_TOKEN_BUDGET_MAX=500000)
+    def test_budget_refusals_do_not_trip_the_delegate_breaker(self):
+        from orchestration.agent_loop import _circuit_breaker_open, run_agent_loop
+
+        patches = self._patch_stack()
+        mocks = [p.start() for p in patches]
+        self.addCleanup(lambda: [p.stop() for p in patches])
+        mock_cache, mock_exec, mock_llm_client = mocks[4], mocks[3], mocks[2]
+        mock_cache.get.return_value = None
+        mock_exec.return_value = {"status": "success"}
+        grants = []
+        batch = [
+            _tool_use_block(f"t{i}", "delegate_task", {"task": f"task {i}"})
+            for i in range(8)
+        ]
+        llm = self._llm(side_effect=[
+            _make_llm_response(
+                batch,
+                stop_reason="tool_use",
+                usage={"input_tokens": 6000, "output_tokens": 10},
+            ),
+            _make_llm_response(
+                [_tool_use_block("later", "delegate_task", {"task": "later"})],
+                stop_reason="tool_use",
+                usage={"input_tokens": 6100, "output_tokens": 10},
+            ),
+            _make_llm_response(
+                [_text_block("Done.")],
+                stop_reason="end_turn",
+                usage={"input_tokens": 6200, "output_tokens": 10},
+            ),
+        ])
+        mock_llm_client.return_value = llm
+        mock_run_sub = AsyncMock(side_effect=self._fake_sub(grants))
+
+        with patch("orchestration.agent_loop._run_sub_agent", new=mock_run_sub):
+            events = self._run(collect_events(run_agent_loop(
+                user_message="delegate to eight then once more",
+                context={"user_id": 1, "room_id": 1, "username": "t"},
+            )))
+
+        delegations = [
+            e for e in events
+            if e.kind == "tool_result" and e.data["name"] == "delegate_task"
+        ]
+        refused = [
+            e for e in delegations
+            if e.data["result"].get("status") == "error"
+        ]
+        # One share funds one delegation; the other seven are refused honestly.
+        self.assertEqual(len(refused), 7)
+        for event in refused:
+            self.assertIn("budget", event.data["result"]["message"].lower())
+        # A budget refusal must never surface as a service outage.
+        for event in delegations:
+            self.assertNotIn(
+                "temporarily unavailable",
+                str(event.data["result"].get("message") or "").lower(),
+            )
+        # The later delegation in the same turn still runs: no breaker opened.
+        self.assertEqual(mock_run_sub.await_count, 2)
+        self.assertFalse(_circuit_breaker_open("delegate_task"))
+
+    @override_settings(AGENT_TURN_TOKEN_BUDGET=200000, AGENT_TURN_TOKEN_BUDGET_MAX=500000)
+    def test_three_real_sub_run_failures_still_open_the_breaker(self):
+        from orchestration.agent_loop import _circuit_breaker_open, run_agent_loop
+
+        patches = self._patch_stack()
+        mocks = [p.start() for p in patches]
+        self.addCleanup(lambda: [p.stop() for p in patches])
+        mock_cache, mock_exec, mock_llm_client = mocks[4], mocks[3], mocks[2]
+        mock_cache.get.return_value = None
+        mock_exec.return_value = {"status": "success"}
+
+        async def _fail(*args, **kwargs):
+            return {"status": "error", "message": "sub-agent failed", "tokens_used": 0}
+
+        batch = [
+            _tool_use_block(f"t{i}", "delegate_task", {"task": f"task {i}"})
+            for i in range(3)
+        ]
+        llm = self._llm(side_effect=[
+            _make_llm_response(
+                batch,
+                stop_reason="tool_use",
+                usage={"input_tokens": 6000, "output_tokens": 10},
+            ),
+            _make_llm_response(
+                [_text_block("Done.")],
+                stop_reason="end_turn",
+                usage={"input_tokens": 6100, "output_tokens": 10},
+            ),
+        ])
+        mock_llm_client.return_value = llm
+
+        with patch(
+            "orchestration.agent_loop._run_sub_agent",
+            new=AsyncMock(side_effect=_fail),
+        ):
+            self._run(collect_events(run_agent_loop(
+                user_message="delegate three failing tasks",
+                context={"user_id": 1, "room_id": 1, "username": "t"},
+            )))
+
+        self.assertTrue(_circuit_breaker_open("delegate_task"))
+
+
 class GrantCeilingTests(_LoopHarness):
     """A grant never raises the turn above the configured maximum (T-F3)."""
 

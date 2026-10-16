@@ -29,7 +29,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A turn that reaches the bound without the model asking keeps its state too:
   the harness note says plainly what ran and offers the same reply, and a grant
   resumes from where it stopped.
-  Delegated runs get a share of what the parent has left. Hard runaway
+  Delegated runs get a share of what the parent has left, never more than the
+  parent still has; what a delegated run spends is charged back to the parent
+  turn, so a second delegation sees less and delegations cannot together
+  outrun the bound, and a parent with too little left refuses to delegate
+  rather than run on a fallback. A grant never raises the turn above
+  `AGENT_TURN_TOKEN_BUDGET_MAX`; when the turn is already at that maximum and
+  runs out again it ends for good, the harness note says so plainly and offers
+  no further grant, and no state is kept to resume. Hard runaway
   backstops (10k iterations, 10k tool calls, a 30-minute wall clock) stay far
   above the bound, and the native web-search tool is rebuilt from the live
   daily allowance on every request so one turn cannot exceed the daily limit.

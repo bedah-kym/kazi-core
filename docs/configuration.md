@@ -122,6 +122,14 @@ which tools) and offers the same reply, and a grant resumes from where it
 stopped. The note is the harness's words, separate from the model's, and claims
 no success.
 
+A delegated run gets a share of what the parent turn has left, and what the
+sub-run spends is charged back to the parent, so a second delegation sees less
+and the delegations cannot together exceed the bound. A parent with too little
+left refuses to delegate. A grant never raises the turn above
+`AGENT_TURN_TOKEN_BUDGET_MAX`; once the turn is at that maximum and runs out
+again it ends for good, the harness note says so plainly, no further grant is
+offered and no state is kept to resume.
+
 The old all-or-nothing **Enforce agent budget caps** switch (Settings >
 Capabilities) is gone; the per-turn bound is the setting above. A stored off
 value from an earlier install is left untouched and maps to

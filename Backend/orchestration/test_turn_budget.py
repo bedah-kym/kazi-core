@@ -77,6 +77,13 @@ class _LoopHarness(SimpleTestCase):
         llm.create_message = AsyncMock(side_effect=side_effect)
         return llm
 
+    def _dict_cache(self, mock_cache):
+        store = {}
+        mock_cache.get.side_effect = lambda key, default=None: store.get(key, default)
+        mock_cache.set.side_effect = lambda key, value, ttl=None: store.__setitem__(key, value)
+        mock_cache.delete.side_effect = lambda key: store.pop(key, None)
+        return store
+
 
 class ResentHistoryBudgetTests(_LoopHarness):
     """A long conversation's resent history must not spend the turn's budget."""
@@ -247,13 +254,6 @@ class BudgetVisibilityTests(_LoopHarness):
 
 
 class RequestMoreBudgetTests(_LoopHarness):
-    def _dict_cache(self, mock_cache):
-        store = {}
-        mock_cache.get.side_effect = lambda key, default=None: store.get(key, default)
-        mock_cache.set.side_effect = lambda key, value, ttl=None: store.__setitem__(key, value)
-        mock_cache.delete.side_effect = lambda key: store.pop(key, None)
-        return store
-
     @override_settings(AGENT_TURN_TOKEN_BUDGET=50000, AGENT_TURN_TOKEN_BUDGET_MAX=500000)
     def test_asking_for_budget_ends_the_turn_honestly(self):
         from orchestration.agent_loop import load_loop_state, run_agent_loop
@@ -409,10 +409,22 @@ class DelegatedBudgetTests(SimpleTestCase):
         return LoopState(messages=[], token_budget=budget, tokens_used=used)
 
     def test_delegated_run_gets_a_share_of_the_parent_remaining(self):
-        from orchestration.agent_loop import MIN_DELEGATED_BUDGET, _delegated_budget
+        from orchestration.agent_loop import _delegated_budget
 
         self.assertEqual(_delegated_budget(self._state(100000, 20000)), 40000)
-        self.assertEqual(_delegated_budget(self._state(1000, 990)), MIN_DELEGATED_BUDGET)
+        # A parent with too little left grants nothing: the delegation is refused.
+        self.assertEqual(_delegated_budget(self._state(1000, 990)), 0)
+
+    def test_delegated_grant_never_exceeds_the_parent_remaining(self):
+        from orchestration.agent_loop import MIN_DELEGATED_BUDGET, _delegated_budget
+
+        # At the refusal floor the grant is still a share of what is left.
+        remaining = MIN_DELEGATED_BUDGET
+        self.assertLessEqual(
+            _delegated_budget(self._state(100000, 100000 - remaining)), remaining,
+        )
+        # A parent with barely anything left refuses.
+        self.assertEqual(_delegated_budget(self._state(100000, 100000 - 1)), 0)
 
     def test_only_delegation_gets_the_budget_share(self):
         from orchestration.agent_loop import _meta_tool_context
@@ -425,6 +437,261 @@ class DelegatedBudgetTests(SimpleTestCase):
         child = _meta_tool_context("delegate_task", context, self._state(100000, 0))
         self.assertEqual(child["sub_agent_budget"], 50000)
         self.assertNotIn("sub_agent_budget", context)
+
+
+class DelegatedSpendTests(_LoopHarness):
+    """A delegated run's work tokens count against the parent turn (T-F3)."""
+
+    def _fake_sub(self, grants, spend=None):
+        async def _run(task_input, context, *args, **kwargs):
+            granted = int(context.get("sub_agent_budget") or 0)
+            grants.append(granted)
+            return {
+                "status": "success",
+                "summary": "sub-task done",
+                "tokens_used": granted if spend is None else spend,
+            }
+
+        return _run
+
+    @override_settings(AGENT_TURN_TOKEN_BUDGET=500000, AGENT_TURN_TOKEN_BUDGET_MAX=500000)
+    def test_parent_tokens_used_grows_by_the_sub_run_spend(self):
+        from orchestration.agent_loop import run_agent_loop
+
+        patches = self._patch_stack()
+        mocks = [p.start() for p in patches]
+        self.addCleanup(lambda: [p.stop() for p in patches])
+        mock_cache, mock_exec, mock_llm_client = mocks[4], mocks[3], mocks[2]
+        mock_cache.get.return_value = None
+        mock_exec.return_value = {"status": "success"}
+        llm = self._llm(side_effect=[
+            _make_llm_response(
+                [_tool_use_block("t1", "delegate_task", {"task": "A"})],
+                stop_reason="tool_use",
+                usage={"input_tokens": 6000, "output_tokens": 10},
+            ),
+            _make_llm_response(
+                [_text_block("Done.")],
+                stop_reason="end_turn",
+                usage={"input_tokens": 6100, "output_tokens": 10},
+            ),
+        ])
+        mock_llm_client.return_value = llm
+
+        with patch(
+            "orchestration.agent_loop._run_sub_agent",
+            new=AsyncMock(side_effect=self._fake_sub([], spend=7000)),
+        ):
+            events = self._run(collect_events(run_agent_loop(
+                user_message="delegate",
+                context={"user_id": 1, "room_id": 1, "username": "t"},
+            )))
+
+        done = next(e for e in events if e.kind == "done")
+        # 10 + 110 from the two LLM calls, plus the 7000 the sub-run spent.
+        self.assertEqual(done.data["budget_used"], 7120)
+        self.assertEqual(done.data["end_reason"], "finished")
+
+    @override_settings(AGENT_TURN_TOKEN_BUDGET=8000, AGENT_TURN_TOKEN_BUDGET_MAX=500000)
+    def test_two_delegations_cannot_together_exceed_the_parent_remaining(self):
+        from orchestration.agent_loop import run_agent_loop
+
+        patches = self._patch_stack()
+        mocks = [p.start() for p in patches]
+        self.addCleanup(lambda: [p.stop() for p in patches])
+        mock_cache, mock_exec, mock_llm_client = mocks[4], mocks[3], mocks[2]
+        mock_cache.get.return_value = None
+        mock_exec.return_value = {"status": "success"}
+        grants = []
+        llm = self._llm(side_effect=[
+            _make_llm_response(
+                [_tool_use_block("t1", "delegate_task", {"task": "A"})],
+                stop_reason="tool_use",
+                usage={"input_tokens": 6000, "output_tokens": 10},
+            ),
+            _make_llm_response(
+                [_tool_use_block("t2", "delegate_task", {"task": "B"})],
+                stop_reason="tool_use",
+                usage={"input_tokens": 6100, "output_tokens": 10},
+            ),
+            _make_llm_response(
+                [_text_block("Done.")],
+                stop_reason="end_turn",
+                usage={"input_tokens": 6200, "output_tokens": 10},
+            ),
+        ])
+        mock_llm_client.return_value = llm
+
+        with patch(
+            "orchestration.agent_loop._run_sub_agent",
+            new=AsyncMock(side_effect=self._fake_sub(grants)),
+        ):
+            events = self._run(collect_events(run_agent_loop(
+                user_message="delegate twice",
+                context={"user_id": 1, "room_id": 1, "username": "t"},
+            )))
+
+        # The first delegation spends its share, so the second is smaller; the
+        # two grants can never total more than the turn had left. On the old
+        # code the spend was never counted and both grants were the same size.
+        self.assertLessEqual(sum(grants), 8000)
+        done = next(e for e in events if e.kind == "done")
+        self.assertEqual(done.data["end_reason"], "finished")
+
+    @override_settings(AGENT_TURN_TOKEN_BUDGET=10000, AGENT_TURN_TOKEN_BUDGET_MAX=500000)
+    def test_near_empty_parent_refuses_to_delegate(self):
+        from orchestration.agent_loop import run_agent_loop
+
+        patches = self._patch_stack()
+        mocks = [p.start() for p in patches]
+        self.addCleanup(lambda: [p.stop() for p in patches])
+        mock_cache, mock_exec, mock_llm_client = mocks[4], mocks[3], mocks[2]
+        mock_cache.get.return_value = None
+        mock_exec.return_value = {"status": "success"}
+        llm = self._llm(side_effect=[
+            _make_llm_response(
+                [_tool_use_block("t1", "get_weather", {})],
+                stop_reason="tool_use",
+                usage={"input_tokens": 6000, "output_tokens": 6000},
+            ),
+            _make_llm_response(
+                [_tool_use_block("t2", "delegate_task", {"task": "A"})],
+                stop_reason="tool_use",
+                usage={"input_tokens": 6100, "output_tokens": 10},
+            ),
+            _make_llm_response(
+                [_text_block("Done.")],
+                stop_reason="end_turn",
+                usage={"input_tokens": 6200, "output_tokens": 10},
+            ),
+        ])
+        mock_llm_client.return_value = llm
+        mock_run_sub = AsyncMock(side_effect=self._fake_sub([]))
+
+        with patch("orchestration.agent_loop._run_sub_agent", new=mock_run_sub):
+            events = self._run(collect_events(run_agent_loop(
+                user_message="delegate with little left",
+                context={"user_id": 1, "room_id": 1, "username": "t"},
+            )))
+
+        mock_run_sub.assert_not_awaited()
+        deleg = next(
+            e for e in events
+            if e.kind == "tool_result" and e.data["name"] == "delegate_task"
+        )
+        self.assertEqual(deleg.data["result"]["status"], "error")
+        self.assertIn("budget", deleg.data["result"]["message"].lower())
+
+
+class GrantCeilingTests(_LoopHarness):
+    """A grant never raises the turn above the configured maximum (T-F3)."""
+
+    @override_settings(AGENT_TURN_TOKEN_BUDGET=1000, AGENT_TURN_TOKEN_BUDGET_MAX=3000)
+    def test_a_grant_never_raises_the_budget_above_the_maximum(self):
+        from orchestration.agent_loop import (
+            LoopState, resume_with_more_budget, save_loop_state,
+        )
+
+        patches = self._patch_stack()
+        mocks = [p.start() for p in patches]
+        self.addCleanup(lambda: [p.stop() for p in patches])
+        mock_cache, mock_exec, mock_llm_client = mocks[4], mocks[3], mocks[2]
+        self._dict_cache(mock_cache)
+        mock_exec.return_value = {"status": "success"}
+        llm = self._llm(side_effect=[
+            _make_llm_response(
+                [_text_block("Done.")],
+                stop_reason="end_turn",
+                usage={"input_tokens": 100, "output_tokens": 10},
+            ),
+        ])
+        mock_llm_client.return_value = llm
+
+        save_loop_state(1, 1, LoopState(
+            messages=[{"role": "user", "content": "task"}],
+            token_budget=2500,
+            tokens_used=100,
+            awaiting_budget=True,
+            end_reason="budget",
+        ))
+
+        events = self._run(collect_events(resume_with_more_budget(
+            context={"user_id": 1, "room_id": 1, "username": "t"},
+        )))
+
+        done = next(e for e in events if e.kind == "done")
+        self.assertEqual(done.data["budget"], 3000)
+        self.assertEqual(done.data["end_reason"], "finished")
+
+    @override_settings(AGENT_TURN_TOKEN_BUDGET=1000, AGENT_TURN_TOKEN_BUDGET_MAX=1000)
+    def test_at_the_maximum_the_note_offers_no_grant_and_state_is_not_kept(self):
+        from orchestration.agent_loop import load_loop_state, run_agent_loop
+
+        patches = self._patch_stack()
+        mocks = [p.start() for p in patches]
+        self.addCleanup(lambda: [p.stop() for p in patches])
+        mock_cache, mock_exec, mock_llm_client = mocks[4], mocks[3], mocks[2]
+        self._dict_cache(mock_cache)
+        mock_exec.return_value = {"status": "success"}
+        llm = self._llm(side_effect=[
+            _make_llm_response(
+                [_tool_use_block("t1", "get_weather", {})],
+                stop_reason="tool_use",
+                usage={"input_tokens": 6000, "output_tokens": 1200},
+            ),
+        ])
+        mock_llm_client.return_value = llm
+
+        events = self._run(collect_events(run_agent_loop(
+            user_message="long task",
+            context={"user_id": 7, "room_id": 9, "username": "t"},
+        )))
+
+        errors = [e for e in events if e.kind == "error"]
+        self.assertTrue(errors)
+        message = errors[-1].data["message"].lower()
+        self.assertIn("maximum", message)
+        self.assertNotIn("more budget", message)
+        self.assertNotIn("budget_request", [e.kind for e in events])
+        done = next(e for e in events if e.kind == "done")
+        self.assertEqual(done.data["end_reason"], "budget")
+        self.assertIsNone(load_loop_state(9, 7))
+
+    @override_settings(AGENT_TURN_TOKEN_BUDGET=1000, AGENT_TURN_TOKEN_BUDGET_MAX=1000)
+    def test_model_asking_at_the_maximum_is_terminal(self):
+        from orchestration.agent_loop import load_loop_state, run_agent_loop
+
+        patches = self._patch_stack()
+        mocks = [p.start() for p in patches]
+        self.addCleanup(lambda: [p.stop() for p in patches])
+        mock_cache, mock_exec, mock_llm_client = mocks[4], mocks[3], mocks[2]
+        self._dict_cache(mock_cache)
+        mock_exec.return_value = {"status": "success"}
+        llm = self._llm(side_effect=[
+            _make_llm_response(
+                [_text_block("I need more."),
+                 _tool_use_block("t1", REQUEST_MORE_BUDGET_TOOL, {"reason": "more"})],
+                stop_reason="tool_use",
+                usage={"input_tokens": 6000, "output_tokens": 1200},
+            ),
+        ])
+        mock_llm_client.return_value = llm
+
+        events = self._run(collect_events(run_agent_loop(
+            user_message="long task",
+            context={"user_id": 7, "room_id": 9, "username": "t"},
+        )))
+
+        kinds = [e.kind for e in events]
+        self.assertNotIn("budget_request", kinds)
+        errors = [e for e in events if e.kind == "error"]
+        self.assertTrue(errors)
+        message = errors[-1].data["message"].lower()
+        self.assertIn("maximum", message)
+        self.assertNotIn("more budget", message)
+        done = next(e for e in events if e.kind == "done")
+        self.assertEqual(done.data["end_reason"], "budget")
+        self.assertIsNone(load_loop_state(9, 7))
 
 
 class CapsOffMappingTests(SimpleTestCase):

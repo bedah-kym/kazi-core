@@ -396,11 +396,49 @@ def _turn_token_budget(caps_enforced: bool) -> int:
 def _delegated_budget(state: "LoopState") -> int:
     """The work-token budget a delegated run may spend (T-F3).
 
-    A share of what the parent has left, with a floor, so a sub-task can do
-    real work but never outspend its parent's remaining turn.
+    A share of what the parent has left. The share never exceeds that remainder
+    (a share plus a floor could outspend the parent), so a second delegation
+    sees less and the delegations together cannot exceed the turn. A parent
+    with less than ``MIN_DELEGATED_BUDGET`` left grants nothing: the delegation
+    is refused rather than run on a share too small to do real work.
     """
     remaining = max(0, state.token_budget - state.tokens_used)
-    return max(MIN_DELEGATED_BUDGET, int(remaining * DELEGATED_BUDGET_SHARE))
+    if remaining < MIN_DELEGATED_BUDGET:
+        return 0
+    return min(remaining, int(remaining * DELEGATED_BUDGET_SHARE))
+
+
+def _apply_delegated_spend(state: "LoopState", result: Any) -> None:
+    """Charge a delegated run's work tokens to the parent turn (T-F3).
+
+    A ``delegate_task`` result carries the work tokens the sub-run spent. The
+    parent's single bound only limits the turn if that spending is counted, so
+    a second delegation sees what is really left. A missing or non-numeric
+    value is treated as zero rather than crashing the turn.
+    """
+    if not isinstance(result, dict):
+        return
+    try:
+        spent = int(result.get("tokens_used") or 0)
+    except (TypeError, ValueError, OverflowError):
+        return
+    if spent > 0:
+        state.tokens_used += spent
+
+
+def _granted_sub_budget(context: Dict[str, Any]) -> Optional[int]:
+    """The delegated budget the harness granted, or None if it granted none.
+
+    ``_meta_tool_context`` always sets ``sub_agent_budget`` for ``delegate_task``
+    (0 when the parent has too little left). A context without the key — a
+    handoff, a direct call — is not a refusal; ``_run_sub_agent`` falls back.
+    """
+    if "sub_agent_budget" not in context:
+        return None
+    try:
+        return int(context.get("sub_agent_budget") or 0)
+    except (TypeError, ValueError, OverflowError):
+        return None
 
 
 def _meta_tool_context(
@@ -714,14 +752,8 @@ def _harness_budget_note(used: int, total: int) -> str:
     )
 
 
-def _bound_reached_note(state: "LoopState") -> str:
-    """The harness line shown when the turn's budget runs out (T-F3).
-
-    It says plainly what ran, so "here's what I managed" is never a promise it
-    does not keep, and offers the same reply a budget request does so the user
-    can extend the turn (deliverable 6). It is the harness's words, not the
-    model's, and claims no success.
-    """
+def _budget_end_detail(state: "LoopState") -> str:
+    """What ran this turn, for a harness note that claims no success (T-F3)."""
     ran = state.tool_call_count
     tools = list(dict.fromkeys(
         entry.get("name") for entry in state.tool_call_log if entry.get("name")
@@ -731,9 +763,33 @@ def _bound_reached_note(state: "LoopState") -> str:
         detail += f" ({', '.join(tools)})" if tools else ""
     else:
         detail = "no tool calls had run yet"
+    return detail
+
+
+def _bound_reached_note(state: "LoopState") -> str:
+    """The harness line shown when the turn's budget runs out (T-F3).
+
+    It says plainly what ran, so "here's what I managed" is never a promise it
+    does not keep, and offers the same reply a budget request does so the user
+    can extend the turn (deliverable 6). It is the harness's words, not the
+    model's, and claims no success.
+    """
     return (
-        f"I've used up this turn's budget: {detail}. "
+        f"I've used up this turn's budget: {_budget_end_detail(state)}. "
         "Reply **more budget** and I'll continue from where it stopped."
+    )
+
+
+def _maximum_budget_note(state: "LoopState") -> str:
+    """The harness line shown when even a grant cannot extend the turn (T-F3).
+
+    At the configured maximum there is no budget left to grant, so this note
+    says that plainly and never offers another grant. It is the harness's
+    words, separate from the model's, and claims no success.
+    """
+    return (
+        f"I've used the maximum budget for this turn: {_budget_end_detail(state)}. "
+        "I can't extend it further; send a new message to continue."
     )
 
 
@@ -1176,6 +1232,17 @@ async def _execute_meta_tool(
     """Execute an internal meta-tool (delegate_task or handoff_to_workflow)."""
 
     if tool_name == "delegate_task":
+        granted = _granted_sub_budget(context)
+        if granted is not None and granted <= 0:
+            # The parent turn has too little left to hand a sub-run a real
+            # budget. Refuse honestly instead of running on the fallback.
+            return {
+                "status": "error",
+                "message": (
+                    "Not enough of this turn's budget is left to delegate this "
+                    "task. I'll continue here or ask the user for more budget."
+                ),
+            }
         return await _run_sub_agent(
             tool_input, context, preferences, parent_system, parent_tools,
         )
@@ -1774,6 +1841,10 @@ async def run_agent_loop(
             result = await _execute_with_timeout(
                 pending["name"], pending["input"], context,
             )
+        if pending["name"] == "delegate_task":
+            # A delegated run spent work tokens; charge them to the turn so the
+            # single bound reflects it (T-F3).
+            _apply_delegated_spend(state, result)
         state.tool_call_count += 1
         state.tool_call_log.append({
             "name": pending["name"],
@@ -1819,12 +1890,16 @@ async def run_agent_loop(
         state.start_time = time.monotonic()
         state.awaiting_budget = False
         state.budget_extensions += 1
-        # One base budget per grant, and always a full base budget of headroom
-        # from where the turn stopped: a bound that was reached has already
-        # overspent the old bound, so adding alone could leave no room to work.
-        state.token_budget = max(
-            (state.token_budget or default_budget) + default_budget,
-            state.tokens_used + default_budget,
+        # Grow by one base budget per grant, always keeping a full base budget
+        # of headroom from where the turn stopped, but never past the
+        # configured maximum: above it there is nothing left to grant (T-F3).
+        max_budget = _turn_token_budget(False)
+        state.token_budget = min(
+            max_budget,
+            max(
+                (state.token_budget or default_budget) + default_budget,
+                state.tokens_used + default_budget,
+            ),
         )
         state.tainted = state.tainted or await sync_to_async(_conversation_tainted)(room_id)
         _append_note_to_last_user(
@@ -1908,6 +1983,14 @@ async def run_agent_loop(
         # request does, so the user can extend the turn in chat (T-F3 follow-up).
         if state.tokens_used >= state.token_budget:
             state.end_reason = "budget"
+            # At the configured maximum there is nothing left to grant, so the
+            # turn ends for good: no pause, no state kept, no offer of more.
+            if state.tokens_used >= _turn_token_budget(False):
+                state.awaiting_budget = False
+                yield AgentEvent("error", {
+                    "message": _maximum_budget_note(state),
+                })
+                break
             state.awaiting_budget = True
             if room_id and user_id:
                 save_loop_state(room_id, user_id, state)
@@ -2007,6 +2090,7 @@ async def run_agent_loop(
             # every call so the message contract stays valid, save the state,
             # and wait for the user. Nothing else in the batch runs (T-F3).
             if any(tc["name"] == REQUEST_MORE_BUDGET_TOOL for tc in tool_calls):
+                at_max = state.tokens_used >= _turn_token_budget(False)
                 state.messages.append({
                     "role": "user",
                     "content": [
@@ -2014,8 +2098,13 @@ async def run_agent_loop(
                             "type": "tool_result",
                             "tool_use_id": tc["id"],
                             "content": (
-                                "Budget request received; the user has been asked. "
-                                "Waiting for their reply."
+                                (
+                                    "The maximum budget for this turn is already "
+                                    "used; no further budget is available."
+                                    if at_max
+                                    else "Budget request received; the user has "
+                                         "been asked. Waiting for their reply."
+                                )
                                 if tc["name"] == REQUEST_MORE_BUDGET_TOOL
                                 else "Skipped: the model asked for more budget first."
                             ),
@@ -2024,6 +2113,15 @@ async def run_agent_loop(
                         for tc in tool_calls
                     ],
                 })
+                if at_max:
+                    # The grant ceiling is reached: end for good, keep no state,
+                    # and never offer another grant (T-F3).
+                    state.end_reason = "budget"
+                    state.awaiting_budget = False
+                    yield AgentEvent("error", {
+                        "message": _maximum_budget_note(state),
+                    })
+                    break
                 state.awaiting_budget = True
                 state.end_reason = "asked_for_more"
                 if room_id and user_id:
@@ -2146,6 +2244,10 @@ async def run_agent_loop(
                         logger.error("Parallel tool error: %s", item)
                         continue
                     tc, result = item
+                    if tc["name"] == "delegate_task":
+                        # Charge the sub-run's work tokens to the turn so the
+                        # single bound reflects them (T-F3).
+                        _apply_delegated_spend(state, result)
                     tool_results.append((tc, result))
                     state.tool_call_count += 1
                     state.tool_call_log.append({

@@ -408,20 +408,33 @@ def _delegated_budget(state: "LoopState") -> int:
     return min(remaining, int(remaining * DELEGATED_BUDGET_SHARE))
 
 
-def _apply_delegated_spend(state: "LoopState", result: Any) -> None:
+def _reported_tokens(result: Any) -> Optional[int]:
+    """The work tokens a delegated result reports, or None when unusable."""
+    if not isinstance(result, dict):
+        return None
+    try:
+        return int(result["tokens_used"])
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
+
+
+def _apply_delegated_spend(
+    state: "LoopState",
+    result: Any,
+    granted: Optional[int] = None,
+) -> None:
     """Charge a delegated run's work tokens to the parent turn (T-F3).
 
     A ``delegate_task`` result carries the work tokens the sub-run spent. The
     parent's single bound only limits the turn if that spending is counted, so
-    a second delegation sees what is really left. A missing or non-numeric
-    value is treated as zero rather than crashing the turn.
+    a second delegation sees what is really left. A result with no usable spend
+    — a sub-run that failed before it could report, or returned a non-numeric
+    value — is charged the share the parent granted, never zero: a delegation
+    that consumed the turn's budget must not look unspent. Fails closed.
     """
-    if not isinstance(result, dict):
-        return
-    try:
-        spent = int(result.get("tokens_used") or 0)
-    except (TypeError, ValueError, OverflowError):
-        return
+    spent = _reported_tokens(result)
+    if spent is None or spent < 0:
+        spent = granted or 0
     if spent > 0:
         state.tokens_used += spent
 
@@ -1421,7 +1434,11 @@ async def _run_sub_agent(
     """Spawn a focused sub-agent loop for a specific task."""
     task_description = tool_input.get("task", "")
     if not task_description:
-        return {"status": "error", "message": "No task description provided."}
+        return {
+            "status": "error",
+            "message": "No task description provided.",
+            "tokens_used": 0,
+        }
 
     # Filter tools if specified
     tools_filter = tool_input.get("tools", "")
@@ -1494,7 +1511,13 @@ async def _run_sub_agent(
                 use_prompt_cache=True,
             )
         except Exception as exc:
-            return {"status": "error", "message": f"Sub-agent LLM error: {exc}"}
+            # Report what the run already spent, so the parent charges it: a
+            # delegation that fails mid-task still consumed the turn's budget.
+            return {
+                "status": "error",
+                "message": f"Sub-agent LLM error: {exc}",
+                "tokens_used": tokens_used,
+            }
 
         content_blocks = response.get("content", [])
         stop_reason = response.get("stop_reason", "end_turn")
@@ -1832,19 +1855,21 @@ async def run_agent_loop(
             # meta-tool (a schedule handoff) must go through its own executor.
             # The main path hands it the turn's taint, so a delegated run
             # paused in a tainted turn does not resume as if it were clean.
+            meta_context = _meta_tool_context(pending["name"], context, state)
+            granted = _granted_sub_budget(meta_context)
             result = await _execute_meta_tool(
-                pending["name"], pending["input"],
-                _meta_tool_context(pending["name"], context, state),
+                pending["name"], pending["input"], meta_context,
                 _taint_preferences(preferences, state.tainted), system, tools,
             )
         else:
+            granted = None
             result = await _execute_with_timeout(
                 pending["name"], pending["input"], context,
             )
         if pending["name"] == "delegate_task":
             # A delegated run spent work tokens; charge them to the turn so the
             # single bound reflects it (T-F3).
-            _apply_delegated_spend(state, result)
+            _apply_delegated_spend(state, result, granted)
         state.tool_call_count += 1
         state.tool_call_log.append({
             "name": pending["name"],
@@ -2090,7 +2115,14 @@ async def run_agent_loop(
             # every call so the message contract stays valid, save the state,
             # and wait for the user. Nothing else in the batch runs (T-F3).
             if any(tc["name"] == REQUEST_MORE_BUDGET_TOOL for tc in tool_calls):
-                at_max = state.tokens_used >= _turn_token_budget(False)
+                # The turn's budget is already at the configured maximum either
+                # because it was granted up to the ceiling or because spending
+                # reached it: a further grant could not raise it, so it is an
+                # empty offer. End for good with the bound path's plain note.
+                at_max = (
+                    state.token_budget >= _turn_token_budget(False)
+                    or state.tokens_used >= _turn_token_budget(False)
+                )
                 state.messages.append({
                     "role": "user",
                     "content": [
@@ -2166,7 +2198,7 @@ async def run_agent_loop(
             tool_results: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
 
             if safe_calls:
-                async def _run_safe(tc: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+                async def _run_safe(tc: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any], Optional[int]]:
                     dedup = _dedup_key(tc["name"], tc["input"])
                     is_retry = dedup in seen_calls
                     if is_retry:
@@ -2188,7 +2220,7 @@ async def run_agent_loop(
                                     "This exact call already ran in this turn. "
                                     "This is the earlier result; nothing ran again."
                                 )
-                                return tc, repeated
+                                return tc, repeated, None
                             is_retry = False
 
                     service = _service_for_tool(tc["name"])
@@ -2196,7 +2228,7 @@ async def run_agent_loop(
                         return tc, {
                             "status": "error",
                             "message": _circuit_open_message(service),
-                        }
+                        }, None
 
                     if is_retry:
                         # Retrying a previously-failed identical call.
@@ -2208,16 +2240,18 @@ async def run_agent_loop(
                                     f"Stopped retrying {tc['name']} after {retries} failures in this turn. "
                                     "It can be tried again in a new message."
                                 ),
-                            }
+                            }, None
                         await asyncio.sleep(_retry_backoff_seconds(retries))
                     seen_calls.add(dedup)
 
+                    granted = None
                     try:
                         # Meta-tools use their own executor
                         if tc["name"] in _META_TOOL_NAMES:
+                            meta_context = _meta_tool_context(tc["name"], context, state)
+                            granted = _granted_sub_budget(meta_context)
                             result = await _execute_meta_tool(
-                                tc["name"], tc["input"],
-                                _meta_tool_context(tc["name"], context, state),
+                                tc["name"], tc["input"], meta_context,
                                 _taint_preferences(preferences, run_tainted), system, tools,
                             )
                         else:
@@ -2233,7 +2267,7 @@ async def run_agent_loop(
                     else:
                         state.retry_counts[tc["name"]] = 0
                         _record_tool_success(service)
-                    return tc, result
+                    return tc, result, granted
 
                 # Run in parallel
                 tasks = [_run_safe(tc) for tc in safe_calls]
@@ -2243,11 +2277,11 @@ async def run_agent_loop(
                     if isinstance(item, Exception):
                         logger.error("Parallel tool error: %s", item)
                         continue
-                    tc, result = item
+                    tc, result, granted = item
                     if tc["name"] == "delegate_task":
                         # Charge the sub-run's work tokens to the turn so the
                         # single bound reflects them (T-F3).
-                        _apply_delegated_spend(state, result)
+                        _apply_delegated_spend(state, result, granted)
                     tool_results.append((tc, result))
                     state.tool_call_count += 1
                     state.tool_call_log.append({

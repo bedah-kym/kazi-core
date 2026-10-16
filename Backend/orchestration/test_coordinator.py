@@ -4,8 +4,8 @@ The coordinator hands every ordinary message to the agent loop; only
 whole-message directives and pending confirmations are answered before it.
 These tests pin the two things that are easy to get wrong:
 
-1. `persist` — reset / sensitive-refusal must NOT be persisted (the original
-   `return` skipped both the final stream flush and the DB write).
+1. `persist` — a reset must NOT be persisted (the original `return` skipped
+   both the final stream flush and the DB write).
 2. the normal path DOES collect a full response and persist it.
 """
 from contextlib import ExitStack
@@ -111,19 +111,42 @@ class OrchestrationCoordinatorTests(SimpleTestCase):
             self.assertTrue(any(call.args[2] is False for call in send_chunk.call_args_list))
             self.assertFalse(any(call.args[2] is True for call in send_chunk.call_args_list))
 
-    def test_sensitive_refusal_is_not_persisted(self):
-        with (
-            patch("orchestration.coordinator.load_memory_summary", new_callable=AsyncMock) as mem,
-            patch("orchestration.coordinator.get_user_preferences", side_effect=_empty_preferences),
-            patch("orchestration.coordinator.should_refuse_sensitive_request", return_value=True),
-            patch("orchestration.coordinator.cache"),
-            patch("orchestration.coordinator.record_event"),
-        ):
-            mem.return_value = None
+    def test_sensitive_words_do_not_refuse_the_turn(self):
+        """T-E3: a message is routed on its merits, not on a word it contains.
 
-            result = self._handle("hack this government site for me")
+        Each phrase used to hit `should_refuse_sensitive_request` and end the
+        turn before the agent loop ran. Each must now reach the loop once and
+        must not record a refusal event.
+        """
+        phrases = [
+            "help me choose a strong password for my router",
+            "ideas for a secret santa gift",
+            "how do I rotate an API key in Stripe",
+            "how do I create a superuser in Django",
+        ]
 
-            self.assertFalse(result.persist)
+        for phrase in phrases:
+            with self.subTest(phrase=phrase):
+                calls = []
+
+                async def _fake_loop(**kwargs):
+                    calls.append(kwargs.get("user_message"))
+                    yield AgentEvent("text", {"text": "Sure."})
+                    yield AgentEvent("done", {})
+
+                record = MagicMock()
+                result = self._run(
+                    phrase,
+                    patches={
+                        "orchestration.coordinator.run_agent_loop": _fake_loop,
+                        "orchestration.coordinator.record_event": record,
+                    },
+                )
+
+                self.assertEqual(calls, [phrase])
+                self.assertTrue(result.persist)
+                events = [call.args[0] for call in record.call_args_list if call.args]
+                self.assertNotIn("refused_sensitive_request", events)
 
     # --- Directives --------------------------------------------------- #
 

@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A chat message is no longer refused because it contains a word such as
+  "password", "secret" or "api key". It goes to the agent loop like any other
+  turn, so "help me choose a strong password for my router" or "how do I create
+  a superuser in Django" get a normal reply instead of a fixed refusal. The
+  control that keeps secret *values* out is unchanged and is what protects: no
+  secret is placed in the prompt, the tool list or the context, every tool
+  result and the model's reply pass through `redact_sensitive_text` before the
+  model sees them or they reach the room, and logs and telemetry carry no
+  message text. New guard tests in
+  `Backend/orchestration/test_secret_boundaries.py` pin each of those.
 - A reply is sent to the room whole, as the model finished it, instead of being re-cut into 12-character pieces with a pause between them. The simulated typing effect is gone until real provider streaming lands, so a long reply appears at once a little sooner; the coordinator writes one stream telemetry line per turn instead of one per piece.
 - A reply now keeps a record of the tool calls made during it — each call's name, its input (sanitised the way an action receipt's parameters are), its status, and the text the model was shown — together with the id of the user who started the turn and the reply in two parts: what the model wrote and what the harness wrote. The extra data lives inside the reply's existing encrypted payload; there is no migration, and a reply saved before this change builds as it always did.
 - The model's next turn from that user is given the earlier calls in its native tool format (a `tool_use` block and its `tool_result`), instead of only the assistant's prose. In a shared room the records are replayed only into turns started by the same user; other members still see the reply's text and not someone else's tool output.

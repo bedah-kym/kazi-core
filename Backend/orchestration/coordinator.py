@@ -32,8 +32,6 @@ from orchestration.adaptive_task import (
 )
 from orchestration.memory_state import load_memory_summary, clear_memory
 from orchestration.security_policy import (
-    should_refuse_sensitive_request,
-    sensitive_refusal_message,
     sanitize_parameters,
 )
 from orchestration.shell.chat_intents import (
@@ -137,9 +135,9 @@ class OrchestrationCoordinator:
         ``get_context_prompt`` supplies extra agent context; ``bump_signals``
         receives action names after successful intent or workflow execution.
 
-        Return the accumulated response with ``persist=False`` for resets and
-        sensitive-request refusals, otherwise ``True``. The caller saves it.
-        Resets and refusals return without sending a final stream chunk.
+        Return the accumulated response with ``persist=False`` for a reset,
+        otherwise ``True``. The caller saves it. A reset returns without
+        sending a final stream chunk.
 
         Context-prompt and progress-frame failures are ignored. A failure from
         a fresh agent run ends the turn with one error message and nothing
@@ -273,18 +271,6 @@ class OrchestrationCoordinator:
             )
             await broadcast_chunk("Okay, starting fresh. What would you like to do?", harness=True)
             await emit_progress("done", "completed", "Context reset.")
-            return OrchestrationResult(full_response="".join(stream_state["full_response"]), persist=False)
-        if should_refuse_sensitive_request(query):
-            record_event(
-                "refused_sensitive_request",
-                {
-                    "user_id": user_id,
-                    "room_id": room_id,
-                    "correlation_id": correlation_id,
-                },
-            )
-            await broadcast_chunk(sensitive_refusal_message(), harness=True)
-            await emit_progress("done", "completed", "Request refused.")
             return OrchestrationResult(full_response="".join(stream_state["full_response"]), persist=False)
 
         def _log_telemetry(event_type, payload=None):

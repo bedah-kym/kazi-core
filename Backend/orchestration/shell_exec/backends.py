@@ -4,11 +4,16 @@ Two backends behind one ``execute()`` interface:
 
 - ``DockerBackend`` — ``standard`` / ``locked``: non-root, read-only rootfs,
   ``--cap-drop=ALL``, no-new-privileges, network off by default, memory/PID caps.
-- ``LocalBackend`` — ``open`` only: a subprocess in the workspace, full trust.
-  ``open`` is never enabled by default (see ``ShellExecConfig.allowed_profiles``).
+  The room workspace is mounted read-write for ``standard`` and read-only for
+  ``locked``.
+- ``LocalBackend`` — ``open`` only: a subprocess in the workspace. It gets a
+  minimal, allowlisted environment so the sidecar's own secrets never reach the
+  command; otherwise ``open`` is full trust. ``open`` is never enabled by
+  default (see ``ShellExecConfig.allowed_profiles``).
 
-The sandbox is the security boundary; this module contains no classifier and no
-policy. See ``docs/contracts/credential-scoping.md``.
+The sandbox is the security boundary; this module contains no classifier. It
+reads the profile's declared ``writable`` mode only to mount the room workspace
+read-only for ``locked``. See ``docs/contracts/credential-scoping.md``.
 """
 from __future__ import annotations
 
@@ -40,6 +45,40 @@ _CAP_CHUNK = 65536
 #: Profiles the sidecar understands. Which ones it will actually serve is
 #: controlled by ``ShellExecConfig.allowed_profiles``.
 SUPPORTED_PROFILES = ("open", "standard", "locked")
+
+#: Environment variables an ``open`` command may inherit from the sidecar.
+#:
+#: An allowlist, never a denylist. The sidecar host's environment holds every
+#: value from ``.env`` — provider keys, DSNs, the Django secret key, the
+#: encryption key, ``SHELL_EXEC_TOKEN`` — plus anything an operator exported. A
+#: subprocess inherits the sidecar's environment unless one is passed, so
+#: ``LocalBackend`` passes exactly this set. A variable that is not named here
+#: (including one only the operator added) never reaches a command.
+LOCAL_ENV_ALLOWLIST = frozenset({
+    # POSIX: enough to find programs and use a home and temp directory.
+    "PATH", "HOME", "TMPDIR", "TMP", "TEMP", "LANG", "LANGUAGE",
+    "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "TERM", "USER", "LOGNAME",
+    "SHELL", "HOSTNAME", "PWD",
+    # Windows: cmd.exe and program lookup need these to start normally.
+    "PATHEXT", "COMSPEC", "SystemRoot", "SystemDrive", "windir",
+    "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "HOMESHARE",
+    "APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "PROGRAMFILES",
+    "PROGRAMFILES(X86)", "PROGRAMW6432", "NUMBER_OF_PROCESSORS",
+    "OS", "PROCESSOR_ARCHITECTURE", "PROCESSOR_IDENTIFIER",
+    "PROCESSOR_LEVEL", "PROCESSOR_REVISION", "COMPUTERNAME", "SESSIONNAME",
+})
+
+
+def local_environment() -> Dict[str, str]:
+    """The minimal environment an ``open`` command is allowed to see.
+
+    Only names in :data:`LOCAL_ENV_ALLOWLIST` survive; every other variable —
+    every Kazi secret and anything the operator added — is dropped. ``PATH`` is
+    always present so programs stay findable.
+    """
+    env = {name: os.environ[name] for name in LOCAL_ENV_ALLOWLIST if name in os.environ}
+    env.setdefault("PATH", os.defpath)
+    return env
 
 
 @dataclass
@@ -301,6 +340,12 @@ class DockerBackend(ShellBackend):
 
     name = "docker"
 
+    def __init__(self, config: Optional[ShellExecConfig] = None, *, writable: str = "workspace"):
+        super().__init__(config)
+        # The profile's ``writable`` mode: a read-only workspace is mounted
+        # ``:ro`` so the command can read it but not change it (``locked``).
+        self.writable = str(writable or "workspace")
+
     def _container_cwd(self, workspace: Path, cwd: Optional[str]) -> str:
         if not cwd:
             return "/workspace"
@@ -344,7 +389,7 @@ class DockerBackend(ShellBackend):
             f"--memory={self.config.memory}",
             f"--pids-limit={self.config.pids_limit}",
             "-v",
-            f"{workspace}:/workspace",
+            f"{workspace}:/workspace" + (":ro" if self.writable == "none" else ""),
             "-w",
             self._container_cwd(workspace, cwd),
             self.config.image,
@@ -557,6 +602,7 @@ class LocalBackend(ShellBackend):
             proc = await asyncio.create_subprocess_shell(  # nosec B602 - open profile is full trust by design
                 command,
                 cwd=str(workdir),
+                env=local_environment(),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 start_new_session=(sys.platform != "win32"),
@@ -676,10 +722,16 @@ async def _gather(
 
 
 def get_backend(profile: str = "standard", config: Optional[ShellExecConfig] = None) -> ShellBackend:
-    """``open`` uses the local subprocess; everything else is containerized."""
+    """``open`` uses the local subprocess; everything else is containerized.
+
+    The profile's declared ``writable`` mode is carried onto the Docker backend
+    so ``locked`` mounts the room workspace read-only (GHSA-ppxm-j4p7-9cw2).
+    """
     if str(profile) == "open":
         return LocalBackend(config)
-    return DockerBackend(config)
+    from orchestration.shell.profiles import get_profile
+
+    return DockerBackend(config, writable=get_profile(str(profile)).writable)
 
 
 # --------------------------------------------------------------------------- #

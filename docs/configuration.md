@@ -322,11 +322,31 @@ default:
 |---|---|---|---|
 | Backend | direct subprocess | Docker | Docker |
 | Root filesystem | full | read-only | read-only |
-| Writable | full | `/workspace` | none |
+| Writable | full | `/workspace` (read-write) | none — `/workspace` is mounted read-only |
 | Network | full | off by default | none |
+| Environment | minimal allowlist (below) | none inherited from the sidecar | none inherited from the sidecar |
 
 `open` is never the default and logs a loud boot warning — it runs unsandboxed
 on the host, so only enable it on a disposable box.
+
+A command under `open` does **not** inherit the sidecar's environment. The
+sidecar passes only a fixed allowlist: `PATH`, `HOME` (or `USERPROFILE`), a temp
+directory (`TMPDIR`/`TEMP`/`TMP`), locale and terminal settings, and the Windows
+variables `cmd.exe` needs to start (`SystemRoot`, `COMSPEC`, `PATHEXT`, and the
+like). Every other variable is dropped, including every key in `.env` — provider
+keys, `DATABASE_URL`, `REDIS_URL`, `CELERY_*`, `DJANGO_SECRET_KEY`,
+`ENCRYPTION_KEY` and `SHELL_EXEC_TOKEN`. Because it is an allowlist and not a
+denylist, a variable an operator adds to the sidecar's environment is dropped
+too. There is no setting to widen it.
+
+This closes the environment, not the filesystem: an `open` command runs as the
+sidecar's operating-system user and can read any file that user can read,
+including `.env`. Run an `open` sidecar as a separate user that cannot read the
+Kazi checkout, and start it without secrets in its environment.
+
+A command under `locked` can read the room workspace but not change it: the
+workspace is mounted read-only, so create/change/delete fail. `standard` keeps
+the read-write `/workspace` mount.
 
 The per-room workspace (`<SHELL_EXEC_ROOT>/workspaces/<room_id>`) persists across
 commands. Before a **destructive** command the sidecar tars it to
@@ -338,7 +358,7 @@ commands. Before a **destructive** command the sidecar tars it to
 | `SHELL_EXEC_TOKEN` | empty | Shared bearer token between Kazi and the sidecar. **Empty disables `run_command`.** |
 | `SHELL_EXEC_HOST` | `127.0.0.1` | Sidecar bind host (and the host Kazi connects to). |
 | `SHELL_EXEC_PORT` | `8765` | Sidecar bind/connect port. |
-| `SHELL_EXEC_PROFILE` | `standard` | Default profile. `standard`/`locked` run in the Docker sandbox; `open` runs unsandboxed on the host (Phase 2 refines the per-profile rules). |
+| `SHELL_EXEC_PROFILE` | `standard` | Default profile. `standard`/`locked` run in the Docker sandbox; `open` runs unsandboxed on the host. See the profile table above for what each may see and write. |
 | `SHELL_EXEC_PROFILES` | the profile above | Comma-separated profiles the sidecar will serve. A request for any other profile is rejected with 400. Add `open` only on a disposable box. |
 | `SHELL_EXEC_ROOT` | `<repo>/shell_workspaces` | Root for per-room workspaces mounted at `/workspace`. |
 | `SHELL_EXEC_IMAGE` | `alpine:3.20` | Container image for the Docker backend. |

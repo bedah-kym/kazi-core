@@ -73,6 +73,26 @@ command classifier is UX and a tripwire, so a classifier false negative costs
 nothing. The exact rules for what the environment may touch are in the
 [credential-scoping contract](contracts/credential-scoping.md).
 
+What a command may see and write depends on the room's profile:
+
+- **`standard`** runs in the container with a read-write `/workspace` and does
+  not inherit the sidecar's environment.
+- **`locked`** runs in the same container, but `/workspace` is mounted
+  read-only: a command can read the room workspace and cannot create, change or
+  delete anything in it.
+- **`open`** runs directly on the sidecar host. It is given only a minimal
+  allowlisted environment (`PATH`, a home and a temp directory, locale, and the
+  variables `cmd.exe` needs). The sidecar's `.env` — provider keys, database and
+  broker URLs, `DJANGO_SECRET_KEY`, `ENCRYPTION_KEY` and `SHELL_EXEC_TOKEN` — is
+  never passed through the environment, and neither is any variable an
+  operator added. `open` remains unsandboxed for the filesystem and network:
+  a command runs as the sidecar's operating-system user and can read any file
+  that user can read, including the `.env` file itself, and on Linux the
+  environment the sidecar was started with (`/proc/<pid>/environ`). If you
+  enable `open`, run the sidecar as a separate user that cannot read the Kazi
+  checkout, start it without secrets in its environment, and use it on
+  disposable boxes only.
+
 ## Where it lives
 
 | Concern | File |

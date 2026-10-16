@@ -22,15 +22,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `run_command` is described once, truly for the room's profile, and the model
   can ask for network access through its `network` parameter.
 - Every connector now says whether it can serve, and one without a key,
-  credentials or its library is not offered. Weather, GIF, currency, WhatsApp
-  and the email route (Gmail/Mailgun) join Telegram, the shell and IntaSend;
-  the weather, GIF and currency connectors now declare their key as a required
-  credential, and WhatsApp, Mailgun and Gmail answer `validate_config()`. A
-  connector that can only mock a send without credentials (Mailgun, WhatsApp)
-  is offered only in `KAZI_DEMO_MODE`, so the canonical demo keeps working and
-  a production install never offers a send that would only pretend.
-  `get_skipped_connectors()` names each skipped connector and the actions it
-  would own.
+  credentials or its library is not offered. Weather, GIF, currency, calendar
+  (Calendly), WhatsApp and the email route (Gmail/Mailgun) join Telegram, the
+  shell and IntaSend; the weather, GIF, currency and calendar connectors now
+  declare their credentials as required, and WhatsApp, Mailgun and Gmail answer
+  `validate_config()`. A connector that can only mock a send without
+  credentials (Mailgun, WhatsApp) is offered only in `KAZI_DEMO_MODE`, so the
+  canonical demo keeps working and a production install never offers a send
+  that would only pretend. `get_skipped_connectors()` names each skipped
+  connector and the actions it would own.
 - With no search tool the prompt says only that the model has no web-search
   tool; it no longer says the environment has no network, which had made the
   model give up on a task one shell command could fetch. When `run_command` is

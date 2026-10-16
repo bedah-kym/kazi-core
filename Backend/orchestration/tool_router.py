@@ -416,6 +416,12 @@ class CalendarConnector(BaseConnector):
     """Real Calendly connector using CalendlyProfile.
     Uses httpx.AsyncClient for non-blocking HTTP in ASGI."""
 
+    name = "calendar"
+    actions = ["schedule_meeting", "check_availability"]
+    # The OAuth app credentials are needed to connect (and to refresh a token),
+    # so without them the routing cannot serve and the actions are not offered.
+    required_credentials = ["CALENDLY_CLIENT_ID", "CALENDLY_CLIENT_SECRET"]
+
     CALENDLY_EVENTS_URL = 'https://api.calendly.com/scheduled_events'
     CALENDLY_TOKEN_URL = 'https://auth.calendly.com/oauth/token'  # nosec B105 — token URL, not a credential
 

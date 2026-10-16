@@ -154,7 +154,8 @@ message.
 1. **Configured at boot.** An action whose connector did not load is never
    offered. A connector is skipped when `validate_config()` fails — a missing
    key (`TELEGRAM_BOT_TOKEN`, `SHELL_EXEC_TOKEN`, `OPENWEATHER_API_KEY`,
-   `GIPHY_API_KEY`, `EXCHANGE_RATE_API_KEY`, `TWILIO_ACCOUNT_SID` /
+   `GIPHY_API_KEY`, `EXCHANGE_RATE_API_KEY`, `CALENDLY_CLIENT_ID` /
+   `CALENDLY_CLIENT_SECRET`, `TWILIO_ACCOUNT_SID` /
    `TWILIO_AUTH_TOKEN`, `MAILGUN_API_KEY` / `MAILGUN_DOMAIN`,
    `GMAIL_OAUTH_CLIENT_ID` / `GMAIL_OAUTH_CLIENT_SECRET`), a missing library
    (the IntaSend SDK), and so on. A connector that can only mock a send without

@@ -291,6 +291,15 @@ class ConnectorAvailabilityTests(SimpleTestCase):
             names = _names(user_capabilities=ALL_GATES_ON)
         self.assertNotIn("convert_currency", names)
 
+    def test_calendar_absent_without_oauth_credentials(self):
+        with _credentials_absent(
+            env_names=["CALENDLY_CLIENT_ID", "CALENDLY_CLIENT_SECRET"],
+            setting_names=["CALENDLY_CLIENT_ID", "CALENDLY_CLIENT_SECRET"],
+        ):
+            names = _names(user_capabilities=ALL_GATES_ON)
+        self.assertNotIn("schedule_meeting", names)
+        self.assertNotIn("check_availability", names)
+
     def test_whatsapp_absent_without_credentials_outside_demo(self):
         with _credentials_absent(
             env_names=["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "KAZI_DEMO_MODE"],

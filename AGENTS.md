@@ -229,6 +229,7 @@ Examples:
 - Update tests with the change. Update docs (`README.md`, this file, `docs/*`) when behavior or contracts shift.
 - Use the PR template. Fill in the validation section with actual command output, not just check-boxes.
 - Maintainers may ask for scope reduction on large PRs — split rather than push back.
+- **Keep the architecture map current.** `docs/architecture/explorer.html` draws everything from `docs/architecture/model.js`. A PR that adds, removes or reroutes a process, module, gate or message path updates the model in the same PR, and `python scripts/check_architecture_model.py` must pass (it fails when a referenced file or symbol no longer exists).
 
 ## 8. Security and operational guardrails
 

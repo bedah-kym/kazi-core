@@ -10,8 +10,9 @@ import subprocess  # nosec B404 — test infra spawns fixed argv interpreters
 import sys
 from datetime import timedelta
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.db import DatabaseError
@@ -19,8 +20,10 @@ from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils import timezone
 
 from chatbot import tasks as chatbot_tasks
-from chatbot.models import Chatroom, Reminder
+from chatbot.consumers import ChatConsumer
+from chatbot.models import Chatroom, Member, Message, Reminder
 from django_celery_beat.models import IntervalSchedule, PeriodicTask
+from orchestration.coordinator import OrchestrationResult
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 REPO_ROOT = BACKEND_DIR.parent
@@ -192,6 +195,24 @@ class InProcessSchedulerTests(TestCase):
         self.assertEqual(self.ran, [])
 
 
+class SchedulerConnectionTests(SimpleTestCase):
+    def test_a_tick_recycles_old_connections_at_both_edges(self):
+        from orchestration.in_process_scheduler import InProcessScheduler
+
+        scheduler = InProcessScheduler(
+            schedules={},
+            runner=lambda entry: None,
+            now=timezone.now,
+        )
+
+        with patch(
+            "orchestration.in_process_scheduler.close_old_connections"
+        ) as recycle:
+            scheduler.run_due()
+
+        self.assertEqual(recycle.call_count, 2)
+
+
 @override_settings(IN_PROCESS_SCHEDULER=True)
 class InProcessReminderDeliveryTests(TestCase):
     def setUp(self):
@@ -326,3 +347,114 @@ class LiteProfileTests(SimpleTestCase):
         proc = self._run("import Backend.asgi\n", WEB_CONCURRENCY="2")
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("one web worker", proc.stdout + proc.stderr)
+
+    def test_one_machine_trial_can_use_plain_http_on_loopback(self):
+        code = (
+            "import django\n"
+            "django.setup()\n"
+            "from django.conf import settings\n"
+            "print('SECURE_SSL_REDIRECT=%s' % settings.SECURE_SSL_REDIRECT)\n"
+            "print('SESSION_COOKIE_SECURE=%s' % settings.SESSION_COOKIE_SECURE)\n"
+            "print('CSRF_COOKIE_SECURE=%s' % settings.CSRF_COOKIE_SECURE)\n"
+            "print('SECURE_HSTS_SECONDS=%s' % settings.SECURE_HSTS_SECONDS)\n"
+        )
+        proc = self._run(
+            code,
+            KAZI_INSECURE_LOCALHOST="1",
+            DJANGO_ALLOWED_HOSTS="localhost,127.0.0.1",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr[-4000:])
+        self.assertIn("SECURE_SSL_REDIRECT=False", proc.stdout)
+        self.assertIn("SESSION_COOKIE_SECURE=False", proc.stdout)
+        self.assertIn("CSRF_COOKIE_SECURE=False", proc.stdout)
+        self.assertIn("SECURE_HSTS_SECONDS=0", proc.stdout)
+
+    def test_one_machine_trial_refuses_a_public_host(self):
+        proc = self._run(
+            "import django; django.setup()\n",
+            KAZI_INSECURE_LOCALHOST="1",
+            DJANGO_ALLOWED_HOSTS="example.com",
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("one-machine trial", proc.stderr)
+
+
+@override_settings(
+    DEBUG=False,
+    KAZI_LITE_PROFILE=True,
+    MODERATION_ENABLED=False,
+    CACHES={
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "kazi-lite-chat",
+        },
+    },
+)
+class LiteChatTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="lite-chat", email="lite@example.com", password="secret",  # nosec B106 — test fixture
+        )
+        self.member = Member.objects.select_related("User").get(User=self.user)
+        self.chatroom = Chatroom.objects.get(participants=self.member)
+
+    def _consumer(self):
+        consumer = ChatConsumer()
+        consumer.scope = {"user": self.user}
+        consumer.room_name = str(self.chatroom.id)
+        consumer.room_group_name = f"chat_{self.chatroom.id}"
+        consumer.channel_layer = MagicMock()
+        consumer.channel_layer.group_send = AsyncMock()
+        consumer.send_chat_message = AsyncMock()
+        consumer.send_message = AsyncMock()
+        consumer.encrypt_message = AsyncMock(return_value={"data": "enc", "nonce": "nonce"})
+        consumer.check_user_muted = AsyncMock(return_value=False)
+        consumer.check_rate_limit = AsyncMock(return_value=True)
+        consumer.check_key_rotation = AsyncMock()
+        consumer.get_current_chatroom = AsyncMock(return_value=self.chatroom)
+        consumer.get_chatroom_participants = AsyncMock(return_value=[self.member])
+        consumer.message_to_json = AsyncMock(return_value={"id": 1})
+        consumer.schedule_context_summary = AsyncMock()
+        consumer.schedule_idle_nudge_if_needed = AsyncMock()
+        consumer.get_history_rows = AsyncMock(return_value=[])
+        return consumer
+
+    @patch("orchestration.coordinator.OrchestrationCoordinator")
+    def test_new_message_completes_in_the_lite_profile_with_debug_off(self, mock_coord):
+        mock_coord.return_value.handle_message = AsyncMock(
+            return_value=OrchestrationResult(full_response="hello back", persist=True)
+        )
+        consumer = self._consumer()
+
+        async_to_sync(consumer.new_message)(
+            {"from": self.user.username, "message": "@kazi hi", "chatid": str(self.chatroom.id)}
+        )
+
+        mock_coord.return_value.handle_message.assert_awaited_once()
+        self.assertTrue(Message.objects.filter(member=self.member).exists())
+        self.assertTrue(Message.objects.filter(member__User__username="kazi").exists())
+        consumer.channel_layer.group_send.assert_awaited_once_with(
+            consumer.room_group_name,
+            {"type": "ai_message_saved", "message": {"id": 1}},
+        )
+        sent = [
+            call.args[0] if call.args else call.kwargs
+            for call in consumer.send_chat_message.await_args_list
+        ]
+        self.assertNotIn(
+            "Error processing message",
+            [item.get("content") for item in sent if isinstance(item, dict)],
+        )
+
+    def test_moderation_enabled_without_redis_is_skipped_and_logged(self):
+        consumer = self._consumer()
+
+        with self.settings(MODERATION_ENABLED=True):
+            with patch("chatbot.consumers._moderation_store_warned", False):
+                with self.assertLogs("chatbot.consumers", level="WARNING") as logs:
+                    triggered = async_to_sync(consumer.buffer_message_for_moderation)(
+                        self.chatroom.id, 1
+                    )
+
+        self.assertFalse(triggered)
+        self.assertIn("not Redis", "\n".join(logs.output))

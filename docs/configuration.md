@@ -75,7 +75,16 @@ See [Run the lite profile](run-lite.md).
 | `KAZI_LITE_PROFILE` | `False` | Chat-only profile: LocMem cache, in-memory Channels, no Temporal, no Celery, in-process scheduler, one web worker. |
 | `KAZI_IN_PROCESS_SCHEDULER` | `True` in lite, `False` otherwise | Run the periodic schedule inside the web process. Never combine with Celery beat. |
 | `KAZI_WEB_WORKERS` | `1` | Worker count the lite guard reads when the platform does not set `WEB_CONCURRENCY`/`GUNICORN_WORKERS`/`UVICORN_WORKERS`. More than 1 is refused when the ASGI app loads; set it when your launcher only has a `--workers` flag. |
+| `KAZI_INSECURE_LOCALHOST` | `False` | One-machine trial only: allow plain HTTP on loopback by turning off `SECURE_SSL_REDIRECT`, secure cookies and HSTS. Refused when `DJANGO_ALLOWED_HOSTS` names a non-loopback host. Never set it on a server; the default keeps the production TLS behaviour. |
 | `REMINDER_SWEEP_SECONDS` | `30` in lite, `3600` otherwise | How often the reminder sweep runs. In lite this is the delivery path for due reminders. |
+
+With `DJANGO_DEBUG=False` the web process must sit behind a TLS-terminating
+reverse proxy that sets `X-Forwarded-Proto: https`; a plain-HTTP request
+otherwise answers `301`. The run page has a minimal Caddy and nginx example.
+
+Moderation follows `MODERATION_ENABLED`. When it is on but the default cache is
+not Redis (the lite profile), message buffering is skipped and logged once
+instead of failing the chat turn.
 
 ## LLM providers & routing
 

@@ -36,6 +36,18 @@ from django.utils.text import get_valid_filename
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
+_moderation_store_warned = False
+
+
+def _moderation_store_is_redis() -> bool:
+    """Whether the default cache is Redis, the only store moderation uses."""
+    try:
+        backend = str((settings.CACHES.get('default') or {}).get('BACKEND', ''))
+    except Exception:
+        return False
+    return 'RedisCache' in backend
+
+
 # v0.7 @admin escalation: a message that *starts* with @admin goes to
 # superusers instead of the bot. "@admin request persona "Name" - "description""
 # opens a PersonaRequest for the admin to approve in the admin UI. The anchor
@@ -635,14 +647,28 @@ class ChatConsumer(AsyncWebsocketConsumer):
         Buffer messages in Redis and trigger moderation when batch is ready
         Returns True if batch was triggered
         """
-        # Skip moderation in DEBUG mode to save Redis operations
-        if settings.DEBUG:
+        # The setting is the source of truth, not DEBUG: the lite profile runs
+        # with DEBUG off and without Redis.
+        if not getattr(settings, 'MODERATION_ENABLED', False):
             return False
 
         room = await self.get_current_chatroom(room_id)
 
         # Skip if moderation disabled for this room
         if hasattr(room, 'moderation_enabled') and not room.moderation_enabled:
+            return False
+
+        if not _moderation_store_is_redis():
+            # Moderation is best-effort. Without Redis (the lite profile) skip
+            # the buffer instead of failing the whole chat turn.
+            global _moderation_store_warned
+            if not _moderation_store_warned:
+                logger.warning(
+                    "Moderation is enabled but the default cache is not Redis; "
+                    "message buffering is skipped. Use the full profile or set "
+                    "MODERATION_ENABLED=0."
+                )
+                _moderation_store_warned = True
             return False
 
         redis = get_redis_connection("default")

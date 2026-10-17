@@ -22,6 +22,7 @@ from importlib import import_module
 from typing import Any, Callable, List, Mapping, Optional
 
 from django.conf import settings
+from django.db import close_old_connections
 from django.db.models import F
 from django.utils import timezone
 from django_celery_beat.models import CrontabSchedule, IntervalSchedule, PeriodicTask
@@ -141,7 +142,20 @@ class InProcessScheduler:
         logger.info("In-process scheduler stopped")
 
     def run_due(self, now: Optional[Any] = None) -> List[str]:
-        """Claim and run every due entry once. Returns the names that ran."""
+        """Claim and run every due entry once. Returns the names that ran.
+
+        The ORM calls run in a thread the ASGI server did not create, so they
+        are outside Django's request cycle. Recycle stale connections at both
+        edges of the tick, the way a request does, instead of leaving them
+        open for the life of the process.
+        """
+        close_old_connections()
+        try:
+            return self._run_due(now)
+        finally:
+            close_old_connections()
+
+    def _run_due(self, now: Optional[Any] = None) -> List[str]:
         now = now or self._now()
         ran: List[str] = []
         for name, entry in self._schedules.items():

@@ -16,13 +16,14 @@ for the setting reference.
 
 ## Configure
 
-Put this in `.env` at the repo root (never commit it):
+Put this in `.env` at the repo root (never commit it). These are server
+values: the host and origin are the public HTTPS name the reverse proxy serves.
 
 ```dotenv
 DJANGO_DEBUG=False
 DJANGO_SECRET_KEY=replace-with-a-long-random-value
-DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1
-DJANGO_CSRF_TRUSTED_ORIGINS=http://localhost:8000
+DJANGO_ALLOWED_HOSTS=kazi.example.com
+DJANGO_CSRF_TRUSTED_ORIGINS=https://kazi.example.com
 KAZI_LITE_PROFILE=1
 
 # Empty disables run_command. Set a long random value to enable the sidecar.
@@ -63,16 +64,63 @@ python -m orchestration.shell_exec
 who already has that process. Both read the same `SHELL_EXEC_*` environment and
 `.env` file.
 
-## Start the web process
+## Start the web process behind TLS
 
-In a second terminal, from `Backend/`:
+With `DJANGO_DEBUG=False` the settings turn on `SECURE_SSL_REDIRECT`, secure
+session/CSRF cookies and HSTS. A plain-HTTP request therefore answers `301` to
+HTTPS. That is deliberate: the lite profile is served **behind a TLS-terminating
+reverse proxy** that sets `X-Forwarded-Proto: https`. Django trusts that header
+through `SECURE_PROXY_SSL_HEADER`, so it sees the request as secure and the
+redirect is not triggered.
+
+Start the web process on loopback (in a second terminal, from `Backend/`):
 
 ```bash
-uvicorn Backend.asgi:application --host 0.0.0.0 --port 8000 --workers 1
+uvicorn Backend.asgi:application --host 127.0.0.1 --port 8000 --workers 1
 ```
 
 Use uvicorn, not Daphne: the in-process scheduler starts from the ASGI lifespan,
 which Daphne does not run.
+
+Point the proxy at it. A minimal Caddy config (Caddy obtains the certificate and
+sets `X-Forwarded-Proto` for you):
+
+```caddyfile
+kazi.example.com {
+    reverse_proxy 127.0.0.1:8000
+}
+```
+
+With nginx, pass the header explicitly (plus the WebSocket upgrade headers):
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:8000;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+}
+```
+
+Browse `https://kazi.example.com`. If you open `http://` directly you will see
+the `301`; that is the redirect working, not a failed start.
+
+### Try it on one machine (plain HTTP)
+
+To try the profile locally without a proxy or certificate, add
+`KAZI_INSECURE_LOCALHOST=1` and keep the allowed host loopback-only:
+
+```dotenv
+DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1
+DJANGO_CSRF_TRUSTED_ORIGINS=http://localhost:8000
+KAZI_INSECURE_LOCALHOST=1
+```
+
+That turns off the HTTPS redirect, secure cookies and HSTS for this process.
+It is refused when `DJANGO_ALLOWED_HOSTS` names anything that is not loopback,
+so it cannot silently weaken a public deployment. Never set it on a server.
+See [Configuration](configuration.md#lite-profile-chat-only-no-redis-or-celery).
 
 ## Reminders
 

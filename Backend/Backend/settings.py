@@ -130,6 +130,20 @@ _INMEMORY = _DEV_INMEMORY or KAZI_LITE_PROFILE
 
 ALLOWED_HOSTS = [host.strip() for host in os.environ.get('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',') if host.strip()]
 
+# One-machine trial only: serve over plain HTTP on loopback without relaxing
+# the production defaults. Refused when ALLOWED_HOSTS names anything that is
+# not loopback, so it cannot silently weaken a public deployment.
+KAZI_INSECURE_LOCALHOST = os.environ.get('KAZI_INSECURE_LOCALHOST', 'False').lower() in ('1', 'true', 'yes', 'on')
+if KAZI_INSECURE_LOCALHOST and not DEBUG:
+    _loopback_hosts = {'localhost', '127.0.0.1', '::1', '[::1]'}
+    _non_loopback = [host for host in ALLOWED_HOSTS if host not in _loopback_hosts]
+    if _non_loopback:
+        raise ValueError(
+            "KAZI_INSECURE_LOCALHOST is only for a one-machine trial; "
+            "DJANGO_ALLOWED_HOSTS must be loopback, got "
+            f"{','.join(_non_loopback)}."
+        )
+
 # CSRF & CORS configuration - be explicit and restrictive
 # you can set a comma-separated list in .env, e.g. DJANGO_CSRF_TRUSTED_ORIGINS=https://example.com,https://app.example.com
 CSRF_TRUSTED_ORIGINS_STRING = os.environ.get('DJANGO_CSRF_TRUSTED_ORIGINS', '')
@@ -838,12 +852,12 @@ CSP_FRAME_SRC = ("'self'", "https://js.stripe.com")
 # --- HSTS (HTTP Strict Transport Security) ---
 # Enabled only when DEBUG is False to avoid local dev issues
 if not DEBUG:
-    SECURE_SSL_REDIRECT = True
-    SESSION_COOKIE_SECURE = True
-    CSRF_COOKIE_SECURE = True
-    SECURE_HSTS_SECONDS = 31536000  # 1 year
-    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
-    SECURE_HSTS_PRELOAD = True
+    SECURE_SSL_REDIRECT = not KAZI_INSECURE_LOCALHOST
+    SESSION_COOKIE_SECURE = not KAZI_INSECURE_LOCALHOST
+    CSRF_COOKIE_SECURE = not KAZI_INSECURE_LOCALHOST
+    SECURE_HSTS_SECONDS = 0 if KAZI_INSECURE_LOCALHOST else 31536000  # 1 year
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = not KAZI_INSECURE_LOCALHOST
+    SECURE_HSTS_PRELOAD = not KAZI_INSECURE_LOCALHOST
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
     SESSION_COOKIE_HTTPONLY = True
     # Keep CSRF cookie readable for JS fetch headers (pin notes, add notes)

@@ -192,6 +192,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   longer shows the user as offline, and a connection that never closed cleanly
   ages out instead of staying online for ever (and silencing that user's unread
   notifications for the room).
+- Chat works in the lite profile with `DEBUG` off. Moderation buffering followed
+  `DEBUG` and called Redis directly, so every message raised
+  `NotImplementedError` and no reply was produced. It now follows
+  `MODERATION_ENABLED` and, without Redis, skips the buffer with one warning
+  instead of failing the turn.
+- The in-process scheduler recycles stale database connections at both edges of
+  each tick, the way Django's request cycle does, instead of leaving ORM
+  connections open in its worker thread.
 
 ### Security
 

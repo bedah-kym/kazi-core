@@ -4,7 +4,6 @@ Searches for local events using Eventbrite API
 """
 import logging
 import os
-import aiohttp
 from typing import Dict, List
 from datetime import datetime
 from django.conf import settings
@@ -82,6 +81,8 @@ class TravelEventsConnector(BaseTravelConnector):
         }
 
     async def _search_eventbrite_api(self, location: str, start_date: str, end_date: str, category: str) -> tuple:
+        import aiohttp
+
         eventbrite_key = os.getenv('EVENTBRITE_API_KEY')
         if not eventbrite_key:
             msg = "EVENTBRITE_API_KEY not set"

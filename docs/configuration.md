@@ -56,7 +56,8 @@ The web process must be served by **uvicorn with exactly one worker**. In-memory
 Channels do not fan a room out across processes: a second worker would split a
 room's sockets. The ASGI app refuses to load when it can see one of
 `KAZI_WEB_WORKERS`, `WEB_CONCURRENCY`, `GUNICORN_WORKERS` or `UVICORN_WORKERS`
-set above 1. The sidecar can run separately with
+set above 1. Uvicorn's `--workers` flag does not export a count, so the run page
+states plainly that one worker is required. The sidecar can run separately with
 `python -m orchestration.shell_exec`, which never imports Django.
 
 The lite profile turns on the in-process scheduler (`IN_PROCESS_SCHEDULER`).
@@ -73,7 +74,7 @@ See [Run the lite profile](run-lite.md).
 |---|---|---|
 | `KAZI_LITE_PROFILE` | `False` | Chat-only profile: LocMem cache, in-memory Channels, no Temporal, no Celery, in-process scheduler, one web worker. |
 | `KAZI_IN_PROCESS_SCHEDULER` | `True` in lite, `False` otherwise | Run the periodic schedule inside the web process. Never combine with Celery beat. |
-| `KAZI_WEB_WORKERS` | `1` | Worker count the lite guard reads when the platform does not set `WEB_CONCURRENCY`/`GUNICORN_WORKERS`/`UVICORN_WORKERS`. More than 1 is refused when the ASGI app loads. |
+| `KAZI_WEB_WORKERS` | `1` | Worker count the lite guard reads when the platform does not set `WEB_CONCURRENCY`/`GUNICORN_WORKERS`/`UVICORN_WORKERS`. More than 1 is refused when the ASGI app loads; set it when your launcher only has a `--workers` flag. |
 | `REMINDER_SWEEP_SECONDS` | `30` in lite, `3600` otherwise | How often the reminder sweep runs. In lite this is the delivery path for due reminders. |
 
 ## LLM providers & routing

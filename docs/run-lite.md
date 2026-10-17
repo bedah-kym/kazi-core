@@ -35,8 +35,10 @@ ANTHROPIC_API_KEY=
 The lite profile starts the in-process scheduler automatically. Do not also
 start `celery beat`; it refuses to start with this setting on. The web process
 must have exactly one worker: in-memory Channels cannot fan a room out across
-processes, and the ASGI app refuses to load when a platform worker variable
-says more than one.
+processes. The ASGI app refuses to load when a platform worker variable
+(`WEB_CONCURRENCY`, `GUNICORN_WORKERS`, `UVICORN_WORKERS` or `KAZI_WEB_WORKERS`)
+says more than one. `uvicorn --workers` does not export a count, so the
+one-worker rule above is the contract for that launcher.
 
 ## Prepare the database
 

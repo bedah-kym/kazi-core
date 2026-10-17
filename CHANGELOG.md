@@ -7,7 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A **lite, chat-only profile** (`KAZI_LITE_PROFILE=1`), independent of
+  `DEBUG`: one uvicorn web worker, LocMem cache, in-memory Channels, no Redis,
+  no Celery worker or beat, and no Temporal. It refuses more than one web
+  worker because in-memory Channels split rooms across processes. See
+  [Run the lite profile](docs/run-lite.md).
+- An **in-process scheduler** (`KAZI_IN_PROCESS_SCHEDULER`) for the lite
+  profile. It runs the existing `CELERY_BEAT_SCHEDULE` entries inside the web
+  process, claims each due run in the database (portable on SQLite and
+  Postgres, fail-closed) so several workers run it once, keeps durable last-run
+  times, and starts/stops with the uvicorn lifespan. Celery beat refuses to
+  start while it is enabled.
+- A **no-Django sidecar entry point**: `python -m orchestration.shell_exec`
+  starts the same server as `manage.py run_shell_exec` without calling
+  `django.setup()` or importing `django.conf`. `ShellExecConfig.from_env()` and
+  `from_settings()` produce the same config.
+
 ### Changed
+
+- Reminder delivery now claims through the shared cache (`cache.add`) instead of
+  a direct Redis call. The claim works on LocMem and Redis and **fails closed**:
+  a claim-store error skips the delivery instead of risking a duplicate. This is
+  a behaviour change from the old fail-open Redis claim.
+- Connector modules import their third-party SDKs (Twilio, `bs4`/`aiohttp`, the
+  Amadeus client) where they are used, not at module import, so a boot with
+  those capabilities off does less work.
 
 - New Kazi identity, the "Lango" mark: a K whose upper arm is a gate a person
   lifts. It replaces the robot icon and the old mascot in the app, the chat, the

@@ -436,12 +436,24 @@ def check_due_reminders():
     count = 0
     for reminder in due_reminders:
         try:
-            send_reminder.delay(reminder.id)
+            _dispatch_due_reminder(reminder.id)
             count += 1
         except Exception as e:
             logger.error(f"Error queueing reminder {reminder.id}: {e}")
 
     return {"processed": count}
+
+
+def _dispatch_due_reminder(reminder_id: int):
+    """Run delivery locally when the web process owns the schedule.
+
+    In the lite profile there is no broker or worker, so ``.delay()`` would
+    queue into an idle memory broker and never deliver. ``.apply()`` runs the
+    same task in the web process; the task's own claim still makes it once.
+    """
+    if getattr(settings, "IN_PROCESS_SCHEDULER", False):
+        return send_reminder.apply(args=(reminder_id,), throw=False)
+    return send_reminder.delay(reminder_id)
 
 
 def schedule_reminder_delivery(reminder_id: int, scheduled_time):
@@ -674,25 +686,32 @@ def _claim_reminder_delivery(reminder_id: int) -> bool:
     """Atomically claim delivery for a reminder row.
 
     The periodic scanner and the ETA task can both queue the same row,
-    and both would read status='pending'. The Redis claim makes delivery
-    idempotent without a schema change. Fail-open: if Redis is down the
-    reminder is still delivered (degraded mode may duplicate).
+    and both would read status='pending'. ``cache.add`` is a single atomic
+    add on both Redis (SET NX) and LocMem, so the claim works in the lite and
+    full profiles without a schema change. Fail closed: if the claim store
+    errors (or the production Redis cache swallows the outage) the delivery is
+    skipped rather than risking a duplicate.
     """
     try:
-        from django_redis import get_redis_connection
-        return bool(get_redis_connection("default").set(
-            f"reminder_claim:{reminder_id}", "1", nx=True, ex=REMINDER_CLAIM_TTL_SECONDS
+        return bool(cache.add(
+            f"reminder_claim:{reminder_id}", "1", timeout=REMINDER_CLAIM_TTL_SECONDS
         ))
     except Exception:
-        return True
+        logger.warning(
+            "Reminder claim store failed for %s; skipping delivery",
+            reminder_id,
+            exc_info=True,
+        )
+        return False
 
 
 def _release_reminder_claim(reminder_id: int) -> None:
     try:
-        from django_redis import get_redis_connection
-        get_redis_connection("default").delete(f"reminder_claim:{reminder_id}")
+        cache.delete(f"reminder_claim:{reminder_id}")
     except Exception:
-        pass
+        logger.warning(
+            "Reminder claim release failed for %s", reminder_id, exc_info=True
+        )
 
 
 def _finalize_failed_delivery(reminder: Reminder, attempts: int, channel: str) -> None:

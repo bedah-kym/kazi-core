@@ -3,11 +3,16 @@ import logging
 import os
 from django.conf import settings
 from ..base_connector import BaseConnector
-from twilio.rest import Client
-from twilio.base.exceptions import TwilioRestException
 from asgiref.sync import sync_to_async
 
 logger = logging.getLogger(__name__)
+
+
+def _twilio_client(account_sid, auth_token):
+    """Import the Twilio SDK only when a client is actually needed."""
+    from twilio.rest import Client
+
+    return Client(account_sid, auth_token)
 
 
 class WhatsAppConnector(BaseConnector):
@@ -23,7 +28,7 @@ class WhatsAppConnector(BaseConnector):
         self.from_number = os.environ.get('TWILIO_FROM_NUMBER')  # e.g., 'whatsapp:+254...'
 
         if self.account_sid and self.auth_token:
-            self.client = Client(self.account_sid, self.auth_token)
+            self.client = _twilio_client(self.account_sid, self.auth_token)
         else:
             self.client = None
 
@@ -50,7 +55,7 @@ class WhatsAppConnector(BaseConnector):
         Validate credentials by initializing a temporary client and fetching account info.
         """
         try:
-            temp_client = Client(account_sid, auth_token)
+            temp_client = _twilio_client(account_sid, auth_token)
             # Fetch account details to verify credentials
             temp_client.api.v2010.accounts(account_sid).fetch()
             return True, "Credentials valid"
@@ -63,7 +68,7 @@ class WhatsAppConnector(BaseConnector):
         Send a test message using provided credentials (not the env vars).
         """
         try:
-            temp_client = Client(account_sid, auth_token)
+            temp_client = _twilio_client(account_sid, auth_token)
             to_number = to if to.startswith('whatsapp:') else f"whatsapp:{to}"
 
             message = temp_client.messages.create(
@@ -134,10 +139,12 @@ class WhatsAppConnector(BaseConnector):
                     "error_code": message.error_code,
                     "error_message": message.error_message
                 }
-            except TwilioRestException as e:
-                logger.error(f"Twilio API Error: {e}")
-                return {"status": "error", "message": f"Twilio Error: {e.msg}", "code": e.code}
             except Exception as e:
+                from twilio.base.exceptions import TwilioRestException
+
+                if isinstance(e, TwilioRestException):
+                    logger.error(f"Twilio API Error: {e}")
+                    return {"status": "error", "message": f"Twilio Error: {e.msg}", "code": e.code}
                 logger.error(f"WhatsApp Connector Error: {str(e)}")
                 return {"status": "error", "message": "An unexpected error occurred. Please try again."}
         else:

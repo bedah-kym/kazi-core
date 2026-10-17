@@ -42,6 +42,40 @@ run a task body inline and never reach a broker.
 |---|---|---|
 | `KAZI_DEV_INMEMORY` | auto (DEBUG + Compose `DATABASE_URL` + Redis unreachable) | Force the in-memory/SQLite dev fallback (ignored unless `DEBUG`). |
 
+## Lite profile (chat-only, no Redis or Celery)
+
+A small install can run the same web app with LocMem cache, in-memory Channels,
+no Temporal and no Celery worker or beat. It is selected independently of
+`DEBUG`, so it is safe on a server:
+
+```bash
+KAZI_LITE_PROFILE=1
+```
+
+The web process must be served by **uvicorn with exactly one worker**. In-memory
+Channels do not fan a room out across processes: a second worker would split a
+room's sockets. The ASGI app refuses to load when it can see one of
+`KAZI_WEB_WORKERS`, `WEB_CONCURRENCY`, `GUNICORN_WORKERS` or `UVICORN_WORKERS`
+set above 1. The sidecar can run separately with
+`python -m orchestration.shell_exec`, which never imports Django.
+
+The lite profile turns on the in-process scheduler (`IN_PROCESS_SCHEDULER`).
+It runs the `CELERY_BEAT_SCHEDULE` entries inside the web process, claiming each
+due run in the database so several workers cannot run it twice. Last-run times
+are durable. It uses the same periodic task rows as beat, so do **not** start
+Celery beat in this profile; beat refuses to start when the setting is on.
+`REMINDER_SWEEP_SECONDS` defaults to 30 in this profile (3600 otherwise) so a
+reminder set two minutes ahead is delivered from chat without an ETA broker.
+
+See [Run the lite profile](run-lite.md).
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `KAZI_LITE_PROFILE` | `False` | Chat-only profile: LocMem cache, in-memory Channels, no Temporal, no Celery, in-process scheduler, one web worker. |
+| `KAZI_IN_PROCESS_SCHEDULER` | `True` in lite, `False` otherwise | Run the periodic schedule inside the web process. Never combine with Celery beat. |
+| `KAZI_WEB_WORKERS` | `1` | Worker count the lite guard reads when the platform does not set `WEB_CONCURRENCY`/`GUNICORN_WORKERS`/`UVICORN_WORKERS`. More than 1 is refused when the ASGI app loads. |
+| `REMINDER_SWEEP_SECONDS` | `30` in lite, `3600` otherwise | How often the reminder sweep runs. In lite this is the delivery path for due reminders. |
+
 ## LLM providers & routing
 
 | Variable | Default | Purpose |
@@ -345,8 +379,11 @@ any compatible endpoint all work. Pick a provider and (for self-hosted) point
 `run_command` executes one command through a deliberately dumb sidecar process
 in a sandboxed container (non-root, read-only rootfs, `--cap-drop=ALL`,
 network off by default, memory/PID caps). Start the sidecar with
-`python Backend/manage.py run_shell_exec`. The sandbox is the security
-boundary; the command classifier is UX and a tripwire. See the
+`python Backend/manage.py run_shell_exec`, or with
+`python -m orchestration.shell_exec` from `Backend/`. Both run the same server
+with the same settings; the `-m` entry point does not start a Django process
+and reads `.env` directly. The sandbox is the security boundary; the command
+classifier is UX and a tripwire. See the
 [credential-scoping contract](contracts/credential-scoping.md).
 
 Isolation profiles (roadmap §3), resolved per room (override) else the global

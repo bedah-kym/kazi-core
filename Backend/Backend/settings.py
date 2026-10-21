@@ -303,13 +303,38 @@ if _DEV_INMEMORY and _urlparse(_DATABASE_URL).hostname in {'db', 'postgres', 'po
     # The configured Postgres lives on the Docker network; fall back to SQLite.
     _DATABASE_URL = 'sqlite:///' + str(BASE_DIR / 'db.sqlite3')
 
-DATABASES = {
-    'default': dj_database_url.parse(
-        _DATABASE_URL,
-        conn_max_age=600,
-        conn_health_checks=True,
-    )
-}
+_POOLED_ENGINES = {'django.db.backends.postgresql', 'django.contrib.gis.db.backends.postgis'}
+
+
+def _database_settings(url, environ):
+    """Build DATABASES['default'], with an opt-in pool for Postgres.
+
+    Under ASGI each worker thread keeps its own persistent connection, which
+    filled a 15-client server limit. DB_POOL_MAX_SIZE caps a per-process pool
+    instead. Django refuses a pool with persistent connections, and a health
+    check is one round trip per request, so both are off when pooled.
+    """
+    from django.core.exceptions import ImproperlyConfigured
+
+    raw = (environ.get('DB_POOL_MAX_SIZE') or '').strip()
+    try:
+        pool_size = int(raw) if raw else 0
+    except ValueError:
+        pool_size = -1
+    if pool_size < 0:
+        raise ImproperlyConfigured("DB_POOL_MAX_SIZE must be a whole number >= 0")
+
+    config = dj_database_url.parse(url, conn_max_age=600, conn_health_checks=True)
+    if pool_size and config['ENGINE'] in _POOLED_ENGINES:
+        config['CONN_MAX_AGE'] = 0
+        config['CONN_HEALTH_CHECKS'] = False
+        config.setdefault('OPTIONS', {})['pool'] = {
+            'min_size': 1, 'max_size': pool_size, 'timeout': 10, 'max_idle': 300,
+        }
+    return config
+
+
+DATABASES = {'default': _database_settings(_DATABASE_URL, os.environ)}
 
 LANGUAGE_CODE = 'en-us'
 

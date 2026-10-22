@@ -923,7 +923,9 @@ def send_reminder(self, reminder_id: int):
             label = ", ".join(channels) if channels else "extra channels"
             _append_reminder_error(
                 reminder,
-                f"{label} not queued: {exc}; "
+                # error_log reaches the user and the model (list_reminders);
+                # a broker error can name hosts, so only the class is kept.
+                f"{label} not queued: {type(exc).__name__}; "
                 f"delivered {_delivery_base_label(reminder)}",
             )
         _release_reminder_claim(reminder_id)

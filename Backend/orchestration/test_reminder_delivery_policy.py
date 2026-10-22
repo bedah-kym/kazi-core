@@ -767,7 +767,7 @@ class ReminderExtraChannelFailureTests(TransactionTestCase):
         broken_dispatch = patch.object(
             chatbot_tasks,
             "_dispatch_extra_channels",
-            side_effect=RuntimeError("broker down"),
+            side_effect=RuntimeError("redis://:fake-password@broker.internal:6379 unreachable"),
         )
         with _NoChannelConfig(), self._mailgun(), \
              patch.object(chatbot_tasks, "_deliver_reminder_to_chat", return_value=True), \
@@ -778,7 +778,9 @@ class ReminderExtraChannelFailureTests(TransactionTestCase):
         reminder.refresh_from_db()
         self.assertEqual(reminder.status, "sent")
         self.assertIn("email not queued", reminder.error_log)
-        self.assertIn("broker down", reminder.error_log)
+        self.assertIn("RuntimeError", reminder.error_log)
+        self.assertNotIn("broker.internal", reminder.error_log)
+        self.assertNotIn("fake-password", reminder.error_log)
         self.assertIn("delivered in chat", reminder.error_log)
 
     @override_settings(GMAIL_OAUTH_CLIENT_ID=None, GMAIL_OAUTH_CLIENT_SECRET=None)

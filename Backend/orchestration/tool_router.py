@@ -857,12 +857,15 @@ class ReminderConnector(BaseConnector):
         """Create a reminder with timezone-aware scheduling, or list
         reminders/notifications (read-only).
 
+        The reminder's room is always the delivery point when the reminder was
+        created in a room. Extra channels are stored only when requested and
+        ready on this install; a demo-mode mock is never ready.
+
         Delivery modes (stored in the channel flags):
-            auto      -> presence routing at fire time (chat when online,
-                         Telegram when connected, else email)
-            email     -> email at fire time
-            whatsapp  -> WhatsApp at fire time
-            in_app    -> in-app notification only
+            auto      -> chat, plus Telegram when away and set up (no email)
+            email     -> chat, plus email when set up
+            whatsapp  -> chat, plus WhatsApp when set up
+            in_app    -> chat only (in-app notification when there is no room)
 
         Args:
             parameters: Dict containing:
@@ -870,7 +873,7 @@ class ReminderConnector(BaseConnector):
                 - time (str): Time expression (e.g., 'in 10 minutes', '5pm', 'tomorrow at 9am').
                 - priority (str, optional): Priority level ('low', 'medium', 'high'). Defaults to 'medium'.
                 - delivery (str, optional): 'auto', 'in_app', 'email', or 'whatsapp'. Defaults to 'auto'.
-                - urgent (bool, optional): Force email delivery with retries/backoff
+                - urgent (bool, optional): Adds email with retries when email is set up
                   (overrides delivery to 'email').
             context: Dict containing:
                 - user_id (int): ID of the user creating the reminder.
@@ -968,18 +971,17 @@ class ReminderConnector(BaseConnector):
             if scheduled_time < now + timedelta(minutes=1):
                 return {"status": "error", "message": "Cannot schedule for less than 1 minute from now."}
 
-            # Channel flags encode the delivery mode (see docstring).
-            if delivery == "auto":
-                via_email, via_whatsapp = True, True
-            elif delivery == "email":
-                via_email, via_whatsapp = True, False
-            elif delivery == "whatsapp":
-                via_email, via_whatsapp = False, True
-            else:
-                via_email, via_whatsapp = False, False
-            if urgent:
-                via_email, via_whatsapp = True, False
-                delivery = "email"
+            room = await sync_to_async(Chatroom.objects.get)(pk=room_id) if room_id else None
+
+            # Extra channels are stored only when this install can actually
+            # send them, so the row never promises a channel it cannot reach.
+            from chatbot.reminder_channels import resolve_delivery
+            plan = await sync_to_async(resolve_delivery)(
+                user, delivery, urgent, bool(room)
+            )
+            delivery = plan["delivery"]
+            via_email = plan["via_email"]
+            via_whatsapp = plan["via_whatsapp"]
 
             # Dedupe: an identical reminder created within a short window
             # updates the existing row instead of stacking duplicates.
@@ -989,6 +991,7 @@ class ReminderConnector(BaseConnector):
                     user=user,
                     content=content,
                     status="pending",
+                    room=room,
                     scheduled_time__gte=scheduled_time - timedelta(seconds=60),
                     scheduled_time__lte=scheduled_time + timedelta(seconds=60),
                     created_at__gte=dedupe_window,
@@ -996,7 +999,6 @@ class ReminderConnector(BaseConnector):
             )()
 
             # Create Reminder
-            room = await sync_to_async(Chatroom.objects.get)(pk=room_id) if room_id else None
             if existing:
                 await sync_to_async(
                     lambda: Reminder.objects.filter(pk=existing.pk).update(
@@ -1040,10 +1042,14 @@ class ReminderConnector(BaseConnector):
 
             return {
                 "status": "success",
-                "message": f"✅ I've {message}: '{content}' for {local_time} ({local_date}).",
+                "message": (
+                    f"✅ I've {message}: '{content}' for {local_time} ({local_date}). "
+                    f"{plan['message']}"
+                ),
                 "reminder_id": reminder.id,
                 "timestamp": scheduled_time.isoformat(),
                 "delivery": delivery,
+                "channels": plan["channels"],
                 "timezone": user_tz,
             }
 

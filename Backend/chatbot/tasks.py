@@ -484,7 +484,7 @@ def _is_user_online(user) -> bool:
 def _resolve_delivery_mode(reminder: Reminder) -> str:
     """Decode the channel flags into the delivery mode set at creation.
 
-    auto        -> both flags set  (presence routing at fire time)
+    auto        -> both flags set  (chat plus Telegram when away at fire time)
     email       -> via_email only
     whatsapp    -> via_whatsapp only
     in_app      -> neither flag
@@ -503,10 +503,11 @@ def _reminder_retry_delay(retries: int) -> int:
 
 
 def _send_reminder_email(reminder: Reminder) -> bool:
+    from chatbot.reminder_channels import email_provider
     from orchestration.connectors.gmail_connector import GmailConnector
     from orchestration.connectors.mailgun_connector import MailgunConnector
 
-    if getattr(settings, "GMAIL_OAUTH_CLIENT_ID", None) and getattr(settings, "GMAIL_OAUTH_CLIENT_SECRET", None):
+    if email_provider(reminder.user) == "gmail":
         connector = GmailConnector()
     else:
         connector = MailgunConnector()
@@ -528,7 +529,10 @@ def _send_reminder_email(reminder: Reminder) -> bool:
 
 
 def _send_reminder_telegram(reminder: Reminder) -> bool:
-    if not os.environ.get("TELEGRAM_BOT_TOKEN"):
+    if not (
+        getattr(settings, "TELEGRAM_BOT_TOKEN", None)
+        or os.environ.get("TELEGRAM_BOT_TOKEN")
+    ):
         return False
     try:
         from users.models import UserIntegration
@@ -589,35 +593,62 @@ def _deliver_reminder_to_chat(reminder: Reminder) -> bool:
         room.chats.add(ai_message)
         room.save()
 
-        channel_layer = get_channel_layer()
-        async_to_sync(channel_layer.group_send)(
-            f"chat_{room.id}",
-            {
-                "type": "ai_message_saved",
-                "message": {
-                    "id": ai_message.id,
-                    "member": "kazi",
-                    "content": f"Reminder: {reminder.content}",
-                    "timestamp": str(ai_message.timestamp),
-                    "parent_id": None,
+        # The persisted Message is the delivery: a realtime push failure must
+        # not make the row retry and post a duplicate into the room.
+        try:
+            channel_layer = get_channel_layer()
+            async_to_sync(channel_layer.group_send)(
+                f"chat_{room.id}",
+                {
+                    "type": "ai_message_saved",
+                    "message": {
+                        "id": ai_message.id,
+                        "member": "kazi",
+                        "content": f"Reminder: {reminder.content}",
+                        "timestamp": str(ai_message.timestamp),
+                        "parent_id": None,
+                    }
                 }
-            }
-        )
+            )
+        except Exception as exc:
+            logger.warning("Reminder chat realtime push failed: %s", exc)
         return True
     except Exception as exc:
         logger.warning("Reminder chat delivery failed: %s", exc)
         return False
 
 
-def _deliver_reminder(reminder: Reminder, create_notification: bool = True) -> Tuple[bool, str]:
-    """Deliver a due reminder. Returns (delivered, channel).
+def _send_reminder_whatsapp(reminder: Reminder) -> bool:
+    """Send a reminder over WhatsApp; a mock reply is never a delivery."""
+    try:
+        from orchestration.connectors.whatsapp_connector import WhatsAppConnector
+        from chatbot.reminder_channels import user_phone
 
-    The in-app notification is the guaranteed channel: it is created on
-    the first delivery attempt only (retries must not stack duplicates)
-    and dispatched in-app only — the mode branches below are the single
-    source of external (email/chat/telegram/whatsapp) delivery.
+        to = user_phone(reminder.user)
+        if not to:
+            return False
+        resp = WhatsAppConnector()._send_message_sync(
+            to, f"Reminder: {reminder.content}"
+        )
+        if not isinstance(resp, dict):
+            return False
+        if resp.get("mock"):
+            return False
+        return resp.get("status") == "sent"
+    except Exception as exc:
+        logger.warning("Reminder whatsapp attempt failed: %s", exc)
+        return False
+
+
+def _deliver_reminder(reminder: Reminder, create_notification: bool = True) -> Tuple[bool, str]:
+    """Deliver a reminder's base channel. Returns (delivered, channel).
+
+    A reminder created in a room is always delivered in that room; presence
+    does not gate it. Without a room the in-app notification is the base.
+    Extra channels are delivered separately so a failure there cannot take a
+    chat delivery down with it.
     """
-    notification_created = True
+    notification_created = False
     if create_notification:
         try:
             from notifications.services import NotificationService
@@ -633,44 +664,147 @@ def _deliver_reminder(reminder: Reminder, create_notification: bool = True) -> T
             )
         except Exception:
             logger.exception("Reminder in-app notification failed")
-            notification_created = False
+        else:
+            notification_created = True
+
+    if reminder.room:
+        return _deliver_reminder_to_chat(reminder), "chat"
+    return notification_created, "in_app"
+
+
+def _extra_channels_for_reminder(reminder: Reminder) -> list:
+    """Resolve the extra channels implied by the stored delivery mode.
+
+    ``auto`` never adds email: it adds Telegram only when the user is away.
+    Readiness is checked again by the delivering task at fire time.
+    """
+    mode = _resolve_delivery_mode(reminder)
+    if mode == "email":
+        return ["email"]
+    if mode == "whatsapp":
+        return ["whatsapp"]
+    if mode == "auto":
+        return [] if _is_user_online(reminder.user) else ["telegram"]
+    return []
+
+
+def _send_extra_channel(reminder: Reminder, channel: str) -> bool:
+    if channel == "email":
+        return _send_reminder_email(reminder)
+    if channel == "whatsapp":
+        return _send_reminder_whatsapp(reminder)
+    if channel == "telegram":
+        return _send_reminder_telegram(reminder)
+    return False
+
+
+def _delivery_base_label(reminder: Reminder) -> str:
+    return "in chat" if reminder.room else "in-app"
+
+
+def _append_reminder_error(reminder: Reminder, message: str) -> None:
+    current = (reminder.error_log or "").strip()
+    combined = f"{current}; {message}" if current else message
+    Reminder.objects.filter(pk=reminder.pk).update(error_log=combined)
+    reminder.error_log = combined
+
+
+def _dispatch_extra_channels(reminder: Reminder):
+    """Queue extra channels after the base delivery has been recorded.
+
+    The task re-checks readiness at fire time; this only decides whether
+    there is anything to queue.
+
+    In the lite/eager profiles the task is run inline with retries disabled:
+    an inline ``self.retry`` would execute every backoff attempt inside the
+    scheduler tick, so one attempt is made there and its failure is written
+    to ``error_log`` like any other final failure.
+    """
+    channels = _extra_channels_for_reminder(reminder)
+    if not channels:
+        return None
+    if (
+        getattr(settings, "IN_PROCESS_SCHEDULER", False)
+        or getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False)
+    ):
+        return deliver_reminder_extra_channels.apply(
+            args=(reminder.id, channels, False)
+        )
+    return deliver_reminder_extra_channels.delay(reminder.id, channels)
+
+
+@shared_task(bind=True, max_retries=REMINDER_URGENT_MAX_RETRIES, ignore_result=True)
+def deliver_reminder_extra_channels(
+    self, reminder_id: int, channels=None, allow_retries=True
+):
+    """Deliver email/WhatsApp/Telegram after the room already has the reminder.
+
+    Non-urgent reminders get one attempt per channel. Urgent ones retry with
+    the existing backoff when ``allow_retries`` is true (the queued worker
+    profile). The eager/lite caller passes false so the scheduler tick is not
+    held for the whole backoff. The final failure is appended to ``error_log``
+    while the row stays ``sent`` because the base delivery succeeded.
+    """
+    reminder = Reminder.objects.filter(id=reminder_id).select_related(
+        "user", "room"
+    ).first()
+    if not reminder:
+        return {"status": "skipped", "reason": "not_found"}
+    if reminder.status != "sent":
+        return {"status": "skipped", "reason": "not_sent"}
+
+    if channels is None:
+        channels = _extra_channels_for_reminder(reminder)
+    if not channels:
+        return {"status": "skipped", "reason": "no_extra_channels"}
+
+    from chatbot.reminder_channels import channel_ready
 
     mode = _resolve_delivery_mode(reminder)
+    failed = []
+    reasons = {}
+    for channel in channels:
+        ready, reason = channel_ready(reminder.user, channel)
+        if not ready:
+            # Auto only offers Telegram opportunistically; if it is not set
+            # up at fire time there is nothing to report.
+            if mode == "auto":
+                continue
+            failed.append(channel)
+            reasons[channel] = f"not sent: {reason}"
+            continue
+        if not _send_extra_channel(reminder, channel):
+            failed.append(channel)
+            reasons[channel] = "failed"
 
-    if mode == "in_app":
-        return notification_created, "in_app"
+    if not failed:
+        return {"status": "sent", "channels": channels}
 
-    if mode == "auto":
-        if _is_user_online(reminder.user):
-            if _deliver_reminder_to_chat(reminder):
-                return True, "chat"
-        if _send_reminder_telegram(reminder):
-            return True, "telegram"
-        ok = _send_reminder_email(reminder)
-        return ok, "email"
+    attempts = self.request.retries + 1
+    if (
+        allow_retries
+        and reminder.priority == "high"
+        and self.request.retries < self.max_retries
+    ):
+        raise self.retry(
+            exc=RuntimeError(
+                f"reminder {reminder.id} extra channel delivery failed"
+            ),
+            countdown=_reminder_retry_delay(self.request.retries),
+            args=(reminder_id, failed),
+        )
 
-    if mode == "email":
-        return _send_reminder_email(reminder), "email"
-
-    if mode == "whatsapp":
-        try:
-            from orchestration.connectors.whatsapp_connector import WhatsAppConnector
-            wa = WhatsAppConnector()
-            profile = getattr(reminder.user, "profile", None)
-            prefs = getattr(profile, "notification_preferences", None) or {}
-            to = (
-                getattr(profile, "phone_number", None)
-                or getattr(profile, "phone", None)
-                or prefs.get("phone_number")
-                or ""
+    details = []
+    for channel in failed:
+        if reasons[channel] == "failed":
+            details.append(
+                f"{channel} failed after {attempts} attempt(s): not sent"
             )
-            resp = wa._send_message_sync(to, f"Reminder: {reminder.content}")
-            return bool(resp.get("status") == "sent"), "whatsapp"
-        except Exception as exc:
-            logger.warning("Reminder whatsapp attempt failed: %s", exc)
-            return False, "whatsapp"
-
-    return False, mode
+        else:
+            details.append(f"{channel} {reasons[channel]}")
+    details.append(f"delivered {_delivery_base_label(reminder)}")
+    _append_reminder_error(reminder, "; ".join(details))
+    return {"status": "failed", "channels": failed, "attempts": attempts}
 
 
 REMINDER_CLAIM_TTL_SECONDS = 7200
@@ -774,6 +908,26 @@ def send_reminder(self, reminder_id: int):
             sent_at=now,
             error_log='',
         )
+        try:
+            _dispatch_extra_channels(reminder)
+        except Exception as exc:
+            logger.warning(
+                "Reminder extra channel dispatch failed for %s",
+                reminder_id,
+                exc_info=True,
+            )
+            try:
+                channels = _extra_channels_for_reminder(reminder)
+            except Exception:
+                channels = []
+            label = ", ".join(channels) if channels else "extra channels"
+            _append_reminder_error(
+                reminder,
+                # error_log reaches the user and the model (list_reminders);
+                # a broker error can name hosts, so only the class is kept.
+                f"{label} not queued: {type(exc).__name__}; "
+                f"delivered {_delivery_base_label(reminder)}",
+            )
         _release_reminder_claim(reminder_id)
         return {"status": "sent", "channel": channel}
 

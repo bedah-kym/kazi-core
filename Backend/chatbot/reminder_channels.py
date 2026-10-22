@@ -37,6 +37,20 @@ def _gmail_configured(user) -> bool:
     ).exists()
 
 
+def email_provider(user):
+    """Return the provider the reminder sender will actually use, or None.
+
+    Gmail wins only when the OAuth app is configured *and* the user has a
+    connected Gmail integration; otherwise Mailgun when configured. Readiness
+    and sending share this rule so they can never disagree.
+    """
+    if _gmail_configured(user):
+        return "gmail"
+    if _mailgun_configured():
+        return "mailgun"
+    return None
+
+
 def user_phone(user):
     """Return the phone number the user configured for notifications."""
     profile = getattr(user, "profile", None)
@@ -77,9 +91,7 @@ def channel_ready(user, channel):
     if channel == "email":
         if not getattr(user, "email", None):
             return False, "you don't have an email address on your account"
-        if _mailgun_configured():
-            return True, ""
-        if _gmail_configured(user):
+        if email_provider(user):
             return True, ""
         return False, "email isn't set up on this install"
 

@@ -991,6 +991,7 @@ class ReminderConnector(BaseConnector):
                     user=user,
                     content=content,
                     status="pending",
+                    room=room,
                     scheduled_time__gte=scheduled_time - timedelta(seconds=60),
                     scheduled_time__lte=scheduled_time + timedelta(seconds=60),
                     created_at__gte=dedupe_window,

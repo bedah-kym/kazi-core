@@ -503,10 +503,11 @@ def _reminder_retry_delay(retries: int) -> int:
 
 
 def _send_reminder_email(reminder: Reminder) -> bool:
+    from chatbot.reminder_channels import email_provider
     from orchestration.connectors.gmail_connector import GmailConnector
     from orchestration.connectors.mailgun_connector import MailgunConnector
 
-    if getattr(settings, "GMAIL_OAUTH_CLIENT_ID", None) and getattr(settings, "GMAIL_OAUTH_CLIENT_SECRET", None):
+    if email_provider(reminder.user) == "gmail":
         connector = GmailConnector()
     else:
         connector = MailgunConnector()
@@ -909,11 +910,21 @@ def send_reminder(self, reminder_id: int):
         )
         try:
             _dispatch_extra_channels(reminder)
-        except Exception:
+        except Exception as exc:
             logger.warning(
                 "Reminder extra channel dispatch failed for %s",
                 reminder_id,
                 exc_info=True,
+            )
+            try:
+                channels = _extra_channels_for_reminder(reminder)
+            except Exception:
+                channels = []
+            label = ", ".join(channels) if channels else "extra channels"
+            _append_reminder_error(
+                reminder,
+                f"{label} not queued: {exc}; "
+                f"delivered {_delivery_base_label(reminder)}",
             )
         _release_reminder_claim(reminder_id)
         return {"status": "sent", "channel": channel}

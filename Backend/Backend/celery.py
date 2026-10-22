@@ -69,11 +69,20 @@ app.autodiscover_tasks()
 
 @beat_init.connect
 def _refuse_beat_alongside_in_process_scheduler(**kwargs):
-    """The web process already owns the schedule; starting beat would double-run it."""
+    """The web process already owns the schedule; starting beat would double-run it.
+
+    Celery's Signal.send catches Exception, so a RuntimeError here would only be
+    logged and beat would keep ticking. SystemExit escapes the signal dispatch
+    and stops the beat command before its first tick.
+    """
     from django.conf import settings
 
     if getattr(settings, "IN_PROCESS_SCHEDULER", False):
-        raise RuntimeError(
+        logger.critical(
+            "IN_PROCESS_SCHEDULER is enabled: the web process runs the periodic "
+            "schedule. Refusing to start celery beat."
+        )
+        raise SystemExit(
             "IN_PROCESS_SCHEDULER is enabled: the web process runs the periodic "
             "schedule. Do not start celery beat for this deployment."
         )

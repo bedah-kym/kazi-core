@@ -21,8 +21,8 @@ from datetime import timedelta
 from importlib import import_module
 from typing import Any, Callable, List, Mapping, Optional
 
+from channels.db import database_sync_to_async
 from django.conf import settings
-from django.db import close_old_connections
 from django.db.models import F
 from django.utils import timezone
 from django_celery_beat.models import CrontabSchedule, IntervalSchedule, PeriodicTask
@@ -30,6 +30,7 @@ from django_celery_beat.models import CrontabSchedule, IntervalSchedule, Periodi
 logger = logging.getLogger(__name__)
 
 DEFAULT_TICK_SECONDS = 5.0
+DEFAULT_STOP_TIMEOUT_SECONDS = 30.0
 _RUNNER = Callable[[Mapping[str, Any]], Any]
 _NOW = Callable[[], Any]
 
@@ -65,14 +66,11 @@ def _schedule_fields(schedule: Any) -> dict:
         )
         return {"interval": interval}
     if hasattr(schedule, "minute") and hasattr(schedule, "hour"):
-        cron, _ = CrontabSchedule.objects.get_or_create(
-            minute=str(schedule.minute),
-            hour=str(schedule.hour),
-            day_of_week=str(schedule.day_of_week),
-            day_of_month=str(schedule.day_of_month),
-            month_of_year=str(schedule.month_of_year),
-            timezone=settings.TIME_ZONE,
-        )
+        # Celery expands the cronspec sets (minute=0 becomes "{0}"), but beat
+        # reads the original fields back from the row. from_schedule() stores
+        # the unexpanded strings, so a row written here stays readable by beat.
+        cron = CrontabSchedule.from_schedule(schedule)
+        cron.save()
         return {"crontab": cron}
     raise ValueError(f"Unsupported schedule type {type(schedule).__name__}")
 
@@ -99,6 +97,7 @@ class InProcessScheduler:
         runner: Optional[_RUNNER] = None,
         now: Optional[_NOW] = None,
         tick_seconds: float = DEFAULT_TICK_SECONDS,
+        stop_timeout: float = DEFAULT_STOP_TIMEOUT_SECONDS,
     ) -> None:
         self._schedules = dict(
             settings.CELERY_BEAT_SCHEDULE if schedules is None else schedules
@@ -106,6 +105,7 @@ class InProcessScheduler:
         self._runner = runner or run_task
         self._now = now or timezone.now
         self._tick_seconds = tick_seconds
+        self._stop_timeout = stop_timeout
         self._stopping = asyncio.Event()
         self._task: Optional[asyncio.Task] = None
 
@@ -115,20 +115,37 @@ class InProcessScheduler:
         return self._task
 
     async def stop(self) -> None:
-        """Ask the loop to stop and wait for a running job to finish."""
+        """Ask the loop to stop and wait a bounded time for a running job."""
         self._stopping.set()
         task = self._task
-        if task is not None and not task.done():
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+        if task is None or task.done():
+            return
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=self._stop_timeout)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "In-process scheduler job still running after %.1fs; "
+                "shutdown continues without it",
+                self._stop_timeout,
+            )
+        except asyncio.CancelledError:
+            pass
+
+    async def tick(self) -> List[str]:
+        """Run one tick on the server's event loop.
+
+        ``database_sync_to_async`` runs the ORM work in asgiref's
+        thread-sensitive executor: it records this loop for nested
+        ``async_to_sync`` calls (reminder group sends) and recycles database
+        connections at both edges of the thread, like a request does.
+        """
+        return await database_sync_to_async(self.run_due)()
 
     async def run(self) -> None:
         logger.info("In-process scheduler started (%d jobs)", len(self._schedules))
         while not self._stopping.is_set():
             try:
-                await asyncio.to_thread(self.run_due)
+                await self.tick()
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -144,18 +161,10 @@ class InProcessScheduler:
     def run_due(self, now: Optional[Any] = None) -> List[str]:
         """Claim and run every due entry once. Returns the names that ran.
 
-        The ORM calls run in a thread the ASGI server did not create, so they
-        are outside Django's request cycle. Recycle stale connections at both
-        edges of the tick, the way a request does, instead of leaving them
-        open for the life of the process.
+        Synchronous on purpose: the connection hygiene and event-loop binding
+        live in ``tick()``, the background-thread path. Calling this directly
+        (tests, an operator's one-off) uses the caller's connection untouched.
         """
-        close_old_connections()
-        try:
-            return self._run_due(now)
-        finally:
-            close_old_connections()
-
-    def _run_due(self, now: Optional[Any] = None) -> List[str]:
         now = now or self._now()
         ran: List[str] = []
         for name, entry in self._schedules.items():
@@ -171,13 +180,13 @@ class InProcessScheduler:
     def _claim(self, name: str, entry: Mapping[str, Any], now: Any) -> bool:
         try:
             row = PeriodicTask.objects.filter(name=name).only(
-                "pk", "last_run_at"
+                "pk", "last_run_at", "enabled"
             ).first()
             if row is None:
-                # PeriodicTask clears last_run_at when disabled, so the row is
-                # enabled. The schedule mirrors the settings entry: if the
-                # deployment later switches to beat after sync_beat_schedule,
-                # the row is already correct.
+                # No row yet: create one so a later switch to beat after
+                # sync_beat_schedule keeps the history. The schedule mirrors
+                # the settings entry; the first tick only records the start
+                # time and does not run the job.
                 defaults = {
                     "task": entry["task"],
                     "enabled": True,
@@ -189,6 +198,12 @@ class InProcessScheduler:
                 )
                 if created:
                     return False
+            if not row.enabled:
+                # An operator disabled this row in the admin; beat skips it,
+                # so this scheduler must too. Saving a disabled row clears
+                # last_run_at, and claiming it here would set it back and run
+                # the job on the next tick.
+                return False
             if row.last_run_at is None:
                 PeriodicTask.objects.filter(
                     pk=row.pk, last_run_at__isnull=True

@@ -82,9 +82,17 @@ With `DJANGO_DEBUG=False` the web process must sit behind a TLS-terminating
 reverse proxy that sets `X-Forwarded-Proto: https`; a plain-HTTP request
 otherwise answers `301`. The run page has a minimal Caddy and nginx example.
 
-Moderation follows `MODERATION_ENABLED`. When it is on but the default cache is
-not Redis (the lite profile), message buffering is skipped and logged once
-instead of failing the chat turn.
+Moderation needs the Redis profile: message buffering and the moderation batch
+store live in Redis. With `KAZI_LITE_PROFILE=1`:
+
+- an explicit `MODERATION_ENABLED=1` refuses to start, with a message that says
+  moderation needs the Redis profile;
+- moderation implied by `HF_API_TOKEN` is turned off, and start-up says so
+  once;
+- `MODERATION_ENABLED=0` is accepted and stays off.
+
+The full profile keeps the existing behaviour: `MODERATION_ENABLED` defaults to
+on when `HF_API_TOKEN` is set.
 
 ## LLM providers & routing
 
@@ -248,7 +256,7 @@ The server keeps the heartbeat; the page sends nothing.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `MODERATION_ENABLED` | auto (on if `HF_API_TOKEN` is set) | Content moderation toggle. |
+| `MODERATION_ENABLED` | auto (on if `HF_API_TOKEN` is set) | Content moderation toggle. Needs Redis; the lite profile refuses an explicit `1` and ignores the `HF_API_TOKEN` default. |
 | `MODERATION_FLUSH_SECONDS` | `600` | Moderation batch flush interval. |
 | `REMINDER_SWEEP_SECONDS` | `3600` | Reminder sweep interval. |
 | `WORKFLOW_REPLAY_SCHEDULE_SECONDS` | `300` | Replay-safety watchdog interval. |
@@ -392,8 +400,11 @@ network off by default, memory/PID caps). Start the sidecar with
 `python Backend/manage.py run_shell_exec`, or with
 `python -m orchestration.shell_exec` from `Backend/`. Both run the same server
 with the same settings; the `-m` entry point does not start a Django process
-and reads `.env` directly. The sandbox is the security boundary; the command
-classifier is UX and a tripwire. See the
+and reads `.env` directly. A `SHELL_EXEC_TOKEN` already present in the process
+environment takes precedence over the `.env` value, so a launcher can rotate the
+token without editing the file; the rest of `.env` keeps its usual precedence.
+The sandbox is the security boundary; the command classifier is UX and a
+tripwire. See the
 [credential-scoping contract](contracts/credential-scoping.md).
 
 Isolation profiles (roadmap §3), resolved per room (override) else the global

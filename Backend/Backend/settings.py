@@ -27,6 +27,11 @@ except Exception:
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# A launcher-provided sidecar token must beat the one in .env, so a rotated
+# token takes effect without editing the file. Capture it before the .env
+# loads below (they run with override=True). Other keys keep .env precedence.
+_SHELL_EXEC_TOKEN_FROM_ENV = os.environ.get('SHELL_EXEC_TOKEN')
+
 env_path = BASE_DIR.parent / '.env'
 load_dotenv(dotenv_path=env_path, override=True)
 
@@ -35,6 +40,9 @@ try:
     load_dotenv(str(BASE_DIR.parent / '.env'))
 except Exception:
     pass
+
+if _SHELL_EXEC_TOKEN_FROM_ENV is not None:
+    os.environ['SHELL_EXEC_TOKEN'] = _SHELL_EXEC_TOKEN_FROM_ENV
 
 
 # Quick-start development settings - unsuitable for production
@@ -456,11 +464,30 @@ PRESENCE_WINDOW_SECONDS = int(os.environ.get('PRESENCE_WINDOW_SECONDS', 75))
 # Celery Beat Schedule — single source of truth. A second definition later in
 # this file silently replaced this dict once already (dropping the reminder
 # sweep and the deferred-workflow replay watchdog); never redefine it below.
-MODERATION_ENABLED = os.environ.get('MODERATION_ENABLED')
-if MODERATION_ENABLED is None:
+_MODERATION_SETTING = os.environ.get('MODERATION_ENABLED')
+if _MODERATION_SETTING is None:
     MODERATION_ENABLED = bool(os.environ.get('HF_API_TOKEN', ''))
+    _MODERATION_EXPLICIT = False
 else:
-    MODERATION_ENABLED = MODERATION_ENABLED.lower() in ('1', 'true', 'yes')
+    MODERATION_ENABLED = _MODERATION_SETTING.lower() in ('1', 'true', 'yes')
+    _MODERATION_EXPLICIT = True
+
+if KAZI_LITE_PROFILE and MODERATION_ENABLED:
+    if _MODERATION_EXPLICIT:
+        # An operator who turned moderation on must not get a silent no-op.
+        raise ValueError(
+            "MODERATION_ENABLED is set, but the lite profile has no Redis: "
+            "moderation needs the Redis profile. Unset MODERATION_ENABLED or "
+            "run without KAZI_LITE_PROFILE."
+        )
+    # HF_API_TOKEN implies moderation, but the lite profile cannot run it.
+    # Say so once at start-up instead of leaving a safety feature silently off.
+    MODERATION_ENABLED = False
+    print(
+        "WARNING: HF_API_TOKEN implies moderation, but KAZI_LITE_PROFILE has "
+        "no Redis; moderation is disabled in the lite profile.",
+        file=sys.stderr,
+    )
 
 MODERATION_FLUSH_SECONDS = int(os.environ.get('MODERATION_FLUSH_SECONDS', 600))
 # The lite profile has no ETA broker, so the periodic sweep is what delivers a

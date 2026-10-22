@@ -3,20 +3,23 @@
 Covers the sidecar's no-Django entry point, environment/settings parity, the
 in-process scheduler, the fail-closed reminder claim, and the lite profile.
 """
+import asyncio
 import base64
 import json
 import os
 import subprocess  # nosec B404 — test infra spawns fixed argv interpreters
 import sys
+import threading
 from datetime import timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from asgiref.sync import async_to_sync
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.db import DatabaseError
-from django.test import SimpleTestCase, TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 
 from chatbot import tasks as chatbot_tasks
@@ -34,6 +37,7 @@ def _clean_env(**overrides):
     prefixes = (
         "DJANGO_", "KAZI_", "CELERY_", "REDIS_", "DATABASE_URL", "TEMPORAL_",
         "WEB_CONCURRENCY", "GUNICORN_WORKERS", "UVICORN_WORKERS", "ENCRYPTION_KEY",
+        "HF_API_TOKEN", "MODERATION_ENABLED",
     )
     env = {
         key: value
@@ -126,6 +130,69 @@ class ShellExecConfigParityTests(SimpleTestCase):
         self.assertEqual(from_env, from_settings)
 
 
+class ShellExecTokenPrecedenceTests(SimpleTestCase):
+    def test_process_environment_token_beats_dotenv_in_the_sidecar_loader(self):
+        from orchestration.shell_exec.backends import ShellExecConfig
+        from orchestration.shell_exec.server import load_environment
+
+        def fake_dotenv(*args, **kwargs):
+            os.environ["SHELL_EXEC_TOKEN"] = "stale-token"  # nosec B105 — test fixture
+            os.environ["SHELL_EXEC_HOST"] = "dotenv-host"
+
+        env = {
+            "SHELL_EXEC_TOKEN": "rotated-token",  # nosec B105 — test fixture
+            "SHELL_EXEC_HOST": "process-host",
+        }
+        with patch.dict(os.environ, env, clear=False), \
+             patch("dotenv.load_dotenv", side_effect=fake_dotenv):
+            load_environment()
+            config = ShellExecConfig.from_env()
+            loaded_token = os.environ["SHELL_EXEC_TOKEN"]
+            loaded_host = os.environ["SHELL_EXEC_HOST"]
+
+        self.assertEqual(loaded_token, "rotated-token")
+        self.assertEqual(config.token, "rotated-token")
+        self.assertEqual(loaded_host, "dotenv-host")
+
+    def test_run_shell_exec_uses_the_process_environment_token(self):
+        code = (
+            "import os, sys, types\n"
+            "os.environ['SHELL_EXEC_TOKEN'] = 'rotated-token'\n"
+            "fake = types.ModuleType('dotenv')\n"
+            "def _load(*args, **kwargs):\n"
+            "    os.environ['SHELL_EXEC_TOKEN'] = 'stale-token'\n"
+            "fake.load_dotenv = _load\n"
+            "sys.modules['dotenv'] = fake\n"
+            "import django\n"
+            "django.setup()\n"
+            "from django.core.management import call_command\n"
+            "from unittest.mock import patch\n"
+            "seen = {}\n"
+            "def _serve(config, host=None, port=None):\n"
+            "    seen['token'] = config.token\n"
+            "with patch('orchestration.shell_exec.server.serve', _serve):\n"
+            "    call_command('run_shell_exec')\n"
+            "print('TOKEN=' + seen['token'])\n"
+        )
+        env = _clean_env(
+            DJANGO_SETTINGS_MODULE="Backend.settings",
+            DJANGO_SECRET_KEY="fake-secret-key-for-token-tests",  # nosec B106 — test fixture
+            DJANGO_DEBUG="True",
+            DJANGO_ALLOWED_HOSTS="localhost,127.0.0.1",
+            ENCRYPTION_KEY=base64.urlsafe_b64encode(b"t" * 32).decode("ascii"),
+        )
+        proc = subprocess.run(  # nosec B603 — test infra spawns a fixed argv interpreter
+            [sys.executable, "-c", code],
+            cwd=str(BACKEND_DIR),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr[-4000:])
+        self.assertIn("TOKEN=rotated-token", proc.stdout)
+
+
 class InProcessSchedulerTests(TestCase):
     def setUp(self):
         from orchestration.in_process_scheduler import InProcessScheduler
@@ -194,9 +261,47 @@ class InProcessSchedulerTests(TestCase):
             self.assertEqual(self.scheduler.run_due(self.now), [])
         self.assertEqual(self.ran, [])
 
+    def test_a_disabled_row_does_not_run_even_when_overdue(self):
+        last_run_at = self.now - timedelta(seconds=120)
+        self._seed(last_run_at)
+        PeriodicTask.objects.filter(name="due-job").update(enabled=False)
 
-class SchedulerConnectionTests(SimpleTestCase):
-    def test_a_tick_recycles_old_connections_at_both_edges(self):
+        self.assertEqual(self.scheduler.run_due(self.now), [])
+        self.assertEqual(self.ran, [])
+        row = PeriodicTask.objects.get(name="due-job")
+        self.assertEqual(row.last_run_at, last_run_at)
+
+    def test_admin_disabling_a_row_keeps_it_disabled(self):
+        self._seed(self.now - timedelta(seconds=120))
+        row = PeriodicTask.objects.get(name="due-job")
+        row.enabled = False
+        row.save()
+        self.assertIsNone(row.last_run_at)
+
+        self.assertEqual(self.scheduler.run_due(self.now), [])
+        self.assertEqual(
+            self.scheduler.run_due(self.now + timedelta(seconds=120)), []
+        )
+        self.assertEqual(self.ran, [])
+        row.refresh_from_db()
+        self.assertFalse(row.enabled)
+        self.assertIsNone(row.last_run_at)
+
+    def test_a_real_crontab_entry_is_stored_unexpanded(self):
+        from orchestration.in_process_scheduler import _schedule_fields
+
+        entry = settings.CELERY_BEAT_SCHEDULE["check-workflow-health"]
+        cron = _schedule_fields(entry["schedule"])["crontab"]
+        cron.refresh_from_db()
+        self.assertEqual(cron.minute, "0")
+        self.assertEqual(cron.hour, "*")
+        self.assertEqual(cron.day_of_week, "*")
+        self.assertEqual(cron.day_of_month, "*")
+        self.assertEqual(cron.month_of_year, "*")
+
+
+class SchedulerThreadPathTests(SimpleTestCase):
+    def test_tick_runs_the_job_through_the_connection_cleaning_path(self):
         from orchestration.in_process_scheduler import InProcessScheduler
 
         scheduler = InProcessScheduler(
@@ -205,12 +310,71 @@ class SchedulerConnectionTests(SimpleTestCase):
             now=timezone.now,
         )
 
-        with patch(
-            "orchestration.in_process_scheduler.close_old_connections"
-        ) as recycle:
-            scheduler.run_due()
+        with patch("channels.db.close_old_connections") as recycle:
+            asyncio.run(scheduler.tick())
 
         self.assertEqual(recycle.call_count, 2)
+
+    def test_stop_bounds_the_wait_for_a_running_job(self):
+        from orchestration.in_process_scheduler import InProcessScheduler
+
+        started = threading.Event()
+        release = threading.Event()
+
+        def runner(entry):
+            started.set()
+            release.wait(2)
+
+        scheduler = InProcessScheduler(
+            schedules={"slow": {"task": "noop", "schedule": 60.0}},
+            runner=runner,
+            now=timezone.now,
+            tick_seconds=60.0,
+            stop_timeout=0.01,
+        )
+
+        async def drive():
+            with patch("channels.db.close_old_connections"), \
+                 patch.object(scheduler, "_claim", return_value=True):
+                scheduler.start()
+                for _ in range(100):
+                    if started.is_set():
+                        break
+                    await asyncio.sleep(0.01)
+                self.assertTrue(started.is_set())
+                loop = asyncio.get_running_loop()
+                before = loop.time()
+                with self.assertLogs(
+                    "orchestration.in_process_scheduler", level="WARNING"
+                ) as logs:
+                    await scheduler.stop()
+                elapsed = loop.time() - before
+                release.set()
+                await asyncio.sleep(0)
+                return elapsed, logs.output
+
+        elapsed, output = asyncio.run(drive())
+        self.assertLess(elapsed, 1.0)
+        self.assertIn("still running", "\n".join(output))
+
+
+class BeatRefusalTests(SimpleTestCase):
+    def test_beat_signal_refuses_to_start_when_the_scheduler_is_on(self):
+        import Backend.celery  # noqa: F401 — connect the real receiver
+        from celery.signals import beat_init
+
+        with override_settings(IN_PROCESS_SCHEDULER=True):
+            with self.assertRaises(SystemExit) as raised:
+                beat_init.send(sender=object())
+
+        self.assertIn("IN_PROCESS_SCHEDULER", str(raised.exception))
+
+    def test_beat_signal_allows_start_when_the_scheduler_is_off(self):
+        import Backend.celery  # noqa: F401 — connect the real receiver
+        from celery.signals import beat_init
+
+        with override_settings(IN_PROCESS_SCHEDULER=False):
+            beat_init.send(sender=object())
 
 
 @override_settings(IN_PROCESS_SCHEDULER=True)
@@ -265,6 +429,74 @@ class InProcessReminderDeliveryTests(TestCase):
         self.assertIsNotNone(reminder.sent_at)
 
 
+@override_settings(
+    IN_PROCESS_SCHEDULER=True,
+    CHANNEL_LAYERS={
+        "default": {"BACKEND": "channels.layers.InMemoryChannelLayer"},
+    },
+)
+class InProcessReminderConsumerTests(TransactionTestCase):
+    def test_scheduler_reminder_wakes_a_connected_consumer(self):
+        from channels.layers import get_channel_layer
+        from orchestration.in_process_scheduler import InProcessScheduler
+
+        user = User.objects.create_user(
+            username="process-weight-consumer",
+            email="pwc@example.com",
+            password="secret",  # nosec B106 — test fixture
+        )
+        room = Chatroom.objects.create()
+        now = timezone.now()
+        reminder = Reminder.objects.create(
+            user=user,
+            room=room,
+            content="Stretch",
+            scheduled_time=now + timedelta(minutes=2),
+            via_email=True,
+            via_whatsapp=True,
+        )
+        Reminder.objects.filter(pk=reminder.pk).update(
+            scheduled_time=now - timedelta(seconds=5)
+        )
+        interval, _ = IntervalSchedule.objects.get_or_create(
+            every=30, period=IntervalSchedule.SECONDS
+        )
+        PeriodicTask.objects.update_or_create(
+            name="check-due-reminders",
+            defaults={
+                "task": "chatbot.tasks.check_due_reminders",
+                "enabled": True,
+                "last_run_at": now - timedelta(seconds=60),
+                "interval": interval,
+            },
+        )
+        scheduler = InProcessScheduler(
+            schedules={
+                "check-due-reminders": {
+                    "task": "chatbot.tasks.check_due_reminders",
+                    "schedule": 30.0,
+                },
+            },
+            now=lambda: now,
+        )
+
+        async def drive():
+            layer = get_channel_layer()
+            channel = await layer.new_channel()
+            await layer.group_add(f"chat_{room.id}", channel)
+            received = asyncio.create_task(layer.receive(channel))
+            with patch("notifications.services.NotificationService.notify"), \
+                 patch.object(chatbot_tasks, "_is_user_online", return_value=True):
+                ran = await scheduler.tick()
+            message = await asyncio.wait_for(received, timeout=1.0)
+            return ran, message
+
+        ran, message = async_to_sync(drive)()
+        self.assertEqual(ran, ["check-due-reminders"])
+        self.assertEqual(message["type"], "ai_message_saved")
+        self.assertIn("Reminder: Stretch", message["message"]["content"])
+
+
 class ReminderClaimTests(TestCase):
     def test_claim_is_granted_once(self):
         cache.delete("reminder_claim:9001")
@@ -310,6 +542,7 @@ class LiteProfileTests(SimpleTestCase):
         "    'temporal_disabled': settings.TEMPORAL_DISABLED,\n"
         "    'eager': settings.CELERY_TASK_ALWAYS_EAGER,\n"
         "    'reminder_sweep': settings.REMINDER_SWEEP_SECONDS,\n"
+        "    'moderation': settings.MODERATION_ENABLED,\n"
         "}\n"
         "print('LITE=' + json.dumps(payload))\n"
     )
@@ -342,6 +575,27 @@ class LiteProfileTests(SimpleTestCase):
         self.assertTrue(payload["temporal_disabled"])
         self.assertTrue(payload["eager"])
         self.assertEqual(payload["reminder_sweep"], 30)
+        self.assertFalse(payload["moderation"])
+
+    def test_lite_profile_refuses_explicit_moderation(self):
+        proc = self._run("import django; django.setup()\n", MODERATION_ENABLED="1")
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("moderation needs the Redis profile", proc.stdout + proc.stderr)
+
+    def test_lite_profile_disables_moderation_implied_by_hf_token(self):
+        proc = self._run(self._SETTINGS_CODE, HF_API_TOKEN="fake-token")  # nosec B106 — test fixture
+        self.assertEqual(proc.returncode, 0, proc.stderr[-4000:])
+        line = next(
+            (candidate for candidate in proc.stdout.splitlines() if candidate.startswith("LITE=")),
+            None,
+        )
+        self.assertIsNotNone(line, proc.stdout[-2000:] + proc.stderr[-2000:])
+        payload = json.loads(line[len("LITE="):])
+        self.assertFalse(payload["moderation"])
+        self.assertIn(
+            "moderation is disabled in the lite profile",
+            proc.stdout + proc.stderr,
+        )
 
     def test_lite_profile_refuses_more_than_one_web_worker(self):
         proc = self._run("import Backend.asgi\n", WEB_CONCURRENCY="2")
@@ -377,6 +631,42 @@ class LiteProfileTests(SimpleTestCase):
         )
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("one-machine trial", proc.stderr)
+
+
+class TravelOptionalDependencyTests(SimpleTestCase):
+    def test_missing_aiohttp_returns_an_error_instead_of_raising(self):
+        from orchestration.connectors.travel_events_connector import TravelEventsConnector
+
+        connector = TravelEventsConnector()
+        with patch.dict(os.environ, {"EVENTBRITE_API_KEY": "fake-key"}), \
+             patch.dict(sys.modules, {"aiohttp": None}):
+            results, error = async_to_sync(connector._search_eventbrite_api)(
+                "Nairobi", None, None, "all"
+            )
+
+        self.assertEqual(results, [])
+        self.assertIn("aiohttp", (error or "").lower())
+
+    @override_settings(TRAVEL_ALLOW_FALLBACK=True)
+    def test_missing_aiohttp_still_serves_fallback_events(self):
+        from orchestration.connectors.travel_events_connector import TravelEventsConnector
+
+        connector = TravelEventsConnector()
+        with patch.dict(os.environ, {"EVENTBRITE_API_KEY": "fake-key"}), \
+             patch.dict(sys.modules, {"aiohttp": None}):
+            result = async_to_sync(connector._fetch)(
+                {"location": "Nairobi", "category": "all"}, {}
+            )
+
+        self.assertGreaterEqual(len(result["results"]), 1)
+        self.assertIn("aiohttp", (result["metadata"].get("warning") or "").lower())
+
+
+class LiteRunDocsTests(SimpleTestCase):
+    def test_nginx_example_speaks_http_1_1_to_the_upstream(self):
+        text = (REPO_ROOT / "docs" / "run-lite.md").read_text(encoding="utf-8")
+        block = text.split("```nginx", 1)[1].split("```", 1)[0]
+        self.assertIn("proxy_http_version 1.1;", block)
 
 
 @override_settings(

@@ -91,11 +91,14 @@ kazi.example.com {
 }
 ```
 
-With nginx, pass the header explicitly (plus the WebSocket upgrade headers):
+With nginx, pass the header explicitly (plus the WebSocket upgrade headers).
+`proxy_http_version 1.1` is required: nginx talks HTTP/1.0 upstream by default,
+and a WebSocket upgrade needs HTTP/1.1.
 
 ```nginx
 location / {
     proxy_pass http://127.0.0.1:8000;
+    proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header Upgrade $http_upgrade;
@@ -130,6 +133,18 @@ sweep delivers them. In the lite profile the sweep runs every 30 seconds
 in chat shortly after it is due. The delivery claim works on LocMem and Redis
 and fails closed: if the claim store cannot be written, the reminder is not
 delivered twice.
+
+## Moderation
+
+Moderation needs the Redis profile: the message buffer and moderation batches
+live in Redis. The lite profile therefore treats moderation explicitly:
+
+- `MODERATION_ENABLED=1` with `KAZI_LITE_PROFILE=1` refuses to start and says
+  moderation needs the Redis profile. Remove the setting or run the full
+  profile.
+- If moderation was only implied by `HF_API_TOKEN`, the lite profile disables
+  it and prints one warning at start-up, so the operator knows the safety
+  feature is not running here.
 
 ## Memory
 

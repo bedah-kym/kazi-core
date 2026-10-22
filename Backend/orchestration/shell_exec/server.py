@@ -8,6 +8,7 @@ from the environment and serves the daemon in :mod:`orchestration.shell_exec.dae
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 from typing import Optional, Sequence
@@ -19,17 +20,25 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def load_environment() -> None:
-    """Load the repo-root ``.env`` exactly as ``Backend.settings`` does."""
+    """Load the repo-root ``.env`` exactly as ``Backend.settings`` does.
+
+    ``SHELL_EXEC_TOKEN`` is the exception: a value already in the process
+    environment wins, so a launcher can rotate the token without editing
+    ``.env``. Every other key keeps ``.env`` precedence.
+    """
     try:
         from dotenv import load_dotenv
     except Exception:
         return
+    token = os.environ.get("SHELL_EXEC_TOKEN")
     env_path = _REPO_ROOT / ".env"
     load_dotenv(dotenv_path=env_path, override=True)
     try:
         load_dotenv(str(env_path))
     except Exception:
         pass
+    if token is not None:
+        os.environ["SHELL_EXEC_TOKEN"] = token
 
 
 def serve(

@@ -220,6 +220,8 @@ def check_schedule_health() -> Dict[str, int]:
 
     checked = 0
     alerts = 0
+    if getattr(settings, "TEMPORAL_DISABLED", False):
+        return {"checked": checked, "skipped_alerts": alerts}
     triggers = WorkflowTrigger.objects.filter(
         trigger_type="schedule",
         is_active=True,

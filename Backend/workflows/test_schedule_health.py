@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from workflows.health import check_schedule_health
 from workflows.models import UserWorkflow, WorkflowTrigger
@@ -48,6 +48,14 @@ class ScheduleHealthTests(TestCase):
         result = check_schedule_health()
 
         self.assertEqual(result, {"checked": 1, "skipped_alerts": 0})
+
+    @override_settings(TEMPORAL_DISABLED=True)
+    @patch("workflows.temporal_integration.fetch_schedule_health")
+    def test_temporal_disabled_skips_the_check(self, mock_fetch):
+        result = check_schedule_health()
+
+        mock_fetch.assert_not_called()
+        self.assertEqual(result, {"checked": 0, "skipped_alerts": 0})
 
     @patch("workflows.temporal_integration.fetch_schedule_health")
     def test_skip_growth_alerts(self, mock_fetch):

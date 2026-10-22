@@ -41,15 +41,20 @@ processes. The ASGI app refuses to load when a platform worker variable
 says more than one. `uvicorn --workers` does not export a count, so the
 one-worker rule above is the contract for that launcher.
 
-## Prepare the database
+## Prepare the database and static files
 
 ```bash
 python Backend/manage.py migrate
 python Backend/manage.py createsuperuser
+python Backend/manage.py collectstatic --noinput
 ```
 
 SQLite is the default and needs no service. If you set `DATABASE_URL`, the lite
 profile uses it unchanged.
+
+With `DJANGO_DEBUG=False`, static files are served only from the collected
+folder. Skip `collectstatic` and the chat page loads without its styles and
+scripts, so messages cannot be sent. Run it again after each update.
 
 ## Start the sidecar
 

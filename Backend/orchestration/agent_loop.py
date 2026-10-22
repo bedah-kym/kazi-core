@@ -26,6 +26,7 @@ from orchestration.agent_prompts import (
     build_system_prompt,
 )
 from orchestration.llm_client import TokenQuotaExceeded, _humanize_seconds, get_llm_client
+from orchestration.memory_state import update_memory_state_batch
 from orchestration.model_catalog import find_model, model_pref_key, parse_model_id, provider_configured
 from orchestration.security_policy import redact_sensitive_text
 from orchestration.telemetry import record_event
@@ -2591,6 +2592,14 @@ async def run_agent_loop(
         state.end_reason = "finished"
 
     elapsed = round(time.monotonic() - state.start_time, 2)
+
+    # One tracker pass for the whole turn, not one per tool call. The summary
+    # the next turn reads carries the entities/actions, never a success claim.
+    if state.tool_call_log:
+        try:
+            await update_memory_state_batch(context, state.tool_call_log)
+        except Exception:
+            pass
 
     # Full loop transcript for audit trail. Neither input values nor input key
     # names are copied into the telemetry file or the server log — only the

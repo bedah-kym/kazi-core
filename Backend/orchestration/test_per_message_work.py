@@ -57,8 +57,12 @@ class _LoopCase(SimpleTestCase):
                 patch("orchestration.agent_loop._record_receipt", new=AsyncMock()), \
                 patch("orchestration.agent_loop.enforce_agent_caps", return_value=True), \
                 patch("orchestration.agent_loop._search_backend_available", return_value=False), \
-                patch("orchestration.agent_loop.cache") as mock_cache:
+                patch("orchestration.agent_loop.cache") as mock_cache, \
+                patch("orchestration.memory_state.cache") as memory_cache, \
+                patch("orchestration.memory_state._persist_entities_to_db", new=AsyncMock()), \
+                patch("orchestration.memory_state.record_event"):
             mock_cache.get.return_value = None
+            memory_cache.get.return_value = None
             return asyncio.run(_drive())
 
 
@@ -68,20 +72,47 @@ class TrackerOffHotPathTests(_LoopCase):
             "orchestration.agent_loop.update_memory_state",
             new=AsyncMock(),
             create=True,
-        ) as tracker:
+        ) as tracker, patch(
+            "orchestration.agent_loop.update_memory_state_batch",
+            new=AsyncMock(),
+            create=True,
+        ):
             self._run_one_tool_turn()
 
         tracker.assert_not_called()
 
-    def test_loop_does_not_write_a_completion_summary(self):
+    def test_loop_tracks_the_turn_in_one_batch(self):
         with patch(
-            "orchestration.agent_loop.save_memory_summary",
+            "orchestration.agent_loop.update_memory_state_batch",
             new=AsyncMock(),
             create=True,
-        ) as summary:
+        ) as batch:
             self._run_one_tool_turn()
 
-        summary.assert_not_called()
+        batch.assert_called_once()
+
+    def test_loop_does_not_write_a_completion_summary(self):
+        written = []
+
+        async def _capture(_context, summary):
+            written.append(summary)
+
+        with patch(
+            "orchestration.agent_loop.save_memory_summary",
+            new=AsyncMock(side_effect=_capture),
+            create=True,
+        ), patch(
+            "orchestration.memory_state.save_memory_summary",
+            new=AsyncMock(side_effect=_capture),
+        ), patch(
+            "orchestration.agent_loop.update_memory_state",
+            new=AsyncMock(),
+            create=True,
+        ):
+            self._run_one_tool_turn()
+
+        self.assertTrue(written)
+        self.assertFalse(any("Completed:" in summary for summary in written))
 
 
 class PauseStatePassthroughTests(SimpleTestCase):

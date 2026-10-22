@@ -208,6 +208,45 @@ async def update_memory_state(
     return state
 
 
+async def update_memory_state_batch(
+    context: Dict[str, Any],
+    records: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Apply a completed turn's tool calls in one read/write pass.
+
+    The loop uses this once at the end of a turn instead of one cache read,
+    two cache writes and a DB bridge per tool call. The summary the next turn
+    reads is the same entity/action summary as before, not a success claim.
+    """
+    state = await load_memory_state(context) or {}
+    for record in records or []:
+        if not isinstance(record, dict):
+            continue
+        _append_action(state, record.get("name"))
+        _merge_entities(state, record.get("input"), record.get("output"))
+    await save_memory_state(context, state)
+    summary = build_memory_summary(state)
+    await save_memory_summary(context, summary)
+    record_event(
+        "memory_state",
+        {
+            "user_id": context.get("user_id"),
+            "room_id": context.get("room_id"),
+            "actions": len(records or []),
+            "summary_len": len(summary),
+        },
+    )
+
+    entities = state.get("entities") or {}
+    if entities:
+        try:
+            await _persist_entities_to_db(context, entities)
+        except Exception:
+            pass  # Non-critical; Redis state is already saved
+
+    return state
+
+
 async def _persist_entities_to_db(
     context: Dict[str, Any], entities: Dict[str, str]
 ) -> None:

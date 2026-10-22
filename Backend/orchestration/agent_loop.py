@@ -2657,7 +2657,6 @@ async def resume_after_confirmation(
     context_prompt: str = "",
     memory_summary: str = "",
     environment_block: str = "",
-    loop_state: Optional[LoopState] = None,
 ) -> AsyncGenerator[AgentEvent, None]:
     """
     Resume a paused agent loop after the user confirms a high-risk action.
@@ -2671,7 +2670,9 @@ async def resume_after_confirmation(
     user_id = context.get("user_id")
 
     record = await sync_to_async(_pending_approval_record)(room_id, user_id)
-    state = loop_state if loop_state is not None else load_loop_state(room_id, user_id)
+    # Read fresh at resume time: several awaits sit between the coordinator's
+    # read and this call, and a second process may have acted on the state.
+    state = load_loop_state(room_id, user_id)
 
     if record is None:
         # A `bounded` (inline) pause is chat-scoped: Redis loop state only, no
@@ -2732,17 +2733,20 @@ async def resume_after_confirmation(
         yield event
 
 
+_STATE_UNSET = object()
+
+
 async def has_pending_budget_state(
-    room_id: int, user_id: int, *, state: Optional[LoopState] = None,
+    room_id: int, user_id: int, *, state=_STATE_UNSET,
 ) -> bool:
     """Whether a turn is paused waiting for the user to grant more budget."""
-    if state is None:
+    if state is _STATE_UNSET:
         state = await sync_to_async(load_loop_state)(room_id, user_id)
     return bool(state and state.awaiting_budget)
 
 
 async def pending_resume_kind(
-    room_id: int, user_id: int, *, state: Optional[LoopState] = None,
+    room_id: int, user_id: int, *, state=_STATE_UNSET,
 ) -> str:
     """Which pause is waiting for a reply: ``"quota"``, ``"budget"`` or ``""``.
 
@@ -2750,7 +2754,7 @@ async def pending_resume_kind(
     set, so the reply handler needs to tell them apart: a quota resume must not
     be read as a budget grant (T-F3b).
     """
-    if state is None:
+    if state is _STATE_UNSET:
         state = await sync_to_async(load_loop_state)(room_id, user_id)
     if not state or not state.awaiting_budget:
         return ""
@@ -2765,7 +2769,6 @@ async def resume_after_quota(
     context_prompt: str = "",
     memory_summary: str = "",
     environment_block: str = "",
-    loop_state: Optional[LoopState] = None,
 ) -> AsyncGenerator[AgentEvent, None]:
     """Continue a turn the hourly token quota stopped, from where it stopped.
 
@@ -2775,7 +2778,7 @@ async def resume_after_quota(
     """
     room_id = context.get("room_id")
     user_id = context.get("user_id")
-    state = loop_state if loop_state is not None else await sync_to_async(load_loop_state)(room_id, user_id)
+    state = await sync_to_async(load_loop_state)(room_id, user_id)
     if not state or not (state.awaiting_quota or state.end_reason == "quota"):
         yield AgentEvent("error", {
             "message": "There is no paused turn waiting for the hourly limit to free up.",
@@ -2802,7 +2805,6 @@ async def resume_with_more_budget(
     context_prompt: str = "",
     memory_summary: str = "",
     environment_block: str = "",
-    loop_state: Optional[LoopState] = None,
 ) -> AsyncGenerator[AgentEvent, None]:
     """Continue a turn whose model asked for more budget, from where it stopped.
 
@@ -2811,7 +2813,7 @@ async def resume_with_more_budget(
     """
     room_id = context.get("room_id")
     user_id = context.get("user_id")
-    state = loop_state if loop_state is not None else await sync_to_async(load_loop_state)(room_id, user_id)
+    state = await sync_to_async(load_loop_state)(room_id, user_id)
     if not state or not state.awaiting_budget:
         yield AgentEvent("error", {
             "message": "There is no paused turn waiting for more budget.",

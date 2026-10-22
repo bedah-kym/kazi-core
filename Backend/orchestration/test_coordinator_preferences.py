@@ -1,9 +1,13 @@
 """A chat turn's capability gate denies when the preference lookup fails."""
 import asyncio
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from django.test import SimpleTestCase
+from asgiref.sync import async_to_sync
+from django.contrib.auth import get_user_model
+from django.test import SimpleTestCase, TestCase
 
+from orchestration.agent_loop import AgentEvent
+from orchestration.coordinator import OrchestrationCoordinator
 from orchestration.test_coordinator_history import _run_agent_turn
 from orchestration.user_preferences import conservative_default_preferences
 
@@ -80,3 +84,60 @@ class CoordinatorCapabilityLookupFailsClosedTests(SimpleTestCase):
 
         self.assertNotIn("send_email", names)
         self.assertIn("get_weather", names)
+
+
+class CoordinatorLoadedProfileFailsClosedTests(TestCase):
+    def test_normalisation_failure_after_profile_load_uses_conservative_defaults(self):
+        from orchestration import user_preferences as prefs_module
+
+        user = get_user_model().objects.create_user(
+            username="loaded-profile-user", password="pw",  # nosec B106
+        )
+        real_get = prefs_module.get_user_preferences
+        seen = {}
+        captured = {}
+
+        def _wrapped(user_id, **kwargs):
+            seen.update(kwargs)
+            if "profile_obj" in kwargs:
+                raise RuntimeError("bad preferences")
+            return real_get(user_id, **kwargs)
+
+        async def _fake_loop(**kwargs):
+            captured.update(kwargs)
+            yield AgentEvent("text", {"text": "ok"})
+
+        async def run():
+            return await OrchestrationCoordinator().handle_message(
+                query="hello",
+                user_id=user.id,
+                room_id="1",
+                username=user.username,
+                message_id=1,
+                send_chunk=AsyncMock(),
+                send_step_event=AsyncMock(),
+                get_context_prompt=AsyncMock(return_value=""),
+                bump_signals=MagicMock(),
+            )
+
+        with (
+            patch("orchestration.coordinator.get_user_preferences", side_effect=_wrapped),
+            patch("orchestration.coordinator.load_memory_summary", AsyncMock(return_value=None)),
+            patch("orchestration.coordinator.has_pending_agent_state", AsyncMock(return_value=False)),
+            patch("orchestration.coordinator.run_agent_loop", _fake_loop),
+            patch("orchestration.coordinator.record_event"),
+            patch("orchestration.coordinator.cache", MagicMock()),
+            patch(
+                "orchestration.preference_mining.merge_learned_overrides",
+                side_effect=AssertionError("must not merge after a failed load"),
+            ),
+        ):
+            async_to_sync(run)()
+
+        self.assertIsNotNone(seen.get("profile_obj"))
+        self.assertEqual(seen["profile_obj"].pk, user.profile.pk)
+        prefs = captured["preferences"]
+        self.assertFalse(prefs.get("allow_email", True))
+        self.assertFalse(prefs.get("allow_payments", True))
+        self.assertFalse(prefs.get("allow_whatsapp", True))
+        self.assertTrue(prefs.get("allow_web_search"))

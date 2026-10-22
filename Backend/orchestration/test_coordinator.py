@@ -184,6 +184,21 @@ class OrchestrationCoordinatorTests(SimpleTestCase):
 
     # --- Agent loop path ----------------------------------------------- #
 
+    def test_ordinary_turn_reads_the_loop_state_once(self):
+        async def _fake_loop(**kwargs):
+            yield AgentEvent("text", {"text": "Hi there"})
+
+        loader = MagicMock(return_value=None)
+        self._run(
+            "hello",
+            patches={
+                "orchestration.coordinator.load_loop_state": loader,
+                "orchestration.coordinator.run_agent_loop": _fake_loop,
+            },
+        )
+
+        self.assertEqual(loader.call_count, 1)
+
     def test_agent_loop_path(self):
         async def _fake_loop(**kwargs):
             yield AgentEvent("text", {"text": "Hi there"})

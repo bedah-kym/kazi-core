@@ -934,6 +934,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             if member in room_members:
                 logger.info("Step 13: Adding message to chatroom...")
                 await sync_to_async(current_chat.chats.add)(message)
+                await self.upgrade_legacy_room_key(current_chat)
 
                 logger.info("Step 14: Buffering for moderation...")
                 # === NEW: Buffer message for moderation ===
@@ -1115,6 +1116,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                 # Add to chatroom
                                 if current_chat:
                                     await sync_to_async(current_chat.chats.add)(ai_message)
+                                    await self.upgrade_legacy_room_key(current_chat)
                                     logger.info(f"AI message saved with ID: {ai_message.id}")
 
                                     # Trigger Kazi Voice Response (TTS) only in voice mode
@@ -1576,6 +1578,17 @@ class ChatConsumer(AsyncWebsocketConsumer):
     async def get_current_chatroom(cls, chatid):
         get_chatroom = sync_to_async(Chatroom.objects.filter(id=chatid).first)
         return await get_chatroom()
+
+    @classmethod
+    async def upgrade_legacy_room_key(cls, room):
+        """Re-save a legacy plaintext room key so the model encrypts it at rest.
+
+        A full-row save is only needed for that upgrade; ordinary turns must
+        not pay for it.
+        """
+        key = getattr(room, "encryption_key", "") or ""
+        if key and not key.startswith("enc:"):
+            await sync_to_async(room.save)(update_fields=["encryption_key"])
 
     @classmethod
     async def get_chatroom_participants(cls, chat):

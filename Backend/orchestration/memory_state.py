@@ -215,8 +215,10 @@ async def update_memory_state_batch(
     """Apply a completed turn's tool calls in one read/write pass.
 
     The loop uses this once at the end of a turn instead of one cache read,
-    two cache writes and a DB bridge per tool call. The summary the next turn
-    reads is the same entity/action summary as before, not a success claim.
+    two cache writes and a DB bridge per tool call. The entity/action state
+    still feeds RoomContext, but no summary is written: tool results are
+    untrusted, so the next turn must not inherit them as remembered facts.
+    T-D3's replay is the record of what ran and how it ended.
     """
     state = await load_memory_state(context) or {}
     for record in records or []:
@@ -225,15 +227,17 @@ async def update_memory_state_batch(
         _append_action(state, record.get("name"))
         _merge_entities(state, record.get("input"), record.get("output"))
     await save_memory_state(context, state)
-    summary = build_memory_summary(state)
-    await save_memory_summary(context, summary)
+    try:
+        await sync_to_async(cache.delete)(_summary_key(context))
+    except Exception:
+        pass
     record_event(
         "memory_state",
         {
             "user_id": context.get("user_id"),
             "room_id": context.get("room_id"),
             "actions": len(records or []),
-            "summary_len": len(summary),
+            "summary_len": 0,
         },
     )
 

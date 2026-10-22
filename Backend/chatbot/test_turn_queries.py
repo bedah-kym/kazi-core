@@ -69,3 +69,32 @@ class TurnQueryCountTests(TransactionTestCase):
 
         self.assertIn("pre_loop", seen)
         self.assertLessEqual(seen["pre_loop"], MAX_PRE_LOOP_QUERIES)
+
+    def test_legacy_plaintext_room_key_is_upgraded_at_rest(self):
+        user, _member, room = self._room_with_history(1)
+        Chatroom.objects.filter(id=room.id).update(encryption_key="legacy-plaintext")
+
+        consumer = ChatConsumer()
+        consumer.scope = {"user": user}
+        consumer.room_name = str(room.id)
+        consumer.room_group_name = f"chat_{room.id}"
+        consumer.channel_layer = MagicMock()
+        consumer.channel_layer.group_send = AsyncMock()
+        consumer.send_chat_message = AsyncMock()
+        consumer.send_message = AsyncMock()
+        consumer.encrypt_message = AsyncMock(return_value={"data": "enc", "nonce": "nonce"})
+        consumer.check_key_rotation = AsyncMock()
+
+        async def stop_before_the_loop(**_kwargs):
+            raise RuntimeError("stop before the loop")
+
+        with patch("orchestration.coordinator.OrchestrationCoordinator") as coordinator:
+            coordinator.return_value.handle_message = AsyncMock(
+                side_effect=stop_before_the_loop,
+            )
+            async_to_sync(consumer.new_message)(
+                {"from": user.username, "message": "@kazi hello", "chatid": str(room.id)}
+            )
+
+        room.refresh_from_db()
+        self.assertTrue(room.encryption_key.startswith("enc:"))

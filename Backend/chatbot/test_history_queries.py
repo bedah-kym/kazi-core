@@ -19,7 +19,8 @@ class HistoryQueryCountTests(TransactionTestCase):
         User = get_user_model()
         user = User.objects.create_user(username=f"history-{count}", password="pw")  # nosec B106
         member = Member.objects.select_related("User").get(User=user)
-        room = Chatroom.objects.get(participants=member)
+        room = Chatroom.objects.create()
+        room.participants.add(member)
         for index in range(count):
             message = Message.objects.create(
                 member=member,
@@ -33,15 +34,17 @@ class HistoryQueryCountTests(TransactionTestCase):
         consumer = ChatConsumer()
         consumer.scope = {"user": user}
         with CaptureQueriesContext(connection) as context:
-            async_to_sync(consumer.get_history_rows)(room.id, limit=limit)
-        return len(context.captured_queries)
+            rows = async_to_sync(consumer.get_history_rows)(room.id, limit=limit)
+        return len(context.captured_queries), rows
 
     def test_history_query_count_does_not_grow_with_message_count(self):
         small_user, small_room = self._room_with_history(2)
         large_user, large_room = self._room_with_history(10)
 
-        small = self._count(small_user, small_room)
-        large = self._count(large_user, large_room)
+        small, small_rows = self._count(small_user, small_room)
+        large, large_rows = self._count(large_user, large_room)
 
+        self.assertEqual(len(small_rows), 2)
+        self.assertEqual(len(large_rows), 8)
         self.assertEqual(small, large)
         self.assertLessEqual(large, 2)

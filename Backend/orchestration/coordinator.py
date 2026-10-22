@@ -498,7 +498,6 @@ class OrchestrationCoordinator:
                 context_prompt=ctx_prompt,
                 memory_summary=mem_summary,
                 environment_block=env_block,
-                loop_state=loop_state,
             ))
 
         async def _handle_agent_budget_resume(ctx_prompt: str, mem_summary: str, env_block: str = ""):
@@ -509,7 +508,6 @@ class OrchestrationCoordinator:
                 context_prompt=ctx_prompt,
                 memory_summary=mem_summary,
                 environment_block=env_block,
-                loop_state=loop_state,
             ))
 
         async def _handle_agent_quota_resume(ctx_prompt: str, mem_summary: str, env_block: str = ""):
@@ -520,7 +518,6 @@ class OrchestrationCoordinator:
                 context_prompt=ctx_prompt,
                 memory_summary=mem_summary,
                 environment_block=env_block,
-                loop_state=loop_state,
             ))
 
         async def _arm_autopilot_from_chat() -> bool:

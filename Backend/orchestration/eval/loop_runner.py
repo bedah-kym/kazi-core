@@ -108,6 +108,7 @@ async def _run_loop(scenario: Dict[str, Any]) -> LoopRunResult:
         patch.object(agent_loop_module, "_execute_meta_tool", new=_fake_meta_tool),
         patch.object(agent_loop_module, "_bucket_tool_calls", new=_recording_bucket),
         patch.object(agent_loop_module, "_record_receipt", new=AsyncMock()),
+        patch.object(agent_loop_module, "update_memory_state_batch", new=AsyncMock()),
         patch.object(
             agent_loop_module, "preview_tool", new=AsyncMock(return_value=None),
         ),

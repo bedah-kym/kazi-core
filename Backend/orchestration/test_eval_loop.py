@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 from io import StringIO
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from django.core.management import call_command
 from django.core.management.base import CommandError
@@ -41,6 +42,26 @@ class LoopRunnerTests(SimpleTestCase):
         self.assertEqual(details, [])
         self.assertEqual(result.executed, ["get_weather"])
         self.assertIsNone(result.paused_on)
+
+    def test_loop_scenario_touches_no_real_memory_cache_or_db(self):
+        with (
+            patch("orchestration.memory_state.load_memory_state", new=MagicMock()) as load,
+            patch("orchestration.memory_state.save_memory_state", new=AsyncMock()) as save,
+            patch("orchestration.memory_state.cache", MagicMock()) as memory_cache,
+            patch("orchestration.memory_state.record_event", MagicMock()) as record,
+            patch(
+                "orchestration.memory_state._persist_entities_to_db",
+                new=AsyncMock(),
+            ) as persist,
+        ):
+            passed, details, _result = evaluate_loop_scenario(_auto_tool_scenario())
+
+        self.assertTrue(passed, msg=details)
+        load.assert_not_called()
+        save.assert_not_called()
+        memory_cache.delete.assert_not_called()
+        record.assert_not_called()
+        persist.assert_not_called()
 
     def test_wrong_expectation_fails_with_readable_reason(self):
         scenario = _auto_tool_scenario(expected_executed=["send_email"])

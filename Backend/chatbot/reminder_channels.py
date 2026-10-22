@@ -109,9 +109,11 @@ def channel_ready(user, channel):
 def resolve_delivery(user, requested="auto", urgent=False, has_room=False):
     """Turn the requested mode into stored flags, channels and a reply clause.
 
-    A requested extra channel that is not ready is dropped; the row then
-    stores the chat-only mode. The returned ``message`` always names where the
-    reminder will arrive.
+    ``auto`` is a stored marker (both flags) rather than an email shortcut: at
+    fire time it adds Telegram only when the user is away and Telegram is
+    ready. A requested email/WhatsApp channel that is not ready is dropped;
+    the row then stores the chat-only mode. The returned ``message`` always
+    names where the reminder will arrive.
     """
     requested = (requested or "auto").strip().lower()
     if requested not in ("auto", "in_app", "email", "whatsapp"):
@@ -119,12 +121,31 @@ def resolve_delivery(user, requested="auto", urgent=False, has_room=False):
     if urgent:
         requested = "email"
 
+    base = "here in chat" if has_room else "as an in-app notification"
+    base_channel = "chat" if has_room else "in_app"
+
+    if requested == "auto":
+        telegram_ready, _ = channel_ready(user, "telegram")
+        channels = [base_channel]
+        if telegram_ready:
+            channels.append("telegram")
+            phrase = (
+                f"I'll remind you {base}, and on Telegram when you're away."
+            )
+        else:
+            phrase = f"I'll remind you {base}."
+        return {
+            "delivery": "auto",
+            "via_email": True,
+            "via_whatsapp": True,
+            "channels": channels,
+            "message": phrase,
+        }
+
     if requested == "email":
         requested_extras = ["email"]
     elif requested == "whatsapp":
         requested_extras = ["whatsapp"]
-    elif requested == "auto":
-        requested_extras = ["email"]
     else:
         requested_extras = []
 
@@ -141,22 +162,17 @@ def resolve_delivery(user, requested="auto", urgent=False, has_room=False):
         delivery = "email" if "email" in ready else "in_app"
     elif requested == "whatsapp":
         delivery = "whatsapp" if "whatsapp" in ready else "in_app"
-    elif requested == "auto":
-        delivery = "auto" if "email" in ready else "in_app"
     else:
         delivery = "in_app"
 
-    if delivery == "auto":
-        via_email, via_whatsapp = True, True
-    elif delivery == "email":
+    if delivery == "email":
         via_email, via_whatsapp = True, False
     elif delivery == "whatsapp":
         via_email, via_whatsapp = False, True
     else:
         via_email, via_whatsapp = False, False
 
-    base = "here in chat" if has_room else "as an in-app notification"
-    channels = ["chat" if has_room else "in_app"]
+    channels = [base_channel]
     if ready:
         labels = {"email": "email", "whatsapp": "WhatsApp"}
         labels_in = ", ".join(labels[channel] for channel in ready)

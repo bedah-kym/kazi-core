@@ -135,8 +135,9 @@ _REMINDER_RULES = """\
   list_notifications tools. Never search notes or memory for them — notes are
   not the source of truth for scheduled reminders.
 - The reminder's room is always the delivery point. set_reminder accepts an
-  extra delivery channel: 'auto' (default), 'email', 'whatsapp', or 'in_app'.
-  Pick the channel the user asked for; when the user is vague, use 'auto'.
+  extra delivery channel: 'auto' (default, adds Telegram when the user is
+  away), 'email', 'whatsapp', or 'in_app' (room only). Pick the channel the
+  user asked for; when the user is vague, use 'auto'. Auto never adds email.
 - Urgency cues (exam, meeting, flight, deadline, "don't let me forget",
   "I must not miss") mean urgent=true: it adds email with retries when email
   is set up on this install.

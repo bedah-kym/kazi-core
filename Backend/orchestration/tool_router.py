@@ -862,7 +862,7 @@ class ReminderConnector(BaseConnector):
         ready on this install; a demo-mode mock is never ready.
 
         Delivery modes (stored in the channel flags):
-            auto      -> chat, plus email (and Telegram when away) when set up
+            auto      -> chat, plus Telegram when away and set up (no email)
             email     -> chat, plus email when set up
             whatsapp  -> chat, plus WhatsApp when set up
             in_app    -> chat only (in-app notification when there is no room)

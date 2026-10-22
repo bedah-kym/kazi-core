@@ -49,17 +49,21 @@ WhatsApp and Telegram stay outside-world and are sent less often than today.
    (real Mailgun keys, or Gmail app credentials **and** the user's connected Gmail; the user
    has an address), `whatsapp` (Twilio client and a user phone), `telegram` (bot token and a
    connected chat id). A demo-mode mock is never "ready".
-2. Creation (`tool_router.py`): a requested channel that is not ready is dropped and the row
-   is stored chat-only. The reply always names the channels, e.g. "I'll remind you here in
-   chat", "here and by email", or "Email isn't set up on this install, so I'll remind you
-   here in chat." The result carries `channels: [...]` and the stored `delivery`. A reminder
-   with no room says "as an in-app notification". The dedupe update path does the same.
+2. Creation (`tool_router.py`): `auto` is stored as the auto marker (both flags) without
+   adding email; it names chat only (plus Telegram when that is set up). A requested
+   email/WhatsApp channel that is not ready is dropped and the row is stored chat-only. The
+   reply always names the channels, e.g. "I'll remind you here in chat", "here and by
+   email", or "Email isn't set up on this install, so I'll remind you here in chat." The
+   result carries `channels: [...]` and the stored `delivery`. A reminder with no room says
+   "as an in-app notification". The dedupe update path does the same.
 3. Delivery (`tasks.py`): every mode posts to the room when there is one (no presence
    check); with no room the in-app notification is the base. The base decides `sent`; the
-   room post happens once, not on retries. Extra channels go to a separate task that
-   re-checks `channel_ready` at fire time, retries only urgent ones (existing backoff), and
-   on final failure appends to `error_log`, e.g. "email failed after 6 attempt(s): not sent;
-   delivered in chat". A mock reply is a failure on every channel.
+   room post happens once, not on retries. `auto` never adds email: it adds Telegram only
+   when the user is away at fire time. Other extra channels go to a separate task that
+   re-checks `channel_ready` at fire time, retries only urgent ones in the queued worker
+   profile (existing backoff), and on final failure appends to `error_log`, e.g. "email
+   failed after 6 attempt(s): not sent; delivered in chat". A mock reply is a failure on
+   every channel.
 4. Dead letter only when the base fails (room post and notification both fail).
 5. `action_catalog.py`: `delivery` says the room is always used; `urgent` "adds email with
    retries when email is set up", not "forces email".
@@ -68,12 +72,15 @@ WhatsApp and Telegram stay outside-world and are sent less often than today.
 - Tests written first; each must fail on `main` (run against a scratch copy of `main`):
   - D1: `auto` reminder, presence offline, no email keys, room set: `send_reminder` posts a
     room `Message`, status `sent`, no dead letter. Same for `in_app` mode.
-  - D2: `set_reminder` with no `delivery`: reply names chat. `delivery="email"` and
-    `urgent=True` without email keys: row stored chat-only, reply says email isn't set up.
-    With Mailgun keys patched in: reply names chat and email. Demo-mode mock is not ready.
+  - D2: `set_reminder` with no `delivery`: reply names chat only, even with Mailgun keys
+    ready. `delivery="email"` with Mailgun keys patched in: reply names chat and email;
+    `delivery="email"` and `urgent=True` without email keys: row stored chat-only, reply
+    says email isn't set up. Demo-mode mock is not ready.
   - D3: email mode, keys present, send fails: room message posted once, status `sent`,
-    `error_log` names the email failure. Urgent: email retried, room posted once, final
-    `error_log` says delivered in chat. WhatsApp mock reply is not counted as delivered.
+    `error_log` names the email failure. Urgent: email retried in the queued worker profile;
+    in the eager/lite profile one attempt is made (the tick is not held for the backoff),
+    room posted once, final `error_log` says delivered in chat. WhatsApp mock reply is not
+    counted as delivered.
 - Existing tests that encode the old routing change on purpose, each named in the PR:
   `test_auto_offline_prefers_telegram_then_email`, `test_urgent_forces_high_priority_and_email`,
   `test_urgent_with_auto_delivery_resolves_email_only`, `test_dead_letter_marks_failed_and_notifies`,
@@ -109,5 +116,12 @@ flags as before.
   goal wins.
 - `agent_prompts.py` reminder guidance was updated alongside the tool descriptions so the
   model stops describing presence-based online/offline routing and "urgent forces email".
+- `auto` stays a stored marker but no longer adds email at creation or fire time. It names
+  chat only (adding "and on Telegram when you're away" when Telegram is ready) and adds
+  Telegram only when the user is away at fire time. Explicit `email`/`whatsapp` still add
+  those channels when ready.
 - In the lite/eager profiles the extra-channel task runs with `.apply` (same convention as
-  `_dispatch_due_reminder`); otherwise it is queued normally.
+  `_dispatch_due_reminder`); otherwise it is queued normally. Urgent extras are limited to
+  one attempt there because an inline `self.retry` would run every backoff attempt inside
+  the scheduler tick with no real delay; the failure is written to `error_log` the same way
+  as the final failure in the queued profile.

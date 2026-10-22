@@ -484,7 +484,7 @@ def _is_user_online(user) -> bool:
 def _resolve_delivery_mode(reminder: Reminder) -> str:
     """Decode the channel flags into the delivery mode set at creation.
 
-    auto        -> both flags set  (presence routing at fire time)
+    auto        -> both flags set  (chat plus Telegram when away at fire time)
     email       -> via_email only
     whatsapp    -> via_whatsapp only
     in_app      -> neither flag
@@ -672,17 +672,18 @@ def _deliver_reminder(reminder: Reminder, create_notification: bool = True) -> T
 
 
 def _extra_channels_for_reminder(reminder: Reminder) -> list:
-    """Resolve the extra channels implied by the stored delivery mode."""
+    """Resolve the extra channels implied by the stored delivery mode.
+
+    ``auto`` never adds email: it adds Telegram only when the user is away.
+    Readiness is checked again by the delivering task at fire time.
+    """
     mode = _resolve_delivery_mode(reminder)
     if mode == "email":
         return ["email"]
     if mode == "whatsapp":
         return ["whatsapp"]
     if mode == "auto":
-        channels = ["email"]
-        if not _is_user_online(reminder.user):
-            channels.append("telegram")
-        return channels
+        return [] if _is_user_online(reminder.user) else ["telegram"]
     return []
 
 
@@ -712,6 +713,11 @@ def _dispatch_extra_channels(reminder: Reminder):
 
     The task re-checks readiness at fire time; this only decides whether
     there is anything to queue.
+
+    In the lite/eager profiles the task is run inline with retries disabled:
+    an inline ``self.retry`` would execute every backoff attempt inside the
+    scheduler tick, so one attempt is made there and its failure is written
+    to ``error_log`` like any other final failure.
     """
     channels = _extra_channels_for_reminder(reminder)
     if not channels:
@@ -720,17 +726,23 @@ def _dispatch_extra_channels(reminder: Reminder):
         getattr(settings, "IN_PROCESS_SCHEDULER", False)
         or getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False)
     ):
-        return deliver_reminder_extra_channels.apply(args=(reminder.id, channels))
+        return deliver_reminder_extra_channels.apply(
+            args=(reminder.id, channels, False)
+        )
     return deliver_reminder_extra_channels.delay(reminder.id, channels)
 
 
 @shared_task(bind=True, max_retries=REMINDER_URGENT_MAX_RETRIES, ignore_result=True)
-def deliver_reminder_extra_channels(self, reminder_id: int, channels=None):
+def deliver_reminder_extra_channels(
+    self, reminder_id: int, channels=None, allow_retries=True
+):
     """Deliver email/WhatsApp/Telegram after the room already has the reminder.
 
     Non-urgent reminders get one attempt per channel. Urgent ones retry with
-    the existing backoff. The final failure is appended to ``error_log`` while
-    the row stays ``sent`` because the base delivery succeeded.
+    the existing backoff when ``allow_retries`` is true (the queued worker
+    profile). The eager/lite caller passes false so the scheduler tick is not
+    held for the whole backoff. The final failure is appended to ``error_log``
+    while the row stays ``sent`` because the base delivery succeeded.
     """
     reminder = Reminder.objects.filter(id=reminder_id).select_related(
         "user", "room"
@@ -747,11 +759,16 @@ def deliver_reminder_extra_channels(self, reminder_id: int, channels=None):
 
     from chatbot.reminder_channels import channel_ready
 
+    mode = _resolve_delivery_mode(reminder)
     failed = []
     reasons = {}
     for channel in channels:
         ready, reason = channel_ready(reminder.user, channel)
         if not ready:
+            # Auto only offers Telegram opportunistically; if it is not set
+            # up at fire time there is nothing to report.
+            if mode == "auto":
+                continue
             failed.append(channel)
             reasons[channel] = f"not sent: {reason}"
             continue
@@ -763,7 +780,11 @@ def deliver_reminder_extra_channels(self, reminder_id: int, channels=None):
         return {"status": "sent", "channels": channels}
 
     attempts = self.request.retries + 1
-    if reminder.priority == "high" and self.request.retries < self.max_retries:
+    if (
+        allow_retries
+        and reminder.priority == "high"
+        and self.request.retries < self.max_retries
+    ):
         raise self.retry(
             exc=RuntimeError(
                 f"reminder {reminder.id} extra channel delivery failed"

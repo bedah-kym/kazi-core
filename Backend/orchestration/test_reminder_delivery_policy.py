@@ -81,17 +81,17 @@ class ReminderDeliveryRouterTests(TransactionTestCase):
         mock_tg.assert_not_called()
         mock_email.assert_not_called()
 
-    def test_auto_offline_adds_telegram_as_an_extra_channel(self):
+    def test_auto_offline_adds_only_telegram_as_an_extra_channel(self):
         reminder = self._reminder(via_email=True, via_whatsapp=True)
         with patch.object(chatbot_tasks, "_is_user_online", return_value=False):
             self.assertEqual(
                 chatbot_tasks._extra_channels_for_reminder(reminder),
-                ["email", "telegram"],
+                ["telegram"],
             )
         with patch.object(chatbot_tasks, "_is_user_online", return_value=True):
             self.assertEqual(
                 chatbot_tasks._extra_channels_for_reminder(reminder),
-                ["email"],
+                [],
             )
 
     def test_in_app_mode_without_room_uses_notification(self):
@@ -305,7 +305,7 @@ class ReminderConnectorToolTests(TransactionTestCase):
         self.assertEqual(reminder.timezone, settings.TIME_ZONE)
 
     @override_settings(GMAIL_OAUTH_CLIENT_ID=None, GMAIL_OAUTH_CLIENT_SECRET=None)
-    def test_auto_delivery_sets_both_flags_when_email_is_ready(self):
+    def test_auto_delivery_keeps_marker_without_adding_email(self):
         import os
 
         with _NoChannelConfig(), patch.dict(os.environ, {
@@ -319,6 +319,8 @@ class ReminderConnectorToolTests(TransactionTestCase):
         self.assertTrue(reminder.via_email)
         self.assertTrue(reminder.via_whatsapp)
         self.assertEqual(result["delivery"], "auto")
+        self.assertNotIn("email", result["channels"])
+        self.assertNotIn("email", result["message"].lower())
 
     @override_settings(GMAIL_OAUTH_CLIENT_ID=None, GMAIL_OAUTH_CLIENT_SECRET=None)
     def test_explicit_email_delivery_sets_email_flag_when_ready(self):
@@ -491,6 +493,51 @@ class ReminderChatFirstDeliveryTests(TransactionTestCase):
         self.assertEqual(reminder.status, "sent")
         self.assertEqual(self.room.chats.count(), 1)
 
+    @override_settings(
+        IN_PROCESS_SCHEDULER=True,
+        GMAIL_OAUTH_CLIENT_ID=None,
+        GMAIL_OAUTH_CLIENT_SECRET=None,
+    )
+    def test_auto_with_email_ready_does_not_send_email(self):
+        import os
+
+        reminder = self._reminder(via_email=True, via_whatsapp=True)
+        with _NoChannelConfig(), patch.dict(os.environ, {
+            "MAILGUN_API_KEY": "fake-key",
+            "MAILGUN_DOMAIN": "example.com",
+        }):
+            with patch.object(chatbot_tasks, "_is_user_online", return_value=False), \
+                 patch.object(chatbot_tasks, "_send_reminder_email", return_value=True) as send_email, \
+                 patch.object(chatbot_tasks, "_send_reminder_telegram", return_value=False) as send_tg, \
+                 patch("notifications.services.NotificationService.notify"):
+                result = chatbot_tasks.send_reminder.run(reminder.id)
+        self.assertEqual(result["status"], "sent")
+        send_email.assert_not_called()
+        send_tg.assert_not_called()
+        self.assertEqual(self.room.chats.count(), 1)
+
+    @override_settings(IN_PROCESS_SCHEDULER=True, TELEGRAM_BOT_TOKEN="fake-token")  # nosec B106 — test fixture — fake credential
+    def test_auto_away_without_email_sends_telegram(self):
+        from users.models import UserIntegration
+
+        reminder = self._reminder(via_email=True, via_whatsapp=True)
+        UserIntegration.objects.create(
+            user=self.user,
+            integration_type="telegram",
+            is_connected=True,
+            metadata={"chat_id": "12345"},
+        )
+        with _NoChannelConfig(), \
+             patch.object(chatbot_tasks, "_is_user_online", return_value=False), \
+             patch.object(chatbot_tasks, "_send_reminder_telegram", return_value=True) as send_tg, \
+             patch.object(chatbot_tasks, "_send_reminder_email", return_value=True) as send_email, \
+             patch("notifications.services.NotificationService.notify"):
+            result = chatbot_tasks.send_reminder.run(reminder.id)
+        self.assertEqual(result["status"], "sent")
+        send_tg.assert_called_once_with(reminder)
+        send_email.assert_not_called()
+        self.assertEqual(self.room.chats.count(), 1)
+
 
 class ReminderCreationNamesChannelsTests(TransactionTestCase):
     """D2: creation only asks for channels that are ready and says which."""
@@ -519,16 +566,17 @@ class ReminderCreationNamesChannelsTests(TransactionTestCase):
             )
 
     @override_settings(GMAIL_OAUTH_CLIENT_ID=None, GMAIL_OAUTH_CLIENT_SECRET=None)
-    def test_default_delivery_names_chat_and_stores_chat_only(self):
+    def test_default_delivery_names_chat_and_stores_auto_marker(self):
         with _NoChannelConfig():
             result = self._execute({"content": "Stretch", "time": "in 2 hours"})
         self.assertEqual(result["status"], "success")
         self.assertIn("chat", result["message"].lower())
-        self.assertEqual(result["delivery"], "in_app")
+        self.assertNotIn("email", result["message"].lower())
+        self.assertEqual(result["delivery"], "auto")
         self.assertIn("chat", result["channels"])
         reminder = Reminder.objects.get(id=result["reminder_id"])
-        self.assertFalse(reminder.via_email)
-        self.assertFalse(reminder.via_whatsapp)
+        self.assertTrue(reminder.via_email)
+        self.assertTrue(reminder.via_whatsapp)
 
     @override_settings(GMAIL_OAUTH_CLIENT_ID=None, GMAIL_OAUTH_CLIENT_SECRET=None)
     def test_urgent_email_without_keys_says_email_is_not_set_up(self):
@@ -548,21 +596,26 @@ class ReminderCreationNamesChannelsTests(TransactionTestCase):
         self.assertFalse(reminder.via_whatsapp)
 
     @override_settings(GMAIL_OAUTH_CLIENT_ID=None, GMAIL_OAUTH_CLIENT_SECRET=None)
-    def test_mailgun_keys_name_chat_and_email(self):
+    def test_explicit_email_with_mailgun_keys_names_chat_and_email(self):
         import os
 
         with _NoChannelConfig(), patch.dict(os.environ, {
             "MAILGUN_API_KEY": "fake-key",
             "MAILGUN_DOMAIN": "example.com",
         }):
-            result = self._execute({"content": "Water", "time": "in 2 hours"})
+            result = self._execute({
+                "content": "Water",
+                "time": "in 2 hours",
+                "delivery": "email",
+            })
         self.assertEqual(result["status"], "success")
         self.assertIn("chat", result["message"].lower())
         self.assertIn("email", result["message"].lower())
-        self.assertEqual(result["delivery"], "auto")
+        self.assertEqual(result["delivery"], "email")
         self.assertIn("email", result["channels"])
         reminder = Reminder.objects.get(id=result["reminder_id"])
         self.assertTrue(reminder.via_email)
+        self.assertFalse(reminder.via_whatsapp)
 
     @override_settings(GMAIL_OAUTH_CLIENT_ID=None, GMAIL_OAUTH_CLIENT_SECRET=None)
     def test_demo_mode_mock_is_never_ready(self):
@@ -631,7 +684,7 @@ class ReminderExtraChannelFailureTests(TransactionTestCase):
         self.assertEqual(self.room.chats.count(), 1)
 
     @override_settings(IN_PROCESS_SCHEDULER=True, GMAIL_OAUTH_CLIENT_ID=None, GMAIL_OAUTH_CLIENT_SECRET=None)
-    def test_urgent_email_retries_then_reports_chat_delivery(self):
+    def test_urgent_email_in_eager_path_makes_one_attempt(self):
         reminder = self._reminder(via_email=True, priority="high")
         with _NoChannelConfig(), self._mailgun(), \
              patch.object(chatbot_tasks, "_is_user_online", return_value=False), \
@@ -639,10 +692,10 @@ class ReminderExtraChannelFailureTests(TransactionTestCase):
              patch("notifications.services.NotificationService.notify"):
             result = chatbot_tasks.send_reminder.run(reminder.id)
         self.assertEqual(result["status"], "sent")
-        self.assertEqual(send_email.call_count, 6)
+        self.assertEqual(send_email.call_count, 1)
         reminder.refresh_from_db()
         self.assertEqual(reminder.status, "sent")
-        self.assertIn("after 6 attempt(s)", reminder.error_log.lower())
+        self.assertIn("after 1 attempt(s)", reminder.error_log.lower())
         self.assertIn("delivered in chat", reminder.error_log.lower())
         self.assertEqual(self.room.chats.count(), 1)
 

@@ -11,7 +11,7 @@ from orchestration.user_preferences import conservative_default_preferences
 class CoordinatorCapabilityLookupFailsClosedTests(SimpleTestCase):
 
     def test_failed_lookup_sends_conservative_preferences_to_the_loop(self):
-        def _boom(user_id):
+        def _boom(user_id, profile_obj=None):
             raise RuntimeError("db down")
 
         _result, captured = _run_agent_turn("hello", load_preferences=_boom)
@@ -23,7 +23,7 @@ class CoordinatorCapabilityLookupFailsClosedTests(SimpleTestCase):
         self.assertTrue(prefs.get("allow_web_search"))
 
     def test_failed_lookup_applies_no_learned_approval_shortcut(self):
-        def _boom(user_id):
+        def _boom(user_id, profile_obj=None):
             raise RuntimeError("db down")
 
         def _learned(preferences, user_id, room_id):
@@ -44,7 +44,7 @@ class CoordinatorCapabilityLookupFailsClosedTests(SimpleTestCase):
             return merged
 
         with patch("orchestration.preference_mining.merge_learned_overrides", side_effect=_learned):
-            _result, captured = _run_agent_turn("hello", load_preferences=lambda user_id: {"allow_email": True})
+            _result, captured = _run_agent_turn("hello", load_preferences=lambda user_id, profile_obj=None: {"allow_email": True})
 
         self.assertEqual(captured["preferences"]["approval_overrides"], {"run_command": "auto"})
 

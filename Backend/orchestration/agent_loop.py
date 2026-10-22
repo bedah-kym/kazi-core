@@ -26,7 +26,6 @@ from orchestration.agent_prompts import (
     build_system_prompt,
 )
 from orchestration.llm_client import TokenQuotaExceeded, _humanize_seconds, get_llm_client
-from orchestration.memory_state import update_memory_state, save_memory_summary
 from orchestration.model_catalog import find_model, model_pref_key, parse_model_id, provider_configured
 from orchestration.security_policy import redact_sensitive_text
 from orchestration.telemetry import record_event
@@ -1523,14 +1522,6 @@ async def _execute_scoped_tool_calls(
             "input": tc["input"],
             "status": result.get("status"),
         })
-        # Memory update
-        try:
-            await update_memory_state(
-                context, action=tc["name"],
-                params=tc["input"], result=result,
-            )
-        except Exception:
-            pass
         if executed:
             await _record_receipt(
                 tc["name"], tc["input"], result, context,
@@ -2014,14 +2005,7 @@ async def run_agent_loop(
             "shown": _sanitize_tool_result(json.dumps(result, default=str)),
         })
 
-        # Memory update & receipt for confirmed tool
-        try:
-            await update_memory_state(
-                context, action=pending["name"],
-                params=pending["input"], result=result,
-            )
-        except Exception:
-            pass
+        # Receipt for confirmed tool
         await _record_receipt(pending["name"], pending["input"], result, context, basis="human")
 
         # Append tool result to messages (with the live budget note).
@@ -2472,14 +2456,7 @@ async def run_agent_loop(
                         "shown": _sanitize_tool_result(json.dumps(result, default=str)),
                     })
 
-                    # Memory update & receipt (fire-and-forget)
-                    try:
-                        await update_memory_state(
-                            context, action=tc["name"],
-                            params=tc["input"], result=result,
-                        )
-                    except Exception:
-                        pass
+                    # Receipt (fire-and-forget)
                     await _record_receipt(
                         tc["name"], tc["input"], result, context,
                         basis=_shell_approval_basis(tc, preferences, run_tainted),
@@ -2615,15 +2592,6 @@ async def run_agent_loop(
 
     elapsed = round(time.monotonic() - state.start_time, 2)
 
-    # Save a completion summary to memory
-    if state.tool_call_log:
-        actions_done = [e["name"] for e in state.tool_call_log]
-        summary = f"Completed: {', '.join(actions_done)} ({elapsed}s)"
-        try:
-            await save_memory_summary(context, summary)
-        except Exception:
-            pass
-
     # Full loop transcript for audit trail. Neither input values nor input key
     # names are copied into the telemetry file or the server log — only the
     # number of keys and the size, since a key name is model-written text.
@@ -2680,6 +2648,7 @@ async def resume_after_confirmation(
     context_prompt: str = "",
     memory_summary: str = "",
     environment_block: str = "",
+    loop_state: Optional[LoopState] = None,
 ) -> AsyncGenerator[AgentEvent, None]:
     """
     Resume a paused agent loop after the user confirms a high-risk action.
@@ -2693,7 +2662,7 @@ async def resume_after_confirmation(
     user_id = context.get("user_id")
 
     record = await sync_to_async(_pending_approval_record)(room_id, user_id)
-    state = load_loop_state(room_id, user_id)
+    state = loop_state if loop_state is not None else load_loop_state(room_id, user_id)
 
     if record is None:
         # A `bounded` (inline) pause is chat-scoped: Redis loop state only, no
@@ -2754,20 +2723,26 @@ async def resume_after_confirmation(
         yield event
 
 
-async def has_pending_budget_state(room_id: int, user_id: int) -> bool:
+async def has_pending_budget_state(
+    room_id: int, user_id: int, *, state: Optional[LoopState] = None,
+) -> bool:
     """Whether a turn is paused waiting for the user to grant more budget."""
-    state = await sync_to_async(load_loop_state)(room_id, user_id)
+    if state is None:
+        state = await sync_to_async(load_loop_state)(room_id, user_id)
     return bool(state and state.awaiting_budget)
 
 
-async def pending_resume_kind(room_id: int, user_id: int) -> str:
+async def pending_resume_kind(
+    room_id: int, user_id: int, *, state: Optional[LoopState] = None,
+) -> str:
     """Which pause is waiting for a reply: ``"quota"``, ``"budget"`` or ``""``.
 
     Both a budget stop and a quota stop keep the state with ``awaiting_budget``
     set, so the reply handler needs to tell them apart: a quota resume must not
     be read as a budget grant (T-F3b).
     """
-    state = await sync_to_async(load_loop_state)(room_id, user_id)
+    if state is None:
+        state = await sync_to_async(load_loop_state)(room_id, user_id)
     if not state or not state.awaiting_budget:
         return ""
     # ``end_reason`` also covers a state saved before the flag existed.
@@ -2781,6 +2756,7 @@ async def resume_after_quota(
     context_prompt: str = "",
     memory_summary: str = "",
     environment_block: str = "",
+    loop_state: Optional[LoopState] = None,
 ) -> AsyncGenerator[AgentEvent, None]:
     """Continue a turn the hourly token quota stopped, from where it stopped.
 
@@ -2790,7 +2766,7 @@ async def resume_after_quota(
     """
     room_id = context.get("room_id")
     user_id = context.get("user_id")
-    state = await sync_to_async(load_loop_state)(room_id, user_id)
+    state = loop_state if loop_state is not None else await sync_to_async(load_loop_state)(room_id, user_id)
     if not state or not (state.awaiting_quota or state.end_reason == "quota"):
         yield AgentEvent("error", {
             "message": "There is no paused turn waiting for the hourly limit to free up.",
@@ -2817,6 +2793,7 @@ async def resume_with_more_budget(
     context_prompt: str = "",
     memory_summary: str = "",
     environment_block: str = "",
+    loop_state: Optional[LoopState] = None,
 ) -> AsyncGenerator[AgentEvent, None]:
     """Continue a turn whose model asked for more budget, from where it stopped.
 
@@ -2825,7 +2802,7 @@ async def resume_with_more_budget(
     """
     room_id = context.get("room_id")
     user_id = context.get("user_id")
-    state = await sync_to_async(load_loop_state)(room_id, user_id)
+    state = loop_state if loop_state is not None else await sync_to_async(load_loop_state)(room_id, user_id)
     if not state or not state.awaiting_budget:
         yield AgentEvent("error", {
             "message": "There is no paused turn waiting for more budget.",

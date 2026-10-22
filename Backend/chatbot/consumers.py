@@ -338,7 +338,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         cache.set(last_key, now.isoformat(), timeout=60 * 60 * 6)
         cache.delete(counter_key)
 
-    async def schedule_idle_nudge_if_needed(self, room_id, user_id):
+    async def schedule_idle_nudge_if_needed(self, room_id, user_id, user=None):
         """
         Schedule idle nudge only if:
         1. No nudge is already pending
@@ -354,7 +354,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
         # Check if idle nudges are enabled for this user's workspace
         try:
-            user = await sync_to_async(User.objects.get)(id=user_id)
+            if user is None:
+                user = await sync_to_async(User.objects.get)(id=user_id)
             workspace = await sync_to_async(lambda: user.workspace)()
             if not workspace.should_use_idle_nudges():
                 logger.debug(f"Idle nudges disabled for user {user_id} ({workspace.plan})")
@@ -642,7 +643,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
         return await sync_to_async(_check)()
 
-    async def buffer_message_for_moderation(self, room_id, message_id):
+    async def buffer_message_for_moderation(self, room_id, message_id, room=None):
         """Buffer a message ID and create a moderation batch at the size limit.
 
         Return True when a pending batch is created, even if dispatch is
@@ -655,7 +656,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
         if not getattr(settings, 'MODERATION_ENABLED', False):
             return False
 
-        room = await self.get_current_chatroom(room_id)
+        if room is None:
+            room = await self.get_current_chatroom(room_id)
 
         # Skip if moderation disabled for this room
         if hasattr(room, 'moderation_enabled') and not room.moderation_enabled:
@@ -806,8 +808,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 })
                 return
 
-            get_user = sync_to_async(User.objects.filter(username=member_username).first)
-            member_user = await get_user()
+            member_user = self.scope.get("user")
+            if not getattr(member_user, "id", None):
+                get_user = sync_to_async(User.objects.filter(username=member_username).first)
+                member_user = await get_user()
             logger.info(f"Step 1: Got user: {member_user}")
 
             if not member_user:
@@ -856,7 +860,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 return
 
             logger.info("Step 5: Get member...")
-            get_member = sync_to_async(Member.objects.filter(User=member_user).first)
+            get_member = sync_to_async(Member.objects.select_related("User").filter(User=member_user).first)
             member = await get_member()
 
             if not member:
@@ -930,12 +934,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
             if member in room_members:
                 logger.info("Step 13: Adding message to chatroom...")
                 await sync_to_async(current_chat.chats.add)(message)
-                await sync_to_async(current_chat.save)()
 
                 logger.info("Step 14: Buffering for moderation...")
                 # === NEW: Buffer message for moderation ===
                 try:
-                    await self.buffer_message_for_moderation(room_id, message.id)
+                    await self.buffer_message_for_moderation(room_id, message.id, room=current_chat)
                     logger.info("Buffering successful!")
                 except Exception as e:
                     logger.error(f"ERROR in buffer_message_for_moderation: {e}")
@@ -955,7 +958,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 try:
                     from notifications.services import NotificationService
                     await sync_to_async(NotificationService.notify_room_message)(
-                        member_user, current_chat, message,
+                        member_user, current_chat, message, participants=room_members,
                     )
                 except Exception as e:
                     logger.debug(f"Room notification dispatch skipped: {e}")
@@ -966,7 +969,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 except Exception as e:
                     logger.warning(f"Context summary refresh skipped: {e}")
                 try:
-                    await self.schedule_idle_nudge_if_needed(room_id, member_user.id)
+                    await self.schedule_idle_nudge_if_needed(room_id, member_user.id, user=member_user)
                 except Exception as e:
                     logger.warning(f"Idle nudge schedule skipped: {e}")
 
@@ -1019,7 +1022,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
                         speaker_note = ""
 
                         async def get_context_prompt():
-                            base = await sync_to_async(ContextManager.get_context_prompt)(room_id) or ""
+                            base = await sync_to_async(ContextManager.get_context_prompt)(
+                                room_id, room=current_chat, participants=room_members,
+                            ) or ""
                             return "\n\n".join(part for part in (speaker_note, base) if part)
 
                         def bump_signals(actions):
@@ -1032,7 +1037,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             await agent_lock.acquire()
                             # Read history under the lock, so a message queued behind a
                             # running turn sees that turn's reply.
-                            history_rows = await self.get_history_rows(room_id, limit=8)
+                            history_rows = await self.get_history_rows(room_id, limit=8, room=current_chat)
                             multi_user = len(human_members) > 1 or has_several_speakers(history_rows)
                             history_messages = build_history_messages(
                                 history_rows,
@@ -1108,10 +1113,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                 ai_message = await sync_to_async(_create_ai_message)()
 
                                 # Add to chatroom
-                                current_chat = await self.get_current_chatroom(room_id)
                                 if current_chat:
                                     await sync_to_async(current_chat.chats.add)(ai_message)
-                                    await sync_to_async(current_chat.save)()
                                     logger.info(f"AI message saved with ID: {ai_message.id}")
 
                                     # Trigger Kazi Voice Response (TTS) only in voice mode
@@ -1646,15 +1649,18 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 'timestamp': str(timezone.now())
             }
 
-    async def get_history_rows(self, room_id, limit=5):
+    async def get_history_rows(self, room_id, limit=5, room=None):
         "Last N messages, oldest first, as (message_id, username, content, extra)."
         try:
             from .models import Chatroom
-            get_room = sync_to_async(Chatroom.objects.get)
-            room = await get_room(id=room_id)
+            if room is None:
+                get_room = sync_to_async(Chatroom.objects.get)
+                room = await get_room(id=room_id)
 
             def _get_msgs():
-                return list(room.chats.all().order_by('-timestamp')[:limit])
+                return list(
+                    room.chats.select_related("member__User").order_by("-timestamp")[:limit]
+                )
 
             messages = await sync_to_async(_get_msgs)()
             messages.reverse()

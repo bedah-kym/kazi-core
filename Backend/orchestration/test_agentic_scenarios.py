@@ -524,10 +524,6 @@ class SubAgentBudgetTests(SimpleTestCase):
                     new=AsyncMock(return_value={"status": "success"}),
         ) as mock_exec, \
                 patch(
-                    "orchestration.agent_loop.update_memory_state",
-                    new=AsyncMock(),
-        ), \
-                patch(
                     "orchestration.agent_loop._resolve_persona",
                     new=AsyncMock(return_value=None),
         ), \
@@ -937,7 +933,6 @@ class SubAgentPauseTurnTests(SimpleTestCase):
         mock_llm = MagicMock()
         mock_llm.create_message = AsyncMock(side_effect=side_effect)
         with patch("orchestration.agent_loop.get_llm_client", return_value=mock_llm), \
-                patch("orchestration.agent_loop.update_memory_state", new=AsyncMock()), \
                 patch("orchestration.agent_loop._resolve_persona", new=AsyncMock(return_value=None)), \
                 patch("orchestration.agent_loop.record_event"):
             result = run_async(_run_sub_agent(

@@ -18,7 +18,7 @@ from orchestration.coordinator import OrchestrationCoordinator
 from orchestration.agent_loop import AgentEvent
 
 
-def _empty_preferences(user_id):
+def _empty_preferences(user_id, profile_obj=None):
     # Module-level so sync_to_async can pickle it (thread pool).
     return {}
 

@@ -144,7 +144,7 @@ class NotificationService:
         return notification
 
     @staticmethod
-    def notify_room_message(sender, room, message) -> None:
+    def notify_room_message(sender, room, message, participants=None) -> None:
         """
         Notify offline room participants about a new message.
         Skips users who are online in the room (from the presence service) and
@@ -161,7 +161,8 @@ class NotificationService:
 
         # Get room participants
         try:
-            participants = room.participants.select_related("User").all()
+            if participants is None:
+                participants = room.participants.select_related("User").all()
         except Exception:
             return
 

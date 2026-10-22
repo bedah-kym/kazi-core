@@ -54,18 +54,13 @@ class RollupTestCase(SimpleTestCase):
 # ---------------------------------------------------------------------------
 
 class EntityExtractionTests(RollupTestCase):
-    def test_extracts_hosts_ips_macs_and_entities(self):
+    def test_extracts_hosts_ips_macs_and_services(self):
         events = [
             {"event": "command_result", "ts": _iso(25), "host": "printer", "ip": "192.168.1.44"},
             {"event": "command_result", "ts": _iso(25), "command": "ping nas.local -c 3"},
             {"event": "command_result", "ts": _iso(25), "command": "ssh ops@10.0.0.7"},
             {"event": "command_result", "ts": _iso(25), "command": "arp shows aa:bb:cc:dd:ee:ff"},
             {"event": "action_receipt", "ts": _iso(25), "action": "send_email", "status": "success"},
-            {
-                "event": "agent_loop_done",
-                "ts": _iso(25),
-                "params": {"city": "Nairobi", "email": "ops@example.com"},
-            },
         ]
         facts = rollups.extract_entity_facts(events)
 
@@ -75,11 +70,19 @@ class EntityExtractionTests(RollupTestCase):
         self.assertIn("10.0.0.7", by_value)
         self.assertIn("aa:bb:cc:dd:ee:ff", by_value)
         self.assertIn("send_email", by_value)
-        self.assertIn("Nairobi", by_value)
-        self.assertIn("ops@example.com", by_value)
         host_facts = [r for r in facts.values() if r["type"] == "host"]
         printer = next(r for r in host_facts if r["value"] == "192.168.1.44")
         self.assertEqual(printer["occurrences"], 1)
+
+    def test_tool_params_and_inputs_produce_no_entity_facts(self):
+        # No telemetry writer carries `params` or `input` any more, so nothing
+        # the rollup reads can produce a named entity fact from them.
+        events = [
+            {"event": "agent_loop_done", "ts": _iso(25), "params": {"city": "Nairobi"}},
+            {"event": "agent_loop_done", "ts": _iso(25), "input": {"email": "ops@example.com"}},
+        ]
+        facts = rollups.extract_entity_facts(events)
+        self.assertEqual(facts, {})
 
     def test_free_text_is_never_scanned(self):
         events = [
@@ -100,15 +103,14 @@ class EntityExtractionTests(RollupTestCase):
         facts = rollups.extract_entity_facts(events)
         self.assertLessEqual(len(facts), rollups.MAX_FACTS)
 
-    def test_distinct_values_for_same_entity_field_stay_separate(self):
+    def test_distinct_hosts_stay_separate(self):
         events = [
-            {"event": "agent_loop_done", "ts": _iso(25), "params": {"city": "Nairobi"}},
-            {"event": "agent_loop_done", "ts": _iso(25), "params": {"city": "Mombasa"}},
+            {"event": "command_result", "ts": _iso(25), "host": "nairobi", "ip": "10.0.0.1"},
+            {"event": "command_result", "ts": _iso(25), "host": "mombasa", "ip": "10.0.0.2"},
         ]
         facts = rollups.extract_entity_facts(events)
-        cities = [r for r in facts.values() if r["type"] == "entity" and r["name"] == "city"]
-        self.assertEqual(len(cities), 2)
-        self.assertEqual({c["value"] for c in cities}, {"Nairobi", "Mombasa"})
+        hosts = [r for r in facts.values() if r["type"] == "host"]
+        self.assertEqual({h["name"] for h in hosts}, {"nairobi", "mombasa"})
 
     def test_hosts_sharing_one_ip_do_not_collide(self):
         events = [

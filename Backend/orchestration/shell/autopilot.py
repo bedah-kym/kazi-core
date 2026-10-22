@@ -82,8 +82,14 @@ def _receipt(user_id: int, room_id: Any, action: str, params: Dict[str, Any]) ->
     return receipt is not None
 
 
-def status(user_id: Optional[int], room_id: Any) -> Optional[Dict[str, Any]]:
-    profile_obj = profile(user_id)
+_PROFILE_UNSET = object()
+
+
+def status(
+    user_id: Optional[int], room_id: Any, *, profile_obj=_PROFILE_UNSET,
+) -> Optional[Dict[str, Any]]:
+    if profile_obj is _PROFILE_UNSET:
+        profile_obj = profile(user_id)
     if not profile_obj:
         return None
     return _read(profile_obj).get(room_key(room_id))
@@ -96,8 +102,10 @@ def entry_is_armed(entry: Any) -> bool:
     return bool(parsed and parsed > timezone.now())
 
 
-def is_armed(user_id: Optional[int], room_id: Any) -> bool:
-    return entry_is_armed(status(user_id, room_id))
+def is_armed(
+    user_id: Optional[int], room_id: Any, *, profile_obj=_PROFILE_UNSET,
+) -> bool:
+    return entry_is_armed(status(user_id, room_id, profile_obj=profile_obj))
 
 
 def all_for_user(user_id: Optional[int]) -> Dict[str, Dict[str, Any]]:

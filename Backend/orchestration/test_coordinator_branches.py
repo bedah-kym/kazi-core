@@ -14,7 +14,7 @@ from orchestration.agent_loop import AgentEvent
 from orchestration.coordinator import OrchestrationCoordinator
 
 
-def _empty_preferences(user_id):
+def _empty_preferences(user_id, profile_obj=None):
     return {}
 
 

@@ -114,7 +114,6 @@ class NextTurnStartsTaintedTests(SimpleTestCase):
         with (
             patch("orchestration.agent_loop.get_llm_client", return_value=llm),
             patch("orchestration.agent_loop._execute_with_timeout", new=executed),
-            patch("orchestration.agent_loop.update_memory_state", new=AsyncMock()),
             patch("orchestration.agent_loop._record_receipt", new=AsyncMock()),
             patch("orchestration.agent_loop._resolve_persona", new=AsyncMock(return_value=None)),
             patch("orchestration.agent_loop.save_pending_confirmation", new=AsyncMock()),

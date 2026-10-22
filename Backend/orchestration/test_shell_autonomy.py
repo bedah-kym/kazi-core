@@ -159,7 +159,7 @@ class SubAgentTaintTests(SimpleTestCase):
         with patch(
             "orchestration.agent_loop._execute_with_timeout",
             new=AsyncMock(return_value={"status": "success"}),
-        ) as executed, patch("orchestration.agent_loop.update_memory_state", new=AsyncMock()):
+        ) as executed:
             blocks, _ = async_to_sync(_execute_scoped_tool_calls)(calls, {}, prefs, log if log is not None else [])
         return blocks, executed
 

@@ -80,8 +80,6 @@ def _patch_loop(stack, mock_llm, execute=None):
     stack.enter_context(patch("orchestration.agent_loop.get_llm_client", return_value=mock_llm))
     stack.enter_context(patch("orchestration.agent_loop._resolve_persona", new=AsyncMock(return_value=None)))
     stack.enter_context(patch("orchestration.agent_loop._record_receipt", new=AsyncMock()))
-    stack.enter_context(patch("orchestration.agent_loop.update_memory_state", new=AsyncMock()))
-    stack.enter_context(patch("orchestration.agent_loop.save_memory_summary", new=AsyncMock()))
     mock_cache = stack.enter_context(patch("orchestration.agent_loop.cache"))
     mock_cache.get.return_value = None
     if execute is not None:
@@ -132,7 +130,7 @@ def _run_coordinator_turn(query, mock_llm):
     with ExitStack() as stack:
         _patch_loop(stack, mock_llm)
         stack.enter_context(patch("orchestration.coordinator.load_memory_summary", new=AsyncMock(return_value=None)))
-        stack.enter_context(patch("orchestration.coordinator.get_user_preferences", new=lambda user_id: {}))
+        stack.enter_context(patch("orchestration.coordinator.get_user_preferences", new=lambda user_id, profile_obj=None: {}))
         stack.enter_context(patch("orchestration.coordinator.has_pending_agent_state", new=AsyncMock(return_value=False)))
         stack.enter_context(patch("orchestration.coordinator.cache", new=coordinator_cache))
         return async_to_sync(_go)()

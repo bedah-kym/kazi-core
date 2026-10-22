@@ -38,7 +38,7 @@ class ContextManager:
     """
 
     @staticmethod
-    def get_context_for_ai(chatroom, lookback_hours=24):
+    def get_context_for_ai(chatroom, lookback_hours=24, participants=None):
         """
         Get structured context for the AI System Prompt.
         Includes:
@@ -119,7 +119,8 @@ class ContextManager:
                     context_data['linked_room_summaries'] = linked_summaries
 
             # 4. Get User Contacts (top 15 by recency)
-            participants = chatroom.participants.all()
+            if participants is None:
+                participants = chatroom.participants.select_related("User")
             try:
                 participant_users = [m.User for m in participants]
                 contacts = list(Contact.objects.filter(
@@ -173,14 +174,15 @@ class ContextManager:
             return {"summary": "", "notes": []}
 
     @staticmethod
-    def get_context_prompt(room_id):
+    def get_context_prompt(room_id, room=None, participants=None):
         """
         Returns a formatted string to append to the System Prompt.
         """
         from .models import Chatroom
         try:
-            room = Chatroom.objects.get(id=room_id)
-            data = ContextManager.get_context_for_ai(room)
+            if room is None:
+                room = Chatroom.objects.get(id=room_id)
+            data = ContextManager.get_context_for_ai(room, participants=participants)
 
             prompt_parts = []
 

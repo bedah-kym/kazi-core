@@ -296,26 +296,31 @@ def format_style_prompt(preferences: Optional[Dict[str, Any]]) -> str:
     return " ".join(parts)
 
 
-def get_user_preferences(user_id: Optional[int]) -> Dict[str, Any]:
+_PROFILE_UNSET = object()
+
+
+def get_user_preferences(user_id: Optional[int], *, profile_obj=_PROFILE_UNSET) -> Dict[str, Any]:
     if not user_id:
         return normalize_preferences({}, language="", timezone_name="", location="")
-    try:
-        from django.contrib.auth import get_user_model
-    except Exception:
+    if profile_obj is _PROFILE_UNSET:
+        try:
+            from django.contrib.auth import get_user_model
+        except Exception:
+            return normalize_preferences({}, language="", timezone_name="", location="")
+        User = get_user_model()
+        user = User.objects.select_related("profile").filter(id=user_id).first()
+        if not user or not hasattr(user, "profile"):
+            return normalize_preferences({}, language="", timezone_name="", location="")
+        profile_obj = user.profile
+    if profile_obj is None or not hasattr(profile_obj, "notification_preferences"):
         return normalize_preferences({}, language="", timezone_name="", location="")
 
-    User = get_user_model()
-    user = User.objects.select_related("profile").filter(id=user_id).first()
-    if not user or not hasattr(user, "profile"):
-        return normalize_preferences({}, language="", timezone_name="", location="")
-
-    profile = user.profile
-    prefs = profile.notification_preferences or {}
+    prefs = profile_obj.notification_preferences or {}
     return normalize_preferences(
         prefs,
-        language=getattr(profile, "language", "") or "",
-        timezone_name=getattr(profile, "timezone", "") or "",
-        location=getattr(profile, "location", "") or "",
+        language=getattr(profile_obj, "language", "") or "",
+        timezone_name=getattr(profile_obj, "timezone", "") or "",
+        location=getattr(profile_obj, "location", "") or "",
     )
 
 

@@ -18,7 +18,6 @@ Design rules:
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
@@ -59,22 +58,6 @@ _COMMAND_HOST_RE = re.compile(
     r"\b(?:ssh|ping|curl|nc|telnet|mtr|traceroute)\s+(?:[A-Za-z0-9._-]+@)?"
     r"([A-Za-z0-9][A-Za-z0-9.-]+)\b"
 )
-_ENTITY_KEYS = {
-    "origin",
-    "destination",
-    "city",
-    "location",
-    "email",
-    "phone_number",
-    "amount",
-    "currency",
-    "departure_date",
-    "return_date",
-    "check_in_date",
-    "check_out_date",
-    "itinerary_id",
-    "invoice_id",
-}
 
 
 def _window_key(day: str) -> str:
@@ -277,25 +260,6 @@ def extract_entity_facts(events: Iterable[Dict[str, Any]]) -> Dict[str, Dict[str
         # Service usage from receipts.
         if event_type == "action_receipt" and event.get("action"):
             _add(f"service:{event['action']}", "service", str(event["action"]), ts)
-
-        # Named entities from tool params.
-        param_dicts: List[Dict[str, Any]] = []
-        if isinstance(event.get("params"), dict):
-            param_dicts.append(event["params"])
-        if isinstance(event.get("input"), dict):
-            param_dicts.append(event["input"])
-        for params in param_dicts:
-            for key in _ENTITY_KEYS:
-                value = params.get(key)
-                if value not in (None, "", [], {}):
-                    if isinstance(value, (list, tuple)):
-                        value = ", ".join(str(v) for v in value)
-                    value = str(value).strip()
-                    # Bounded, value-derived discriminator: distinct values
-                    # for the same field stay separate records without
-                    # embedding free text in the key.
-                    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
-                    _add(f"entity:{key}:{digest}", "entity", value, ts, name=key)
 
     ranked = sorted(
         collected.items(),

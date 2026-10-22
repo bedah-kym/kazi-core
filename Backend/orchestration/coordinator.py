@@ -55,6 +55,7 @@ from orchestration.agent_loop import (
     cancel_pending_action,
     clear_loop_state,
     dismiss_pending_confirmation,
+    load_loop_state,
     _untrusted_source,
 )
 from orchestration.llm_client import TokenQuotaExceeded, _humanize_seconds, get_llm_client
@@ -260,12 +261,32 @@ class OrchestrationCoordinator:
         memory_summary = await load_memory_summary(adaptive_context)
         user_preferences = {}
         preferences_loaded = True
+        profile_obj = None
+        profile_loaded = False
         try:
-            user_preferences = await sync_to_async(get_user_preferences)(user_id)
+            from orchestration.shell.profile_store import profile as load_profile
+            profile_obj = await sync_to_async(load_profile)(user_id)
+            profile_loaded = True
         except Exception as e:
-            logger.warning(f"User preferences load failed: {e}")
-            user_preferences = conservative_default_preferences()
-            preferences_loaded = False
+            logger.debug("Profile load skipped: %s", e)
+        if not profile_loaded:
+            # The profile could not be read at all. Try the preferences path once
+            # more (it fails closed on its own) before denying the sensitive gates.
+            try:
+                user_preferences = await sync_to_async(get_user_preferences)(user_id)
+            except Exception as e:
+                logger.warning(f"User preferences load failed: {e}")
+                user_preferences = conservative_default_preferences()
+                preferences_loaded = False
+        else:
+            try:
+                user_preferences = await sync_to_async(get_user_preferences)(
+                    user_id, profile_obj=profile_obj,
+                )
+            except Exception as e:
+                logger.warning(f"User preferences load failed: {e}")
+                user_preferences = conservative_default_preferences()
+                preferences_loaded = False
         # Learned overrides only relieve friction beneath the user's own choices.
         # When those could not be read, none is applied.
         if preferences_loaded:
@@ -274,10 +295,11 @@ class OrchestrationCoordinator:
                 user_preferences = await sync_to_async(merge_learned_overrides)(user_preferences, user_id, room_id)
             except Exception as e:
                 logger.debug("Learned override merge skipped: %s", e)
+        resolved_profile = None
         try:
             from orchestration.shell.profiles import resolve_profile
-            resolved = await sync_to_async(resolve_profile)(room_id, user_preferences)
-            user_preferences["shell_profile"] = resolved.name
+            resolved_profile = await sync_to_async(resolve_profile)(room_id, user_preferences)
+            user_preferences["shell_profile"] = resolved_profile.name
         except Exception as e:
             logger.debug("Shell profile resolution skipped: %s", e)
         # Human-armed window for the unsandboxed profile. Always overwritten here
@@ -286,11 +308,13 @@ class OrchestrationCoordinator:
         try:
             from orchestration.shell.autopilot import is_armed
             user_preferences["_shell_autopilot"] = bool(
-                await sync_to_async(is_armed)(user_id, room_id)
+                await sync_to_async(is_armed)(user_id, room_id, profile_obj=profile_obj)
             )
         except Exception as e:
             logger.debug("Shell autopilot lookup skipped: %s", e)
             user_preferences["_shell_autopilot"] = False
+        # One read per turn: the reset and pause checks below share this state.
+        loop_state = None
         if is_reset_command(query):
             await clear_task_state(adaptive_context)
             await clear_result_sets(adaptive_context)
@@ -333,13 +357,13 @@ class OrchestrationCoordinator:
 
             Returned separately so it can be its own prompt section and ride
             only with the shell tool (T-F2)."""
+            if resolved_profile is None:
+                return ""
             try:
                 from orchestration.agent_prompts import build_environment_block
                 from orchestration.shell.environment import get_shell_environment
-                from orchestration.shell.profiles import resolve_profile
 
-                profile = await sync_to_async(resolve_profile)(room_id, user_preferences)
-                return build_environment_block(await get_shell_environment(profile))
+                return build_environment_block(await get_shell_environment(resolved_profile))
             except Exception as exc:
                 logger.debug("Environment block skipped: %s", exc)
                 return ""
@@ -369,15 +393,19 @@ class OrchestrationCoordinator:
             """A durable approval, or an inline `bounded` shell pause (loop state only)."""
             if await has_pending_agent_state(room_id, user_id):
                 return True
-            from orchestration.agent_loop import load_loop_state
-
-            state = await sync_to_async(load_loop_state)(room_id, user_id)
-            return bool(state and state.pending_tool and state.pending_tier == "bounded")
+            return bool(
+                loop_state
+                and loop_state.pending_tool
+                and loop_state.pending_tier == "bounded"
+            )
 
         async def _pending_armable_shell() -> bool:
-            """True when the pending action is a shell command the window could cover."""
-            from orchestration.agent_loop import load_loop_state
+            """True when the pending action is a shell command the window could cover.
 
+            The turn's pre-loop state may no longer be the pending one (a new
+            turn can pause after a directive clears the old state), so read the
+            current state at confirmation time.
+            """
             state = await sync_to_async(load_loop_state)(room_id, user_id)
             pending = getattr(state, "pending_tool", None) if state else None
             if not isinstance(pending, dict):
@@ -525,11 +553,12 @@ class OrchestrationCoordinator:
         # disarms the window, so "why did it stop?" reaches the model.
         from orchestration.shell.chat_intents import is_autopilot_disarm_request
         explicit_disarm = is_autopilot_disarm_request(query)
+        loop_state = await sync_to_async(load_loop_state)(room_id, user_id)
         pending_confirmation = await _has_pending_confirmation()
-        pending_budget = await has_pending_budget_state(room_id, user_id)
+        pending_budget = await has_pending_budget_state(room_id, user_id, state=loop_state)
         # A quota pause also keeps the turn with awaiting_budget set, but it must
         # resume without inflating the budget (T-F3b).
-        pending_pause = await pending_resume_kind(room_id, user_id) if pending_budget else ""
+        pending_pause = await pending_resume_kind(room_id, user_id, state=loop_state) if pending_budget else ""
         cancel_request = is_cancel_request(query) if pending_confirmation else is_cancel_command(query)
         if explicit_disarm or cancel_request:
             was_armed = bool(user_preferences.get("_shell_autopilot"))

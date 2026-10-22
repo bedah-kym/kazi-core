@@ -36,16 +36,15 @@ def _end_turn():
 
 
 class _Harness:
-    """Patches the executor, memory and receipt writer around a delegated run."""
+    """Patches the executor and receipt writer around a delegated run."""
 
     def __enter__(self):
         self._patches = [
             patch("orchestration.agent_loop._execute_with_timeout", new=AsyncMock(return_value={"status": "success"})),
-            patch("orchestration.agent_loop.update_memory_state", new=AsyncMock()),
             patch("orchestration.agent_loop._record_receipt", new=AsyncMock()),
             patch("orchestration.agent_loop.record_event"),
         ]
-        self.executed, _, self.receipt, _ = [p.start() for p in self._patches]
+        self.executed, self.receipt, _ = [p.start() for p in self._patches]
         return self
 
     def __exit__(self, *exc):
@@ -84,7 +83,6 @@ class DelegatedReceiptTests(SimpleTestCase):
     def test_a_receipt_that_cannot_be_written_is_logged_and_the_result_is_unchanged(self):
         store_down = AsyncMock(side_effect=RuntimeError("store down"))
         with patch("orchestration.agent_loop._execute_with_timeout", new=AsyncMock(return_value={"status": "success"})), \
-                patch("orchestration.agent_loop.update_memory_state", new=AsyncMock()), \
                 patch("orchestration.action_receipts.record_action_receipt", new=store_down), \
                 self.assertLogs("orchestration.agent_loop", level="WARNING") as logs:
             blocks, _ = async_to_sync(_execute_scoped_tool_calls)(
@@ -105,8 +103,7 @@ class DelegatedReceiptRowTests(TestCase):
         )
 
     def test_a_delegated_command_leaves_a_receipt_row_with_its_basis(self):
-        with patch("orchestration.agent_loop._execute_with_timeout", new=AsyncMock(return_value={"status": "success"})), \
-                patch("orchestration.agent_loop.update_memory_state", new=AsyncMock()):
+        with patch("orchestration.agent_loop._execute_with_timeout", new=AsyncMock(return_value={"status": "success"})):
             async_to_sync(_execute_scoped_tool_calls)(
                 [_call("run_command", {"command": "ls"})],
                 {"user_id": self.user.id, "room_id": None}, OPEN_PROFILE, [],

@@ -21,7 +21,7 @@ ORDINARY_SENTENCES = (
 )
 
 
-def _empty_preferences(user_id):
+def _empty_preferences(user_id, profile_obj=None):
     return {}
 
 

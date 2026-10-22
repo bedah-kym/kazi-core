@@ -90,8 +90,6 @@ class AgentLoopTelemetryPrivacyTests(SimpleTestCase):
             ),
             patch("orchestration.agent_loop.record_event") as mock_record,
             patch("orchestration.agent_loop._record_receipt", new=AsyncMock()),
-            patch("orchestration.agent_loop.update_memory_state", new=AsyncMock()),
-            patch("orchestration.agent_loop.save_memory_summary", new=AsyncMock()),
             patch("orchestration.agent_loop.cache") as mock_cache,
         ):
             mock_cache.get.return_value = None

@@ -202,7 +202,7 @@ class CoordinatorEnvironmentTests(SimpleTestCase):
         cache_mock.get.return_value = None
         targets = {
             "orchestration.coordinator.load_memory_summary": AsyncMock(return_value=None),
-            "orchestration.coordinator.get_user_preferences": lambda user_id: {},
+            "orchestration.coordinator.get_user_preferences": lambda user_id, profile_obj=None: {},
             "orchestration.coordinator.has_pending_agent_state": AsyncMock(return_value=False),
             "orchestration.coordinator.cache": cache_mock,
             "orchestration.coordinator.record_event": MagicMock(),

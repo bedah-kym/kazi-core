@@ -1232,7 +1232,6 @@ class SearchAllowanceTests(_LoopHarness):
         self.assertIsNone(self._search_uses(calls[2].kwargs))
 
     @patch("orchestration.agent_loop.get_remaining_searches", side_effect=[4, 1, 0])
-    @patch("orchestration.agent_loop.update_memory_state", new=AsyncMock())
     @patch("orchestration.agent_loop._record_receipt", new=AsyncMock())
     @patch("orchestration.agent_loop._resolve_persona", new=AsyncMock(return_value=None))
     @patch("orchestration.agent_loop.get_llm_client")

@@ -14,6 +14,7 @@ root (one level above `Backend/`).
 | `DJANGO_ALLOWED_HOSTS` | `localhost,127.0.0.1` | Comma-separated allowed hosts. |
 | `DJANGO_CSRF_TRUSTED_ORIGINS` | empty | Comma-separated trusted origins. Required in production. |
 | `DATABASE_URL` | SQLite fallback | Database URL. Use Postgres in production. |
+| `DB_POOL_MAX_SIZE` | unset (no pool) | Postgres only. A whole number caps each process at that many connections in a reused pool (`CONN_MAX_AGE` becomes 0, health checks off, 10 s wait for a free connection). Unset or `0` keeps persistent per-thread connections (600 s). Set it when the server has a small client limit, such as a hosted session pooler. The limit is per process: set it above that process's concurrent requests (web needs the most), and keep the sum across processes under the server's limit. A request that finds the pool full waits, then fails. Any other value refuses to boot. |
 | `REDIS_URL` | `redis://redis:6379/0` | Redis for Channels + cache + Celery. Required in production. |
 | `REDIS_CACHE_IGNORE_EXCEPTIONS` | `True` | Fail-soft on Redis cache read errors (real-time features degrade, HTTP still serves). |
 | `CELERY_BROKER_URL` | `REDIS_URL` | Celery broker URL. |

@@ -85,6 +85,7 @@ propcache==0.5.2
 protobuf==7.36.0
 psycopg==3.3.5
 psycopg-binary==3.3.5 ; implementation_name != 'pypy'
+psycopg-pool==3.3.3
 pycparser==3.0 ; implementation_name != 'PyPy'
 pycryptodome==3.23.0
 pydantic==2.13.4

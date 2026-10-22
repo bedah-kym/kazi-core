@@ -643,9 +643,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
         return await sync_to_async(_check)()
 
     async def buffer_message_for_moderation(self, room_id, message_id):
-        """
-        Buffer messages in Redis and trigger moderation when batch is ready
-        Returns True if batch was triggered
+        """Buffer a message ID and create a moderation batch at the size limit.
+
+        Return True when a pending batch is created, even if dispatch is
+        deferred to the periodic sweep. Return False below the limit, when
+        moderation is disabled globally or for the room, or without a Redis
+        cache. Redis and database errors propagate to the caller.
         """
         # The setting is the source of truth, not DEBUG: the lite profile runs
         # with DEBUG off and without Redis.

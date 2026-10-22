@@ -9,7 +9,10 @@ logger = logging.getLogger(__name__)
 
 
 def _twilio_client(account_sid, auth_token):
-    """Import the Twilio SDK only when a client is actually needed."""
+    """Create a Twilio client on demand using the supplied credentials.
+
+    SDK import and client construction errors propagate to the caller.
+    """
     from twilio.rest import Client
 
     return Client(account_sid, auth_token)
@@ -21,6 +24,11 @@ class WhatsAppConnector(BaseConnector):
     """
 
     def __init__(self):
+        """Read WhatsApp settings from the environment and initialize Twilio.
+
+        Leave the client unset without both credentials. SDK import and client
+        construction errors propagate when credentials are present.
+        """
         # Allow switching between vendors via env
         self.provider = os.environ.get('WHATSAPP_PROVIDER', 'twilio')
         self.account_sid = os.environ.get('TWILIO_ACCOUNT_SID')
@@ -53,6 +61,9 @@ class WhatsAppConnector(BaseConnector):
     def validate_credentials(self, account_sid, auth_token):
         """
         Validate credentials by initializing a temporary client and fetching account info.
+
+        Return a validity flag and message; SDK import, client construction,
+        and API errors are converted to a False result.
         """
         try:
             temp_client = _twilio_client(account_sid, auth_token)
@@ -66,6 +77,10 @@ class WhatsAppConnector(BaseConnector):
     def send_test_message(self, to, account_sid, auth_token, from_number):
         """
         Send a test message using provided credentials (not the env vars).
+
+        Prefix the recipient with 'whatsapp:' if needed; from_number must
+        already use the sender format Twilio expects. Return a sent status
+        and SID, or an error status if client creation or sending fails.
         """
         try:
             temp_client = _twilio_client(account_sid, auth_token)
@@ -109,6 +124,14 @@ class WhatsAppConnector(BaseConnector):
         return await sync_to_async(self._send_message_sync)(to, body, media_url)
 
     def _send_message_sync(self, to, body, media_url=None):
+        """Send a WhatsApp message, optionally attaching one media URL.
+
+        Prefix the recipient with 'whatsapp:' if needed. Return a sent status
+        with Twilio details, or a mock sent status in DEBUG without a client.
+        Missing inputs, unavailable providers, and send failures return an
+        error dict; Twilio API errors include a code. SDK import errors in
+        error handling propagate.
+        """
         # Basic validation
         if not to or not body:
             return {"status": "error", "message": "phone_number and message are required"}

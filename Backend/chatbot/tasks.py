@@ -424,8 +424,11 @@ def cleanup_old_moderation_batches():
 
 @shared_task(ignore_result=True)
 def check_due_reminders():
-    """
-    Periodic task to check for due reminders and send notifications
+    """Dispatch pending reminders scheduled at or before the current time.
+
+    Return a dict whose ``processed`` count includes dispatches that did not
+    raise, not confirmed deliveries. Individual dispatch errors are skipped;
+    database query errors propagate.
     """
     now = timezone.now()
     due_reminders = Reminder.objects.filter(
@@ -445,11 +448,10 @@ def check_due_reminders():
 
 
 def _dispatch_due_reminder(reminder_id: int):
-    """Run delivery locally when the web process owns the schedule.
+    """Run delivery locally when IN_PROCESS_SCHEDULER is on; otherwise queue it.
 
-    In the lite profile there is no broker or worker, so ``.delay()`` would
-    queue into an idle memory broker and never deliver. ``.apply()`` runs the
-    same task in the web process; the task's own claim still makes it once.
+    Return the Celery result. Local task errors are stored in the eager result;
+    errors publishing to the broker propagate.
     """
     if getattr(settings, "IN_PROCESS_SCHEDULER", False):
         return send_reminder.apply(args=(reminder_id,), throw=False)
@@ -706,6 +708,7 @@ def _claim_reminder_delivery(reminder_id: int) -> bool:
 
 
 def _release_reminder_claim(reminder_id: int) -> None:
+    """Delete the reminder's delivery claim, suppressing cache errors."""
     try:
         cache.delete(f"reminder_claim:{reminder_id}")
     except Exception:

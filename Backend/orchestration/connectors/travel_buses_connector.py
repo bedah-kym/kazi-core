@@ -82,6 +82,12 @@ class TravelBusesConnector(BaseTravelConnector):
             }
 
     async def _scrape_buupass(self, origin: str, destination: str, travel_date: str, passengers: int) -> List[Dict]:
+        """Return Buupass bus offers with prices in KES; passengers is unused.
+
+        Non-200 responses and request or page parsing errors return an empty
+        list; individual card errors skip that card. Dependency import errors
+        propagate to the caller.
+        """
         import aiohttp
         from bs4 import BeautifulSoup
 

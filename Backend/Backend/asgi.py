@@ -21,6 +21,11 @@ django_asgi_app = get_asgi_application()
 
 
 def _web_worker_count() -> int:
+    """Read the first nonempty worker count from the supported environment keys.
+
+    Precedence is KAZI_WEB_WORKERS, WEB_CONCURRENCY, GUNICORN_WORKERS, then
+    UVICORN_WORKERS. Return 1 if none is set or the selected value is invalid.
+    """
     try:
         return int(
             os.environ.get('KAZI_WEB_WORKERS')
@@ -47,10 +52,12 @@ _in_process_scheduler = None
 
 
 async def lifespan(scope, receive, send):
-    """Handle ASGI lifespan: start the lite scheduler, close LLM clients.
+    """Start the scheduler when IN_PROCESS_SCHEDULER is enabled.
 
     Django's ASGI handler serves HTTP only, so without this the lifespan scope
     is unhandled and the reused httpx client is never closed cleanly.
+    Scheduler startup errors produce a lifespan.startup.failed response.
+    Shutdown stops the scheduler and closes the shared LLM HTTP clients.
     """
     global _in_process_scheduler
     while True:

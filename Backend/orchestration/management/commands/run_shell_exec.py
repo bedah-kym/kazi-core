@@ -12,6 +12,11 @@ class Command(BaseCommand):
         parser.add_argument("--port", type=int, default=None, help="Bind port (default: SHELL_EXEC_PORT).")
 
     def handle(self, *args, **options):
+        """Serve the sidecar using Django settings and optional host/port overrides.
+
+        Raise CommandError for a missing token or RuntimeError from serving,
+        including egress preparation failures. Other errors propagate.
+        """
         from orchestration.shell_exec.backends import ShellExecConfig
         from orchestration.shell_exec.server import serve
 

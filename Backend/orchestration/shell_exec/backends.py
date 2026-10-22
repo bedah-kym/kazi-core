@@ -132,6 +132,8 @@ class ShellExecConfig:
         ``settings.py`` reads these values from the environment with the same
         defaults, so a sidecar started with ``python -m orchestration.shell_exec``
         and one started by ``manage.py run_shell_exec`` see the same config.
+        This does not load .env or validate the token. Invalid integer
+        environment values raise ValueError.
         """
         default_root = Path(__file__).resolve().parents[3] / "shell_workspaces"
         profile = str(os.environ.get("SHELL_EXEC_PROFILE", "standard") or "standard")

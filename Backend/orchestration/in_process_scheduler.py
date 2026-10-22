@@ -36,7 +36,12 @@ _NOW = Callable[[], Any]
 
 
 def is_due(schedule: Any, last_run_at: Any, now: Any) -> bool:
-    """Return whether ``schedule`` is due at ``now`` given ``last_run_at``."""
+    """Return whether an interval has elapsed, including the exact boundary.
+
+    Numeric schedules are seconds; timedeltas are also accepted. Other
+    schedules use their own ``is_due`` clock rather than ``now``. Return
+    False without a last-run time or if that schedule evaluation raises.
+    """
     if last_run_at is None:
         return False
     seconds = None
@@ -54,7 +59,11 @@ def is_due(schedule: Any, last_run_at: Any, now: Any) -> bool:
 
 
 def _schedule_fields(schedule: Any) -> dict:
-    """The django_celery_beat schedule fields for a settings schedule."""
+    """Persist a beat schedule and return its interval or crontab field dict.
+
+    Numeric seconds and timedeltas are rounded to whole seconds. Raise
+    ValueError for unsupported schedule types; database errors propagate.
+    """
     seconds = None
     if isinstance(schedule, (int, float)):
         seconds = float(schedule)
@@ -76,7 +85,12 @@ def _schedule_fields(schedule: Any) -> dict:
 
 
 def run_task(entry: Mapping[str, Any]) -> Any:
-    """Execute one scheduled task in this process, never through the broker."""
+    """Execute one scheduled task in this process, never through the broker.
+
+    ``entry['task']`` is a dotted task path; optional args and kwargs default
+    to empty collections. Return the eager result, which holds task failures.
+    Missing task keys, module import errors, and attribute errors propagate.
+    """
     module_path, _, attr = str(entry["task"]).rpartition(".")
     module = import_module(module_path)
     task = getattr(module, attr)
@@ -99,6 +113,12 @@ class InProcessScheduler:
         tick_seconds: float = DEFAULT_TICK_SECONDS,
         stop_timeout: float = DEFAULT_STOP_TIMEOUT_SECONDS,
     ) -> None:
+        """Use the supplied schedules or a copy of CELERY_BEAT_SCHEDULE.
+
+        Runner receives one schedule entry; now supplies the current datetime.
+        They default to run_task and timezone.now. tick_seconds is the delay
+        between ticks; stop_timeout bounds the shutdown wait in seconds.
+        """
         self._schedules = dict(
             settings.CELERY_BEAT_SCHEDULE if schedules is None else schedules
         )
@@ -115,7 +135,10 @@ class InProcessScheduler:
         return self._task
 
     async def stop(self) -> None:
-        """Ask the loop to stop and wait a bounded time for a running job."""
+        """Ask the loop to stop and wait a bounded time for a running job.
+
+        A timeout returns without cancelling the job, which may finish later.
+        """
         self._stopping.set()
         task = self._task
         if task is None or task.done():
@@ -142,6 +165,10 @@ class InProcessScheduler:
         return await database_sync_to_async(self.run_due)()
 
     async def run(self) -> None:
+        """Tick until stop is requested, continuing after ordinary tick errors.
+
+        Wait tick_seconds after each attempt; cancellation propagates.
+        """
         logger.info("In-process scheduler started (%d jobs)", len(self._schedules))
         while not self._stopping.is_set():
             try:
@@ -159,11 +186,13 @@ class InProcessScheduler:
         logger.info("In-process scheduler stopped")
 
     def run_due(self, now: Optional[Any] = None) -> List[str]:
-        """Claim and run every due entry once. Returns the names that ran.
+        """Claim due entries and return names attempted, including runner failures.
 
         Synchronous on purpose: the connection hygiene and event-loop binding
         live in ``tick()``, the background-thread path. Calling this directly
         (tests, an operator's one-off) uses the caller's connection untouched.
+        ``now`` defaults to the configured clock. Claim failures skip the entry;
+        runner errors are suppressed after the last-run time has advanced.
         """
         now = now or self._now()
         ran: List[str] = []
@@ -178,6 +207,13 @@ class InProcessScheduler:
         return ran
 
     def _claim(self, name: str, entry: Mapping[str, Any], now: Any) -> bool:
+        """Return True only after atomically claiming an enabled, due entry.
+
+        New rows and rows without a last-run time are initialized at now
+        without running. A successful claim advances last_run_at and the run
+        count before execution. Disabled or not-due entries, lost races, and
+        claim errors return False.
+        """
         try:
             row = PeriodicTask.objects.filter(name=name).only(
                 "pk", "last_run_at", "enabled"

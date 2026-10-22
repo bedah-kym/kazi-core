@@ -211,6 +211,9 @@ def check_schedule_health() -> Dict[str, int]:
 
     Pausing is NOT the response — pausing does not fix skips. The alert names
     the workflow and the skip delta so the operator can check the worker.
+    Return checked and skipped_alerts counts, both zero when Temporal is
+    disabled. Fetch failures skip that trigger; database and cache errors
+    propagate. Cache each snapshot for comparison on the next check.
     """
     from asgiref.sync import async_to_sync
     from django.core.cache import cache

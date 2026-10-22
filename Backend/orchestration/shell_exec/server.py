@@ -46,7 +46,12 @@ def serve(
     host: Optional[str] = None,
     port: Optional[int] = None,
 ) -> None:
-    """Validate the config and run the sidecar until interrupted."""
+    """Run the sidecar, using nonempty host/port overrides when supplied.
+
+    Raise RuntimeError for a missing token or an egress preparation error.
+    Egress preparation may build a proxy image and remove leftover resources.
+    Server import and startup errors propagate.
+    """
     if not config.token:
         raise RuntimeError(
             "SHELL_EXEC_TOKEN is not set; refusing to start an unauthenticated sidecar."
@@ -73,6 +78,12 @@ def serve(
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    """Load the environment and serve the sidecar using optional CLI overrides.
+
+    argv defaults to the process arguments. Return 0 after serving or 1 when
+    serve raises RuntimeError. Argument parsing may raise SystemExit;
+    environment loading and configuration errors propagate.
+    """
     parser = argparse.ArgumentParser(
         prog="python -m orchestration.shell_exec",
         description="Run the shell-exec sidecar without a Django process.",

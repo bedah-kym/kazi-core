@@ -1,15 +1,15 @@
-﻿# Plan: T-F6 per-message work
+# Plan: T-F6 per-message work
 Status: approved by Bedan on 2026-10-22 (touches the protected `agent_loop.py`, within the Limits below). Coder: DeepSeek. Reviewed and live-tested by the lead.
 Style: deliverables and acceptance checks; the coder chooses the approach and explains departures in the PR.
 
 ## Goal
-One chat turn reads each thing it needs once. The travel-era entity tracker no longer runs on every tool call, and the harness no longer writes a "Completed: â€¦" line the next turn treats as fact.
+One chat turn reads each thing it needs once. The travel-era entity tracker no longer runs on every tool call, and the harness no longer writes a "Completed: …" line the next turn treats as fact.
 
 ## Evidence
 Research `plans/2026-10-compute-memory-research.md` Q6, read on `main` at `181f1f7`. Line numbers are from that commit; the roadmap's `agent_loop.py:1622-1628` is stale.
-- **Before the loop starts, about 15â€“25 database and cache round trips repeat:**
+- **Before the loop starts, about 15–25 database and cache round trips repeat:**
   - the user is read twice (`consumers.py:780`; the user is already in `scope`);
-  - the chatroom 3â€“4 times (`consumers.py:1544`, `:642`, `:1626`; `context_manager.py:176`);
+  - the chatroom 3–4 times (`consumers.py:1544`, `:642`, `:1626`; `context_manager.py:176`);
   - participants twice (`consumers.py:1549`; `notifications/services.py:163`);
   - user plus profile twice (`user_preferences.py:311`; `profile_store.py:17`);
   - the loop state twice, a full JSON parse each time (`coordinator.py:367-374`; `agent_loop.py:2757-2760`);
@@ -24,7 +24,7 @@ Research `plans/2026-10-compute-memory-research.md` Q6, read on `main` at `181f1
 1. **One read per thing per turn.** Every database and cache read between "message received" and "loop start" (consumer and coordinator) is either removed or justified in a table in the PR: what, why, and its count before and after. Room, member, participants, user profile, loop state and shell profile are each read once per turn and passed along.
 2. **No N+1 in history.** Loading a room's recent history costs a fixed number of queries, whatever the message count.
 3. **Entity tracker off the hot path.** No per-tool-call entity-tracker work in the loop. If something the model sees depends on it, say what and keep that part, with its cost in the PR.
-4. **No harness success claim in memory.** The loop no longer writes "Completed: â€¦" into the summary the next turn reads. The record of what ran is T-D3's, which carries the results.
+4. **No harness success claim in memory.** The loop no longer writes "Completed: …" into the summary the next turn reads. The record of what ran is T-D3's, which carries the results.
 5. **Dead telemetry branch removed**, with its tests, or a source named that does not write values to a plain-text file. Choose, and say which.
 6. **No behaviour change for the user.** Same replies, approvals, pending-confirmation and budget/quota resumes, presence and notifications.
 

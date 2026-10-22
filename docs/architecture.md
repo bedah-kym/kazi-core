@@ -7,6 +7,11 @@ the chat consumer into the agent loop, which selects tools, executes them
 through a governed executor, and returns the reply. The agent loop is the only
 path for a chat turn.
 
+To explore this interactively, open the [architecture explorer](architecture/explorer.html).
+It shows the processes, the inside of the web worker, the agent loop and the shell
+sidecar. It also plays common flows step by step: a chat turn, a shell approval, a
+quota stop and resume, and a reminder.
+
 ```
 Client (WebSocket / HTTP)
   |

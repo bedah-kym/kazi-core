@@ -134,15 +134,14 @@ _REMINDER_RULES = """\
 - To check existing reminders or notifications, ALWAYS use the list_reminders /
   list_notifications tools. Never search notes or memory for them — notes are
   not the source of truth for scheduled reminders.
-- set_reminder accepts a delivery channel: 'auto' (default), 'email',
-  'whatsapp', or 'in_app'. Pick the channel the user asked for; when the user
-  is vague, use 'auto'.
+- The reminder's room is always the delivery point. set_reminder accepts an
+  extra delivery channel: 'auto' (default), 'email', 'whatsapp', or 'in_app'.
+  Pick the channel the user asked for; when the user is vague, use 'auto'.
 - Urgency cues (exam, meeting, flight, deadline, "don't let me forget",
-  "I must not miss") mean urgent=true: it forces email delivery with retries
-  so the reminder survives a transient failure.
+  "I must not miss") mean urgent=true: it adds email with retries when email
+  is set up on this install.
 - When the user asks to be reminded "by email", set delivery='email'. When
-  they ask for it "in chat" or "here", use delivery='auto' (auto delivers in
-  chat when they are online).
+  they ask for it "in chat" or "here", use 'in_app'.
 - After creating a reminder, report the exact local time it will fire.
 """
 

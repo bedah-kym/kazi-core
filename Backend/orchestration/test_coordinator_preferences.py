@@ -93,15 +93,22 @@ class CoordinatorLoadedProfileFailsClosedTests(TestCase):
         user = get_user_model().objects.create_user(
             username="loaded-profile-user", password="pw",  # nosec B106
         )
+        profile = user.profile
+        profile.notification_preferences = {"allow_email": False}
+        profile.save(update_fields=["notification_preferences"])
         real_get = prefs_module.get_user_preferences
+        real_normalize = prefs_module.normalize_preferences
         seen = {}
         captured = {}
 
         def _wrapped(user_id, **kwargs):
             seen.update(kwargs)
-            if "profile_obj" in kwargs:
-                raise RuntimeError("bad preferences")
             return real_get(user_id, **kwargs)
+
+        def _normalize(raw_prefs, **kwargs):
+            if raw_prefs:
+                raise RuntimeError("bad preferences")
+            return real_normalize(raw_prefs, **kwargs)
 
         async def _fake_loop(**kwargs):
             captured.update(kwargs)
@@ -122,6 +129,10 @@ class CoordinatorLoadedProfileFailsClosedTests(TestCase):
 
         with (
             patch("orchestration.coordinator.get_user_preferences", side_effect=_wrapped),
+            patch(
+                "orchestration.user_preferences.normalize_preferences",
+                side_effect=_normalize,
+            ),
             patch("orchestration.coordinator.load_memory_summary", AsyncMock(return_value=None)),
             patch("orchestration.coordinator.has_pending_agent_state", AsyncMock(return_value=False)),
             patch("orchestration.coordinator.run_agent_loop", _fake_loop),

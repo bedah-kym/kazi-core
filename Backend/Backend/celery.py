@@ -3,6 +3,7 @@ import os
 from datetime import datetime, timezone
 from celery import Celery
 from celery.contrib.django.task import DjangoTask
+from celery.signals import beat_init
 from kombu.utils.uuid import uuid
 from pathlib import Path
 
@@ -64,6 +65,27 @@ app.config_from_object('django.conf:settings', namespace='CELERY')
 
 # Auto-discover tasks in all installed apps
 app.autodiscover_tasks()
+
+
+@beat_init.connect
+def _refuse_beat_alongside_in_process_scheduler(**kwargs):
+    """The web process already owns the schedule; starting beat would double-run it.
+
+    Celery's Signal.send catches Exception, so a RuntimeError here would only be
+    logged and beat would keep ticking. SystemExit escapes the signal dispatch
+    and stops the beat command before its first tick.
+    """
+    from django.conf import settings
+
+    if getattr(settings, "IN_PROCESS_SCHEDULER", False):
+        logger.critical(
+            "IN_PROCESS_SCHEDULER is enabled: the web process runs the periodic "
+            "schedule. Refusing to start celery beat."
+        )
+        raise SystemExit(
+            "IN_PROCESS_SCHEDULER is enabled: the web process runs the periodic "
+            "schedule. Do not start celery beat for this deployment."
+        )
 
 
 @app.task(bind=True, ignore_result=True)

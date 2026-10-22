@@ -19,43 +19,6 @@ User = get_user_model()
 FUTURE = timezone.now() + timedelta(hours=2)
 
 
-class _FreeRedis:
-    def __init__(self):
-        self.deleted = []
-
-    def set(self, *args, **kwargs):
-        return True
-
-    def delete(self, *args, **kwargs):
-        self.deleted.append(args[0])
-        return True
-
-
-class _HeldRedis:
-    def set(self, *args, **kwargs):
-        return None
-
-    def delete(self, *args, **kwargs):
-        return True
-
-
-class _ClaimRedis:
-    def __init__(self):
-        self.store = {}
-        self.set_calls = 0
-
-    def set(self, key, value, nx=False, ex=None):
-        self.set_calls += 1
-        if nx and key in self.store:
-            return None
-        self.store[key] = value
-        return True
-
-    def delete(self, *args, **kwargs):
-        self.store.pop(args[0], None)
-        return True
-
-
 class DeliveryModeResolutionTests(TestCase):
     def test_flag_combinations_map_to_modes(self):
         def reminder(email, whatsapp):
@@ -238,7 +201,7 @@ class ReminderDeliveryRouterTests(TransactionTestCase):
         with patch.object(chatbot_tasks.send_reminder, "max_retries", 0), \
              patch.object(chatbot_tasks, "_deliver_reminder", return_value=(False, "email")), \
              patch("notifications.services.NotificationService.notify"), \
-             patch("django_redis.get_redis_connection", return_value=_FreeRedis()):
+             patch.object(chatbot_tasks.cache, "add", return_value=True):
             result = chatbot_tasks.send_reminder.run(reminder.id)
         self.assertEqual(result["status"], "dead_letter")
         reminder.refresh_from_db()
@@ -251,7 +214,7 @@ class ReminderDeliveryRouterTests(TransactionTestCase):
             scheduled_time=timezone.now() - timedelta(hours=1)
         )
         reminder.refresh_from_db()
-        with patch("django_redis.get_redis_connection", return_value=_HeldRedis()), \
+        with patch.object(chatbot_tasks.cache, "add", return_value=False), \
              patch.object(chatbot_tasks, "_deliver_reminder") as mock_deliver:
             result = chatbot_tasks.send_reminder.run(reminder.id)
         self.assertEqual(result["status"], "skipped")
@@ -264,13 +227,13 @@ class ReminderDeliveryRouterTests(TransactionTestCase):
             scheduled_time=timezone.now() - timedelta(hours=1)
         )
         reminder.refresh_from_db()
-        fake = _FreeRedis()
-        with patch("django_redis.get_redis_connection", return_value=fake), \
+        with patch.object(chatbot_tasks.cache, "add", return_value=True), \
+             patch.object(chatbot_tasks.cache, "delete") as released, \
              patch.object(chatbot_tasks, "_deliver_reminder", return_value=(True, "chat")), \
              patch("notifications.services.NotificationService.notify"):
             result = chatbot_tasks.send_reminder.run(reminder.id)
         self.assertEqual(result["status"], "sent")
-        self.assertIn(f"reminder_claim:{reminder.id}", fake.deleted)
+        released.assert_called_with(f"reminder_claim:{reminder.id}")
 
     def test_send_reminder_reschedules_within_the_final_minute(self):
         reminder = self._reminder(via_email=True, via_whatsapp=False)
@@ -290,14 +253,13 @@ class ReminderDeliveryRouterTests(TransactionTestCase):
             scheduled_time=timezone.now() - timedelta(hours=1)
         )
         reminder.refresh_from_db()
-        redis = _ClaimRedis()
         with override_settings(CELERY_TASK_ALWAYS_EAGER=True), \
-             patch("django_redis.get_redis_connection", return_value=redis), \
+             patch.object(chatbot_tasks.cache, "add", return_value=True) as claim, \
              patch.object(chatbot_tasks, "_deliver_reminder",
                           side_effect=[(False, "email"), (True, "email")]) as mock_deliver, \
              patch("notifications.services.NotificationService.notify"):
             chatbot_tasks.send_reminder.apply(args=[reminder.id], retries=0)
-        self.assertEqual(redis.set_calls, 1)
+        self.assertEqual(claim.call_count, 1)
         self.assertEqual(mock_deliver.call_count, 2)
         reminder.refresh_from_db()
         self.assertEqual(reminder.status, "sent")

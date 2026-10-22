@@ -27,6 +27,11 @@ except Exception:
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# A launcher-provided sidecar token must beat the one in .env, so a rotated
+# token takes effect without editing the file. Capture it before the .env
+# loads below (they run with override=True). Other keys keep .env precedence.
+_SHELL_EXEC_TOKEN_FROM_ENV = os.environ.get('SHELL_EXEC_TOKEN')
+
 env_path = BASE_DIR.parent / '.env'
 load_dotenv(dotenv_path=env_path, override=True)
 
@@ -35,6 +40,9 @@ try:
     load_dotenv(str(BASE_DIR.parent / '.env'))
 except Exception:
     pass
+
+if _SHELL_EXEC_TOKEN_FROM_ENV is not None:
+    os.environ['SHELL_EXEC_TOKEN'] = _SHELL_EXEC_TOKEN_FROM_ENV
 
 
 # Quick-start development settings - unsuitable for production
@@ -80,6 +88,18 @@ if not SECRET_KEY:
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DJANGO_DEBUG', 'False').lower() in ('1', 'true', 'yes')
 
+# --- Lite profile: a chat-only install --------------------------------------
+# One web process (uvicorn), the no-Django shell sidecar, in-memory cache and
+# Channels, no Temporal, no Celery. Independent of DEBUG so it is safe on a
+# server. In-memory Channels cannot fan a room out across worker processes, so
+# the ASGI app refuses to load with more than one web worker rather than
+# silently splitting rooms.
+KAZI_LITE_PROFILE = os.environ.get('KAZI_LITE_PROFILE', 'False').lower() in ('1', 'true', 'yes', 'on')
+IN_PROCESS_SCHEDULER = os.environ.get(
+    'KAZI_IN_PROCESS_SCHEDULER',
+    'True' if KAZI_LITE_PROFILE else 'False',
+).lower() in ('1', 'true', 'yes', 'on')
+
 # --- Dev fallback: no Redis/Postgres (e.g. Docker unavailable) ---------------
 # When DEBUG is on and Redis is unreachable at boot, run fully in-memory and on
 # SQLite so `manage.py runserver` works natively from a venv. Production
@@ -112,7 +132,25 @@ if not _DEV_INMEMORY:
     if DEBUG and _db_host in {'db', 'postgres', 'postgresql'}:
         _DEV_INMEMORY = not _redis_reachable(os.environ.get('REDIS_URL', 'redis://redis:6379/0'))
 
+# The lite profile uses no shared services: LocMem cache, in-memory Channels and
+# inline Celery. The dev fallback above shares the same switches.
+_INMEMORY = _DEV_INMEMORY or KAZI_LITE_PROFILE
+
 ALLOWED_HOSTS = [host.strip() for host in os.environ.get('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',') if host.strip()]
+
+# One-machine trial only: serve over plain HTTP on loopback without relaxing
+# the production defaults. Refused when ALLOWED_HOSTS names anything that is
+# not loopback, so it cannot silently weaken a public deployment.
+KAZI_INSECURE_LOCALHOST = os.environ.get('KAZI_INSECURE_LOCALHOST', 'False').lower() in ('1', 'true', 'yes', 'on')
+if KAZI_INSECURE_LOCALHOST and not DEBUG:
+    _loopback_hosts = {'localhost', '127.0.0.1', '::1', '[::1]'}
+    _non_loopback = [host for host in ALLOWED_HOSTS if host not in _loopback_hosts]
+    if _non_loopback:
+        raise ValueError(
+            "KAZI_INSECURE_LOCALHOST is only for a one-machine trial; "
+            "DJANGO_ALLOWED_HOSTS must be loopback, got "
+            f"{','.join(_non_loopback)}."
+        )
 
 # CSRF & CORS configuration - be explicit and restrictive
 # you can set a comma-separated list in .env, e.g. DJANGO_CSRF_TRUSTED_ORIGINS=https://example.com,https://app.example.com
@@ -349,16 +387,19 @@ USE_TZ = True
 # Read Redis URL from environment so containers use the Compose service hostname
 REDIS_URL = os.environ.get('REDIS_URL', 'redis://redis:6379/0')
 CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', REDIS_URL)
-if _DEV_INMEMORY:
+if _INMEMORY:
     # No broker; run tasks inline in the web process.
     CELERY_BROKER_URL = 'memory://'
-CELERY_TASK_ALWAYS_EAGER = _DEV_INMEMORY
+CELERY_TASK_ALWAYS_EAGER = _INMEMORY
 
 # Temporal configuration for workflow execution
 TEMPORAL_HOST = os.environ.get('TEMPORAL_HOST', 'localhost:7233')
 TEMPORAL_NAMESPACE = os.environ.get('TEMPORAL_NAMESPACE', 'default')
 TEMPORAL_TASK_QUEUE = os.environ.get('TEMPORAL_TASK_QUEUE', 'user-workflows')
-TEMPORAL_DISABLED = os.environ.get('TEMPORAL_DISABLED', 'False').lower() in ('1', 'true', 'yes')
+TEMPORAL_DISABLED = (
+    os.environ.get('TEMPORAL_DISABLED', 'False').lower() in ('1', 'true', 'yes')
+    or KAZI_LITE_PROFILE
+)
 # Approval decisions go through the Workflow Update API (typed request/response
 # per approval id) instead of fire-and-forget signals. Default off — reversible.
 WORKFLOW_APPROVALS_UPDATE_API = os.environ.get('WORKFLOW_APPROVALS_UPDATE_API', 'False').lower() in ('1', 'true', 'yes')
@@ -395,11 +436,11 @@ CELERY_RESULT_EXPIRES = int(os.environ.get('CELERY_RESULT_EXPIRES', 3600))  # 1 
 # IGNORE_EXCEPTIONS: when Redis is down, HTTP views must still serve —
 # cache reads return the default and writes are skipped (logged) instead of 500ing.
 REDIS_CACHE_IGNORE_EXCEPTIONS = os.environ.get('REDIS_CACHE_IGNORE_EXCEPTIONS', '1').lower() in ('1', 'true', 'yes')
-if _DEV_INMEMORY:
+if _INMEMORY:
     CACHES = {
         "default": {
             "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
-            "LOCATION": "kazi-dev-inmemory",
+            "LOCATION": "kazi-inmemory",
         }
     }
     CHANNEL_LAYERS = {
@@ -448,14 +489,37 @@ PRESENCE_WINDOW_SECONDS = int(os.environ.get('PRESENCE_WINDOW_SECONDS', 75))
 # Celery Beat Schedule — single source of truth. A second definition later in
 # this file silently replaced this dict once already (dropping the reminder
 # sweep and the deferred-workflow replay watchdog); never redefine it below.
-MODERATION_ENABLED = os.environ.get('MODERATION_ENABLED')
-if MODERATION_ENABLED is None:
+_MODERATION_SETTING = os.environ.get('MODERATION_ENABLED')
+if _MODERATION_SETTING is None:
     MODERATION_ENABLED = bool(os.environ.get('HF_API_TOKEN', ''))
+    _MODERATION_EXPLICIT = False
 else:
-    MODERATION_ENABLED = MODERATION_ENABLED.lower() in ('1', 'true', 'yes')
+    MODERATION_ENABLED = _MODERATION_SETTING.lower() in ('1', 'true', 'yes')
+    _MODERATION_EXPLICIT = True
+
+if KAZI_LITE_PROFILE and MODERATION_ENABLED:
+    if _MODERATION_EXPLICIT:
+        # An operator who turned moderation on must not get a silent no-op.
+        raise ValueError(
+            "MODERATION_ENABLED is set, but the lite profile has no Redis: "
+            "moderation needs the Redis profile. Unset MODERATION_ENABLED or "
+            "run without KAZI_LITE_PROFILE."
+        )
+    # HF_API_TOKEN implies moderation, but the lite profile cannot run it.
+    # Say so once at start-up instead of leaving a safety feature silently off.
+    MODERATION_ENABLED = False
+    print(
+        "WARNING: HF_API_TOKEN implies moderation, but KAZI_LITE_PROFILE has "
+        "no Redis; moderation is disabled in the lite profile.",
+        file=sys.stderr,
+    )
 
 MODERATION_FLUSH_SECONDS = int(os.environ.get('MODERATION_FLUSH_SECONDS', 600))
-REMINDER_SWEEP_SECONDS = int(os.environ.get('REMINDER_SWEEP_SECONDS', 3600))
+# The lite profile has no ETA broker, so the periodic sweep is what delivers a
+# reminder. Keep it short enough that a 2-minute reminder lands close to time.
+REMINDER_SWEEP_SECONDS = int(os.environ.get(
+    'REMINDER_SWEEP_SECONDS', '30' if KAZI_LITE_PROFILE else '3600',
+))
 WORKFLOW_REPLAY_SCHEDULE_SECONDS = int(os.environ.get('WORKFLOW_REPLAY_SCHEDULE_SECONDS', 300))
 WORKFLOW_APPROVAL_SWEEP_SECONDS = int(os.environ.get('WORKFLOW_APPROVAL_SWEEP_SECONDS', 300))
 PROMOTION_MIN_OCCURRENCES = int(os.environ.get('PROMOTION_MIN_OCCURRENCES', 3))
@@ -840,12 +904,12 @@ CSP_FRAME_SRC = ("'self'", "https://js.stripe.com")
 # --- HSTS (HTTP Strict Transport Security) ---
 # Enabled only when DEBUG is False to avoid local dev issues
 if not DEBUG:
-    SECURE_SSL_REDIRECT = True
-    SESSION_COOKIE_SECURE = True
-    CSRF_COOKIE_SECURE = True
-    SECURE_HSTS_SECONDS = 31536000  # 1 year
-    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
-    SECURE_HSTS_PRELOAD = True
+    SECURE_SSL_REDIRECT = not KAZI_INSECURE_LOCALHOST
+    SESSION_COOKIE_SECURE = not KAZI_INSECURE_LOCALHOST
+    CSRF_COOKIE_SECURE = not KAZI_INSECURE_LOCALHOST
+    SECURE_HSTS_SECONDS = 0 if KAZI_INSECURE_LOCALHOST else 31536000  # 1 year
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = not KAZI_INSECURE_LOCALHOST
+    SECURE_HSTS_PRELOAD = not KAZI_INSECURE_LOCALHOST
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
     SESSION_COOKIE_HTTPONLY = True
     # Keep CSRF cookie readable for JS fetch headers (pin notes, add notes)

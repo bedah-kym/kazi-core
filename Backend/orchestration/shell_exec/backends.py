@@ -126,6 +126,45 @@ class ShellExecConfig:
     egress_port: int = 3128
 
     @classmethod
+    def from_env(cls) -> "ShellExecConfig":
+        """Build the same config from the environment without importing Django.
+
+        ``settings.py`` reads these values from the environment with the same
+        defaults, so a sidecar started with ``python -m orchestration.shell_exec``
+        and one started by ``manage.py run_shell_exec`` see the same config.
+        This does not load .env or validate the token. Invalid integer
+        environment values raise ValueError.
+        """
+        default_root = Path(__file__).resolve().parents[3] / "shell_workspaces"
+        profile = str(os.environ.get("SHELL_EXEC_PROFILE", "standard") or "standard")
+        raw_profiles = os.environ.get("SHELL_EXEC_PROFILES", "")
+        allowed = tuple(part.strip() for part in raw_profiles.split(",") if part.strip())
+        if not allowed:
+            allowed = (profile,) if profile in SUPPORTED_PROFILES else ("standard",)
+        return cls(
+            root=Path(os.environ.get("SHELL_EXEC_ROOT") or default_root),
+            token=os.environ.get("SHELL_EXEC_TOKEN", ""),
+            host=os.environ.get("SHELL_EXEC_HOST", "127.0.0.1"),
+            port=int(os.environ.get("SHELL_EXEC_PORT", "8765")),
+            profile=profile,
+            allowed_profiles=allowed,
+            image=os.environ.get("SHELL_EXEC_IMAGE", "alpine:3.20"),
+            user=os.environ.get("SHELL_EXEC_USER", "65534:65534"),
+            memory=os.environ.get("SHELL_EXEC_MEMORY", "256m"),
+            pids_limit=int(os.environ.get("SHELL_EXEC_PIDS_LIMIT", "128")),
+            timeout_default=int(os.environ.get("SHELL_EXEC_TIMEOUT_DEFAULT", "120")),
+            timeout_max=int(os.environ.get("SHELL_EXEC_TIMEOUT_MAX", "600")),
+            output_bytes_max=int(os.environ.get("SHELL_EXEC_OUTPUT_BYTES_MAX", "65536")),
+            network_allowlist=tuple(
+                host.strip()
+                for host in os.environ.get("SHELL_EXEC_NETWORK_ALLOWLIST", "").split(",")
+                if host.strip()
+            ),
+            egress_proxy=os.environ.get("SHELL_EGRESS_PROXY", "False").lower() in ("1", "true", "yes"),
+            egress_image=os.environ.get("SHELL_EGRESS_PROXY_IMAGE", "kazi-egress-squid:1"),
+        )
+
+    @classmethod
     def from_settings(cls) -> "ShellExecConfig":
         from django.conf import settings
 

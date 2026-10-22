@@ -424,8 +424,11 @@ def cleanup_old_moderation_batches():
 
 @shared_task(ignore_result=True)
 def check_due_reminders():
-    """
-    Periodic task to check for due reminders and send notifications
+    """Dispatch pending reminders scheduled at or before the current time.
+
+    Return a dict whose ``processed`` count includes dispatches that did not
+    raise, not confirmed deliveries. Individual dispatch errors are skipped;
+    database query errors propagate.
     """
     now = timezone.now()
     due_reminders = Reminder.objects.filter(
@@ -436,12 +439,23 @@ def check_due_reminders():
     count = 0
     for reminder in due_reminders:
         try:
-            send_reminder.delay(reminder.id)
+            _dispatch_due_reminder(reminder.id)
             count += 1
         except Exception as e:
             logger.error(f"Error queueing reminder {reminder.id}: {e}")
 
     return {"processed": count}
+
+
+def _dispatch_due_reminder(reminder_id: int):
+    """Run delivery locally when IN_PROCESS_SCHEDULER is on; otherwise queue it.
+
+    Return the Celery result. Local task errors are stored in the eager result;
+    errors publishing to the broker propagate.
+    """
+    if getattr(settings, "IN_PROCESS_SCHEDULER", False):
+        return send_reminder.apply(args=(reminder_id,), throw=False)
+    return send_reminder.delay(reminder_id)
 
 
 def schedule_reminder_delivery(reminder_id: int, scheduled_time):
@@ -674,25 +688,33 @@ def _claim_reminder_delivery(reminder_id: int) -> bool:
     """Atomically claim delivery for a reminder row.
 
     The periodic scanner and the ETA task can both queue the same row,
-    and both would read status='pending'. The Redis claim makes delivery
-    idempotent without a schema change. Fail-open: if Redis is down the
-    reminder is still delivered (degraded mode may duplicate).
+    and both would read status='pending'. ``cache.add`` is a single atomic
+    add on both Redis (SET NX) and LocMem, so the claim works in the lite and
+    full profiles without a schema change. Fail closed: if the claim store
+    errors (or the production Redis cache swallows the outage) the delivery is
+    skipped rather than risking a duplicate.
     """
     try:
-        from django_redis import get_redis_connection
-        return bool(get_redis_connection("default").set(
-            f"reminder_claim:{reminder_id}", "1", nx=True, ex=REMINDER_CLAIM_TTL_SECONDS
+        return bool(cache.add(
+            f"reminder_claim:{reminder_id}", "1", timeout=REMINDER_CLAIM_TTL_SECONDS
         ))
     except Exception:
-        return True
+        logger.warning(
+            "Reminder claim store failed for %s; skipping delivery",
+            reminder_id,
+            exc_info=True,
+        )
+        return False
 
 
 def _release_reminder_claim(reminder_id: int) -> None:
+    """Delete the reminder's delivery claim, suppressing cache errors."""
     try:
-        from django_redis import get_redis_connection
-        get_redis_connection("default").delete(f"reminder_claim:{reminder_id}")
+        cache.delete(f"reminder_claim:{reminder_id}")
     except Exception:
-        pass
+        logger.warning(
+            "Reminder claim release failed for %s", reminder_id, exc_info=True
+        )
 
 
 def _finalize_failed_delivery(reminder: Reminder, attempts: int, channel: str) -> None:

@@ -4,7 +4,6 @@ Searches for local events using Eventbrite API
 """
 import logging
 import os
-import aiohttp
 from typing import Dict, List
 from datetime import datetime
 from django.conf import settings
@@ -82,6 +81,14 @@ class TravelEventsConnector(BaseTravelConnector):
         }
 
     async def _search_eventbrite_api(self, location: str, start_date: str, end_date: str, category: str) -> tuple:
+        """Return ``(events, error)`` from Eventbrite, with None on success.
+
+        Optional YYYY-MM-DD dates bound event start times from 00:00:00 UTC
+        through 23:59:59 UTC. Category matches substrings; 'all' disables the
+        filter. Missing credentials, import or request errors, and invalid
+        response shapes return an empty list and an error string. Individual
+        event parsing errors skip that event.
+        """
         eventbrite_key = os.getenv('EVENTBRITE_API_KEY')
         if not eventbrite_key:
             msg = "EVENTBRITE_API_KEY not set"
@@ -105,6 +112,10 @@ class TravelEventsConnector(BaseTravelConnector):
         }
 
         try:
+            # Lazy so a lite install without aiohttp still boots; the
+            # ImportError is handled below and lets TRAVEL_ALLOW_FALLBACK run.
+            import aiohttp
+
             async with aiohttp.ClientSession() as session:
                 async with session.get(api_url, params=params, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
                     if response.status == 429:

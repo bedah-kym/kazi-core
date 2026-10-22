@@ -3,9 +3,7 @@ Travel Buses Connector
 Searches for bus tickets using Buupass website scraper
 """
 import logging
-import aiohttp
 from typing import Dict, List
-from bs4 import BeautifulSoup
 from django.conf import settings
 from orchestration.connectors.base_travel_connector import BaseTravelConnector
 
@@ -84,6 +82,15 @@ class TravelBusesConnector(BaseTravelConnector):
             }
 
     async def _scrape_buupass(self, origin: str, destination: str, travel_date: str, passengers: int) -> List[Dict]:
+        """Return Buupass bus offers with prices in KES; passengers is unused.
+
+        Non-200 responses and request or page parsing errors return an empty
+        list; individual card errors skip that card. Dependency import errors
+        propagate to the caller.
+        """
+        import aiohttp
+        from bs4 import BeautifulSoup
+
         try:
             location_map = {
                 'nairobi': 'Nairobi',

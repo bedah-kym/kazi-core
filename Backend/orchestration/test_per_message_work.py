@@ -282,25 +282,38 @@ class ResumeReadsFreshStateTests(SimpleTestCase):
                 self.assertNotIn("loop_state", inspect.signature(helper).parameters)
 
     def test_resume_reads_the_paused_state_at_resume_time(self):
-        from orchestration.agent_loop import resume_after_confirmation
+        from orchestration.agent_loop import _args_hash, resume_after_confirmation
 
+        call = {"id": "t1", "name": "run_command", "input": {"command": "ls"}}
         state = LoopState(
             messages=[],
-            pending_tool={"id": "t1", "name": "run_command", "input": {"command": "ls"}},
+            pending_tool=call,
             pending_tier="bounded",
+            pending_args_hashes={"t1": _args_hash(call["input"])},
         )
+        record = MagicMock()
+        record.metadata = {"calls": [{"tool_call_id": "t1", "tool": "run_command"}]}
+        turn = MagicMock(state="running", pause_expires_at=None)
 
         async def _fake_run(**_kwargs):
             yield AgentEvent("done", {})
 
         async def _run():
             return await _collect(resume_after_confirmation(
-                context={"user_id": 1, "room_id": 1},
+                context={"user_id": 1, "room_id": 1, "turn_id": "turn-1"},
             ))
 
         with (
-            patch("orchestration.agent_loop._pending_approval_record", return_value=None),
-            patch("orchestration.agent_loop.load_loop_state", return_value=state) as loader,
+            patch(
+                "orchestration.agent_loop._claim_turn_for_resume",
+                new=AsyncMock(return_value=(turn, True)),
+            ),
+            patch("orchestration.agent_loop._pending_approval_record", return_value=record),
+            patch("orchestration.agent_loop._consume_pending_approval_sync", return_value=True),
+            patch(
+                "orchestration.agent_loop._load_resume_state",
+                new=AsyncMock(return_value=state),
+            ) as loader,
             patch("orchestration.agent_loop.clear_loop_state"),
             patch("orchestration.agent_loop.run_agent_loop", side_effect=_fake_run),
         ):

@@ -7,6 +7,7 @@ first gated call was held.
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -18,6 +19,9 @@ from django.utils import timezone
 from chatbot.models import Chatroom
 from orchestration import turns as turns_mod
 from orchestration.agent_loop import (
+    _append_terminal_results,
+    _args_hash,
+    _quota_pause_ttl,
     resume_after_confirmation,
     resume_after_expiry,
     resume_after_quota,
@@ -58,19 +62,45 @@ def _tool(call_id, name, tool_input):
 
 
 def _assert_history_paired(messages):
-    """Every tool_use must be answered before the next assistant turn."""
-    pending = set()
-    for message in messages:
+    """Every tool_use is answered by the very next user message, in order.
+
+    No text block may precede the results, and two user messages may not be
+    adjacent: that is the shape Anthropic accepts and the one the paused step
+    must emit.
+    """
+    for index, message in enumerate(messages):
         content = message.get("content")
-        if not isinstance(content, list):
+        if message.get("role") != "assistant" or not isinstance(content, list):
             continue
-        for block in content:
-            if block.get("type") == "tool_use":
-                pending.add(block.get("id"))
-            elif block.get("type") == "tool_result":
-                pending.discard(block.get("tool_use_id"))
-    if pending:
-        raise AssertionError(f"tool_use left unpaired: {pending}")
+        tool_ids = [
+            block.get("id") for block in content
+            if isinstance(block, dict) and block.get("type") == "tool_use"
+        ]
+        if not tool_ids:
+            continue
+        if index + 1 >= len(messages):
+            raise AssertionError(f"tool_use left unpaired: {tool_ids}")
+        answer = messages[index + 1]
+        if answer.get("role") != "user" or not isinstance(answer.get("content"), list):
+            raise AssertionError(f"tool_use not answered by a user message: {tool_ids}")
+        result_ids = []
+        saw_text = False
+        for block in answer["content"]:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_result":
+                if saw_text:
+                    raise AssertionError("text block appears before a tool_result")
+                result_ids.append(block.get("tool_use_id"))
+            elif block.get("type") == "text":
+                saw_text = True
+        if result_ids != tool_ids:
+            raise AssertionError(
+                f"results {result_ids} do not answer tools {tool_ids} in order"
+            )
+    for first, second in zip(messages, messages[1:]):
+        if first.get("role") == second.get("role") == "user":
+            raise AssertionError("two user messages are adjacent")
 
 
 class _PauseHarness(TransactionTestCase):
@@ -127,7 +157,7 @@ class _PauseHarness(TransactionTestCase):
             "turn_id": str(turn.pk),
         }
 
-    def _pause(self, turn, calls, *, kind="approval", state=None):
+    def _pause(self, turn, calls, *, kind="approval", state=None, budget=None):
         payload = dict(state or {})
         if calls:
             payload.setdefault("messages", [
@@ -139,12 +169,18 @@ class _PauseHarness(TransactionTestCase):
             payload.setdefault("pending_tiers", [None for _ in calls])
             payload.setdefault("pending_tool", calls[0])
             payload.setdefault("pending_tier", None)
+            payload.setdefault(
+                "pending_args_hashes",
+                {c["id"]: _args_hash(c["input"]) for c in calls},
+            )
             payload.setdefault("paused_for_confirmation", True)
         payload.setdefault("active_seconds", 0.0)
         payload.setdefault("wall_started_at", timezone.now().timestamp())
         return turns_mod.pause_turn(
             str(turn.pk), turn.version,
             state_payload=payload, pause_kind=kind,
+            tainted=bool(payload.get("tainted")),
+            budget=budget,
         )
 
 
@@ -232,7 +268,18 @@ class HeldBatchTests(_PauseHarness):
 
         record = WorkflowApprovalRecord.objects.get(kind="agent_loop")
         self.assertEqual(len(record.metadata["calls"]), 2)
-        self.assertEqual(record.sanitized_params, {"to": "[REDACTED EMAIL]"})
+        self.assertEqual(
+            [entry["tool"] for entry in record.metadata["calls"]],
+            ["send_email", "send_email"],
+        )
+        self.assertNotIn("args_hash", record.metadata["calls"][0])
+        display_calls = record.sanitized_params["calls"]
+        self.assertEqual(len(display_calls), 2)
+        self.assertEqual(
+            [entry["params"]["to"] for entry in display_calls],
+            ["[REDACTED EMAIL]", "[REDACTED EMAIL]"],
+        )
+        self.assertNotIn("a@b.c", record.approval_message)
 
         cache.clear()
         turn.refresh_from_db()
@@ -253,11 +300,24 @@ class HeldBatchTests(_PauseHarness):
         turn = self._turn()
         call = {"id": "c1", "name": "send_email", "input": {"to": "a@b.c"}}
         self._pause(turn, [call], state={"tainted": True})
+        _run(save_pending_confirmation(
+            self.room.id, self.user.id, call, "Send?",
+            turn_id=turn.pk, calls=[call],
+        ))
         cache.delete("agent_loop_taint:{}".format(self.room.id))
         turn.refresh_from_db()
         state = _run(turns_mod.aget_turn_paused_state(turn))
         self.assertIsNotNone(state)
         self.assertTrue(state["tainted"])
+        self._llm([_response([_text("Sent.")])])
+
+        _run(_collect(resume_after_confirmation(
+            context=self._context(turn), preferences={},
+        )))
+
+        self.assertEqual(self.execute_tool.await_count, 1)
+        turn.refresh_from_db()
+        self.assertTrue(turn.tainted)
 
     def test_reproposed_arguments_do_not_run_without_a_new_approval(self):
         turn = self._turn()
@@ -267,8 +327,11 @@ class HeldBatchTests(_PauseHarness):
             self.room.id, self.user.id, shown, "Send?",
             turn_id=turn.pk, calls=[shown],
         ))
-        # The stored state tries to run different arguments.
-        self._pause(turn, [other])
+        # The stored state tries to run different arguments while carrying the
+        # hashes of what was actually shown.
+        self._pause(turn, [other], state={
+            "pending_args_hashes": {"c1": _args_hash(shown["input"])},
+        })
         cache.clear()
 
         events = _run(_collect(resume_after_confirmation(
@@ -358,7 +421,6 @@ class ExpiryAndTimeTests(_PauseHarness):
         _assert_history_paired(messages)
         self.assertEqual(self.execute_tool.await_count, 0)
 
-    @override_settings(HARD_TURN_TIMEOUT_SECONDS=60)
     def test_elapsed_spans_the_pause_and_the_backstop_uses_active_time(self):
         turn = self._turn()
         state = {
@@ -372,9 +434,12 @@ class ExpiryAndTimeTests(_PauseHarness):
         self.assertTrue(self._pause(turn, [], kind="budget", state=state))
         self._llm([_response([_text("Finished.")])])
 
-        events = _run(_collect(resume_with_more_budget(
-            context=self._context(turn), preferences={},
-        )))
+        # The module constant is what the loop reads, so an override_settings
+        # entry here would have no effect.
+        with patch("orchestration.agent_loop.HARD_TURN_TIMEOUT_SECONDS", 60):
+            events = _run(_collect(resume_with_more_budget(
+                context=self._context(turn), preferences={},
+            )))
         done = next(e for e in events if e.kind == "done")
         self.assertGreaterEqual(done.data["elapsed"], 3500)
         self.assertFalse(any(
@@ -384,11 +449,16 @@ class ExpiryAndTimeTests(_PauseHarness):
 
 
 class CoordinatorRestartTests(_PauseHarness):
-    def _coordinator(self):
+    def _coordinator(self, *, extra_patches=None):
         from asgiref.sync import async_to_sync
+        from contextlib import ExitStack
         from orchestration.coordinator import OrchestrationCoordinator
 
+        sent = []
+
         async def _send(*args, **kwargs):
+            if len(args) >= 2:
+                sent.append(args[1])
             return None
 
         async def _send_step(*args, **kwargs):
@@ -408,14 +478,30 @@ class CoordinatorRestartTests(_PauseHarness):
                 history_messages=None,
             )
 
-        with (
-            patch("orchestration.coordinator.load_memory_summary", AsyncMock(return_value=None)),
-            patch("orchestration.coordinator.get_user_preferences", lambda user_id, profile_obj=None: {}),
-            patch("orchestration.coordinator.cache", MagicMock()),
-            patch("orchestration.coordinator.record_event", MagicMock()),
-            patch("orchestration.coordinator._quota_resume_still_blocked", AsyncMock(return_value=None)),
-        ):
-            return async_to_sync(_run)
+        patches = {
+            "orchestration.coordinator.load_memory_summary": AsyncMock(return_value=None),
+            "orchestration.coordinator.get_user_preferences": lambda user_id, profile_obj=None: {},
+            "orchestration.coordinator.cache": MagicMock(),
+            "orchestration.coordinator.record_event": MagicMock(),
+            "orchestration.coordinator._quota_resume_still_blocked": AsyncMock(return_value=None),
+        }
+        patches.update(extra_patches or {})
+
+        def run(query):
+            with ExitStack() as stack:
+                for target, new in patches.items():
+                    stack.enter_context(patch(target, new))
+                result = async_to_sync(_run)(query)
+                # The consumer finalizes a committing Turn after saving the
+                # reply; without it the next resume would hit the active-Turn
+                # unique constraint.
+                async_to_sync(OrchestrationCoordinator().finalize_turn)(
+                    result, reply_saved=True,
+                )
+                return result
+
+        run.sent = sent
+        return run
 
     def test_a_fresh_coordinator_resumes_the_paused_action_on_yes(self):
         call = {"id": "c1", "name": "send_email", "input": {"to": "a@b.c"}}
@@ -438,3 +524,387 @@ class CoordinatorRestartTests(_PauseHarness):
         self.assertEqual(
             WorkflowApprovalRecord.objects.get(kind="agent_loop").status, "approved",
         )
+
+    def test_a_question_reshows_the_prompt_and_the_next_yes_runs_the_action(self):
+        call = {"id": "c1", "name": "send_email", "input": {"to": "a@b.c"}}
+        self._llm([
+            _response([_tool("c1", "send_email", call["input"])], stop_reason="tool_use"),
+            _response([_text("It sends the report.")]),
+            _response([_text("Sent.")]),
+        ])
+        run = self._coordinator()
+        run("send it")
+        run.sent.clear()
+
+        run("what does that do?")
+        question_output = "".join(run.sent)
+        self.assertIn("Should I go ahead", question_output)
+        self.assertNotIn("did not run the pending action", question_output)
+        self.assertNotIn("\\n\\n", question_output)
+        self.assertEqual(question_output.count("approval id"), 1)
+        self.assertEqual(self.execute_tool.await_count, 0)
+
+        run("yes")
+        self.assertEqual(self.execute_tool.await_count, 1)
+        self.assertEqual(self.execute_tool.await_args.args[1], call["input"])
+
+    def test_autopilot_never_confirms_a_batch_that_holds_a_non_shell_call(self):
+        safe = {"id": "a1", "name": "get_weather", "input": {"city": "Nairobi"}}
+        gated = {"id": "g1", "name": "send_email", "input": {"to": "a@b.c"}}
+        self._llm([
+            _response([
+                _tool("a1", "get_weather", safe["input"]),
+                _tool("g1", "send_email", gated["input"]),
+            ], stop_reason="tool_use"),
+        ])
+        run = self._coordinator(extra_patches={
+            "orchestration.shell.autopilot.arm": MagicMock(return_value=True),
+        })
+        run("send it")
+        run.sent.clear()
+
+        run("autopilot")
+
+        self.assertEqual(self.execute_tool.await_count, 1)  # only the safe call
+        turn = Turn.objects.get(state="paused")
+        self.assertEqual((turn.state, turn.pause_kind), ("paused", "approval"))
+        self.assertIn("Should I go ahead", "".join(run.sent))
+
+    def test_a_late_yes_after_expiry_is_answered_before_a_new_turn_exists(self):
+        turn = self._turn()
+        call = {"id": "c1", "name": "send_email", "input": {"to": "a@b.c"}}
+        self._pause(turn, [call])
+        turn.refresh_from_db()
+        turns_mod.transition(
+            str(turn.pk), turn.version, "expired",
+            from_state="paused", end_reason="pause_expired",
+        )
+        Turn.objects.filter(pk=turn.pk).update(
+            pause_expires_at=timezone.now() - timedelta(minutes=1),
+        )
+        llm = self._llm([_response([_text("It expired.")])])
+        run = self._coordinator()
+        run.sent.clear()
+
+        run("yes")
+
+        sent = "".join(run.sent)
+        self.assertIn("approval expired at", sent)
+        self.assertEqual(self.execute_tool.await_count, 0)
+        messages = llm.create_message.await_args.kwargs["messages"]
+        _assert_history_paired(messages)
+        self.assertTrue(any(
+            block.get("is_error") is True
+            for message in messages if isinstance(message.get("content"), list)
+            for block in message["content"] if isinstance(block, dict)
+        ))
+
+
+class MixedStepTests(_PauseHarness):
+    def _mixed_pause(self):
+        turn = self._turn()
+        safe = {"id": "a1", "name": "get_weather", "input": {"city": "Nairobi"}}
+        gated = {"id": "g1", "name": "send_email", "input": {"to": "a@b.c"}}
+        llm = self._llm([
+            _response([
+                _tool("a1", "get_weather", safe["input"]),
+                _tool("g1", "send_email", gated["input"]),
+            ], stop_reason="tool_use"),
+            _response([_text("Sent.")]),
+        ])
+        events = _run(_collect(run_agent_loop(
+            user_message="send it", context=self._context(turn), preferences={},
+        )))
+        self.assertTrue(any(e.kind == "confirmation" for e in events))
+        self.assertEqual(self.execute_tool.await_count, 1)  # the safe call
+        turn.refresh_from_db()
+        return turn, gated, llm
+
+    def test_mixed_step_resume_emits_one_user_message_in_model_order(self):
+        turn, gated, llm = self._mixed_pause()
+        cache.clear()
+        _run(_collect(resume_after_confirmation(
+            context=self._context(turn), preferences={},
+        )))
+        self.assertEqual(self.execute_tool.await_count, 2)
+        self.assertEqual(self.execute_tool.await_args.args[1], gated["input"])
+        messages = llm.create_message.await_args_list[-1].kwargs["messages"]
+        _assert_history_paired(messages)
+        answer = next(
+            message["content"] for message in messages
+            if message.get("role") == "user"
+            and isinstance(message.get("content"), list)
+            and any(b.get("type") == "tool_result" for b in message["content"])
+        )
+        results = [b for b in answer if b.get("type") == "tool_result"]
+        self.assertEqual([b["tool_use_id"] for b in results], ["a1", "g1"])
+
+    def test_mixed_step_decline_emits_one_user_message_in_model_order(self):
+        from orchestration.agent_loop import LoopState
+
+        safe = {"id": "a1", "name": "get_weather", "input": {"city": "Nairobi"}}
+        gated = {"id": "g1", "name": "send_email", "input": {"to": "a@b.c"}}
+        state = LoopState(
+            messages=[{"role": "assistant", "content": [
+                _tool("a1", "get_weather", safe["input"]),
+                _tool("g1", "send_email", gated["input"]),
+            ]}],
+            pending_tools=[gated],
+            pending_tiers=[None],
+            pending_tool=gated,
+            pending_step_results=[{
+                "type": "tool_result",
+                "tool_use_id": "a1",
+                "content": '{"status": "success"}',
+            }],
+        )
+        _append_terminal_results(state, "you declined")
+        _assert_history_paired(state.messages)
+        answer = state.messages[-1]["content"]
+        self.assertEqual(
+            [b["tool_use_id"] for b in answer if b.get("type") == "tool_result"],
+            ["a1", "g1"],
+        )
+
+    def test_mixed_step_expiry_emits_one_user_message_in_model_order(self):
+        turn, _gated, llm = self._mixed_pause()
+        turn.refresh_from_db()
+        turns_mod.transition(
+            str(turn.pk), turn.version, "expired",
+            from_state="paused", end_reason="pause_expired",
+        )
+        Turn.objects.filter(pk=turn.pk).update(
+            pause_expires_at=timezone.now() - timedelta(minutes=1),
+        )
+        llm.create_message = AsyncMock(side_effect=[_response([_text("It expired.")])])
+        _run(_collect(resume_after_expiry(
+            context=self._context(turn), preferences={},
+        )))
+        messages = llm.create_message.await_args.kwargs["messages"]
+        _assert_history_paired(messages)
+        answer = next(
+            message["content"] for message in messages
+            if message.get("role") == "user"
+            and isinstance(message.get("content"), list)
+            and any(b.get("type") == "tool_result" for b in message["content"])
+        )
+        results = [b for b in answer if b.get("type") == "tool_result"]
+        self.assertEqual([b["tool_use_id"] for b in results], ["a1", "g1"])
+        turn.refresh_from_db()
+        self.assertIsNone(turn.paused_state_enc)
+
+
+class MissingApprovalTests(_PauseHarness):
+    def test_a_paused_turn_with_no_approval_row_never_runs_on_yes(self):
+        turn = self._turn()
+        call = {"id": "c1", "name": "send_email", "input": {"to": "a@b.c"}}
+        self._pause(turn, [call])
+        cache.clear()
+
+        events = _run(_collect(resume_after_confirmation(
+            context=self._context(turn), preferences={},
+        )))
+
+        self.assertEqual(self.execute_tool.await_count, 0)
+        self.assertTrue(any(e.kind == "error" for e in events))
+        turn.refresh_from_db()
+        self.assertEqual(turn.state, "failed")
+
+    def test_a_row_write_failure_fails_the_pause_closed(self):
+        turn = self._turn()
+        self._llm([
+            _response(
+                [_tool("c1", "send_email", {"to": "a@b.c"})],
+                stop_reason="tool_use",
+            ),
+        ])
+        with patch(
+            "orchestration.agent_loop.save_pending_confirmation",
+            new=AsyncMock(side_effect=RuntimeError("db down")),
+        ):
+            events = _run(_collect(run_agent_loop(
+                user_message="send it", context=self._context(turn), preferences={},
+            )))
+
+        self.assertEqual(self.execute_tool.await_count, 0)
+        self.assertFalse(any(e.kind == "confirmation" for e in events))
+        self.assertTrue(any(
+            e.kind == "error" and "could not record" in e.data.get("message", "").lower()
+            for e in events
+        ))
+        turn.refresh_from_db()
+        self.assertEqual(turn.state, "failed")
+
+    def test_a_missing_or_mismatched_hash_set_denies(self):
+        turn = self._turn()
+        call = {"id": "c1", "name": "send_email", "input": {"to": "a@b.c"}}
+        self._pause(turn, [call], state={"pending_args_hashes": {}})
+        _run(save_pending_confirmation(
+            self.room.id, self.user.id, call, "Send?",
+            turn_id=turn.pk, calls=[call],
+        ))
+        cache.clear()
+
+        events = _run(_collect(resume_after_confirmation(
+            context=self._context(turn), preferences={},
+        )))
+        self.assertEqual(self.execute_tool.await_count, 0)
+        self.assertTrue(any(e.kind == "error" for e in events))
+
+
+class SupersedeAndTtlTests(_PauseHarness):
+    def test_a_quota_pause_supersedes_an_older_approval_and_clears_it(self):
+        from orchestration.llm_client import TokenQuotaExceeded
+
+        older = self._turn()
+        call = {"id": "old", "name": "send_email", "input": {"to": "a@b.c"}}
+        self._pause(older, [call])
+        newer = self._turn()
+        self._llm([TokenQuotaExceeded(1800, reason="limit")])
+
+        events = _run(_collect(run_agent_loop(
+            user_message="another task", context=self._context(newer), preferences={},
+        )))
+
+        self.assertTrue(any(e.kind == "paused" for e in events))
+        older.refresh_from_db()
+        newer.refresh_from_db()
+        self.assertEqual(older.state, "superseded")
+        self.assertIsNone(older.paused_state_enc)
+        self.assertEqual((newer.state, newer.pause_kind), ("paused", "quota"))
+        self.assertGreaterEqual(
+            (newer.pause_expires_at - timezone.now()).total_seconds(),
+            _quota_pause_ttl(1800) - 5,
+        )
+
+    def test_a_budget_pause_supersedes_an_older_approval(self):
+        older = self._turn()
+        call = {"id": "old", "name": "send_email", "input": {"to": "a@b.c"}}
+        self._pause(older, [call])
+        newer = self._turn()
+        self._llm([
+            _response(
+                [_tool("w1", "get_weather", {"city": "Nairobi"})],
+                stop_reason="tool_use",
+                usage={"input_tokens": 50, "output_tokens": 50},
+            ),
+        ])
+        with override_settings(AGENT_TURN_TOKEN_BUDGET=10, AGENT_TURN_TOKEN_BUDGET_MAX=100000):
+            events = _run(_collect(run_agent_loop(
+                user_message="long task", context=self._context(newer), preferences={},
+            )))
+
+        self.assertTrue(any(e.kind == "paused" for e in events))
+        older.refresh_from_db()
+        newer.refresh_from_db()
+        self.assertEqual(older.state, "superseded")
+        self.assertEqual((newer.state, newer.pause_kind), ("paused", "budget"))
+
+    def test_a_budget_pause_that_cannot_be_saved_does_not_offer_more_budget(self):
+        turn = self._turn()
+        self._llm([
+            _response(
+                [_tool("w1", "get_weather", {"city": "Nairobi"})],
+                stop_reason="tool_use",
+                usage={"input_tokens": 50, "output_tokens": 50},
+            ),
+        ])
+        with (
+            override_settings(AGENT_TURN_TOKEN_BUDGET=10, AGENT_TURN_TOKEN_BUDGET_MAX=100000),
+            patch(
+                "orchestration.agent_loop._persist_pause_state",
+                new=AsyncMock(return_value=False),
+            ),
+        ):
+            events = _run(_collect(run_agent_loop(
+                user_message="long task", context=self._context(turn), preferences={},
+            )))
+
+        sent = " ".join(e.data.get("message", "") for e in events if e.kind == "error")
+        self.assertNotIn("more budget", sent.lower())
+        self.assertIn("couldn't save", sent.lower())
+        turn.refresh_from_db()
+        self.assertEqual(turn.state, "failed")
+
+    def test_plaintext_columns_hold_no_raw_arguments_hashes_or_effects(self):
+        turn = self._turn()
+        call = {
+            "id": "c1",
+            "name": "send_email",
+            "input": {
+                "to": "a@b.c",
+                "api_key": "sk-live-0123456789abcdef",
+                "body": "hello",
+            },
+        }
+        _run(save_pending_confirmation(
+            self.room.id, self.user.id, call, "Send it?",
+            effects=["to a@b.c", "key sk-live-0123456789abcdef"],
+            turn_id=turn.pk, calls=[call],
+        ))
+        record = WorkflowApprovalRecord.objects.get(kind="agent_loop")
+        blob = json.dumps({
+            "message": record.approval_message,
+            "params": record.sanitized_params,
+            "metadata": record.metadata,
+        })
+        self.assertNotIn("sk-live-0123456789abcdef", blob)
+        self.assertNotIn("a@b.c", blob)
+        self.assertNotIn("args_hash", record.metadata["calls"][0])
+        self.assertNotIn("api_key", record.sanitized_params["calls"][0]["params"])
+        self.assertEqual(
+            record.sanitized_params["calls"][0]["params"]["to"],
+            "[REDACTED EMAIL]",
+        )
+
+    def test_pause_keeps_existing_budget_fields_and_binds_ciphertext_to_its_turn(self):
+        first = self._turn()
+        Turn.objects.filter(pk=first.pk).update(budget={"snapshot": "keep"})
+        call = {"id": "c1", "name": "send_email", "input": {"to": "a@b.c"}}
+        self._pause(first, [call], budget={"token_budget": 5})  # nosec B105 — test fixture, not a credential
+        first.refresh_from_db()
+        self.assertEqual(first.budget.get("snapshot"), "keep")
+        self.assertIn("token_budget", first.budget)
+        second = self._turn()
+        Turn.objects.filter(pk=second.pk).update(
+            paused_state_enc=first.paused_state_enc,
+        )
+        second.refresh_from_db()
+        self.assertIsNone(_run(turns_mod.aget_turn_paused_state(second)))
+
+    def test_a_stale_paused_state_write_loses_the_version_cas(self):
+        turn = self._turn()
+        call = {"id": "c1", "name": "send_email", "input": {"to": "a@b.c"}}
+        self._pause(turn, [call])
+        turn.refresh_from_db()
+        payload = {"messages": [], "pending_tools": [call]}
+        self.assertFalse(turns_mod.update_paused_state(
+            turn.pk, payload, expected_version=turn.version - 1,
+        ))
+        self.assertTrue(turns_mod.update_paused_state(
+            turn.pk, payload, expected_version=turn.version,
+        ))
+
+    def test_two_yes_on_a_bounded_pause_run_the_action_once(self):
+        turn = self._turn()
+        call = {"id": "c1", "name": "run_command", "input": {"command": "ls -la"}}
+        self._pause(turn, [call], state={
+            "pending_tier": "bounded",
+            "pending_tiers": ["bounded"],
+        })
+        _run(save_pending_confirmation(
+            self.room.id, self.user.id, call, "Run it?",
+            turn_id=turn.pk, calls=[call],
+        ))
+        self._llm([_response([_text("Done.")])])
+
+        first = _run(_collect(resume_after_confirmation(
+            context=self._context(turn), preferences={},
+        )))
+        second = _run(_collect(resume_after_confirmation(
+            context=self._context(turn), preferences={},
+        )))
+
+        self.assertEqual(self.execute_tool.await_count, 1)
+        self.assertTrue(any(e.kind == "done" for e in first))
+        self.assertTrue(any(e.kind == "error" for e in second))

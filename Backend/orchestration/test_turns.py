@@ -708,9 +708,10 @@ class CoordinatorTurnTests(_CoordinatorTurnBase):
         self.assertEqual(turn.state, "failed")
         self.assertEqual(turn.end_reason, "room_gone")
 
-    def test_autopilot_that_cannot_arm_keeps_the_pause_and_starts_a_new_turn(self):
+    def test_autopilot_that_cannot_arm_keeps_the_pause_without_a_new_turn(self):
         paused = self._paused_turn(end_reason="awaiting_approval")
-        # No coverable shell command, so the window cannot arm. The pause stays.
+        # No coverable shell command, so the window cannot arm. The pause stays
+        # on its own Turn; "autopilot" never confirms a mixed batch.
         self._handle(
             "autopilot",
             pending=True,
@@ -721,7 +722,8 @@ class CoordinatorTurnTests(_CoordinatorTurnBase):
         )
         paused.refresh_from_db()
         self.assertEqual(paused.state, "paused")
-        self.assertEqual(Turn.objects.filter(state="completed").count(), 1)
+        self.assertEqual(Turn.objects.count(), 1)
+        self.assertEqual(Turn.objects.filter(state="completed").count(), 0)
 
     def test_autopilot_arm_failure_holds_the_paused_turn(self):
         paused = self._paused_turn(end_reason="awaiting_approval")

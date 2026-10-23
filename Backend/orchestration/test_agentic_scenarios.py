@@ -738,7 +738,8 @@ class Scenario12RepeatedShellCommandTest(SimpleTestCase):
         self.assertEqual(mock_exec.await_count, 3)
         self.assertEqual(
             results[-1]["message"],
-            "Stopped retrying run_command after 2 failures in this turn. It can be tried again in a new message.",
+            "Stopped retrying run_command echo hi after 2 failures in this turn. "
+            "It can be tried again in a new message.",
         )
 
     @override_settings(SHELL_EXEC_PROFILE="open", SHELL_EXEC_PROFILES=["open"])

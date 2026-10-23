@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — consent semantics
+
+- **Pauses are durable and a question no longer cancels them** (#216, P3-3).
+  Approval, budget and quota pauses now live on the `Turn` in
+  `paused_state_enc`, encrypted with the room key, instead of a ten-minute
+  cache. A restart loses nothing: an exact whole-message **yes** resumes the
+  stored action and runs it exactly once, with the arguments that were shown.
+  Any other reply — a question, another request, another language — keeps the
+  action pending, runs as a new Turn that sees a harness note, and the harness
+  shows the pending prompt again last with a short approval id. A bare yes or
+  no with nothing pending gets an honest harness note. Approval expiry is
+  recorded as data (`AGENT_PAUSE_TTL_SECONDS`, default 600) and a late reply
+  says when it expired and that nothing ran. Every resolved call gets a
+  `tool_result` (`not executed: you declined` / `approval expired` /
+  `superseded by a newer request`), so history stays valid. Several gated calls
+  in one model step are held and shown in one prompt, then run together in
+  model order on one approval. `elapsed` spans the pause; the hard backstop
+  runs on active time, so a long human wait cannot trip it.
+
 ### Added
 
 - Every routed chat message now gets one durable **Turn** row (`orchestration.Turn`)

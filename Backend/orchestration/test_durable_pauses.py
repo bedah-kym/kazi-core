@@ -381,3 +381,60 @@ class ExpiryAndTimeTests(_PauseHarness):
             e.kind == "error" and "ran out of time" in e.data.get("message", "")
             for e in events
         ))
+
+
+class CoordinatorRestartTests(_PauseHarness):
+    def _coordinator(self):
+        from asgiref.sync import async_to_sync
+        from orchestration.coordinator import OrchestrationCoordinator
+
+        async def _send(*args, **kwargs):
+            return None
+
+        async def _send_step(*args, **kwargs):
+            return None
+
+        async def _run(query):
+            return await OrchestrationCoordinator().handle_message(
+                query=query,
+                user_id=self.user.id,
+                room_id=self.room.id,
+                username=self.user.username,
+                message_id=None,
+                send_chunk=_send,
+                send_step_event=_send_step,
+                get_context_prompt=AsyncMock(return_value=""),
+                bump_signals=MagicMock(),
+                history_messages=None,
+            )
+
+        with (
+            patch("orchestration.coordinator.load_memory_summary", AsyncMock(return_value=None)),
+            patch("orchestration.coordinator.get_user_preferences", lambda user_id, profile_obj=None: {}),
+            patch("orchestration.coordinator.cache", MagicMock()),
+            patch("orchestration.coordinator.record_event", MagicMock()),
+            patch("orchestration.coordinator._quota_resume_still_blocked", AsyncMock(return_value=None)),
+        ):
+            return async_to_sync(_run)
+
+    def test_a_fresh_coordinator_resumes_the_paused_action_on_yes(self):
+        call = {"id": "c1", "name": "send_email", "input": {"to": "a@b.c"}}
+        self._llm([
+            _response([_tool("c1", "send_email", call["input"])], stop_reason="tool_use"),
+            _response([_text("Sent.")]),
+        ])
+
+        run = self._coordinator()
+        run("send it")
+        turn = Turn.objects.get()
+        self.assertEqual((turn.state, turn.pause_kind), ("paused", "approval"))
+
+        # Restart: no cache, a brand-new coordinator, the same durable Turn.
+        cache.clear()
+        run("yes")
+
+        self.assertEqual(self.execute_tool.await_count, 1)
+        self.assertEqual(self.execute_tool.await_args.args[1], call["input"])
+        self.assertEqual(
+            WorkflowApprovalRecord.objects.get(kind="agent_loop").status, "approved",
+        )

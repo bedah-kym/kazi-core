@@ -535,9 +535,12 @@ class WorkflowApprovalRecord(models.Model):
     Covers two kinds of approval:
       - ``workflow``    — a step inside a durable workflow run (has workflow
         + execution FKs, written by the Temporal integration).
-      - ``agent_loop``  — a high-risk tool paused inside the ReAct agent loop
-        (no workflow/execution; scoped by ``room_id`` and the requesting user,
-        with the serialized loop state held in ``metadata``).
+      - ``agent_loop``  — one held batch of high-risk tools paused inside the
+        ReAct agent loop (no workflow/execution; scoped by ``room_id`` and the
+        requesting user, linked to the paused ``Turn`` whose encrypted
+        ``paused_state_enc`` holds the loop state). ``metadata.calls`` records
+        each call's id, tool name and argument hash; ``sanitized_params`` holds
+        only the sanitised display values.
     """
 
     STATUS_CHOICES = [
@@ -577,6 +580,15 @@ class WorkflowApprovalRecord(models.Model):
     )
 
     kind = models.CharField(max_length=20, choices=KIND_CHOICES, default='workflow')
+    # The paused Turn this agent-loop approval belongs to (one row per held
+    # batch). Workflow-kind rows leave it null.
+    turn = models.ForeignKey(
+        'orchestration.Turn',
+        on_delete=models.SET_NULL,
+        related_name='approval_records',
+        null=True,
+        blank=True,
+    )
     room_id = models.IntegerField(null=True, blank=True)
     step_id = models.CharField(max_length=120)
     service = models.CharField(max_length=50, blank=True)

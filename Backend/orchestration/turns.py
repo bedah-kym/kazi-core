@@ -11,7 +11,12 @@ because ``record_event`` does blocking file I/O.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import json
+import os
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any, Dict, Iterable, Optional
 
 from asgiref.sync import sync_to_async
@@ -200,11 +205,226 @@ def link_message(turn_id: str, message_id: Optional[int]) -> bool:
     return bool(Message.objects.filter(pk=message_id).update(turn_id=turn_id))
 
 
-def get_paused_turn(room_id: Any, user_id: Any) -> Optional[Turn]:
-    return (
+def get_paused_turn(
+    room_id: Any, user_id: Any, *, include_expired: bool = False,
+) -> Optional[Turn]:
+    """The room/user's paused Turn, expiring a stale one lazily on read."""
+    turn = (
         Turn.objects.filter(room_id=room_id, user_id=user_id, state="paused")
         .order_by("-created_at")
         .first()
+    )
+    if turn is None:
+        return None
+    if _pause_expired(turn):
+        expire_pause(turn)
+        return turn if include_expired else None
+    return turn
+
+
+def get_expired_pause(
+    room_id: Any, user_id: Any, *, within_seconds: int = 86400,
+) -> Optional[Turn]:
+    """The most recent pause this room/user let expire, for an honest reply.
+
+    The encrypted state is kept on the row so a late reply can be answered
+    with the calls that never ran. It is never executable.
+    """
+    cutoff = timezone.now() - timedelta(seconds=max(0, int(within_seconds)))
+    return (
+        Turn.objects.filter(
+            room_id=room_id,
+            user_id=user_id,
+            state="expired",
+            pause_kind__isnull=False,
+            ended_at__gte=cutoff,
+        )
+        .order_by("-ended_at")
+        .first()
+    )
+
+
+def _pause_expired(turn: Turn) -> bool:
+    return bool(turn.pause_expires_at and turn.pause_expires_at <= timezone.now())
+
+
+def pause_ttl_seconds() -> int:
+    """One TTL for every pause kind (D7); junk falls back to ten minutes."""
+    default = 600
+    try:
+        value = int(getattr(settings, "AGENT_PAUSE_TTL_SECONDS", default))
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+def pause_expiry(ttl: Optional[int] = None):
+    return timezone.now() + timedelta(seconds=ttl or pause_ttl_seconds())
+
+
+def _room_key(room_id: Any) -> Optional[str]:
+    from chatbot.models import Chatroom
+    from users.encryption import TokenEncryption
+
+    if not room_id:
+        return None
+    try:
+        key = (
+            Chatroom.objects.filter(pk=room_id)
+            .values_list("encryption_key", flat=True)
+            .first()
+        )
+    except Exception:
+        return None
+    if key and key.startswith("enc:"):
+        key = TokenEncryption.safe_decrypt(key[4:], default=None)
+    return key or None
+
+
+def _room_cipher(room_id: Any):
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    key = _room_key(room_id)
+    if not key:
+        return None
+    try:
+        return AESGCM(base64.b64decode(key.encode("utf-8")))
+    except Exception:
+        return None
+
+
+def _encode_b64(data: bytes) -> str:
+    return base64.b64encode(data).decode("utf-8").rstrip("=") + "=" * (-len(data) % 4)
+
+
+def encrypt_paused_state(room_id: Any, payload: Dict[str, Any]) -> Optional[str]:
+    """Encrypt the loop state with the room key, as chat messages are (D5)."""
+    cipher = _room_cipher(room_id)
+    if cipher is None:
+        return None
+    try:
+        nonce = os.urandom(12)
+        body = json.dumps(payload, default=str).encode("utf-8")
+        return json.dumps({
+            "v": 1,
+            "nonce": _encode_b64(nonce),
+            "data": _encode_b64(cipher.encrypt(nonce, body, None)),
+        })
+    except Exception:
+        return None
+
+
+def decrypt_paused_state(room_id: Any, blob: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Decrypt a paused state; unreadable means the caller must fail closed."""
+    cipher = _room_cipher(room_id)
+    if cipher is None or not blob:
+        return None
+    try:
+        envelope = json.loads(blob)
+        nonce = base64.b64decode(envelope["nonce"].encode("utf-8"))
+        data = base64.b64decode(envelope["data"].encode("utf-8"))
+        return json.loads(cipher.decrypt(nonce, data, None).decode("utf-8"))
+    except Exception:
+        return None
+
+
+def get_turn(turn_id: Any) -> Optional[Turn]:
+    if not turn_id:
+        return None
+    try:
+        return Turn.objects.filter(pk=turn_id).first()
+    except (ValueError, TypeError):
+        return None
+
+
+def get_turn_paused_state(turn: Optional[Turn]) -> Optional[Dict[str, Any]]:
+    if turn is None:
+        return None
+    return decrypt_paused_state(turn.room_id, turn.paused_state_enc)
+
+
+def pause_turn(
+    turn_id: Any,
+    expected_version: int,
+    *,
+    state_payload: Dict[str, Any],
+    pause_kind: str,
+    ttl: Optional[int] = None,
+    tainted: bool = False,
+    budget: Optional[Dict[str, Any]] = None,
+    active_seconds: Optional[float] = None,
+) -> bool:
+    """Persist a pause as the Turn's encrypted resting state.
+
+    The state is encrypted before the compare-and-set, so a failed encryption
+    refuses the pause instead of writing plaintext (fail closed).
+    """
+    turn = get_turn(turn_id)
+    if turn is None:
+        return False
+    encrypted = encrypt_paused_state(turn.room_id, state_payload)
+    if encrypted is None:
+        return False
+    expires_at = pause_expiry(ttl)
+    return transition(
+        str(turn.pk),
+        expected_version,
+        "paused",
+        from_state="running",
+        pause_kind=pause_kind,
+        pause_expires_at=expires_at,
+        paused_state_enc=encrypted,
+        tainted=bool(tainted),
+        budget=budget if budget is not None else {},
+        active_seconds=active_seconds,
+    )
+
+
+def update_paused_state(turn_id: Any, state_payload: Dict[str, Any]) -> bool:
+    """Refresh the resting state without moving the Turn (crash markers)."""
+    turn = get_turn(turn_id)
+    if turn is None:
+        return False
+    encrypted = encrypt_paused_state(turn.room_id, state_payload)
+    if encrypted is None:
+        return False
+    return bool(
+        Turn.objects.filter(pk=turn.pk, state__in=("paused", "running")).update(
+            paused_state_enc=encrypted,
+        )
+    )
+
+
+def clear_paused_state(turn_id: Any) -> bool:
+    if not turn_id:
+        return False
+    try:
+        return bool(
+            Turn.objects.filter(pk=turn_id).update(paused_state_enc=None)
+        )
+    except (ValueError, TypeError):
+        return False
+
+
+def expire_pause(turn: Turn) -> bool:
+    """Move a stale pause to ``expired`` once, keeping its state for a reply."""
+    return transition(
+        str(turn.pk),
+        turn.version,
+        "expired",
+        from_state="paused",
+        end_reason="pause_expired",
+    )
+
+
+def supersede_pause(turn: Turn, by_turn_id: Any) -> bool:
+    return transition(
+        str(turn.pk),
+        turn.version,
+        "superseded",
+        from_state="paused",
+        end_reason="superseded",
+        superseded_by_id=by_turn_id,
     )
 
 
@@ -224,6 +444,7 @@ def transition(
     tainted: Any = _UNSET,
     model: Any = _UNSET,
     pause_expires_at: Any = _UNSET,
+    paused_state_enc: Any = _UNSET,
     superseded_by_id: Any = _UNSET,
 ) -> bool:
     """Move a turn with one compare-and-set write.
@@ -253,6 +474,7 @@ def transition(
         "tainted": tainted,
         "model": model,
         "pause_expires_at": pause_expires_at,
+        "paused_state_enc": paused_state_enc,
         "superseded_by_id": superseded_by_id,
     }
     for field, value in optional.items():
@@ -261,6 +483,13 @@ def transition(
 
     if to_state in TERMINAL_STATES and ended_at is _UNSET:
         updates["ended_at"] = timezone.now()
+    # A finished turn keeps no resting state. ``expired`` and ``superseded``
+    # keep theirs briefly so a late reply can be answered honestly.
+    if (
+        to_state in ("completed", "failed", "cancelled")
+        and "paused_state_enc" not in updates
+    ):
+        updates["paused_state_enc"] = None
 
     try:
         with transaction.atomic():
@@ -336,6 +565,42 @@ async def aget_paused_turn(room_id: Any, user_id: Any) -> Optional[Turn]:
 
 async def atransition(turn_id: str, expected_version: int, to_state: str, **kwargs) -> bool:
     return await sync_to_async(transition)(turn_id, expected_version, to_state, **kwargs)
+
+
+async def aget_turn(turn_id: Any) -> Optional[Turn]:
+    return await sync_to_async(get_turn)(turn_id)
+
+
+async def aget_turn_paused_state(turn: Optional[Turn]) -> Optional[Dict[str, Any]]:
+    return await sync_to_async(get_turn_paused_state)(turn)
+
+
+async def apause_turn(*args, **kwargs) -> bool:
+    return await sync_to_async(pause_turn)(*args, **kwargs)
+
+
+async def aupdate_paused_state(turn_id: Any, state_payload: Dict[str, Any]) -> bool:
+    return await sync_to_async(update_paused_state)(turn_id, state_payload)
+
+
+async def aclear_paused_state(turn_id: Any) -> bool:
+    return await sync_to_async(clear_paused_state)(turn_id)
+
+
+async def aexpire_pause(turn: Turn) -> bool:
+    return await sync_to_async(expire_pause)(turn)
+
+
+async def asupersede_pause(turn: Turn, by_turn_id: Any) -> bool:
+    return await sync_to_async(supersede_pause)(turn, by_turn_id)
+
+
+async def aget_expired_pause(
+    room_id: Any, user_id: Any, *, within_seconds: int = 86400,
+) -> Optional[Turn]:
+    return await sync_to_async(get_expired_pause)(
+        room_id, user_id, within_seconds=within_seconds,
+    )
 
 
 def ref_from_turn(turn: Turn) -> TurnRef:

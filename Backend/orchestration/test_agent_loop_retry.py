@@ -141,11 +141,12 @@ class RetryAccountingTests(SimpleTestCase):
         self.assertEqual(len(saved["retry_counts"]), 1)
         self.assertNotIn("curl", next(iter(saved["retry_counts"])))
 
+    @patch("orchestration.agent_loop._resolve_persona", new_callable=AsyncMock, return_value=None)
     @patch("orchestration.agent_loop.get_llm_client")
     @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)
     @patch("orchestration.agent_loop.cache")
     def test_old_name_keyed_state_loads_and_resumes(
-        self, mock_cache, mock_exec, mock_get_llm,
+        self, mock_cache, mock_exec, mock_get_llm, mock_persona,
     ):
         from orchestration.agent_loop import load_loop_state, run_agent_loop
 
@@ -228,6 +229,15 @@ class CircuitBreakerTests(SimpleTestCase):
 class AgentLoopRetryIntegrationTests(SimpleTestCase):
     def setUp(self):
         reset_circuit_breakers()
+        # These tests run without a database, so the real persona lookup would
+        # fail closed and remove all tool reach. "No persona" is the case here.
+        persona_patcher = patch(
+            "orchestration.agent_loop._resolve_persona",
+            new_callable=AsyncMock,
+            return_value=None,
+        )
+        persona_patcher.start()
+        self.addCleanup(persona_patcher.stop)
 
     def tearDown(self):
         reset_circuit_breakers()
@@ -379,6 +389,62 @@ class AgentLoopRetryIntegrationTests(SimpleTestCase):
         self.assertIn("Stopped retrying run_command ls a", stopped)
         self.assertIn("after 2 failures in this turn.", stopped)
         self.assertNotIn("ls b", stopped)
+
+    @override_settings(SHELL_EXEC_PROFILE="standard")
+    @patch("orchestration.agent_loop.asyncio.sleep", new_callable=AsyncMock)
+    @patch("orchestration.agent_loop.get_llm_client")
+    @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)
+    @patch("orchestration.agent_loop.cache")
+    def test_refusal_label_does_not_carry_restricted_values(
+        self, mock_cache, mock_exec, mock_get_llm, mock_sleep,
+    ):
+        secrets = {
+            "password": "hunter2-secret",  # nosec B105 - test fixture - fake credential
+            "token": "tok-abc123",  # nosec B105 - test fixture - fake credential
+            "api_key": "key-xyz789",
+        }
+        # No command-like key, so the label falls back to the rendered input —
+        # the path where restricted values used to leak.
+        secret_input = {"city": "Nairobi", **secrets}
+        shell_input = {"command": "ls a"}
+        down = {"status": "error", "message": "The shell sidecar is unreachable."}
+        mock_cache.get.return_value = None
+        mock_exec.return_value = down
+        calls = [
+            _tool_use_block(f"w{i}", "get_weather", secret_input)
+            for i in range(3)
+        ] + [
+            _tool_use_block(f"s{i}", "run_command", shell_input)
+            for i in range(3)
+        ]
+        mock_llm = MagicMock()
+        mock_llm.create_message = AsyncMock(side_effect=[
+            _make_llm_response([call], stop_reason="tool_use") for call in calls
+        ] + [_make_llm_response([_text_block("Done.")], stop_reason="end_turn")])
+        mock_get_llm.return_value = mock_llm
+
+        from orchestration.agent_loop import run_agent_loop
+
+        events = run_async(collect_events(run_agent_loop(
+            user_message="Run it",
+            context={"user_id": 1, "room_id": 1, "username": "test"},
+        )))
+
+        messages = [
+            e.data.get("result", {}).get("message") or ""
+            for e in events if e.kind == "tool_result"
+        ]
+        weather_stopped = next(
+            m for m in messages if "Stopped retrying get_weather" in m
+        )
+        for value in secrets.values():
+            self.assertNotIn(value, weather_stopped)
+        shell_stopped = next(
+            m for m in messages if "Stopped retrying run_command" in m
+        )
+        self.assertIn("run_command ls a", shell_stopped)
+        for value in secrets.values():
+            self.assertNotIn(value, shell_stopped)
 
     @patch("orchestration.agent_loop.get_llm_client")
     @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)

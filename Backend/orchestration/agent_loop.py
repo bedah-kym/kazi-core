@@ -29,7 +29,7 @@ from orchestration.agent_prompts import (
 from orchestration.llm_client import TokenQuotaExceeded, _humanize_seconds, get_llm_client
 from orchestration.memory_state import update_memory_state_batch
 from orchestration.model_catalog import find_model, model_pref_key, parse_model_id, provider_configured
-from orchestration.security_policy import redact_sensitive_text
+from orchestration.security_policy import redact_sensitive_text, sanitize_parameters
 from orchestration.telemetry import record_event
 from orchestration.tool_executor import execute_tool, get_tool_risk_info, preview_tool
 from orchestration.tool_schemas import get_tool_definitions
@@ -741,16 +741,19 @@ def _describe_tool_call(name: str, tool_input: Dict[str, Any]) -> str:
     """A short, redacted label for the call a retry bound stopped."""
     detail = ""
     if isinstance(tool_input, dict):
+        # Drop restricted keys before rendering: redaction patterns do not
+        # match JSON form, where a quote sits between key and colon.
+        safe_input = sanitize_parameters(tool_input)
         for key in ("command", "cmd", "script", "query", "text"):
-            value = tool_input.get(key)
+            value = safe_input.get(key)
             if isinstance(value, str) and value.strip():
                 detail = value.strip()
                 break
         if not detail:
             try:
-                rendered = json.dumps(tool_input, sort_keys=True, default=str)
+                rendered = json.dumps(safe_input, sort_keys=True, default=str)
             except (TypeError, ValueError):
-                rendered = str(tool_input)
+                rendered = str(safe_input)
             if rendered not in ("{}", "null", ""):
                 detail = rendered
     label = f"{name} {detail}" if detail else name

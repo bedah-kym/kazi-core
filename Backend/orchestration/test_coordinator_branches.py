@@ -12,6 +12,7 @@ from django.test import SimpleTestCase
 
 from orchestration.agent_loop import AgentEvent
 from orchestration.coordinator import OrchestrationCoordinator
+from orchestration.testsupport import turn_test_patches
 
 
 def _empty_preferences(user_id, profile_obj=None):
@@ -44,6 +45,7 @@ class CoordinatorBranchTests(SimpleTestCase):
             # A quota pause defaults to the hour having freed, so tests that do
             # not care about the check resume as before (T-F3b).
             "orchestration.coordinator._quota_resume_still_blocked": AsyncMock(return_value=None),
+            **turn_test_patches(),
         }
         defaults.update(patches or {})
         for target, new in defaults.items():

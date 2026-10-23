@@ -15,6 +15,7 @@ from asgiref.sync import async_to_sync
 from django.test import SimpleTestCase
 
 from orchestration.coordinator import OrchestrationCoordinator
+from orchestration.testsupport import turn_test_patches
 from orchestration.agent_loop import AgentEvent
 
 
@@ -40,6 +41,7 @@ def _base_patches():
         "orchestration.coordinator.has_pending_agent_state": AsyncMock(return_value=False),
         "orchestration.coordinator.record_event": MagicMock(),
         "orchestration.coordinator.cache": MagicMock(),
+        **turn_test_patches(),
     }
 
 
@@ -57,7 +59,11 @@ class OrchestrationCoordinatorTests(SimpleTestCase):
                 **callbacks,
             )
 
-        return async_to_sync(run)()
+        patches = turn_test_patches()
+        with ExitStack() as stack:
+            for target, value in patches.items():
+                stack.enter_context(patch(target, new=value))
+            return async_to_sync(run)()
 
     def _run(self, query, patches=None, callbacks=None):
         """Run handle_message with the base patches plus extras (returns result)."""

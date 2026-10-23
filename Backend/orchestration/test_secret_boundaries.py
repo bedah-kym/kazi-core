@@ -22,6 +22,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from django.test import SimpleTestCase, override_settings
 
+from orchestration.testsupport import turn_test_patches
+
 SENTINEL = "fake-token-otter-4471"
 
 # Every setting and environment variable that holds a secret the server reads.
@@ -133,6 +135,8 @@ def _run_coordinator_turn(query, mock_llm):
         stack.enter_context(patch("orchestration.coordinator.get_user_preferences", new=lambda user_id, profile_obj=None: {}))
         stack.enter_context(patch("orchestration.coordinator.has_pending_agent_state", new=AsyncMock(return_value=False)))
         stack.enter_context(patch("orchestration.coordinator.cache", new=coordinator_cache))
+        for target, value in turn_test_patches().items():
+            stack.enter_context(patch(target, new=value))
         return async_to_sync(_go)()
 
 

@@ -1,7 +1,87 @@
+import uuid
+
 from django.db import models
 from django.contrib.auth import get_user_model
 
 User = get_user_model()
+
+
+class Turn(models.Model):
+    """Durable record of one logical chat turn (#216a).
+
+    The coordinator is its only writer. ``version`` is the fencing token: a
+    transition is a compare-and-set on ``(id, version)``, so a writer that lost
+    the race changes nothing. States are deliberately coarse (D2); the
+    in-flight phase stays in memory, frames and telemetry.
+    """
+
+    STATE_CHOICES = [
+        ("queued", "Queued"),
+        ("running", "Running"),
+        ("paused", "Paused"),
+        ("committing", "Committing"),
+        ("completed", "Completed"),
+        ("failed", "Failed"),
+        ("cancelled", "Cancelled"),
+        ("superseded", "Superseded"),
+        ("expired", "Expired"),
+    ]
+    PAUSE_KIND_CHOICES = [
+        ("approval", "Approval"),
+        ("budget", "Budget"),
+        ("quota", "Quota"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    # The record outlives its room so a deletion mid-turn can be recorded
+    # honestly as failed(room_gone) instead of erasing history.
+    room = models.ForeignKey(
+        "chatbot.Chatroom", null=True, on_delete=models.SET_NULL, related_name="turns",
+    )
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="turns")
+    state = models.CharField(max_length=20, choices=STATE_CHOICES, default="queued")
+    pause_kind = models.CharField(max_length=20, choices=PAUSE_KIND_CHOICES, null=True, blank=True)
+    end_reason = models.CharField(max_length=64, null=True, blank=True)
+    partial = models.BooleanField(default=False)
+    version = models.IntegerField(default=0)
+    # Ownership and leasing arrive in P3-4; both stay null here.
+    owner_id = models.CharField(max_length=128, null=True, blank=True)
+    lease_expires_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    ended_at = models.DateTimeField(null=True, blank=True)
+    deadline_at = models.DateTimeField(null=True, blank=True)
+    active_seconds = models.FloatField(default=0.0)
+    attempt = models.IntegerField(default=0)
+    budget = models.JSONField(default=dict, blank=True)
+    tainted = models.BooleanField(default=False)
+    model = models.CharField(max_length=100, blank=True, default="")
+    # P3-3 fills the encrypted pause body; it stays empty in this PR.
+    paused_state_enc = models.TextField(null=True, blank=True)
+    pause_expires_at = models.DateTimeField(null=True, blank=True)
+    superseded_by = models.ForeignKey(
+        "self", null=True, blank=True, on_delete=models.SET_NULL, related_name="supersedes",
+    )
+    schema_version = models.IntegerField(default=1)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["room", "user"],
+                condition=models.Q(state__in=["running", "committing"]),
+                name="uniq_turn_active_room_user",
+            ),
+            models.UniqueConstraint(
+                fields=["room", "user"],
+                condition=models.Q(state="paused"),
+                name="uniq_turn_paused_room_user",
+            ),
+        ]
+        indexes = [models.Index(fields=["state", "lease_expires_at"])]
+
+    def __str__(self):
+        return f"Turn({self.id}, {self.state})"
 
 
 class ActionReceipt(models.Model):

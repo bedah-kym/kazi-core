@@ -138,6 +138,11 @@ class CoordinatorLoadedProfileFailsClosedTests(TestCase):
             patch("orchestration.coordinator.run_agent_loop", _fake_loop),
             patch("orchestration.coordinator.record_event"),
             patch("orchestration.coordinator.cache", MagicMock()),
+            patch("orchestration.coordinator.aget_paused_turn", new=AsyncMock(return_value=None)),
+            patch("orchestration.coordinator.acreate_turn", new=AsyncMock(return_value=__import__("types").SimpleNamespace(pk="00000000-0000-0000-0000-000000000001", version=0, state="queued"))),
+            patch("orchestration.coordinator.atransition", new=AsyncMock(return_value=True)),
+            patch("orchestration.coordinator.alink_message", new=AsyncMock(return_value=True)),
+            patch("orchestration.coordinator._room_exists", new=lambda room_id: True),
             patch(
                 "orchestration.preference_mining.merge_learned_overrides",
                 side_effect=AssertionError("must not merge after a failed load"),

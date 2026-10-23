@@ -252,3 +252,45 @@ class RouterLogPrivacyTests(TransactionTestCase):
                 ))
 
         self.assertNotIn(FAKE, "\n".join(messages))
+
+
+class TurnTransitionTelemetryPrivacyTests(TransactionTestCase):
+    """T-S2: a Turn transition records ids, states, reasons and counts only."""
+
+    def test_transition_telemetry_carries_no_message_text_or_tool_inputs(self):
+        from django.utils import timezone
+
+        from chatbot.models import Chatroom, Member, Message
+        from orchestration.models import Turn
+        from orchestration.turns import create_turn, transition
+
+        user = User.objects.create_user(
+            username="turn-privacy", password="fake-token",  # nosec B106
+        )
+        member, _ = Member.objects.get_or_create(User=user)
+        room = Chatroom.objects.create()
+        message = Message.objects.create(
+            member=member, content=FAKE, timestamp=timezone.now(),
+        )
+
+        with patch("orchestration.turns.record_event") as mock_record:
+            turn = create_turn(
+                room_id=room.id, user_id=user.id, request_message_id=message.id,
+            )
+            transition(str(turn.pk), turn.version, "running", from_state="queued")
+            transition(
+                str(turn.pk), turn.version + 1, "paused",
+                from_state="running", pause_kind="approval",
+                end_reason="awaiting_approval",
+            )
+
+        recorded = json.dumps([call.args for call in mock_record.call_args_list], default=str)
+        self.assertNotIn(FAKE, recorded)
+        allowed = {
+            "turn_id", "room_id", "user_id", "state", "schema_version",
+            "from", "to", "pause_kind", "end_reason", "partial", "version",
+        }
+        for call in mock_record.call_args_list:
+            self.assertEqual(call.args[0] in {"turn_created", "turn_transition", "turn_paused"}, True)
+            self.assertLessEqual(set(call.args[1]), allowed)
+        self.assertEqual(Turn.objects.count(), 1)

@@ -8,6 +8,7 @@ from django.test import SimpleTestCase
 
 from orchestration.agent_loop import AgentEvent, run_agent_loop
 from orchestration.coordinator import OrchestrationCoordinator
+from orchestration.testsupport import turn_test_patches
 
 
 def run_async(coro):
@@ -48,6 +49,7 @@ def _run_coordinator_turn(reply):
         "orchestration.coordinator.cache": cache,
         "orchestration.coordinator.record_event": record,
         "orchestration.coordinator.run_agent_loop": _events,
+        **turn_test_patches(),
     }
 
     async def run():

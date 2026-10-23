@@ -1108,7 +1108,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                     return Message.objects.create(
                                         member=ai_member,
                                         content=payload,
-                                        timestamp=timezone.now()
+                                        timestamp=timezone.now(),
+                                        turn_id=(result.turn_id or None),
                                     )
 
                                 ai_message = await sync_to_async(_create_ai_message)()

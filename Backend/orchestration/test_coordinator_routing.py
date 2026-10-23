@@ -11,6 +11,7 @@ from django.test import SimpleTestCase
 
 from orchestration.agent_loop import AgentEvent
 from orchestration.coordinator import OrchestrationCoordinator
+from orchestration.testsupport import turn_test_patches
 
 
 def _empty_prefs(user_id, profile_obj=None):
@@ -45,6 +46,7 @@ class RoutingBranchTests(SimpleTestCase):
             "orchestration.coordinator.has_pending_agent_state": AsyncMock(return_value=False),
             "orchestration.coordinator.cache": cache,
             "orchestration.coordinator.record_event": MagicMock(),
+            **turn_test_patches(),
         }
         if mocks:
             spec.update(mocks)

@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Every routed chat message now gets one durable **Turn** row (`orchestration.Turn`)
+  with a stable `turn_id` that survives approval, budget and quota resumes
+  (#216a). The coordinator is its only writer, and transitions are a single
+  compare-and-set on `(id, version)`, so a writer that lost the race changes
+  nothing. States are coarse (`queued`, `running`, `paused`, `committing` plus
+  terminals), pauses record `pause_kind`, and every ending carries an honest
+  `end_reason` and `partial` flag. The user's request and the replies link to
+  their Turn through a nullable `Message.turn`; telemetry uses `turn_id` and
+  never records tool inputs or message text. The loop's repeated
+  safety-policy stop, pause limit and refusal/unknown stops now end as
+  `safety_stop`, `pause_limit` and `refusal` rather than `finished`, and a
+  confirmation pause emits a paused signal. A room deleted mid-turn records
+  `failed(room_gone)`.
+
 - A **lite, chat-only profile** (`KAZI_LITE_PROFILE=1`), independent of
   `DEBUG`: one uvicorn web worker, LocMem cache, in-memory Channels, no Redis,
   no Celery worker or beat, and no Temporal. It requires exactly one web

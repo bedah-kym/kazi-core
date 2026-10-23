@@ -1549,6 +1549,7 @@ def _load_skill(tool_input: Dict[str, Any], context: Dict[str, Any]) -> Dict[str
                 "skill": result.get("skill"),
                 "user_id": context.get("user_id"),
                 "room_id": context.get("room_id"),
+                "turn_id": context.get("turn_id"),
             })
         return result
     except Exception as exc:
@@ -1797,6 +1798,7 @@ async def _run_sub_agent(
             "tokens_used": tokens_used,
             "user_id": context.get("user_id"),
             "room_id": context.get("room_id"),
+            "turn_id": context.get("turn_id"),
         })
 
     summary = "\n".join(collected_text)
@@ -2206,6 +2208,7 @@ async def run_agent_loop(
                     record_event("context_compacted", {
                         "user_id": user_id,
                         "room_id": room_id,
+                        "turn_id": context.get("turn_id"),
                         "kept_messages": len(history),
                         "history_max_chars": int(getattr(settings, "HISTORY_MAX_CHARS", 60000)),
                     })
@@ -2358,6 +2361,7 @@ async def run_agent_loop(
             record_event("web_search_used", {
                 "user_id": user_id,
                 "room_id": room_id,
+                "turn_id": context.get("turn_id"),
                 "searches": search_count,
                 "remaining": get_remaining_searches(user_id),
             })
@@ -2447,6 +2451,7 @@ async def run_agent_loop(
                 record_event("agent_budget_requested", {
                     "user_id": user_id,
                     "room_id": room_id,
+                    "turn_id": context.get("turn_id"),
                     "used": state.tokens_used,
                     "budget": state.token_budget,
                 })
@@ -2664,6 +2669,9 @@ async def run_agent_loop(
                     "effects": effects,
                     "tier": tier,
                 })
+                # The durable record gets an honest pause signal instead of the
+                # loop returning silently; no user-facing frame changes.
+                yield AgentEvent("paused", {"pause_kind": "approval"})
                 # Pause the loop — consumer will resume after user confirms
                 return
 
@@ -2677,6 +2685,7 @@ async def run_agent_loop(
             # let the model keep rewording attempts until its budget is gone.
             recent = state.tool_call_log[-3:]
             if len(recent) == 3 and all(_is_policy_block(entry.get("output")) for entry in recent):
+                state.end_reason = "safety_stop"
                 yield AgentEvent("error", {
                     "message": "I was blocked by the safety policy repeatedly, so I stopped this request.",
                 })
@@ -2691,6 +2700,7 @@ async def run_agent_loop(
             # bounded: a provider that pauses forever must still end the turn.
             consecutive_pauses += 1
             if consecutive_pauses > MAX_CONSECUTIVE_PAUSES:
+                state.end_reason = "pause_limit"
                 yield AgentEvent("error", {
                     "message": "The model paused repeatedly and did not finish this request.",
                 })
@@ -2702,6 +2712,7 @@ async def run_agent_loop(
             # ...). End the turn: re-sending the same messages would loop until
             # the iteration cap and never answer. Any text the model already
             # wrote was emitted above and is kept.
+            state.end_reason = "refusal"
             if stop_reason == "refusal":
                 yield AgentEvent("text_delta", {
                     "text": "\n\n*(The model declined to answer this request.)*",
@@ -2748,6 +2759,7 @@ async def run_agent_loop(
     record_event("agent_loop_done", {
         "user_id": user_id,
         "room_id": room_id,
+        "turn_id": context.get("turn_id"),
         "iterations": state.iteration,
         "tool_calls": state.tool_call_count,
         "tokens_used": state.tokens_used,

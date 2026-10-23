@@ -1,0 +1,213 @@
+"""The durable Turn record and its one transition function (#216a).
+
+A transition is a single compare-and-set write on ``(id, version)``. The
+``version`` column is the fencing token: a writer whose conditional update
+changes zero rows has lost ownership, writes nothing further and learns it
+from the ``False`` return. Terminal states have no outgoing edges.
+
+Everything here is sync; callers use the ``a*`` wrappers so the ORM does not
+touch the event loop. Telemetry is emitted from inside the same sync function
+because ``record_event`` does blocking file I/O.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Dict, Iterable, Optional
+
+from asgiref.sync import sync_to_async
+from django.db.models import F
+from django.utils import timezone
+
+from orchestration.models import Turn
+from orchestration.telemetry import record_event
+
+TERMINAL_STATES = frozenset({
+    "completed", "failed", "cancelled", "superseded", "expired",
+})
+
+# to-state -> states it may be entered from. A terminal state is never a key,
+# so no transition can leave one.
+ALLOWED: Dict[str, frozenset] = {
+    "running": frozenset({"queued", "paused"}),
+    "paused": frozenset({"running"}),
+    "committing": frozenset({"running"}),
+    "completed": frozenset({"committing"}),
+    "failed": frozenset({"running", "committing"}),
+    "cancelled": frozenset({"queued", "running", "paused"}),
+    "superseded": frozenset({"paused"}),
+    "expired": frozenset({"queued", "paused"}),
+}
+
+_UNSET = object()
+
+
+@dataclass(frozen=True)
+class TurnRef:
+    """A caller's in-memory view of a Turn; ``version`` is the expected fence."""
+
+    id: str
+    version: int
+    state: str
+
+
+def _ref(turn: Turn) -> TurnRef:
+    return TurnRef(id=str(turn.pk), version=turn.version, state=turn.state)
+
+
+def create_turn(
+    *,
+    room_id: Any,
+    user_id: Any,
+    request_message_id: Optional[int] = None,
+    model: str = "",
+    budget: Optional[Dict[str, Any]] = None,
+) -> Turn:
+    """Create the one row for a routed message and link the request to it."""
+    turn = Turn.objects.create(
+        room_id=room_id,
+        user_id=user_id,
+        state="queued",
+        model=(model or "")[:100],
+        budget=budget or {},
+    )
+    if request_message_id is not None:
+        link_message(str(turn.pk), request_message_id)
+    record_event("turn_created", {
+        "turn_id": str(turn.pk),
+        "room_id": room_id,
+        "user_id": user_id,
+        "state": turn.state,
+        "schema_version": turn.schema_version,
+    })
+    return turn
+
+
+def link_message(turn_id: str, message_id: Optional[int]) -> bool:
+    """Attach a message to a turn without touching the turn row."""
+    if message_id is None:
+        return False
+    from chatbot.models import Message
+
+    return bool(Message.objects.filter(pk=message_id).update(turn_id=turn_id))
+
+
+def get_paused_turn(room_id: Any, user_id: Any) -> Optional[Turn]:
+    return (
+        Turn.objects.filter(room_id=room_id, user_id=user_id, state="paused")
+        .order_by("-created_at")
+        .first()
+    )
+
+
+def transition(
+    turn_id: str,
+    expected_version: int,
+    to_state: str,
+    *,
+    from_state: Optional[str] = None,
+    end_reason: Any = _UNSET,
+    pause_kind: Any = _UNSET,
+    partial: Any = _UNSET,
+    started_at: Any = _UNSET,
+    ended_at: Any = _UNSET,
+    active_seconds: Any = _UNSET,
+    budget: Any = _UNSET,
+    tainted: Any = _UNSET,
+    model: Any = _UNSET,
+    pause_expires_at: Any = _UNSET,
+    superseded_by_id: Any = _UNSET,
+) -> bool:
+    """Move a turn with one compare-and-set write.
+
+    Returns ``True`` only when this caller won the race. A lost race changes
+    nothing in the database and emits no telemetry.
+    """
+    allowed_from = ALLOWED.get(to_state)
+    if not allowed_from:
+        return False
+
+    updates: Dict[str, Any] = {
+        "state": to_state,
+        "version": F("version") + 1,
+    }
+    if to_state == "running":
+        updates["attempt"] = F("attempt") + 1
+
+    optional = {
+        "end_reason": end_reason,
+        "pause_kind": pause_kind,
+        "partial": partial,
+        "started_at": started_at,
+        "ended_at": ended_at,
+        "active_seconds": active_seconds,
+        "budget": budget,
+        "tainted": tainted,
+        "model": model,
+        "pause_expires_at": pause_expires_at,
+        "superseded_by_id": superseded_by_id,
+    }
+    for field, value in optional.items():
+        if value is not _UNSET:
+            updates[field] = value
+
+    if to_state in TERMINAL_STATES and ended_at is _UNSET:
+        updates["ended_at"] = timezone.now()
+
+    try:
+        updated = (
+            Turn.objects.filter(
+                pk=turn_id,
+                version=expected_version,
+                state__in=allowed_from,
+            ).update(**updates)
+        )
+    except (ValueError, TypeError):
+        # A malformed id or an unusable value is a lost write, not a crash.
+        return False
+
+    if updated != 1:
+        return False
+
+    event = "turn_paused" if to_state == "paused" else "turn_transition"
+    payload = {
+        "turn_id": str(turn_id),
+        "from": from_state,
+        "to": to_state,
+        "pause_kind": updates.get("pause_kind"),
+        "end_reason": updates.get("end_reason"),
+        "partial": bool(updates.get("partial")) if "partial" in updates else None,
+        "version": expected_version + 1,
+    }
+    record_event(event, payload)
+    return True
+
+
+def advance(ref: TurnRef, to_state: str, **kwargs) -> Optional[TurnRef]:
+    """Transition a ``TurnRef`` and return the new ref, or ``None`` on loss."""
+    if not transition(ref.id, ref.version, to_state, from_state=ref.state, **kwargs):
+        return None
+    return TurnRef(id=ref.id, version=ref.version + 1, state=to_state)
+
+
+async def acreate_turn(**kwargs) -> Turn:
+    return await sync_to_async(create_turn)(**kwargs)
+
+
+async def alink_message(turn_id: str, message_id: Optional[int]) -> bool:
+    return await sync_to_async(link_message)(turn_id, message_id)
+
+
+async def aget_paused_turn(room_id: Any, user_id: Any) -> Optional[Turn]:
+    return await sync_to_async(get_paused_turn)(room_id, user_id)
+
+
+async def atransition(turn_id: str, expected_version: int, to_state: str, **kwargs) -> bool:
+    return await sync_to_async(transition)(turn_id, expected_version, to_state, **kwargs)
+
+
+def ref_from_turn(turn: Turn) -> TurnRef:
+    return _ref(turn)
+
+
+def legal_from(to_state: str) -> Iterable[str]:
+    return ALLOWED.get(to_state, frozenset())

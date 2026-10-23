@@ -22,6 +22,10 @@ class Message(models.Model):
     content = models.TextField()
     timestamp = models.DateTimeField(null=False)
     parent = models.ForeignKey('self', null=True, blank=True, on_delete=models.SET_NULL, related_name='replies')
+    turn = models.ForeignKey(
+        'orchestration.Turn', null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='messages',
+    )
 
     # Voice features
     is_voice = models.BooleanField(default=False)

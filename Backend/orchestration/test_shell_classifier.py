@@ -120,6 +120,83 @@ class TierProfileMatrixTests(unittest.TestCase):
         self.assertEqual(result["tier"], TIER_BOUNDED)
 
 
+class OpenProfilePlainDeleteTests(unittest.TestCase):
+    """A plain file delete is bounded on the unsandboxed profile (no `open` sandbox)."""
+
+    PLAIN_DELETES = (
+        "del gate1.txt",
+        "del /q gate1.txt",
+        "erase gate1.txt",
+        "rm notes.txt",
+        "rm -f notes.txt",
+        "unlink notes.txt",
+        "Remove-Item notes.txt",
+        "ri notes.txt",
+        "powershell -Command \"Remove-Item notes.txt\"",
+        "rmdir empty_folder",
+        "rd empty_folder",
+        "git clean -f",
+        "git clean -fd",
+        "git clean -fdx",
+        "cd build && del gate1.txt",
+    )
+
+    def test_plain_delete_is_bounded_on_open(self):
+        for command in self.PLAIN_DELETES:
+            result = classify_command(command, "open")
+            self.assertEqual(result["tier"], TIER_BOUNDED, command)
+            self.assertFalse(result["destructive"], command)
+            self.assertIn("deletes files", result["reason"].lower(), command)
+
+    def test_plain_delete_is_unchanged_on_sandboxed_profiles(self):
+        for command in (
+            "del gate1.txt",
+            "rm notes.txt",
+            "Remove-Item notes.txt",
+            "git clean -fd",
+        ):
+            for profile in ("standard", "locked"):
+                self.assertEqual(classify_command(command, profile)["tier"], TIER_SAFE, (profile, command))
+
+    def test_recursive_and_wildcard_deletes_stay_destructive_on_open(self):
+        for command in (
+            "rd /s /q build",
+            "rmdir /s /q build",
+            "rm -rf x",
+            "rm -r build",
+            "rm -R build",
+            "rm --recursive build",
+            "rm *",
+            "del /s *",
+            "del *.txt",
+            "Remove-Item -Recurse x",
+            "git rm -r tracked",
+            "git clean -f '*.log'",
+        ):
+            self.assertEqual(classify_command(command, "open")["tier"], TIER_DESTRUCTIVE, command)
+
+    def test_delete_verbs_only_count_in_verb_position(self):
+        for command in (
+            "docker run --rm img",
+            "docker compose run --rm web pytest -r a",
+            "git rm --cached notes.txt",
+            "grep rm notes.txt",
+            "echo del notes.txt",
+            "Get-ChildItem rm",
+            "cat /tmp/del/notes.txt",
+            "python del.py",
+            "zip rm.zip",
+        ):
+            self.assertEqual(classify_command(command, "open")["tier"], TIER_SAFE, command)
+
+    def test_git_rm_of_a_tracked_file_asks_on_open(self):
+        self.assertEqual(classify_command("git rm tracked.txt", "open")["tier"], TIER_BOUNDED)
+        self.assertEqual(classify_command("git rm --cached tracked.txt", "open")["tier"], TIER_SAFE)
+        self.assertEqual(classify_command("git rm -r tracked", "open")["tier"], TIER_DESTRUCTIVE)
+        for profile in ("standard", "locked"):
+            self.assertEqual(classify_command("git rm tracked.txt", profile)["tier"], TIER_SAFE)
+
+
 class ObfuscationTests(unittest.TestCase):
     def test_obfuscated_destructive_is_a_safe_tier_but_not_unguarded(self):
         """A classifier miss is acceptable: the sandbox still bounds it.

@@ -210,8 +210,9 @@ def build_environment_block(env: Optional[Dict[str, Any]]) -> str:
         lines.append("- This room's shell has full network access.")
         lines.append(
             f"- The harness asks the user before a command {recently}, when the command needs "
-            "root, or when it is on the harness's short destructive list. Otherwise the command "
-            "runs at once. While the user has autopilot armed, only the destructive list asks."
+            "root, when it deletes files on this unsandboxed host, or when it is on the harness's "
+            "short destructive list. Otherwise the command runs at once. While the user has "
+            "autopilot armed, a plain delete runs without asking and only the destructive list asks."
         )
         lines.append(
             "- Your part is to call the tool. The harness then asks the user and shows them "

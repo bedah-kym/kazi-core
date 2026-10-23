@@ -84,6 +84,47 @@ class OpenProfileTests(SimpleTestCase):
         self.assertEqual(_bucket("rm -rf /", "open", armed=True), "ask")
         self.assertEqual(_bucket("rm -rf /", "open", tainted=True, armed=True), "ask")
 
+    def test_plain_delete_asks_in_a_clean_turn(self):
+        for command in (
+            "del gate1.txt",
+            "rm notes.txt",
+            "Remove-Item a.txt",
+            "erase x",
+            "unlink x",
+            "git clean -fd",
+        ):
+            self.assertEqual(_bucket(command, "open"), "ask", command)
+
+    def test_armed_window_covers_a_plain_delete(self):
+        for command in (
+            "del gate1.txt",
+            "rm notes.txt",
+            "Remove-Item a.txt",
+            "erase x",
+            "unlink x",
+            "git clean -fd",
+        ):
+            self.assertEqual(_bucket(command, "open", armed=True), "auto", command)
+
+    def test_plain_delete_still_asks_when_tainted(self):
+        for command in ("del gate1.txt", "rm notes.txt", "Remove-Item a.txt"):
+            self.assertEqual(_bucket(command, "open", tainted=True), "ask", command)
+
+    def test_recursive_or_wildcard_delete_is_never_covered(self):
+        for command in (
+            "rd /s /q build",
+            "rm -rf x",
+            "del /s *",
+            "Remove-Item -Recurse x",
+            "rm -r build",
+            "del *.txt",
+        ):
+            self.assertEqual(_bucket(command, "open", armed=True), "ask", command)
+
+    def test_plain_delete_is_unchanged_when_sandboxed(self):
+        for profile in ("standard", "locked"):
+            self.assertEqual(_bucket("rm notes.txt", profile), "auto", profile)
+
 
 class RiskInfoTests(SimpleTestCase):
     def test_reports_egress_and_basis(self):

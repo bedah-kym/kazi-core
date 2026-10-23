@@ -65,6 +65,113 @@ _POWERSHELL_PREFIX = re.compile(
     r"^(?:powershell|pwsh)(?:\.exe)?\s+(?:-\w+\s+)*?-(?:command|c)\s+[\"']?", re.IGNORECASE,
 )
 
+# File-delete verbs, matched only as the command of a segment (never a flag or
+# a path). On `open` there is no sandbox to bound them, so a plain delete asks.
+_DELETE_VERBS = {"del", "erase", "rm", "unlink", "rmdir", "rd", "remove-item", "ri"}
+_WINDOWS_DELETE_VERBS = {"del", "erase", "rmdir", "rd", "remove-item", "ri"}
+
+
+def _short_flags(token: str) -> str:
+    token = token.strip("\"'")
+    if re.fullmatch(r"-[A-Za-z]+", token):
+        return token[1:].lower()
+    return ""
+
+
+def _is_recursive_option(token: str, *, windows: bool) -> bool:
+    clean = token.strip("\"'").lower()
+    if windows and clean == "/s":
+        return True
+    if clean in ("--recursive", "--recurse") or clean.startswith(("--recursive=", "--recurse=")):
+        return True
+    flags = _short_flags(clean)
+    if not flags:
+        return False
+    if windows:
+        return "s" in flags or "r" in flags
+    return "r" in flags
+
+
+def _has_wildcard(args: Iterable[str]) -> bool:
+    for raw in args:
+        token = raw.strip("\"'")
+        if token.startswith("-") or re.fullmatch(r"/[A-Za-z]", token):
+            continue
+        if "*" in token or "?" in token:
+            return True
+    return False
+
+
+def _delete_kind_for(verb: str, args: Iterable[str]) -> str:
+    windows = verb in _WINDOWS_DELETE_VERBS
+    args = list(args)
+    if any(_is_recursive_option(token, windows=windows) for token in args):
+        return "recursive"
+    if _has_wildcard(args):
+        return "recursive"
+    return "plain"
+
+
+def _clean_is_dry_run(token: str) -> bool:
+    return token in ("-n", "--dry-run") or "n" in _short_flags(token)
+
+
+def _clean_is_forced(token: str) -> bool:
+    return token == "--force" or "f" in _short_flags(token)  # nosec B105 - git flag, not a secret
+
+
+def _git_delete_kind(words: List[str]) -> str:
+    sub = _subcommand(words)
+    if not sub:
+        return ""
+    index = next(
+        (position for position, token in enumerate(words[1:], start=1) if token.strip("\"'") == sub),
+        None,
+    )
+    if index is None:
+        return ""
+    args = words[index + 1:]
+    if sub == "rm":
+        # `git rm --cached` only unstages; it leaves the working tree alone.
+        if any(token.strip("\"'").lower() == "--cached" for token in args):
+            return ""
+        if any(_is_recursive_option(token, windows=False) for token in args) or _has_wildcard(args):
+            return "recursive"
+        return "plain"
+    if sub == "clean":
+        flags = [token.strip("\"'").lower() for token in args]
+        if any(_clean_is_dry_run(token) for token in flags):
+            return ""
+        if not any(_clean_is_forced(token) for token in flags):
+            return ""
+        if _has_wildcard(args):
+            return "recursive"
+        return "plain"
+    return ""
+
+
+def _delete_kind(command: str) -> str:
+    """``plain``, ``recursive`` or empty for a delete in verb position."""
+    found = ""
+    for segment in _segments(command):
+        text = _POWERSHELL_PREFIX.sub("", " ".join(_words(segment)))
+        words = _command(text.strip().split())
+        if not words:
+            continue
+        verb = _basename(words[0]).lower()
+        if verb == "git":
+            kind = _git_delete_kind(words)
+        elif verb in _DELETE_VERBS:
+            kind = _delete_kind_for(verb, words[1:])
+        else:
+            kind = ""
+        if kind == "recursive":
+            return "recursive"
+        if kind == "plain":
+            found = "plain"
+    return found
+
+
 _NETWORK_BINARIES = {
     "ping", "ping6", "dig", "host", "nslookup", "curl", "wget", "ssh", "scp",
     "sftp", "ftp", "nc", "ncat", "netcat", "telnet", "traceroute", "tracepath",
@@ -360,13 +467,23 @@ def classify_command(
 
     root = needs_root(command)
     network = needs_network(command) or str(requested_network or "").strip().lower() == "bridge"
-    destructive = is_destructive(command)
+    # On `open` a plain delete has no sandbox below it, so it asks. Recursive
+    # and wildcard deletes stay on the destructive tripwire. Sandboxed
+    # profiles keep today's classification.
+    delete_kind = _delete_kind(command) if profile == "open" else ""
+    tripwire = is_destructive(command)
+    destructive = tripwire or delete_kind == "recursive"
     hosts = extract_hosts(command)
     allow = {str(host).strip().lower() for host in (allowlist or []) if str(host).strip()}
     allowlisted = bool(hosts) and all(host.lower() in allow for host in hosts)
 
     if destructive:
-        tier, reason = TIER_DESTRUCTIVE, "matches the destructive tripwire"
+        if tripwire:
+            tier, reason = TIER_DESTRUCTIVE, "matches the destructive tripwire"
+        else:
+            tier, reason = TIER_DESTRUCTIVE, "recursive or wildcard delete on the unsandboxed profile"
+    elif delete_kind == "plain":
+        tier, reason = TIER_BOUNDED, "deletes files on the unsandboxed profile"
     elif root:
         if profile == "open":
             tier, reason = TIER_BOUNDED, "needs root (inline confirmation on open)"

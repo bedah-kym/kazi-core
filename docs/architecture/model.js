@@ -326,9 +326,9 @@ window.KAZI_ARCH = {
          "payload": {"event": "agent_loop_done", "iterations": 1, "tool_calls": 0, "tokens_used": 7, "budget": 100000, "end_reason": "finished"},
          "refs": [{"file": "Backend/orchestration/telemetry.py", "symbol": "record_event"}]},
         {"level": "web", "edge": "w_cons_chan", "title": "Reply streamed to the room",
-         "body": "broadcast_chunk sends ai_stream chunks through the channel layer; the saved reply follows as ai_message_saved.",
+         "body": "broadcast_chunk sends ai_stream chunks through the channel layer; the saved reply follows as ai_message_saved from the one Kazi-message door, which encrypts it with the room key and records its origin.",
          "payload": {"command": "ai_stream", "chunk": "17 x 23 = 391.", "is_final": true},
-         "refs": [{"file": "Backend/orchestration/coordinator.py", "symbol": "broadcast_chunk"}]},
+         "refs": [{"file": "Backend/orchestration/coordinator.py", "symbol": "broadcast_chunk"}, {"file": "Backend/chatbot/kazi_messages.py", "symbol": "persist_kazi_message"}]},
         {"level": "host", "edge": "h_browser_web", "reverse": true, "title": "Rendered",
          "body": "main.js renders the stream into the Kazi bubble with the model badge.",
          "refs": [{"file": "Backend/chatbot/static/js/main.js", "symbol": "ai_stream"}]}
@@ -445,7 +445,8 @@ window.KAZI_ARCH = {
          "body": "Beat also fires check_due_reminders every REMINDER_SWEEP_SECONDS (3600) for anything missed.",
          "refs": [{"file": "Backend/chatbot/tasks.py", "symbol": "check_due_reminders"}]},
         {"level": "host", "edge": "h_browser_web", "reverse": true, "title": "In the room",
-         "body": "Delivered through the channel layer. In the dev in-memory mode nothing runs later, so a future reminder is never delivered (T-F5)."}
+         "body": "The worker writes the reminder through the one Kazi-message door with origin reminder, then pushes ai_message_saved; the model later sees it as a harness note, not its own speech. In the dev in-memory mode nothing runs later, so a future reminder is never delivered (T-F5).",
+         "refs": [{"file": "Backend/chatbot/kazi_messages.py", "symbol": "persist_kazi_message"}]}
       ]
     }
   ]

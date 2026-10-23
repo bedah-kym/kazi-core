@@ -5,8 +5,7 @@ import logging
 import json
 import re
 from datetime import datetime, timedelta
-from base64 import b64decode, b64encode
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from base64 import b64decode
 from cryptography.exceptions import InvalidKey
 from asgiref.sync import async_to_sync
 from typing import Optional, Dict, Any, Tuple
@@ -20,10 +19,16 @@ from .models import (
     RoomContext,
     RoomNote,
     DailySummary,
-    Member,
+)
+from .kazi_messages import (
+    ORIGIN_NUDGE,
+    ORIGIN_REMINDER,
+    KaziMessageError,
+    encrypt_content_for_room,
+    persist_kazi_message,
+    room_cipher,
 )
 from orchestration.llm_client import get_llm_client, extract_json
-from users.encryption import TokenEncryption
 from django.contrib.auth import get_user_model
 import os
 import traceback
@@ -563,56 +568,17 @@ def _deliver_reminder_to_chat(reminder: Reminder) -> bool:
     if not room:
         return False
     try:
-        from channels.layers import get_channel_layer
-
-        encrypted_payload = _encrypt_message_for_room(room, f"Reminder: {reminder.content}")
-        if not encrypted_payload:
-            return False
-
-        ai_user, _ = User.objects.get_or_create(
-            username='kazi',
-            defaults={
-                'first_name': 'Kazi',
-                'last_name': 'AI',
-                'is_active': True,
-                'email': 'kazi@kwikchat.ai'
-            }
+        # The persisted Message is the delivery: the helper's realtime push is
+        # best effort, so a push failure cannot make the row retry and post a
+        # duplicate into the room.
+        persist_kazi_message(
+            room,
+            content=f"Reminder: {reminder.content}",
+            origin=ORIGIN_REMINDER,
         )
-        ai_member = Member.objects.filter(User=ai_user).first()
-        if not ai_member:
-            ai_member = Member.objects.create(User=ai_user)
-        payload = json.dumps({
-            "data": encrypted_payload["data"],
-            "nonce": encrypted_payload["nonce"],
-        })
-        ai_message = Message.objects.create(
-            member=ai_member,
-            content=payload,
-            timestamp=timezone.now()
-        )
-        room.chats.add(ai_message)
-        room.save()
-
-        # The persisted Message is the delivery: a realtime push failure must
-        # not make the row retry and post a duplicate into the room.
-        try:
-            channel_layer = get_channel_layer()
-            async_to_sync(channel_layer.group_send)(
-                f"chat_{room.id}",
-                {
-                    "type": "ai_message_saved",
-                    "message": {
-                        "id": ai_message.id,
-                        "member": "kazi",
-                        "content": f"Reminder: {reminder.content}",
-                        "timestamp": str(ai_message.timestamp),
-                        "parent_id": None,
-                    }
-                }
-            )
-        except Exception as exc:
-            logger.warning("Reminder chat realtime push failed: %s", exc)
         return True
+    except KaziMessageError:
+        return False
     except Exception as exc:
         logger.warning("Reminder chat delivery failed: %s", exc)
         return False
@@ -1066,17 +1032,7 @@ def _normalize_base64(value):
 
 
 def _get_room_cipher(chatroom):
-    key = chatroom.encryption_key
-    if key and key.startswith("enc:"):
-        key = TokenEncryption.safe_decrypt(key[4:], default=None)
-    if not key:
-        return None
-    try:
-        session_key = b64decode(key.encode("utf-8"))
-        return AESGCM(session_key)
-    except Exception as exc:
-        logger.warning(f"Context summary: failed to init AESGCM ({exc})")
-        return None
+    return room_cipher(chatroom)
 
 
 def _decrypt_message_content(message, cipher):
@@ -1599,24 +1555,8 @@ def _archive_note_to_episode(note, reason=""):
     note.save(update_fields=["is_archived", "last_accessed_at", "updated_at"])
 
 
-def _encode_base64(data: bytes) -> str:
-    return b64encode(data).decode("utf-8").rstrip("=") + "=" * (-len(data) % 4)
-
-
 def _encrypt_message_for_room(room: Chatroom, content: str) -> Optional[Dict[str, str]]:
-    cipher = _get_room_cipher(room)
-    if cipher is None:
-        return None
-    nonce = os.urandom(12)
-    payload = json.dumps({
-        "content": content,
-        "timestamp": str(timezone.now()),
-    }).encode("utf-8")
-    encrypted = cipher.encrypt(nonce, payload, None)
-    return {
-        "data": _encode_base64(encrypted),
-        "nonce": _encode_base64(nonce),
-    }
+    return encrypt_content_for_room(room, content)
 
 
 _SIGNAL_TTL_SECONDS = 60 * 60 * 48
@@ -1820,53 +1760,11 @@ def send_idle_nudge(self, room_id: int, user_id: int, scheduled_at_iso: str):
             cache.delete(f"proactive:pending:{room_id}:{user_id}")
             return {"status": "skipped", "reason": "dismissed"}
 
-        encrypted_payload = _encrypt_message_for_room(room, message_text)
-        if not encrypted_payload:
+        try:
+            persist_kazi_message(room, content=message_text, origin=ORIGIN_NUDGE)
+        except KaziMessageError:
             cache.delete(f"proactive:pending:{room_id}:{user_id}")
             return {"status": "skipped", "reason": "encryption_failed"}
-
-        def _create_ai_message():
-            ai_user, _ = User.objects.get_or_create(
-                username='kazi',
-                defaults={
-                    'first_name': 'Kazi',
-                    'last_name': 'AI',
-                    'is_active': True,
-                    'email': 'kazi@kwikchat.ai'
-                }
-            )
-            ai_member = Member.objects.filter(User=ai_user).first()
-            if not ai_member:
-                ai_member = Member.objects.create(User=ai_user)
-            payload = json.dumps({
-                "data": encrypted_payload["data"],
-                "nonce": encrypted_payload["nonce"],
-            })
-            return Message.objects.create(
-                member=ai_member,
-                content=payload,
-                timestamp=timezone.now()
-            )
-
-        ai_message = _create_ai_message()
-        room.chats.add(ai_message)
-        room.save()
-
-        from channels.layers import get_channel_layer
-        channel_layer = get_channel_layer()
-        async_to_sync(channel_layer.group_send)(
-            f"chat_{room_id}",
-            {
-                "type": "ai_message_saved",
-                "message": {
-                    "id": ai_message.id,
-                    "member": "kazi",
-                    "content": message_text,
-                    "timestamp": str(ai_message.timestamp),
-                    "parent_id": ai_message.parent_id,
-                }
-            }
-        )
 
         cache.set(last_nudge_key, timezone.now().isoformat(), timeout=60 * 60 * 24)
         if reason:

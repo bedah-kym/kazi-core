@@ -722,8 +722,12 @@ async def save_pending_confirmation(
             status="pending",
             defaults=defaults,
         )
-        if not created and (record.expires_at is None or record.expires_at <= now):
-            # Refresh a stale-but-unswept row so the new pause is durable.
+        if not created and (
+            record.expires_at is None
+            or record.expires_at <= now
+            or str(record.turn_id) != str(turn_id)
+        ):
+            # Refresh a stale-or-other-turn row so this pause owns the row.
             for attr_name, value in defaults.items():
                 setattr(record, attr_name, value)
             record.save(update_fields=list(defaults.keys()))

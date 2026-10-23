@@ -8,6 +8,7 @@ sees the results, and iterates until the task is complete.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -28,7 +29,7 @@ from orchestration.agent_prompts import (
 from orchestration.llm_client import TokenQuotaExceeded, _humanize_seconds, get_llm_client
 from orchestration.memory_state import update_memory_state_batch
 from orchestration.model_catalog import find_model, model_pref_key, parse_model_id, provider_configured
-from orchestration.security_policy import redact_sensitive_text
+from orchestration.security_policy import redact_sensitive_text, sanitize_parameters
 from orchestration.telemetry import record_event
 from orchestration.tool_executor import execute_tool, get_tool_risk_info, preview_tool
 from orchestration.tool_schemas import get_tool_definitions
@@ -115,7 +116,7 @@ class LoopState:
     tokens_used: int = 0  # cumulative *work* tokens this turn (T-F3)
     start_time: float = 0.0
     tool_call_log: List[Dict[str, Any]] = field(default_factory=list)
-    retry_counts: Dict[str, int] = field(default_factory=dict)  # tool_name -> retry count
+    retry_counts: Dict[str, int] = field(default_factory=dict)  # call digest -> retry count
     paused_for_confirmation: bool = False
     pending_tool: Optional[Dict[str, Any]] = None
     pending_tier: Optional[str] = None
@@ -723,6 +724,45 @@ def _dedup_key(name: str, tool_input: Dict[str, Any]) -> str:
     return f"{name}:{json.dumps(tool_input, sort_keys=True, default=str)}"
 
 
+def _retry_key(name: str, tool_input: Dict[str, Any]) -> str:
+    """Stable per-call key for retry accounting.
+
+    The digest keeps raw tool input out of the paused loop state, which is
+    cached now and becomes a database row in T-D4.
+    """
+    digest = hashlib.sha256(_dedup_key(name, tool_input).encode("utf-8")).hexdigest()
+    return f"{name}:{digest}"
+
+
+_MAX_CALL_LABEL_CHARS = 160
+
+
+def _describe_tool_call(name: str, tool_input: Dict[str, Any]) -> str:
+    """A short, redacted label for the call a retry bound stopped."""
+    detail = ""
+    if isinstance(tool_input, dict):
+        # Drop restricted keys before rendering: redaction patterns do not
+        # match JSON form, where a quote sits between key and colon.
+        safe_input = sanitize_parameters(tool_input)
+        for key in ("command", "cmd", "script", "query", "text"):
+            value = safe_input.get(key)
+            if isinstance(value, str) and value.strip():
+                detail = value.strip()
+                break
+        if not detail:
+            try:
+                rendered = json.dumps(safe_input, sort_keys=True, default=str)
+            except (TypeError, ValueError):
+                rendered = str(safe_input)
+            if rendered not in ("{}", "null", ""):
+                detail = rendered
+    label = f"{name} {detail}" if detail else name
+    label = " ".join(redact_sensitive_text(label).split())
+    if len(label) > _MAX_CALL_LABEL_CHARS:
+        label = label[:_MAX_CALL_LABEL_CHARS - 3] + "..."
+    return label
+
+
 def _message_chars(message: Dict[str, Any]) -> int:
     """Rough character count of one history message (token proxy)."""
     content = message.get("content", "")
@@ -1177,10 +1217,15 @@ def _circuit_open_message(service: str) -> str:
 def _account_tool_result(
     state: "LoopState",
     tool_name: str,
+    tool_input: Dict[str, Any],
     service: str,
     result: Any,
 ) -> None:
     """Update retry + circuit-breaker state after a tool call (T-F3).
+
+    The retry count is keyed by the exact call, not the tool, so different
+    inputs to one tool do not share a count and an unrelated success does not
+    reset it.
 
     A harness refusal (e.g. a budget refusal) is the harness declining to run
     the call, not the service failing: it leaves the retry count and the
@@ -1188,11 +1233,12 @@ def _account_tool_result(
     """
     if _is_harness_refusal(result):
         return
+    key = _retry_key(tool_name, tool_input)
     if isinstance(result, dict) and result.get("status") == "error":
-        state.retry_counts[tool_name] = state.retry_counts.get(tool_name, 0) + 1
+        state.retry_counts[key] = state.retry_counts.get(key, 0) + 1
         _record_tool_failure(service)
     else:
-        state.retry_counts[tool_name] = 0
+        state.retry_counts.pop(key, None)
         _record_tool_success(service)
 
 
@@ -2466,12 +2512,15 @@ async def run_agent_loop(
 
                     if is_retry:
                         # Retrying a previously-failed identical call.
-                        retries = state.retry_counts.get(tc["name"], 0)
+                        retries = state.retry_counts.get(
+                            _retry_key(tc["name"], tc["input"]), 0,
+                        )
                         if retries >= MAX_RETRIES_PER_TOOL:
+                            label = _describe_tool_call(tc["name"], tc["input"])
                             return tc, {
                                 "status": "error",
                                 "message": (
-                                    f"Stopped retrying {tc['name']} after {retries} failures in this turn. "
+                                    f"Stopped retrying {label} after {retries} failures in this turn. "
                                     "It can be tried again in a new message."
                                 ),
                             }, None
@@ -2499,7 +2548,7 @@ async def run_agent_loop(
                     # Track retries + circuit breaker state. A harness refusal
                     # (e.g. a budget refusal) is not a service failure and never
                     # counts toward the retry cap or the breaker (T-F3).
-                    _account_tool_result(state, tc["name"], service, result)
+                    _account_tool_result(state, tc["name"], tc["input"], service, result)
                     return tc, result, granted
 
                 # Run in parallel. Delegations in one batch share a single

@@ -60,11 +60,21 @@ class WorkTokenAccountingTests(SimpleTestCase):
 
 class _LoopHarness(SimpleTestCase):
     def setUp(self):
+        super().setUp()
         # The circuit breaker is module-global; a failed tool in one test must
         # not trip it for the next.
         from orchestration.agent_loop import reset_circuit_breakers
 
         reset_circuit_breakers()
+        # A SimpleTestCase cannot touch the database, so the real persona
+        # lookup fails closed (C3) and refuses every tool call. Return "no
+        # persona" so these tests do not depend on execution order.
+        persona_patch = patch(
+            "orchestration.agent_loop._resolve_persona",
+            new=AsyncMock(return_value=None),
+        )
+        persona_patch.start()
+        self.addCleanup(persona_patch.stop)
 
     def _run(self, coro):
         return run_async(coro)

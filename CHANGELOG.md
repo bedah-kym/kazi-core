@@ -28,6 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The in-turn retry bound now counts failures **per identical call**, not per
+  tool name (#261). Different inputs to one tool no longer share a count, and a
+  success of an unrelated call no longer resets a failing call's count. The
+  refusal names the stopped call, and paused loop state stores a digest of the
+  call rather than its raw input. A state paused before this change still loads
+  and resumes; its old name-keyed counts are ignored (at most one extra retry,
+  still bounded by the cap).
 - A failed room-persona lookup now **fails closed** (C3, AGENTS.md §0.3). "This
   room has no persona" still means today's behaviour, but if the persona lookup
   itself errors, the turn gets no tool reach: the ordinary tool definitions stay

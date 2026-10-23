@@ -63,7 +63,7 @@ One bound ends a normal turn — a **work-token budget** the model can see:
 - A delegated run gets a share of what its parent has left, not a fixed table.
 - Hard runaway backstops remain, far above the bound: 10k iterations, 10k tool
   calls, a 30-minute wall clock, and a `AGENT_TURN_TOKEN_BUDGET_MAX` ceiling.
-- 30 seconds per tool, 2 retries per failed tool with exponential backoff and a
+- 30 seconds per tool, 2 retries per failed call with exponential backoff and a
   per-service circuit breaker.
 
 ### OrchestrationCoordinator (`orchestration/coordinator.py`)

@@ -10,9 +10,9 @@ from typing import List, Optional, Tuple
 
 from django.conf import settings
 
-# Per-room model preference is stored in Redis under this key template. A value
-# of "" (or an absent key) means "Auto" — fall back to the agent loop's
-# fast/high heuristic.
+# Legacy cache key for the per-room model preference. The choice now lives on
+# Chatroom.model_pref; this key is read once to carry a pre-migration choice
+# over, then deleted.
 MODEL_PREF_KEY = "model_pref:{room_id}"
 
 

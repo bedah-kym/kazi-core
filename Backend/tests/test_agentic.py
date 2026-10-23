@@ -243,6 +243,58 @@ class ModelSelectionTests(SimpleTestCase):
         self.assertIsNone(kwargs.get("provider"))
 
 
+class DurableModelPreferenceTests(TransactionTestCase):
+    """A room's stored model survives a cache flush (C6)."""
+
+    def setUp(self):
+        from django.core.cache import cache
+        from chatbot.models import Chatroom
+
+        cache.clear()
+        self.room = Chatroom.objects.create()
+        Chatroom.objects.filter(pk=self.room.pk).update(
+            model_pref="deepseek/deepseek-v4-pro"
+        )
+
+    def test_room_answers_with_stored_model_after_cache_flush(self):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from django.core.cache import cache
+
+        from orchestration.agent_loop import run_agent_loop
+
+        mock_llm = MagicMock()
+        mock_llm.default_provider.return_value = "deepseek"
+        mock_llm.create_message = AsyncMock(return_value={
+            "content": [{"type": "text", "text": "hi"}],
+            "stop_reason": "end_turn",
+            "usage": {},
+        })
+
+        cache.clear()
+
+        async def run():
+            with patch("orchestration.agent_loop.get_llm_client",
+                       return_value=mock_llm), \
+                    patch("orchestration.agent_loop._resolve_persona",
+                          new=AsyncMock(return_value=None)), \
+                    patch("orchestration.agent_loop.provider_configured",
+                          return_value=True):
+                events = []
+                async for event in run_agent_loop(
+                    user_message="hello",
+                    context={"user_id": 1, "room_id": self.room.pk, "username": "test"},
+                ):
+                    events.append(event)
+                return events
+
+        run_with_db_cleanup(run())
+
+        kwargs = mock_llm.create_message.await_args.kwargs
+        self.assertEqual(kwargs.get("provider"), "deepseek")
+        self.assertEqual(kwargs.get("model"), "deepseek-v4-pro")
+
+
 # ---------------------------------------------------------------------------
 #  Phase 6: Web Search Rate Limiting
 # ---------------------------------------------------------------------------
@@ -811,43 +863,42 @@ class ProviderRoutingTests(SimpleTestCase):
 # ---------------------------------------------------------------------------
 
 class ModelOverrideTests(SimpleTestCase):
-    @patch("orchestration.agent_loop.cache")
-    def test_no_override_when_room_id_missing(self, mock_cache):
+    @patch("chatbot.model_preference.read_room_model_pref")
+    def test_no_override_when_room_id_missing(self, mock_read):
         from orchestration.agent_loop import _resolve_model_override
         self.assertEqual(_resolve_model_override(None), (None, None))
-        mock_cache.get.assert_not_called()
+        mock_read.assert_not_called()
 
-    @patch("orchestration.agent_loop.cache")
-    def test_override_auto_when_unset(self, mock_cache):
+    @patch("chatbot.model_preference.read_room_model_pref", return_value=None)
+    def test_override_auto_when_unset(self, mock_read):
         from orchestration.agent_loop import _resolve_model_override
-        mock_cache.get.return_value = None
         self.assertEqual(_resolve_model_override(7), (None, None))
 
-    @patch("orchestration.agent_loop.cache")
     @patch("orchestration.agent_loop.provider_configured", return_value=True)
-    def test_override_parses_valid_preference(self, mock_configured, mock_cache):
+    @patch("chatbot.model_preference.read_room_model_pref",
+           return_value="deepseek/deepseek-v4-pro")
+    def test_override_parses_valid_preference(self, mock_read, mock_configured):
         from orchestration.agent_loop import _resolve_model_override
-        mock_cache.get.return_value = "deepseek/deepseek-v4-pro"
         self.assertEqual(
             _resolve_model_override(7),
             ("deepseek", "deepseek-v4-pro"),
         )
 
-    @patch("orchestration.agent_loop.cache")
-    def test_override_auto_when_malformed(self, mock_cache):
+    @patch("chatbot.model_preference.read_room_model_pref",
+           return_value="garbage-no-slash")
+    def test_override_auto_when_malformed(self, mock_read):
         from orchestration.agent_loop import _resolve_model_override
-        mock_cache.get.return_value = "garbage-no-slash"
         self.assertEqual(_resolve_model_override(7), (None, None))
 
-    @patch("orchestration.agent_loop.cache")
-    def test_override_auto_when_unknown_model(self, mock_cache):
+    @patch("chatbot.model_preference.read_room_model_pref",
+           return_value="deepseek/not-a-real-model")
+    def test_override_auto_when_unknown_model(self, mock_read):
         from orchestration.agent_loop import _resolve_model_override
-        mock_cache.get.return_value = "deepseek/not-a-real-model"
         self.assertEqual(_resolve_model_override(7), (None, None))
 
-    @patch("orchestration.agent_loop.cache")
     @patch("orchestration.agent_loop.provider_configured", return_value=False)
-    def test_override_auto_when_provider_unconfigured(self, mock_configured, mock_cache):
+    @patch("chatbot.model_preference.read_room_model_pref",
+           return_value="deepseek/deepseek-v4-pro")
+    def test_override_auto_when_provider_unconfigured(self, mock_read, mock_configured):
         from orchestration.agent_loop import _resolve_model_override
-        mock_cache.get.return_value = "deepseek/deepseek-v4-pro"
         self.assertEqual(_resolve_model_override(7), (None, None))

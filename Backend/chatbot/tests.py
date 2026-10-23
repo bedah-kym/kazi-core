@@ -461,6 +461,9 @@ class RoomModelApiTests(TransactionTestCase):
     """Per-room model preference API: catalog + selection, set/clear, access."""
 
     def setUp(self):
+        from django.core.cache import cache
+
+        cache.clear()
         User = get_user_model()
         self.user = User.objects.create_user(username="model-user", password="pw")  # nosec B106 — test fixture — fake credential
         self.member = Member.objects.select_related("User").get(User=self.user)
@@ -488,48 +491,42 @@ class RoomModelApiTests(TransactionTestCase):
             ModelInfo("deepseek", "deepseek-v4-flash", "DeepSeek Flash", "fast"),
         ]
 
+    def _stored(self):
+        self.chatroom.refresh_from_db()
+        return self.chatroom.model_pref
+
     @patch("chatbot.model_api.available_models")
-    @patch("chatbot.model_api.cache")
-    def test_get_returns_models_and_null_selection(self, mock_cache, mock_models):
+    def test_get_returns_models_and_null_selection(self, mock_models):
         mock_models.return_value = self._models()
-        mock_cache.get.return_value = None
 
         resp = self._get()
 
         self.assertEqual(resp.status_code, 200)
         self.assertIsNone(resp.data["selected"])
+        self.assertIsNone(self._stored())
         ids = {m["id"] for m in resp.data["models"]}
         self.assertEqual(ids, {"deepseek/deepseek-v4-pro", "deepseek/deepseek-v4-flash"})
 
     @patch("chatbot.model_api.available_models")
-    @patch("chatbot.model_api.cache")
-    def test_post_sets_override(self, mock_cache, mock_models):
-        from orchestration.model_catalog import model_pref_key
-
+    def test_post_sets_override(self, mock_models):
         mock_models.return_value = self._models()
-        mock_cache.get.return_value = "deepseek/deepseek-v4-flash"
 
         resp = self._post({"model": "deepseek/deepseek-v4-flash"})
 
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.data["selected"], "deepseek/deepseek-v4-flash")
-        mock_cache.set.assert_called_once_with(
-            model_pref_key(self.chatroom.id), "deepseek/deepseek-v4-flash", timeout=None
-        )
+        self.assertEqual(self._stored(), "deepseek/deepseek-v4-flash")
 
     @patch("chatbot.model_api.available_models")
-    @patch("chatbot.model_api.cache")
-    def test_post_clears_override_on_empty(self, mock_cache, mock_models):
-        from orchestration.model_catalog import model_pref_key
-
+    def test_post_clears_override_on_empty(self, mock_models):
         mock_models.return_value = self._models()
-        mock_cache.get.return_value = None
+        self._post({"model": "deepseek/deepseek-v4-flash"})
 
         resp = self._post({"model": ""})
 
         self.assertEqual(resp.status_code, 200)
         self.assertIsNone(resp.data["selected"])
-        mock_cache.delete.assert_called_once_with(model_pref_key(self.chatroom.id))
+        self.assertEqual(self._stored(), "")
 
     @patch("chatbot.model_api.available_models")
     def test_post_rejects_unavailable_model(self, mock_models):
@@ -538,6 +535,55 @@ class RoomModelApiTests(TransactionTestCase):
         resp = self._post({"model": "anthropic/claude-sonnet-4-6"})
 
         self.assertEqual(resp.status_code, 400)
+        self.assertIsNone(self._stored())
+
+    @patch("chatbot.model_api.available_models")
+    def test_choice_survives_a_cache_flush(self, mock_models):
+        from django.core.cache import cache
+
+        mock_models.return_value = self._models()
+        self._post({"model": "deepseek/deepseek-v4-flash"})
+
+        cache.clear()
+
+        resp = self._get()
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["selected"], "deepseek/deepseek-v4-flash")
+        self.assertEqual(self._stored(), "deepseek/deepseek-v4-flash")
+
+    @patch("chatbot.model_preference.provider_configured", return_value=True)
+    @patch("chatbot.model_api.available_models")
+    def test_cached_only_choice_is_carried_over(self, mock_models, mock_configured):
+        from django.core.cache import cache
+        from orchestration.model_catalog import model_pref_key
+
+        mock_models.return_value = self._models()
+        key = model_pref_key(self.chatroom.id)
+        cache.set(key, "deepseek/deepseek-v4-flash", timeout=None)
+
+        resp = self._get()
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["selected"], "deepseek/deepseek-v4-flash")
+        self.assertEqual(self._stored(), "deepseek/deepseek-v4-flash")
+        self.assertIsNone(cache.get(key))
+
+    @patch("chatbot.model_api.available_models")
+    def test_invalid_cached_only_choice_is_not_carried_over(self, mock_models):
+        from django.core.cache import cache
+        from orchestration.model_catalog import model_pref_key
+
+        mock_models.return_value = self._models()
+        key = model_pref_key(self.chatroom.id)
+        cache.set(key, "deepseek/not-a-real-model", timeout=None)
+
+        resp = self._get()
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertIsNone(resp.data["selected"])
+        self.assertIsNone(self._stored())
+        self.assertIsNone(cache.get(key))
 
     def test_requires_room_access(self):
         User = get_user_model()
@@ -546,6 +592,32 @@ class RoomModelApiTests(TransactionTestCase):
         resp = self._get(user=outsider)
 
         self.assertEqual(resp.status_code, 403)
+
+
+class RoomModelPreferenceReadTests(SimpleTestCase):
+    """A failed preference read falls back to Auto and logs once."""
+
+    def setUp(self):
+        from chatbot import model_preference
+
+        model_preference._read_failure_logged = False
+
+    def tearDown(self):
+        from chatbot import model_preference
+
+        model_preference._read_failure_logged = False
+
+    @patch("chatbot.model_preference._stored_pref",
+           side_effect=RuntimeError("database down"))
+    def test_read_error_falls_back_to_auto_and_logs_once(self, mock_stored):
+        from chatbot.model_preference import read_room_model_pref
+
+        with self.assertLogs("chatbot.model_preference", level="WARNING") as logs:
+            self.assertIsNone(read_room_model_pref(1))
+            self.assertIsNone(read_room_model_pref(1))
+
+        self.assertEqual(len(logs.records), 1)
+        self.assertEqual(mock_stored.call_count, 2)
 
 
 class ReminderTimeParserTests(SimpleTestCase):

@@ -1,19 +1,23 @@
 """
 Model Selector API Views
-Per-chatroom LLM model preference (stored in Redis under ``model_pref:{room_id}``).
+Per-chatroom LLM model preference (stored on the room; the database is the
+source of truth).
 """
-from django.core.cache import cache
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from chatbot.model_preference import (
+    clear_room_model_pref,
+    read_room_model_pref,
+    set_room_model_pref,
+)
 from chatbot.models import Chatroom
 from orchestration.model_catalog import (
     available_models,
     model_id,
-    model_pref_key,
     parse_model_id,
 )
 
@@ -71,11 +75,11 @@ def room_model(request, room_id):
                     {"error": "Invalid or unavailable model id"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            cache.set(model_pref_key(room_id), raw, timeout=None)
+            set_room_model_pref(room_id, raw)
         else:
-            cache.delete(model_pref_key(room_id))
+            clear_room_model_pref(room_id)
 
-    selected = cache.get(model_pref_key(room_id))
+    selected = read_room_model_pref(room_id)
     return Response({
         "models": _serialize_models(models),
         "selected": selected or None,

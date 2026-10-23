@@ -28,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The reply that confirms **autopilot** is now true in a room that recently
+  read untrusted content (C4). It says that commands reaching the network will
+  still ask while the room holds that content, and that this lifts on its own;
+  in a clean room the reply is unchanged. If the taint state cannot be read,
+  the cautious version is used. The offer text before arming carries the same
+  caveat.
 - The in-turn retry bound now counts failures **per identical call**, not per
   tool name (#261). Different inputs to one tool no longer share a count, and a
   success of an unrelated call no longer resets a failing call's count. The

@@ -54,6 +54,7 @@ from orchestration.agent_loop import (
     dismiss_pending_confirmation,
     load_loop_state,
     _untrusted_source,
+    _conversation_tainted,
 )
 from orchestration.llm_client import TokenQuotaExceeded, _humanize_seconds, get_llm_client
 
@@ -113,6 +114,32 @@ def _cap_tool_records(records: List[Dict]) -> List[Dict]:
     capped = [dict(record) for record in records[:MAX_TOOL_RECORDS]]
     capped[-1]["note"] = f"{dropped} more tool calls were not recorded."
     return capped
+
+
+_AUTOPILOT_ARMED_REPLY = (
+    "Autopilot armed for this room. Shell commands, including root and "
+    "network ones, now run on this unsandboxed host without asking until "
+    "the window expires or you say **autopilot off**. Commands on the "
+    "destructive list still ask."
+)
+_AUTOPILOT_ARMED_TAINTED_REPLY = (
+    "Autopilot armed for this room. Shell commands, including root ones, "
+    "now run on this unsandboxed host without asking until the window "
+    "expires or you say **autopilot off**. Commands on the destructive "
+    "list still ask. Because this room recently read untrusted content, "
+    "commands that reach the network will still ask while the room holds "
+    "it. That lifts on its own, though I can't tell you exactly when."
+)
+_AUTOPILOT_HINT = (
+    "\n\nThis room's shell is unsandboxed, so I ask before commands like this. "
+    "Reply **autopilot** to stop asking for a limited window; destructive "
+    "commands will still ask."
+)
+_AUTOPILOT_HINT_TAINTED = (
+    _AUTOPILOT_HINT
+    + " While this room holds untrusted content, commands that reach the "
+    "network will still ask."
+)
 
 
 def _history_replays_untrusted(history_msgs: Optional[List[dict]]) -> bool:
@@ -411,6 +438,20 @@ class OrchestrationCoordinator:
                 return False
             return getattr(state, "pending_tier", None) in ("safe", "bounded")
 
+        async def _room_is_tainted() -> bool:
+            """Whether the turn starts tainted. Unreadable means yes.
+
+            The loop starts tainted for the room window or a replayed untrusted
+            history, so the wording must use the same decision (C4).
+            """
+            if _history_replays_untrusted(history_messages):
+                return True
+            try:
+                return bool(await sync_to_async(_conversation_tainted)(room_id))
+            except Exception as exc:
+                logger.debug("Room taint read skipped: %s", exc)
+                return True
+
         async def _autopilot_hint() -> str:
             """Offer the window only where it applies: an unsandboxed room, a coverable command."""
             if user_preferences.get("shell_profile") != "open" or user_preferences.get("_shell_autopilot"):
@@ -420,11 +461,7 @@ class OrchestrationCoordinator:
                     return ""
             except Exception:
                 return ""
-            return (
-                "\n\nThis room's shell is unsandboxed, so I ask before commands like this. "
-                "Reply **autopilot** to stop asking for a limited window; destructive "
-                "commands will still ask."
-            )
+            return _AUTOPILOT_HINT_TAINTED if await _room_is_tainted() else _AUTOPILOT_HINT
 
         async def _relay_agent_events(events):
             """Map AgentEvents to WebSocket frames, shared by every agent run."""
@@ -528,13 +565,12 @@ class OrchestrationCoordinator:
                 armed = False
             if armed:
                 user_preferences["_shell_autopilot"] = True
-                await broadcast_chunk(
-                    "Autopilot armed for this room. Shell commands, including root and "
-                    "network ones, now run on this unsandboxed host without asking until "
-                    "the window expires or you say **autopilot off**. Commands on the "
-                    "destructive list still ask.",
-                    harness=True,
+                reply = (
+                    _AUTOPILOT_ARMED_TAINTED_REPLY
+                    if await _room_is_tainted()
+                    else _AUTOPILOT_ARMED_REPLY
                 )
+                await broadcast_chunk(reply, harness=True)
             else:
                 await broadcast_chunk(
                     "I couldn't arm autopilot, so nothing has changed. It needs a room on "

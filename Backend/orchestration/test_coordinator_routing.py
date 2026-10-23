@@ -117,7 +117,7 @@ class RoutingBranchTests(SimpleTestCase):
         self.assertTrue(result.persist)
         cancel.assert_awaited_once()
 
-    def test_a_non_approval_reply_dismisses_then_starts_a_new_turn(self):
+    def test_a_non_approval_reply_keeps_the_pause_pending(self):
         dismiss = AsyncMock()
         captured = {}
 
@@ -128,11 +128,17 @@ class RoutingBranchTests(SimpleTestCase):
         result, chunks = self._run("hello there", mocks={
             "orchestration.coordinator.has_pending_agent_state": AsyncMock(return_value=True),
             "orchestration.coordinator.dismiss_pending_confirmation": dismiss,
+            "orchestration.coordinator.pending_approval_prompt": AsyncMock(return_value={
+                "message": "Should I go ahead? (yes / no)", "short_id": "abc123",
+            }),
             "orchestration.coordinator.run_agent_loop": _capture,
         })
         self.assertTrue(result.persist)
-        dismiss.assert_awaited_once()
+        dismiss.assert_not_awaited()
         self.assertEqual(captured.get("user_message"), "hello there")
+        self.assertIn("waiting for your approval", captured.get("pending_note", ""))
+        # The prompt is shown again, last, with its short id.
+        self.assertIn("abc123", result.full_response)
 
     # -- agent loop path ------------------------------------------------- #
 

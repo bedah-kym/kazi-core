@@ -6,7 +6,7 @@ confirmation pause/resume, error recovery, iteration/token limits, dedup,
 model selection, web search rate limiting, result sanitization, approval overrides.
 """
 import asyncio
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from django.test import SimpleTestCase, override_settings
 
@@ -410,7 +410,10 @@ class ConfirmationStateTests(SimpleTestCase):
         def _no_pending(room_id, user_id):
             return None
 
-        with patch("orchestration.agent_loop._pending_approval_record", new=_no_pending):
+        with (
+            patch("orchestration.agent_loop._pending_approval_record", new=_no_pending),
+            patch("orchestration.turns.aget_paused_turn", new=AsyncMock(return_value=None)),
+        ):
             result = asyncio.run(has_pending_agent_state(1, 1))
         self.assertFalse(result)
 

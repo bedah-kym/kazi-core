@@ -123,11 +123,14 @@ class CoordinatorBranchTests(SimpleTestCase):
                 "orchestration.coordinator.resume_after_confirmation": resume,
                 "orchestration.coordinator.dismiss_pending_confirmation": AsyncMock(),
                 "orchestration.coordinator.cancel_pending_action": AsyncMock(return_value="Cancelled."),
+                "orchestration.coordinator.pending_approval_prompt": AsyncMock(return_value={
+                    "message": "Should I go ahead? (yes / no)", "short_id": "abc123",
+                }),
                 "orchestration.coordinator.run_agent_loop": _event_stream,
             },
         )
 
-    def test_approval_word_followed_by_more_does_not_run_the_pending_action(self):
+    def test_approval_word_followed_by_more_keeps_the_action_pending(self):
         for query in (
             "ok but use a different folder",
             "yes, but only the first part",
@@ -135,9 +138,13 @@ class CoordinatorBranchTests(SimpleTestCase):
         ):
             result, mocks, send_chunk = self._pending_reply(query)
             mocks["resume_after_confirmation"].assert_not_called()
-            mocks["dismiss_pending_confirmation"].assert_awaited_once()
+            # D8: a question is not consent, but it does not throw the action
+            # away either. The prompt is shown again last, with its short id.
+            mocks["dismiss_pending_confirmation"].assert_not_awaited()
             sent = "".join(c.args[1] for c in send_chunk.await_args_list)
-            self.assertIn("did not run the pending action", sent, query)
+            self.assertNotIn("did not run the pending action", sent, query)
+            self.assertIn("Should I go ahead?", sent, query)
+            self.assertIn("abc123", sent, query)
 
     def test_cancel_is_checked_before_approval(self):
         # Force both matchers true: only the order of the checks decides.
@@ -250,7 +257,7 @@ class CoordinatorBranchTests(SimpleTestCase):
             sent = "".join(c.args[1] for c in send_chunk.await_args_list)
             self.assertIn("stopped", sent.lower(), query)
 
-    def test_a_different_message_discards_the_paused_budget_turn(self):
+    def test_a_different_message_keeps_the_paused_budget_turn(self):
         resume = MagicMock(side_effect=AssertionError("must not resume"))
         result, mocks, send_chunk = self._run(
             "what is the weather?",
@@ -262,14 +269,14 @@ class CoordinatorBranchTests(SimpleTestCase):
             },
         )
         resume.assert_not_called()
-        mocks["clear_loop_state"].assert_called_once()
-        # The reply says once that the paused work was dropped, then the new turn
-        # runs as today.
+        # D8: the paused work waits; it is not dropped by a new question.
+        mocks["clear_loop_state"].assert_not_called()
         sent = "".join(c.args[1] for c in send_chunk.await_args_list)
-        self.assertIn("dropped", sent.lower())
+        self.assertNotIn("dropped", sent.lower())
+        self.assertIn("still paused", sent.lower())
         self.assertTrue(any(c.args[1] == "ok" for c in send_chunk.await_args_list))
 
-    def test_a_directive_reply_discards_the_paused_budget_turn(self):
+    def test_a_directive_reply_keeps_the_paused_budget_turn(self):
         result, mocks, send_chunk = self._run(
             "receipts",
             patches={
@@ -279,9 +286,11 @@ class CoordinatorBranchTests(SimpleTestCase):
                 "orchestration.coordinator.format_receipt_list": lambda r: "No receipts.",
             },
         )
-        mocks["clear_loop_state"].assert_called_once()
+        mocks["clear_loop_state"].assert_not_called()
+        sent = "".join(c.args[1] for c in send_chunk.await_args_list)
+        self.assertIn("still paused", sent.lower())
 
-    def test_a_directive_reply_does_not_leave_the_pending_action_armed(self):
+    def test_a_directive_reply_keeps_the_pending_action_armed(self):
         for query in ("receipts", "undo", "dismiss suggestions"):
             patches = {
                 "orchestration.coordinator.has_pending_agent_state": AsyncMock(return_value=True),
@@ -289,11 +298,15 @@ class CoordinatorBranchTests(SimpleTestCase):
                     side_effect=AssertionError("must not resume")
                 ),
                 "orchestration.coordinator.dismiss_pending_confirmation": AsyncMock(),
+                "orchestration.coordinator.pending_approval_prompt": AsyncMock(return_value={
+                    "message": "Should I go ahead? (yes / no)", "short_id": "abc123",
+                }),
                 "orchestration.coordinator.fetch_recent_receipts": AsyncMock(return_value=[]),
                 "orchestration.coordinator.format_receipt_list": lambda r: "No receipts.",
                 "orchestration.coordinator.undo_last_action": AsyncMock(return_value={"message": "Undone."}),
             }
             result, mocks, send_chunk = self._run(query, patches=patches)
-            mocks["dismiss_pending_confirmation"].assert_awaited_once()
+            mocks["dismiss_pending_confirmation"].assert_not_awaited()
             sent = "".join(c.args[1] for c in send_chunk.await_args_list)
-            self.assertIn("did not run the pending action", sent, query)
+            self.assertNotIn("did not run the pending action", sent, query)
+            self.assertIn("Should I go ahead?", sent, query)

@@ -318,7 +318,7 @@ class _CoordinatorTurnBase(TransactionTestCase):
                 return_value=pause_kind or "budget",
             ),
             "orchestration.coordinator._quota_resume_still_blocked": AsyncMock(return_value=None),
-            "orchestration.coordinator.load_loop_state": MagicMock(return_value=loop_state),
+            "orchestration.coordinator.load_pending_state": AsyncMock(return_value=loop_state),
             "orchestration.coordinator.dismiss_pending_confirmation": AsyncMock(),
             "orchestration.coordinator.cancel_pending_action": AsyncMock(return_value="Cancelled."),
             "orchestration.coordinator.cache": MagicMock(),
@@ -608,18 +608,19 @@ class CoordinatorTurnTests(_CoordinatorTurnBase):
         self.assertEqual(turn.state, "cancelled")
         self.assertEqual(turn.end_reason, "cancelled")
 
-    def test_a_dropped_pause_is_cancelled_and_a_new_turn_starts(self):
+    def test_a_question_keeps_the_pause_and_starts_a_new_turn(self):
         paused = self._paused_turn(end_reason="awaiting_approval")
         self._handle(
             "hello",
+            pending=True,
             run_loop=self._loop(
                 AgentEvent("text_delta", {"text": "Hi."}),
                 AgentEvent("done", {"end_reason": "finished"}),
             ),
         )
         paused.refresh_from_db()
-        self.assertEqual(paused.state, "cancelled")
-        self.assertEqual(paused.end_reason, "dropped")
+        # D8: a non-approval message no longer drops the paused action.
+        self.assertEqual(paused.state, "paused")
         self.assertEqual(Turn.objects.filter(state="completed").count(), 1)
         self.assertEqual(Turn.objects.count(), 2)
 
@@ -707,9 +708,9 @@ class CoordinatorTurnTests(_CoordinatorTurnBase):
         self.assertEqual(turn.state, "failed")
         self.assertEqual(turn.end_reason, "room_gone")
 
-    def test_autopilot_that_cannot_arm_drops_the_pause_and_starts_a_new_turn(self):
+    def test_autopilot_that_cannot_arm_keeps_the_pause_and_starts_a_new_turn(self):
         paused = self._paused_turn(end_reason="awaiting_approval")
-        # loop_state is None, so there is no coverable shell command to arm for.
+        # No coverable shell command, so the window cannot arm. The pause stays.
         self._handle(
             "autopilot",
             pending=True,
@@ -719,8 +720,7 @@ class CoordinatorTurnTests(_CoordinatorTurnBase):
             ),
         )
         paused.refresh_from_db()
-        self.assertEqual(paused.state, "cancelled")
-        self.assertEqual(paused.end_reason, "dropped")
+        self.assertEqual(paused.state, "paused")
         self.assertEqual(Turn.objects.filter(state="completed").count(), 1)
 
     def test_autopilot_arm_failure_holds_the_paused_turn(self):

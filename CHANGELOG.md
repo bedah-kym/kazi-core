@@ -218,6 +218,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A room's selected model is now stored on the room, so it survives a restart,
+  a cache flush or a Redis eviction (C6). The database is the source of truth;
+  a choice that only exists in the old `model_pref:{room_id}` cache key is
+  carried over lazily on the next read. A read failure falls back to Auto and
+  is logged once.
 - A response whose stop reason the loop does not handle (a provider refusal,
   `pause_turn`, `stop_sequence`, ...) now ends the turn after a single model
   call. It used to re-send the same messages until the iteration cap and never

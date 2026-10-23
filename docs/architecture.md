@@ -186,8 +186,10 @@ reused across calls, with the per-call timeout passed on each request.
 A frozen catalog of the models the chatroom picker offers, keyed `provider/model`
 with a `fast` / `high` / `vision` tier. The agent loop applies a per-room override
 (see the model selector dropdown) when one is set; otherwise the default
-provider's own default model answers. There is no keyword router — the harness
-does not guess a model from the message shape.
+provider's own default model answers. The choice is stored on the room
+(`Chatroom.model_pref`), so it survives a restart or a cache flush; the old
+`model_pref:{room_id}` cache key is read once and carried over. There is no
+keyword router — the harness does not guess a model from the message shape.
 
 ## Untrusted Text and Taint (`orchestration/agent_loop.py`)
 

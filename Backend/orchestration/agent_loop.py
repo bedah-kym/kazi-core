@@ -28,7 +28,7 @@ from orchestration.agent_prompts import (
 )
 from orchestration.llm_client import TokenQuotaExceeded, _humanize_seconds, get_llm_client
 from orchestration.memory_state import update_memory_state_batch
-from orchestration.model_catalog import find_model, model_pref_key, parse_model_id, provider_configured
+from orchestration.model_catalog import find_model, parse_model_id, provider_configured
 from orchestration.security_policy import redact_sensitive_text, sanitize_parameters
 from orchestration.telemetry import record_event
 from orchestration.tool_executor import execute_tool, get_tool_risk_info, preview_tool
@@ -1092,13 +1092,16 @@ def _sanitize_tool_result(result_json: str) -> str:
 
 def _resolve_model_override(room_id: Optional[int]) -> Tuple[Optional[str], Optional[str]]:
     """
-    Read the per-room model preference (``model_pref:{room_id}``) and return a
+    Read the per-room model preference stored on the room and return a
     (provider, model) pair. Returns (None, None) for Auto — no override, an
-    unset/empty key, or a preference that is no longer in the catalog/configured.
+    unset/empty value, a read failure, or a preference that is no longer in the
+    catalog/configured.
     """
     if not room_id:
         return None, None
-    raw = cache.get(model_pref_key(room_id))
+    from chatbot.model_preference import read_room_model_pref
+
+    raw = read_room_model_pref(room_id)
     if not raw:
         return None, None
     parsed = parse_model_id(str(raw))
@@ -1996,7 +1999,7 @@ async def run_agent_loop(
     # when offered: native search on Anthropic, or a registered search backend
     # elsewhere. With neither it is excluded and the prompt says so, or the
     # model invents a search.
-    override_provider, _ = _resolve_model_override(room_id)
+    override_provider, _ = await sync_to_async(_resolve_model_override)(room_id)
     effective_provider = override_provider or llm.default_provider()
     native_search = effective_provider == "anthropic"
     backend_search = (not native_search) and _search_backend_available()
@@ -2296,7 +2299,7 @@ async def run_agent_loop(
             _rebuild_search_tool(tools, user_id, user_location_hint)
             if native_search else tools
         )
-        override_provider, override_model = _resolve_model_override(room_id)
+        override_provider, override_model = await sync_to_async(_resolve_model_override)(room_id)
         try:
             response = await llm.create_message(
                 messages=state.messages,

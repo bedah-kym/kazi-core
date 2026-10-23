@@ -28,6 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A replayed tool call now marks an input value the record shortened, and says
+  how long the call's value was, so the model no longer reads the record's cut
+  as the content the call sent and tries to repair it (C1). Receipts keep their
+  existing limits and are unchanged; restricted keys and secret patterns are
+  still removed without a marker.
 - Reminder delivery now claims through the shared cache (`cache.add`) instead of
   a direct Redis call. The claim works on LocMem and Redis and **fails closed**:
   a claim-store error skips the delivery instead of risking a duplicate. This is

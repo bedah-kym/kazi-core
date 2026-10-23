@@ -62,6 +62,7 @@ class Scenario1SimpleToolTest(SimpleTestCase):
     @patch("orchestration.agent_loop.get_llm_client")
     @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)
     @patch("orchestration.agent_loop.cache")
+    @patch("orchestration.agent_loop._resolve_persona", new=AsyncMock(return_value=None))
     def test_weather_check(self, mock_cache, mock_exec, mock_get_llm):
         mock_cache.get.return_value = None
         mock_exec.return_value = {
@@ -175,6 +176,7 @@ class Scenario3ErrorRecoveryTest(SimpleTestCase):
     @patch("orchestration.agent_loop.get_llm_client")
     @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)
     @patch("orchestration.agent_loop.cache")
+    @patch("orchestration.agent_loop._resolve_persona", new=AsyncMock(return_value=None))
     def test_retry_on_error(self, mock_cache, mock_exec, mock_get_llm):
         mock_cache.get.return_value = None
         mock_exec.side_effect = [
@@ -290,6 +292,7 @@ class Scenario6ParallelToolsTest(SimpleTestCase):
     @patch("orchestration.agent_loop.get_llm_client")
     @patch("orchestration.agent_loop.execute_tool", new_callable=AsyncMock)
     @patch("orchestration.agent_loop.cache")
+    @patch("orchestration.agent_loop._resolve_persona", new=AsyncMock(return_value=None))
     def test_parallel_execution(self, mock_cache, mock_exec, mock_get_llm):
         mock_cache.get.return_value = None
         mock_exec.side_effect = [

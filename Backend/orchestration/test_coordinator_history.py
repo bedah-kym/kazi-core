@@ -1,12 +1,15 @@
 """The coordinator hands the agent loop the transcript it was given, untouched."""
+import json
 from contextlib import ExitStack
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from asgiref.sync import async_to_sync
 from django.test import SimpleTestCase
 
+from chatbot.transcript import build_history_messages
 from orchestration.agent_loop import AgentEvent
 from orchestration.coordinator import OrchestrationCoordinator
+from orchestration.tool_record import RECORD_STRING_MAX
 
 
 def _run_agent_turn(query, *, history_messages=None, memory_summary=None, context_prompt="", events=None, load_preferences=None):
@@ -49,6 +52,59 @@ def _run_agent_turn(query, *, history_messages=None, memory_summary=None, contex
             stack.enter_context(patch(target, new))
         result = async_to_sync(run)()
     return result, captured
+
+
+def _replayed_input(tool_input):
+    """The input a later turn sees for one tool call, after the record is replayed."""
+    events = [AgentEvent("tool_result", {
+        "name": "create_note",
+        "result": {"status": "success"},
+        "input": tool_input,
+        "shown": "note saved",
+    })]
+    result, _captured = _run_agent_turn("write the note", events=events)
+    rows = [
+        (1, "alice", "write the note"),
+        (2, "kazi", "Done.", {"tools": result.tools, "by": 1, "model": "Done.", "harness": ""}),
+    ]
+    messages = build_history_messages(rows, viewer_user_id=1)
+    use = messages[1]["content"][0]
+    return use["input"]
+
+
+class ToolRecordMarkerTests(SimpleTestCase):
+    def test_a_long_input_replays_with_a_shortened_marker_and_its_original_length(self):
+        content = "x" * 900
+
+        replayed = _replayed_input({"content": content})
+
+        self.assertIn("shortened", replayed["content"])
+        self.assertIn("the call sent 900 characters", replayed["content"])
+        self.assertNotEqual(replayed["content"], content)
+        self.assertLessEqual(len(replayed["content"]), RECORD_STRING_MAX)
+
+    def test_restricted_keys_and_secret_values_stay_out_of_the_record(self):
+        secret = "Authorization: Bearer abcdefghijklmnopqrstuvwxyz123456"  # nosec B105 — test fixture — fake credential
+
+        replayed = _replayed_input({
+            "content": "summarise this",
+            "token": "fake-token",  # nosec B105 — test fixture — fake credential
+            "api_key": "fake-api-key",  # nosec B105 — test fixture — fake credential
+            "note": secret,
+        })
+        stored = json.dumps(replayed)
+
+        self.assertNotIn("token", replayed)
+        self.assertNotIn("api_key", replayed)
+        self.assertNotIn("fake-token", stored)
+        self.assertNotIn("abcdefghijklmnopqrstuvwxyz123456", stored)
+        self.assertNotIn("shortened", stored)
+
+    def test_a_short_input_replays_unchanged_with_no_marker(self):
+        replayed = _replayed_input({"content": "a short note"})
+
+        self.assertEqual(replayed["content"], "a short note")
+        self.assertNotIn("shortened", json.dumps(replayed))
 
 
 class CoordinatorHistoryTests(SimpleTestCase):

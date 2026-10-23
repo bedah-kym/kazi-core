@@ -23,7 +23,6 @@ from orchestration.action_receipts import (
     fetch_recent_receipts,
     undo_last_action,
     format_receipt_list,
-    _sanitize_payload,
 )
 from orchestration.adaptive_task import (
     clear_task_state,
@@ -31,9 +30,7 @@ from orchestration.adaptive_task import (
     is_cancel_request,
 )
 from orchestration.memory_state import load_memory_summary, clear_memory
-from orchestration.security_policy import (
-    sanitize_parameters,
-)
+from orchestration.tool_record import tool_record_input
 from orchestration.shell.chat_intents import (
     is_approval_reply,
     is_budget_extend_reply,
@@ -103,7 +100,7 @@ def _tool_record(data: Dict) -> Dict:
     raw_input = raw_input if isinstance(raw_input, dict) else {}
     return {
         "name": data.get("name") or "",
-        "input": _sanitize_payload(sanitize_parameters(raw_input)),
+        "input": tool_record_input(raw_input),
         "status": result.get("status") or "",
         "shown": str(data.get("shown") or "")[:_SHOWN_LIMIT],
     }

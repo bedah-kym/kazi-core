@@ -8,6 +8,7 @@ silently change the WebSocket contract.
 The TransactionTestCase class locks the handoff boundary: a routed `@Kazi`
 message must delegate to the coordinator and persist the returned response.
 """
+import asyncio
 import json
 import os
 import shutil
@@ -24,6 +25,13 @@ from django.utils import timezone
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from orchestration.coordinator import OrchestrationResult
+from orchestration.models import Turn
+from orchestration.turns import (
+    TERMINAL_STATES,
+    aclaim_turn,
+    afinalize_turn,
+    atransition,
+)
 
 from .consumers import (
     ChatConsumer,
@@ -94,6 +102,39 @@ class ChatConsumerContractTests(SimpleTestCase):
         self.assertEqual(
             consumer.send_chat_message.await_args[0][0]["content"],
             "Invalid sender.",
+        )
+
+
+class _DurableTurnCoordinator:
+    """A coordinator double that really claims and finalizes durable Turns."""
+
+    def __init__(self):
+        self.claims = 0
+
+    async def handle_message(self, *, query, user_id, room_id, message_id, **_kwargs):
+        turn = await aclaim_turn(
+            room_id=room_id, user_id=user_id, request_message_id=message_id,
+        )
+        if turn is None:
+            return OrchestrationResult(full_response="", persist=False)
+        self.claims += 1
+        moved = await atransition(
+            str(turn.pk), turn.version, "committing",
+            from_state="running", end_reason="finished",
+        )
+        if not moved:
+            return OrchestrationResult(full_response="", persist=False)
+        return OrchestrationResult(
+            full_response=f"reply to {query}",
+            persist=True,
+            turn_id=str(turn.pk),
+            turn_version=turn.version + 1,
+            turn_state="committing",
+        )
+
+    async def finalize_turn(self, result, *, reply_saved):
+        return await afinalize_turn(
+            result.turn_id, result.turn_version, reply_saved=reply_saved,
         )
 
 
@@ -282,6 +323,121 @@ class ChatConsumerRoutingTests(TransactionTestCase):
         self.assertTrue(observed["locked"])
         self.assertEqual(_agent_loop_locks, {})
         self.assertEqual(_agent_loop_lock_refs, {})
+
+    @override_settings(KAZI_LITE_PROFILE=True)
+    def test_a_second_message_waits_for_the_reply_save_and_the_turn_completes(self):
+        User = get_user_model()
+        alice = User.objects.create_user(username="alice_turn_wait", password="pw")  # nosec B106 — fake test credential
+        member = Member.objects.select_related("User").get(User=alice)
+        chatroom = Chatroom.objects.get(participants=member)
+        first_consumer = self._make_consumer(alice, member, chatroom)
+        second_consumer = self._make_consumer(alice, member, chatroom)
+
+        save_started = asyncio.Event()
+        release_save = asyncio.Event()
+        coordinator = _DurableTurnCoordinator()
+
+        async def blocking_encrypt(payload):
+            if payload.get("content") == "reply to first":
+                save_started.set()
+                await release_save.wait()
+            return {"data": "enc", "nonce": "nonce"}
+
+        first_consumer.encrypt_message = blocking_encrypt
+
+        async def second_reached_the_lock():
+            lock_key = (alice.id, str(chatroom.id))
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + 5
+            while loop.time() < deadline:
+                lock = _agent_loop_locks.get(lock_key)
+                if coordinator.claims == 2 or (lock is not None and lock._waiters):
+                    return
+                await asyncio.sleep(0.01)
+
+        async def scenario():
+            with patch(
+                "orchestration.coordinator.OrchestrationCoordinator",
+                return_value=coordinator,
+            ):
+                first = asyncio.create_task(first_consumer.new_message({
+                    "from": alice.username,
+                    "message": "@kazi first",
+                    "chatid": str(chatroom.id),
+                }))
+                second = None
+                try:
+                    await asyncio.wait_for(save_started.wait(), timeout=5)
+                    second = asyncio.create_task(second_consumer.new_message({
+                        "from": alice.username,
+                        "message": "@kazi second",
+                        "chatid": str(chatroom.id),
+                    }))
+                    await second_reached_the_lock()
+                    self.assertEqual(coordinator.claims, 1)
+                finally:
+                    release_save.set()
+                    awaiting = [task for task in (first, second) if task is not None]
+                    await asyncio.gather(*awaiting, return_exceptions=True)
+
+        async_to_sync(scenario)()
+
+        first_turn, second_turn = Turn.objects.order_by("created_at")
+        self.assertEqual(first_turn.state, "completed")
+        self.assertEqual(second_turn.state, "completed")
+        self.assertEqual(Turn.objects.count(), 2)
+
+    def test_cancellation_during_the_reply_save_ends_the_turn_terminal(self):
+        User = get_user_model()
+        alice = User.objects.create_user(username="alice_turn_cancel", password="pw")  # nosec B106 — fake test credential
+        member = Member.objects.select_related("User").get(User=alice)
+        chatroom = Chatroom.objects.get(participants=member)
+        consumer = self._make_consumer(alice, member, chatroom)
+
+        save_started = asyncio.Event()
+        coordinator = _DurableTurnCoordinator()
+
+        async def cancel_during_save(payload):
+            if payload.get("content") == "reply to hello":
+                save_started.set()
+                await asyncio.Event().wait()
+            return {"data": "enc", "nonce": "nonce"}
+
+        consumer.encrypt_message = cancel_during_save
+
+        async def scenario():
+            with patch(
+                "orchestration.coordinator.OrchestrationCoordinator",
+                return_value=coordinator,
+            ):
+                task = asyncio.create_task(consumer.new_message({
+                    "from": alice.username,
+                    "message": "@kazi hello",
+                    "chatid": str(chatroom.id),
+                }))
+                await asyncio.wait_for(save_started.wait(), timeout=5)
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+
+        async_to_sync(scenario)()
+
+        first = Turn.objects.get()
+        self.assertIn(first.state, TERMINAL_STATES)
+        self.assertNotEqual(first.state, "committing")
+
+        follow_up = self._make_consumer(alice, member, chatroom)
+        with patch(
+            "orchestration.coordinator.OrchestrationCoordinator",
+            return_value=coordinator,
+        ):
+            async_to_sync(follow_up.new_message)({
+                "from": alice.username,
+                "message": "@kazi again",
+                "chatid": str(chatroom.id),
+            })
+        self.assertEqual(Turn.objects.count(), 2)
+        self.assertEqual(Turn.objects.filter(state="committing").count(), 0)
 
 
 class StoredMessageDecryptTests(SimpleTestCase):

@@ -303,9 +303,11 @@ def advance(ref: TurnRef, to_state: str, **kwargs) -> Optional[TurnRef]:
 def finalize_turn(turn_id: str, expected_version: int, *, reply_saved: bool) -> bool:
     """Record the committing turn's true ending after the reply is persisted."""
     if reply_saved:
-        return transition(turn_id, expected_version, "completed")
+        return transition(
+            turn_id, expected_version, "completed", from_state="committing",
+        )
     return transition(
-        turn_id, expected_version, "failed",
+        turn_id, expected_version, "failed", from_state="committing",
         end_reason="reply_not_saved", partial=True,
     )
 

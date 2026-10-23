@@ -38,6 +38,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A delegated run makes no tool call and ends with the same reason. The failure
   is logged once with the exception class only, and telemetry records it as
   `persona_lookup_failed`.
+- A replayed tool call now marks an input value the record shortened, and says
+  how long the call's value was, so the model no longer reads the record's cut
+  as the content the call sent and tries to repair it (C1). Receipts keep their
+  existing limits and are unchanged; restricted keys and secret patterns are
+  still removed without a marker.
 - Reminder delivery now claims through the shared cache (`cache.add`) instead of
   a direct Redis call. The claim works on LocMem and Redis and **fails closed**:
   a claim-store error skips the delivery instead of risking a duplicate. This is

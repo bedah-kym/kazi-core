@@ -539,8 +539,9 @@ class WorkflowApprovalRecord(models.Model):
         ReAct agent loop (no workflow/execution; scoped by ``room_id`` and the
         requesting user, linked to the paused ``Turn`` whose encrypted
         ``paused_state_enc`` holds the loop state). ``metadata.calls`` records
-        each call's id, tool name and argument hash; ``sanitized_params`` holds
-        only the sanitised display values.
+        only each call's id and tool name; ``sanitized_params`` holds the
+        sanitised, redacted display values for every held call. Raw arguments
+        and their hashes live only in the encrypted Turn state.
     """
 
     STATUS_CHOICES = [

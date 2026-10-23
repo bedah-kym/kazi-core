@@ -296,8 +296,19 @@ def _encode_b64(data: bytes) -> str:
     return base64.b64encode(data).decode("utf-8")
 
 
-def encrypt_paused_state(room_id: Any, payload: Dict[str, Any]) -> Optional[str]:
-    """Encrypt the loop state with the room key, as chat messages are (D5)."""
+def _state_aad(turn_id: Any) -> Optional[bytes]:
+    """The Turn id is authenticated with the ciphertext, so a blob cannot move."""
+    return str(turn_id).encode("utf-8") if turn_id else None
+
+
+def encrypt_paused_state(
+    room_id: Any, payload: Dict[str, Any], *, turn_id: Any = None,
+) -> Optional[str]:
+    """Encrypt the loop state with the room key, as chat messages are (D5).
+
+    The Turn id is bound as associated data, so a stored blob cannot be copied
+    onto another Turn without failing decryption.
+    """
     cipher = _room_cipher(room_id)
     if cipher is None:
         return None
@@ -307,13 +318,15 @@ def encrypt_paused_state(room_id: Any, payload: Dict[str, Any]) -> Optional[str]
         return json.dumps({
             "v": 1,
             "nonce": _encode_b64(nonce),
-            "data": _encode_b64(cipher.encrypt(nonce, body, None)),
+            "data": _encode_b64(cipher.encrypt(nonce, body, _state_aad(turn_id))),
         })
     except Exception:
         return None
 
 
-def decrypt_paused_state(room_id: Any, blob: Optional[str]) -> Optional[Dict[str, Any]]:
+def decrypt_paused_state(
+    room_id: Any, blob: Optional[str], *, turn_id: Any = None,
+) -> Optional[Dict[str, Any]]:
     """Decrypt a paused state; unreadable means the caller must fail closed."""
     cipher = _room_cipher(room_id)
     if cipher is None or not blob:
@@ -322,7 +335,9 @@ def decrypt_paused_state(room_id: Any, blob: Optional[str]) -> Optional[Dict[str
         envelope = json.loads(blob)
         nonce = base64.b64decode(envelope["nonce"].encode("utf-8"))
         data = base64.b64decode(envelope["data"].encode("utf-8"))
-        return json.loads(cipher.decrypt(nonce, data, None).decode("utf-8"))
+        return json.loads(
+            cipher.decrypt(nonce, data, _state_aad(turn_id)).decode("utf-8")
+        )
     except Exception as exc:
         import logging
         logging.getLogger(__name__).warning(
@@ -343,7 +358,9 @@ def get_turn(turn_id: Any) -> Optional[Turn]:
 def get_turn_paused_state(turn: Optional[Turn]) -> Optional[Dict[str, Any]]:
     if turn is None:
         return None
-    return decrypt_paused_state(turn.room_id, turn.paused_state_enc)
+    return decrypt_paused_state(
+        turn.room_id, turn.paused_state_enc, turn_id=turn.pk,
+    )
 
 
 def pause_turn(
@@ -365,10 +382,17 @@ def pause_turn(
     turn = get_turn(turn_id)
     if turn is None:
         return False
-    encrypted = encrypt_paused_state(turn.room_id, state_payload)
+    encrypted = encrypt_paused_state(
+        turn.room_id, state_payload, turn_id=turn.pk,
+    )
     if encrypted is None:
         return False
     expires_at = pause_expiry(ttl)
+    # Keep every other field already in the Turn's budget snapshot; a pause
+    # refreshes the token budget rather than replacing the whole record.
+    merged_budget = dict(turn.budget or {})
+    if budget is not None:
+        merged_budget.update(budget)
     return transition(
         str(turn.pk),
         expected_version,
@@ -378,24 +402,31 @@ def pause_turn(
         pause_expires_at=expires_at,
         paused_state_enc=encrypted,
         tainted=bool(tainted),
-        budget=budget if budget is not None else {},
+        budget=merged_budget,
         active_seconds=active_seconds if active_seconds is not None else 0.0,
     )
 
 
-def update_paused_state(turn_id: Any, state_payload: Dict[str, Any]) -> bool:
-    """Refresh the resting state without moving the Turn (crash markers)."""
+def update_paused_state(
+    turn_id: Any, state_payload: Dict[str, Any], *, expected_version: Any = None,
+) -> bool:
+    """Refresh the resting state without moving the Turn (crash markers).
+
+    ``expected_version`` makes the write a compare-and-set on the Turn's fence,
+    so a stale writer cannot overwrite a newer state.
+    """
     turn = get_turn(turn_id)
     if turn is None:
         return False
-    encrypted = encrypt_paused_state(turn.room_id, state_payload)
+    encrypted = encrypt_paused_state(
+        turn.room_id, state_payload, turn_id=turn.pk,
+    )
     if encrypted is None:
         return False
-    return bool(
-        Turn.objects.filter(pk=turn.pk, state__in=("paused", "running")).update(
-            paused_state_enc=encrypted,
-        )
-    )
+    query = Turn.objects.filter(pk=turn.pk, state__in=("paused", "running"))
+    if expected_version is not None:
+        query = query.filter(version=expected_version)
+    return bool(query.update(paused_state_enc=encrypted))
 
 
 def clear_paused_state(turn_id: Any) -> bool:
@@ -586,8 +617,12 @@ async def apause_turn(*args, **kwargs) -> bool:
     return await sync_to_async(pause_turn)(*args, **kwargs)
 
 
-async def aupdate_paused_state(turn_id: Any, state_payload: Dict[str, Any]) -> bool:
-    return await sync_to_async(update_paused_state)(turn_id, state_payload)
+async def aupdate_paused_state(
+    turn_id: Any, state_payload: Dict[str, Any], *, expected_version: Any = None,
+) -> bool:
+    return await sync_to_async(update_paused_state)(
+        turn_id, state_payload, expected_version=expected_version,
+    )
 
 
 async def aclear_paused_state(turn_id: Any) -> bool:

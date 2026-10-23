@@ -266,6 +266,15 @@ def sweep_stuck_approvals(limit: int = None) -> Dict[str, int]:
         ):
             expired_turns += 1
 
+    # An expired pause keeps its body only long enough for a late reply; a
+    # superseded one is never executable. Clear both after the reply window.
+    reply_window = timedelta(seconds=3600)
+    turns_mod.Turn.objects.filter(
+        state__in=('expired', 'superseded'),
+        ended_at__lte=now - reply_window,
+        paused_state_enc__isnull=False,
+    ).update(paused_state_enc=None)
+
     stuck_ids = list(
         WorkflowApprovalRecord.objects.filter(status='pending').filter(
             models.Q(expires_at__lte=now)

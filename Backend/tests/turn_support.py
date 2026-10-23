@@ -23,5 +23,4 @@ def turn_test_patches() -> dict:
         # These read the Turn store in production; a routing test must not.
         "orchestration.coordinator.load_pending_state": AsyncMock(return_value=None),
         "orchestration.coordinator.pending_approval_prompt": AsyncMock(return_value={}),
-        "orchestration.coordinator.has_expired_pause": AsyncMock(return_value=False),
     }

@@ -661,19 +661,32 @@ class OrchestrationCoordinator:
             return await has_pending_agent_state(room_id, user_id)
 
         async def _pending_armable_shell() -> bool:
-            """True when the pending action is a shell command the window could cover.
+            """True only when EVERY held call is a shell command the window covers.
 
             The turn's pre-loop state may no longer be the pending one (a new
             turn can pause after a directive clears the old state), so read the
-            current state at confirmation time.
+            current state at confirmation time. A batch with one non-shell call
+            is never confirmable by "autopilot".
             """
             state = await load_pending_state(room_id, user_id)
-            pending = getattr(state, "pending_tool", None) if state else None
-            if not isinstance(pending, dict):
+            if not state:
                 return False
-            if str(pending.get("name") or "") not in {"run_command", "run_shell", "shell_command"}:
+            held = list(
+                getattr(state, "pending_tools", None)
+                or ([getattr(state, "pending_tool", None)] if getattr(state, "pending_tool", None) else [])
+            )
+            tiers = list(getattr(state, "pending_tiers", None) or [])
+            if not held:
                 return False
-            return getattr(state, "pending_tier", None) in ("safe", "bounded")
+            for index, pending in enumerate(held):
+                if not isinstance(pending, dict):
+                    return False
+                if str(pending.get("name") or "") not in {"run_command", "run_shell", "shell_command"}:
+                    return False
+                tier = tiers[index] if index < len(tiers) else getattr(state, "pending_tier", None)
+                if tier not in ("safe", "bounded"):
+                    return False
+            return True
 
         async def _room_is_tainted() -> bool:
             """Whether the turn starts tainted. Unreadable means yes.
@@ -935,18 +948,29 @@ class OrchestrationCoordinator:
 
         pending_handled = handled_directive
 
+        # Check an expired pause BEFORE claiming a new Turn: has_expired_pause
+        # requires the expired Turn to still be the newest for this room.
+        late_reply = bool(
+            not pending_handled and not pending_confirmation and not pending_budget
+            and (
+                is_approval_reply(query) or is_decline_reply(query)
+                or is_budget_extend_reply(query) or is_cancel_command(query)
+            )
+        )
+        expired_pause = await has_expired_pause(room_id, user_id) if late_reply else False
+
         # One logical turn keeps one id. A reply that resolves a pause continues
         # that Turn; anything else (a question, another request) keeps the pause
         # armed and starts a new record (D8).
         paused_turn = await aget_paused_turn(room_id, user_id)
-        armable_shell = bool(
+        autopilot_request = bool(
             pending_confirmation and is_autopilot_request(query)
-            and await _pending_armable_shell()
         )
+        armable_shell = bool(autopilot_request and await _pending_armable_shell())
         approval_continues = bool(
             pending_confirmation and (
                 is_cancel_request(query) or is_decline_reply(query)
-                or armable_shell or is_approval_reply(query)
+                or autopilot_request or is_approval_reply(query)
             )
         )
         budget_continues = bool(
@@ -981,15 +1005,7 @@ class OrchestrationCoordinator:
 
         # A late reply to a pause that already expired is answered honestly,
         # never treated as consent. The model still sees the is_error results.
-        if (
-            not pending_handled
-            and not pending_confirmation and not pending_budget
-            and (
-                is_approval_reply(query) or is_decline_reply(query)
-                or is_budget_extend_reply(query) or is_cancel_command(query)
-            )
-            and await has_expired_pause(room_id, user_id)
-        ):
+        if late_reply and expired_pause:
             ctx_prompt = ""
             try:
                 ctx_prompt = await get_context_prompt() or ""
@@ -1028,15 +1044,33 @@ class OrchestrationCoordinator:
                     await _advance_turn("cancelled", end_reason="cancelled")
                     await broadcast_chunk(cancel_msg or "Okay, cancelled.", harness=True)
                     pending_handled = True
-                elif is_autopilot_request(query) and armable_shell:
-                    # Arming confirms the pending command only when it armed;
-                    # otherwise the command stays pending for a plain yes/no.
-                    if await _arm_autopilot_from_chat():
-                        if await _resume_turn(turn_box["ref"]):
-                            await _resume_confirmed()
-                    elif turn_box["ref"] is not None and turn_box["ref"].state == "paused":
-                        turn_box["hold"] = True
-                    pending_handled = True
+                elif autopilot_request:
+                    if armable_shell:
+                        # Arming confirms only when every held call is a shell
+                        # command the window covers, and only if it armed.
+                        if await _arm_autopilot_from_chat():
+                            if await _resume_turn(turn_box["ref"]):
+                                await _resume_confirmed()
+                            else:
+                                await broadcast_chunk(
+                                    "This turn was already resumed elsewhere. "
+                                    "Nothing further was run.",
+                                    harness=True,
+                                )
+                            pending_handled = True
+                        else:
+                            if turn_box["ref"] is not None and turn_box["ref"].state == "paused":
+                                turn_box["hold"] = True
+                            pending_left = True
+                            pending_handled = True
+                    else:
+                        # A mixed batch is never confirmed by "autopilot". Arm
+                        # the window if eligible and keep the batch pending.
+                        await _arm_autopilot_from_chat()
+                        if turn_box["ref"] is not None and turn_box["ref"].state == "paused":
+                            turn_box["hold"] = True
+                        pending_left = True
+                        pending_handled = True
                 elif is_approval_reply(query):
                     if await _resume_turn(turn_box["ref"]):
                         await _resume_confirmed()
@@ -1051,13 +1085,23 @@ class OrchestrationCoordinator:
                     # action stays pending; this message runs as a new Turn that
                     # sees a harness note, and the prompt is shown again last.
                     info = await pending_approval_prompt(room_id, user_id)
-                    prompt = info.get("message") or "An action is waiting for your approval."
-                    short = info.get("short_id") or ""
-                    turn_box["pending_note"] = (
-                        "[Harness: an action is waiting for your approval: "
-                        f"{prompt}" + (f" (approval id {short})" if short else "") + "]"
-                    )
-                    pending_left = True
+                    prompt = info.get("message") or ""
+                    if prompt:
+                        short = info.get("short_id") or ""
+                        turn_box["pending_note"] = (
+                            "[Harness: an action is waiting for your approval: "
+                            f"{prompt}" + (f" (approval id {short})" if short else "") + "]"
+                        )
+                        pending_left = True
+                    else:
+                        # No approval row backs this paused Turn, so it cannot
+                        # be confirmed. Do not tell the user an action waits.
+                        await cancel_pending_action(room_id, user_id)
+                        turn_box["pending_note"] = (
+                            "[Harness: the earlier approval record could not be "
+                            "loaded, so nothing is waiting and nothing ran.]"
+                        )
+                        pending_left = False
 
         # --- Agent loop budget / quota resume (T-F3, T-F3b) ---
         if not pending_handled and pending_budget:
@@ -1166,14 +1210,14 @@ class OrchestrationCoordinator:
         if pending_left and not turn_box.get("new_pause_shown"):
             info = await pending_approval_prompt(room_id, user_id)
             if info.get("message"):
-                suffix = f" (approval id {info['short_id']})" if info.get("short_id") else ""
-                await broadcast_chunk(
-                    "\\n\\n" + str(info["message"]) + suffix,
-                    harness=True,
-                )
+                message = str(info["message"])
+                short = str(info.get("short_id") or "")
+                if short and short not in message:
+                    message += f" (approval id {short})"
+                await broadcast_chunk("\n\n" + message, harness=True)
             elif pending_budget:
                 await broadcast_chunk(
-                    "\\n\\nThis turn is still paused waiting for more budget. "
+                    "\n\nThis turn is still paused waiting for more budget. "
                     "Reply **continue** (or grant more budget) to pick up where it "
                     "stopped, or **no** to drop it.",
                     harness=True,

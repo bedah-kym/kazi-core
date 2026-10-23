@@ -116,8 +116,17 @@ async def _end_unexpected_turn(turn_box: Dict, stream_state: Dict, outcome: str)
     if ref is None or turn_box.get("settled"):
         return
     if outcome == "cancelled":
-        to_state = "cancelled"
-        updates: Dict = {"from_state": ref.state, "end_reason": "cancelled"}
+        if ref.state == "committing":
+            # committing has no cancelled edge; the reply was never saved.
+            to_state = "failed"
+            updates: Dict = {
+                "from_state": ref.state,
+                "end_reason": "cancelled",
+                "partial": bool(stream_state.get("tools") or stream_state.get("model")),
+            }
+        else:
+            to_state = "cancelled"
+            updates = {"from_state": ref.state, "end_reason": "cancelled"}
     else:
         to_state = "failed"
         updates = {

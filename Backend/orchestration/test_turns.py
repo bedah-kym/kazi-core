@@ -299,6 +299,7 @@ class _CoordinatorTurnBase(TransactionTestCase):
         budget=False,
         pause_kind="",
         send_chunk=None,
+        send_step_event=None,
         extra_patches=None,
         loop_state=None,
         finalize=True,
@@ -331,6 +332,8 @@ class _CoordinatorTurnBase(TransactionTestCase):
             patches.update(extra_patches)
         if send_chunk is None:
             send_chunk = AsyncMock()
+        if send_step_event is None:
+            send_step_event = AsyncMock()
 
         async def _call():
             callback = send_chunk
@@ -341,7 +344,7 @@ class _CoordinatorTurnBase(TransactionTestCase):
                 username=self.user.username,
                 message_id=self.message.id,
                 send_chunk=callback,
-                send_step_event=AsyncMock(),
+                send_step_event=send_step_event,
                 get_context_prompt=AsyncMock(return_value=""),
                 bump_signals=MagicMock(),
             )
@@ -652,6 +655,44 @@ class CoordinatorTurnTests(_CoordinatorTurnBase):
         turn = Turn.objects.get()
         self.assertEqual(turn.state, "cancelled")
         self.assertEqual(turn.end_reason, "cancelled")
+
+    def test_cancellation_after_committing_ends_the_turn_terminal(self):
+        async def cancel_on_done(_correlation_id, event):
+            if event.get("phase") == "done":
+                raise asyncio.CancelledError()
+
+        with self.assertRaises(asyncio.CancelledError):
+            self._handle(
+                "hello",
+                run_loop=self._loop(
+                    AgentEvent("text_delta", {"text": "Hi."}),
+                    AgentEvent("done", {"end_reason": "finished"}),
+                ),
+                send_step_event=cancel_on_done,
+            )
+        turn = Turn.objects.get()
+        self.assertIn(turn.state, TERMINAL_STATES)
+        self.assertEqual(turn.state, "failed")
+        self.assertEqual(turn.end_reason, "cancelled")
+
+    def test_finalize_telemetry_names_the_committing_from_state(self):
+        result = self._handle(
+            "hello",
+            finalize=False,
+            run_loop=self._loop(
+                AgentEvent("text_delta", {"text": "Hi."}),
+                AgentEvent("done", {"end_reason": "finished"}),
+            ),
+        )
+        with patch("orchestration.turns.record_event") as telemetry:
+            moved = async_to_sync(OrchestrationCoordinator().finalize_turn)(
+                result, reply_saved=True,
+            )
+        self.assertTrue(moved)
+        event_name, payload = telemetry.call_args.args
+        self.assertEqual(event_name, "turn_transition")
+        self.assertEqual(payload["to"], "completed")
+        self.assertEqual(payload["from"], "committing")
 
     def test_room_gone_fails_the_turn(self):
         self._handle(

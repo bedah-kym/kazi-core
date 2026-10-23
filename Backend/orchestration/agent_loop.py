@@ -29,7 +29,11 @@ from orchestration.agent_prompts import (
 from orchestration.llm_client import TokenQuotaExceeded, _humanize_seconds, get_llm_client
 from orchestration.memory_state import update_memory_state_batch
 from orchestration.model_catalog import find_model, parse_model_id, provider_configured
-from orchestration.security_policy import redact_sensitive_text, sanitize_parameters
+from orchestration.security_policy import (
+    RESTRICTED_PARAM_KEYS,
+    redact_sensitive_text,
+    sanitize_parameters,
+)
 from orchestration.telemetry import record_event
 from orchestration.tool_executor import execute_tool, get_tool_risk_info, preview_tool
 from orchestration.tool_record import tool_record_input
@@ -673,6 +677,66 @@ def _display_params(tool_input: Any) -> Dict[str, Any]:
     return tool_record_input(tool_input)
 
 
+_RESTRICTED_SHOWN_AS = "[hidden secret value]"
+
+
+def _approval_display_value(value: Any) -> Any:
+    """The exact input shown for approval, except restricted values.
+
+    What the user approves is what runs, so values are not redacted or
+    shortened here. A value under a restricted key is replaced by a visible
+    placeholder that keeps the key, so the user knows the call carries it.
+    """
+    if isinstance(value, dict):
+        return {
+            key: (
+                _RESTRICTED_SHOWN_AS
+                if key in RESTRICTED_PARAM_KEYS
+                else _approval_display_value(nested)
+            )
+            for key, nested in value.items()
+        }
+    if isinstance(value, list):
+        return [_approval_display_value(item) for item in value]
+    return value
+
+
+def _approval_display_params(tool_input: Any) -> Dict[str, Any]:
+    if not isinstance(tool_input, dict):
+        return {}
+    return _approval_display_value(tool_input)
+
+
+def _approval_prompt_calls(calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [
+        {
+            "name": str(call.get("name") or ""),
+            "input": _approval_display_params(call.get("input")),
+        }
+        for call in calls
+    ]
+
+
+def _approval_prompt_for_calls(
+    calls: List[Dict[str, Any]], short_id: str = "",
+) -> str:
+    if not calls:
+        return ""
+    return build_confirmation_prompt_many(
+        _approval_prompt_calls(calls), short_id=short_id,
+    )
+
+
+def _approval_prompt_for_state(state: Optional[LoopState]) -> str:
+    if state is None:
+        return ""
+    calls = list(
+        state.pending_tools
+        or ([state.pending_tool] if state.pending_tool else [])
+    )
+    return _approval_prompt_for_calls(calls, state.approval_short_id)
+
+
 def _display_calls(calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Per-call display rows for the plaintext columns (no raw arguments)."""
     return [
@@ -956,22 +1020,36 @@ async def _refresh_dispatched_marker(context: Dict[str, Any], state: LoopState) 
     )
 
 
-def _supersede_older_pause_sync(context: Dict[str, Any], new_turn_id) -> None:
+def _supersede_older_pause_sync(
+    context: Dict[str, Any], new_turn_id,
+) -> List[str]:
     """End an older pause with synthetic, never-executed results (D9).
 
     The new turn is the only running Turn; the older paused row becomes
-    ``superseded`` so there is never more than one armed action.
+    ``superseded`` so there is never more than one armed action. Returns the
+    names of the older held actions when it was an approval that this new pause
+    dropped, so the caller can tell the user plainly.
     """
     from orchestration import turns as turns_mod
 
     room_id = context.get("room_id")
     user_id = context.get("user_id")
     if not room_id or not user_id:
-        return
+        return []
     older = turns_mod.get_paused_turn(room_id, user_id, include_expired=False)
     if older is None or str(older.pk) == str(new_turn_id or ""):
-        return
+        return []
     state = _load_turn_state_sync(older)
+    dropped: List[str] = []
+    if older.pause_kind == "approval" and state is not None:
+        calls = list(
+            state.pending_tools
+            or ([state.pending_tool] if state.pending_tool else [])
+        )
+        dropped = [
+            (str(call.get("name") or "action")).replace("_", " ")
+            for call in calls
+        ]
     if state is not None:
         _append_terminal_results(state, "superseded by a newer request")
         turns_mod.update_paused_state(older.pk, loop_state_payload(state))
@@ -982,15 +1060,31 @@ def _supersede_older_pause_sync(context: Dict[str, Any], new_turn_id) -> None:
         turns_mod.clear_paused_state(older.pk)
     from workflows.models import WorkflowApprovalRecord
 
-    WorkflowApprovalRecord.objects.filter(
+    pending_rows = WorkflowApprovalRecord.objects.filter(
         kind=AGENT_LOOP_APPROVAL_KIND,
         room_id=room_id,
         requested_by_id=user_id,
         status="pending",
-    ).update(
+    )
+    if older.pause_kind == "approval" and not dropped:
+        # The encrypted state could not be read; the row still names the action
+        # that is being dropped, so the user is never left without a name.
+        fallback_action = pending_rows.values_list("action", flat=True).first()
+        if fallback_action:
+            dropped = [str(fallback_action).replace("_", " ")]
+    pending_rows.update(
         status="cancelled",
         reviewed_at=timezone.now(),
         review_comment="Superseded by a newer request.",
+    )
+    return dropped
+
+
+def _dropped_actions_note(names: List[str]) -> str:
+    labels = ", ".join(name for name in names if name) or "the earlier action"
+    return (
+        f"The earlier pending action ({labels}) was not run and has been "
+        "dropped because this request took its place."
     )
 
 
@@ -1053,23 +1147,32 @@ def _ordered_step_results(
 
 
 def _append_terminal_results(state: LoopState, reason: str) -> None:
-    """Close every held tool_use with an honest ``is_error`` result."""
+    """Close every held tool_use with an honest ``is_error`` result.
+
+    Only held calls are closed. A budget/quota pause has no held call, and its
+    newest tool step was already answered, so building results from the last
+    assistant message again would duplicate the tool_result blocks and leave
+    two user messages adjacent.
+    """
     calls = list(state.pending_tools or ([state.pending_tool] if state.pending_tool else []))
-    gated = {
-        str(call.get("id") or ""): {
-            "type": "tool_result",
-            "tool_use_id": str(call.get("id") or ""),
-            "content": f"not executed: {reason}",
-            "is_error": True,
+    if calls:
+        gated = {
+            str(call.get("id") or ""): {
+                "type": "tool_result",
+                "tool_use_id": str(call.get("id") or ""),
+                "content": f"not executed: {reason}",
+                "is_error": True,
+            }
+            for call in calls
         }
-        for call in calls
-    }
-    blocks = _ordered_step_results(state, gated)
-    if blocks:
-        state.messages.append({
-            "role": "user",
-            "content": _with_budget_note(blocks, state),
-        })
+        blocks = _ordered_step_results(state, gated)
+        if blocks:
+            state.messages.append({
+                "role": "user",
+                "content": _with_budget_note(blocks, state),
+            })
+    else:
+        state.pending_step_results = []
     state.pending_tools = []
     state.pending_tiers = []
     state.pending_tool = None
@@ -2573,7 +2676,15 @@ async def run_agent_loop(
         # honest is_error result for every held call so no tool_use is unpaired.
         state = resumed_state
         state.paused_for_confirmation = False
-        state.token_budget = state.token_budget or default_budget
+        # The late reply starts with a full base budget of headroom. An expired
+        # budget pause must not re-pause immediately after saying nothing ran.
+        state.token_budget = min(
+            _turn_token_budget(False),
+            max(
+                state.token_budget or default_budget,
+                state.tokens_used + default_budget,
+            ),
+        )
         state.segment_started_monotonic = time.monotonic()
         # Another member may have tainted the room while this run was paused.
         state.tainted = state.tainted or await sync_to_async(_conversation_tainted)(room_id)
@@ -2733,10 +2844,15 @@ async def run_agent_loop(
                 break
             state.awaiting_budget = True
             _accumulate_active()
+            dropped = []
             if turn_backed:
-                await sync_to_async(_supersede_older_pause_sync)(
+                dropped = await sync_to_async(_supersede_older_pause_sync)(
                     context, context.get("turn_id"),
                 )
+            if dropped:
+                yield AgentEvent("text_delta", {
+                    "text": _dropped_actions_note(dropped) + "\n\n",
+                })
             saved = await _persist_pause_state(context, state, "budget")
             if turn_backed and not saved:
                 # Fail closed: never tell the user to reply "more budget" when
@@ -2805,10 +2921,15 @@ async def run_agent_loop(
             state.awaiting_quota = True
             _accumulate_active()
             quota_ttl = _quota_pause_ttl(quota_exc.retry_after_seconds)
+            dropped = []
             if turn_backed:
-                await sync_to_async(_supersede_older_pause_sync)(
+                dropped = await sync_to_async(_supersede_older_pause_sync)(
                     context, context.get("turn_id"),
                 )
+            if dropped:
+                yield AgentEvent("text_delta", {
+                    "text": _dropped_actions_note(dropped) + "\n\n",
+                })
             saved = await _persist_pause_state(context, state, "quota", ttl=quota_ttl)
             if turn_backed and not saved:
                 state.end_reason = "pause_not_recorded"
@@ -2943,10 +3064,15 @@ async def run_agent_loop(
                 state.awaiting_budget = True
                 state.end_reason = "asked_for_more"
                 _accumulate_active()
+                dropped = []
                 if turn_backed:
-                    await sync_to_async(_supersede_older_pause_sync)(
+                    dropped = await sync_to_async(_supersede_older_pause_sync)(
                         context, context.get("turn_id"),
                     )
+                if dropped:
+                    yield AgentEvent("text_delta", {
+                        "text": _dropped_actions_note(dropped) + "\n\n",
+                    })
                 saved = await _persist_pause_state(context, state, "budget")
                 if turn_backed and not saved:
                     state.end_reason = "pause_not_recorded"
@@ -3170,8 +3296,14 @@ async def run_agent_loop(
                     {"name": tc["name"], "input": _display_params(tc["input"])}
                     for tc in held_calls
                 ]
-                confirmation_text = build_confirmation_prompt_many(
+                display_text = build_confirmation_prompt_many(
                     safe_calls, short_id=short_id,
+                )
+                # The chat prompt is what the user approves, so it shows the
+                # exact stored input (restricted values as named placeholders).
+                # The plaintext row keeps the masked display.
+                confirmation_text = _approval_prompt_for_calls(
+                    held_calls, short_id,
                 )
 
                 # Dry-run effects for the approval card (never executes).
@@ -3199,7 +3331,7 @@ async def run_agent_loop(
                 if room_id and user_id:
                     try:
                         await save_pending_confirmation(
-                            room_id, user_id, held_calls[0], confirmation_text,
+                            room_id, user_id, held_calls[0], display_text,
                             effects=effects,
                             turn_id=context.get("turn_id"),
                             calls=held_calls,
@@ -3209,7 +3341,10 @@ async def run_agent_loop(
                             short_id=short_id,
                         )
                     except Exception as exc:
-                        logger.error("Could not save the approval row: %s", exc)
+                        logger.error(
+                            "Could not save the approval row: %s",
+                            exc.__class__.__name__,
+                        )
                         row_saved = False
 
                 if not row_saved:
@@ -3442,17 +3577,24 @@ async def pending_resume_kind(
 
 
 async def pending_approval_prompt(room_id: int, user_id: int) -> Dict[str, Any]:
-    """The pending prompt and its short id, read from the Turn or the row."""
+    """The pending prompt and its short id, read from the Turn or the row.
+
+    A Turn-backed pause rebuilds the prompt from its encrypted state, so the
+    re-shown prompt is again the exact input that will run (the plaintext row
+    only holds the masked display).
+    """
     from orchestration import turns as turns_mod
 
     turn = await turns_mod.aget_paused_turn(room_id, user_id)
     if turn is not None and turn.pause_kind == "approval":
         state = await sync_to_async(_load_turn_state_sync)(turn)
         short_id = state.approval_short_id if state else ""
-        record = await sync_to_async(_pending_approval_record)(
-            room_id, user_id, turn_id=turn.pk,
-        )
-        message = record.approval_message if record else ""
+        message = _approval_prompt_for_state(state)
+        if not message:
+            record = await sync_to_async(_pending_approval_record)(
+                room_id, user_id, turn_id=turn.pk,
+            )
+            message = record.approval_message if record else ""
         return {"message": message, "short_id": short_id, "kind": "approval"}
     record = await sync_to_async(_pending_approval_record)(room_id, user_id)
     if record is not None:

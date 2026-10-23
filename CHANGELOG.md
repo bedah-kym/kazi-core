@@ -24,7 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `superseded by a newer request`), so history stays valid. Several gated calls
   in one model step are held and shown in one prompt, then run together in
   model order on one approval. `elapsed` spans the pause; the hard backstop
-  runs on active time, so a long human wait cannot trip it.
+  runs on active time, so a long human wait cannot trip it. The confirmation
+  prompt (shown once and again after a question) is rebuilt from the encrypted
+  paused state and shows the exact input that will run; a restricted value
+  (token, password, API key) appears as a named placeholder instead of being
+  dropped, while the plaintext approval row keeps only the masked display. If
+  a newer budget or quota pause supersedes a pending approval, the reply names
+  the dropped action first. A late reply to an expired budget or quota pause
+  no longer duplicates the previous step's results or re-pauses immediately.
 
 ### Added
 

@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Optional
 
 from asgiref.sync import sync_to_async
+from django.db import IntegrityError
 from django.db.models import F
 from django.utils import timezone
 
@@ -161,8 +162,9 @@ def transition(
                 state__in=allowed_from,
             ).update(**updates)
         )
-    except (ValueError, TypeError):
-        # A malformed id or an unusable value is a lost write, not a crash.
+    except (ValueError, TypeError, IntegrityError):
+        # A malformed id, an unusable value or a losing insert against the
+        # partial unique constraint is a lost write, not a crash.
         return False
 
     if updated != 1:

@@ -855,6 +855,20 @@ class OrchestrationCoordinator:
             await alink_message(turn_box["ref"].id, message_id)
         else:
             await _start_turn()
+        if not pending_handled and turn_box["ref"] is None:
+            # Another writer owns this room's active turn (the partial unique
+            # constraint refused the claim). Fail closed instead of running
+            # the work a second time with no record.
+            await broadcast_chunk(
+                "This turn could not be recorded, so nothing was run. Please try again.",
+                harness=True,
+            )
+            await emit_progress("done", "completed", "Turn not recorded.")
+            return OrchestrationResult(
+                full_response="".join(stream_state["full_response"]),
+                persist=False,
+                turn_id="",
+            )
 
         # --- Agent loop confirmation resume ---
         if not pending_handled:

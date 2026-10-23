@@ -24,6 +24,7 @@ from orchestration.turns import (
     aclaim_turn,
     afinalize_turn,
     aget_paused_turn,
+    aget_turn,
     alink_message,
     atransition,
     ref_from_turn,
@@ -61,10 +62,13 @@ from orchestration.agent_loop import (
     resume_after_confirmation,
     resume_with_more_budget,
     resume_after_quota,
+    resume_after_expiry,
+    has_expired_pause,
+    pending_approval_prompt,
+    load_pending_state,
     cancel_pending_action,
     clear_loop_state,
     dismiss_pending_confirmation,
-    load_loop_state,
     _untrusted_source,
     _conversation_tainted,
 )
@@ -368,6 +372,15 @@ class OrchestrationCoordinator:
                 ref.id, ref.version, to_state, from_state=ref.state, **kwargs,
             )
             if not moved:
+                # A pause may already have been written by the loop itself
+                # (the Turn is the source of truth). Adopt it rather than
+                # writing a second transition.
+                if to_state in ("paused", "cancelled", "expired"):
+                    current = await aget_turn(ref.id)
+                    if current is not None and current.state == to_state:
+                        turn_box["ref"] = ref_from_turn(current)
+                        turn_box["settled"] = True
+                        return True
                 return False
             turn_box["ref"] = TurnRef(
                 id=ref.id, version=ref.version + 1, state=to_state,
@@ -396,12 +409,12 @@ class OrchestrationCoordinator:
                     partial = bool(stream_state["tools"] or stream_state["model"])
                     await _advance_turn(
                         "failed", end_reason="budget", partial=partial,
-                        active_seconds=float(stream_state.get("elapsed") or 0),
+                        active_seconds=float(stream_state.get("active_seconds") or 0),
                     )
                     return
                 await _advance_turn(
                     "paused", pause_kind="budget", end_reason=reason,
-                    active_seconds=float(stream_state.get("elapsed") or 0),
+                    active_seconds=float(stream_state.get("active_seconds") or 0),
                 )
                 return
             if reason == "quota":
@@ -424,7 +437,7 @@ class OrchestrationCoordinator:
             partial = bool(stream_state["tools"] or stream_state["model"])
             await _advance_turn(
                 "failed", end_reason=reason, partial=partial,
-                active_seconds=float(stream_state.get("elapsed") or 0),
+                active_seconds=float(stream_state.get("active_seconds") or 0),
             )
 
         async def broadcast_chunk(chunk_text, is_final=False, harness=False):
@@ -644,14 +657,8 @@ class OrchestrationCoordinator:
             return refreshed
 
         async def _has_pending_confirmation() -> bool:
-            """A durable approval, or an inline `bounded` shell pause (loop state only)."""
-            if await has_pending_agent_state(room_id, user_id):
-                return True
-            return bool(
-                loop_state
-                and loop_state.pending_tool
-                and loop_state.pending_tier == "bounded"
-            )
+            """An approval pause on the Turn (or a legacy durable row)."""
+            return await has_pending_agent_state(room_id, user_id)
 
         async def _pending_armable_shell() -> bool:
             """True when the pending action is a shell command the window could cover.
@@ -660,7 +667,7 @@ class OrchestrationCoordinator:
             turn can pause after a directive clears the old state), so read the
             current state at confirmation time.
             """
-            state = await sync_to_async(load_loop_state)(room_id, user_id)
+            state = await load_pending_state(room_id, user_id)
             pending = getattr(state, "pending_tool", None) if state else None
             if not isinstance(pending, dict):
                 return False
@@ -712,12 +719,20 @@ class OrchestrationCoordinator:
                     status = result.get("status", "")
                     await emit_progress("executing", "completed", f"{tool.replace('_', ' ')}: {status}")
                 elif event.kind == "paused":
+                    pause_kind = event.data.get("pause_kind") or "approval"
                     await _advance_turn(
                         "paused",
-                        pause_kind=event.data.get("pause_kind") or "approval",
-                        end_reason="awaiting_approval",
+                        pause_kind=pause_kind,
+                        end_reason=(
+                            "awaiting_approval" if pause_kind == "approval"
+                            else pause_kind
+                        ),
+                        active_seconds=float(
+                            event.data.get("active_seconds") or 0,
+                        ),
                     )
                 elif event.kind == "confirmation":
+                    turn_box["new_pause_shown"] = True
                     await broadcast_chunk(event.data.get("message", "Please confirm.") + await _autopilot_hint(), harness=True)
                     await emit_progress("validating", "completed", "Waiting for confirmation.")
                 elif event.kind == "budget_request":
@@ -733,6 +748,7 @@ class OrchestrationCoordinator:
                     await emit_progress("executing", "completed", "Error encountered.")
                 elif event.kind == "done":
                     stream_state["elapsed"] = event.data.get("elapsed")
+                    stream_state["active_seconds"] = event.data.get("active_seconds")
                     turn_box["end_reason"] = event.data.get("end_reason") or "finished"
                     await _finish_turn(turn_box["end_reason"])
                     await emit_progress("done", "completed", "Request complete.")
@@ -763,6 +779,8 @@ class OrchestrationCoordinator:
                 environment_block=env_block,
                 history=history_msgs or None,
                 history_tainted=_history_replays_untrusted(history_msgs),
+                pending_note=turn_box.get("pending_note", ""),
+                nothing_pending=bool(turn_box.get("nothing_pending")),
             ))
 
         async def _handle_agent_resume(ctx_prompt: str, mem_summary: str, env_block: str = ""):
@@ -830,7 +848,7 @@ class OrchestrationCoordinator:
         # disarms the window, so "why did it stop?" reaches the model.
         from orchestration.shell.chat_intents import is_autopilot_disarm_request
         explicit_disarm = is_autopilot_disarm_request(query)
-        loop_state = await sync_to_async(load_loop_state)(room_id, user_id)
+        loop_state = await load_pending_state(room_id, user_id)
         pending_confirmation = await _has_pending_confirmation()
         pending_budget = await has_pending_budget_state(room_id, user_id, state=loop_state)
         # A quota pause also keeps the turn with awaiting_budget set, but it must
@@ -917,24 +935,10 @@ class OrchestrationCoordinator:
 
         pending_handled = handled_directive
 
-        # A directive answered this message without touching the agent's pending
-        # action. That was not consent, so the action must not stay armed for a
-        # later "ok". Replies to the approval machinery itself (autopilot off,
-        # allow host) leave it pending.
-        keeps_pending = explicit_disarm or bool(host_request)
-        if handled_directive and not keeps_pending:
-            if pending_confirmation:
-                await dismiss_pending_confirmation(room_id, user_id)
-                await broadcast_chunk("\n\nI did not run the pending action; it is cancelled.", harness=True)
-            if pending_budget:
-                clear_loop_state(room_id, user_id)
-
-        # One logical turn keeps one id. A reply to a pause continues that Turn;
-        # anything else supersedes the pause and starts a new record.
+        # One logical turn keeps one id. A reply that resolves a pause continues
+        # that Turn; anything else (a question, another request) keeps the pause
+        # armed and starts a new record (D8).
         paused_turn = await aget_paused_turn(room_id, user_id)
-        # The arming branch needs a coverable shell command. The continue
-        # decision must use the same predicate, or an autopilot reply that
-        # cannot arm would run a fresh loop under the still-paused Turn.
         armable_shell = bool(
             pending_confirmation and is_autopilot_request(query)
             and await _pending_armable_shell()
@@ -948,17 +952,10 @@ class OrchestrationCoordinator:
         budget_continues = bool(
             pending_budget and (
                 is_budget_extend_reply(query) or is_decline_reply(query)
-                or is_cancel_command(query)
+                or is_cancel_command(query) or is_approval_reply(query)
             )
         )
         continues_paused = approval_continues or budget_continues
-        if (
-            paused_turn is not None
-            and not (pending_handled and keeps_pending)
-            and not continues_paused
-        ):
-            await _cancel_other_turn(paused_turn, "dropped")
-            paused_turn = None
         if continues_paused and paused_turn is not None:
             turn_box["ref"] = ref_from_turn(paused_turn)
             await alink_message(turn_box["ref"].id, message_id)
@@ -979,6 +976,37 @@ class OrchestrationCoordinator:
                 persist=False,
                 turn_id="",
             )
+
+        pending_left = False
+
+        # A late reply to a pause that already expired is answered honestly,
+        # never treated as consent. The model still sees the is_error results.
+        if (
+            not pending_handled
+            and not pending_confirmation and not pending_budget
+            and (
+                is_approval_reply(query) or is_decline_reply(query)
+                or is_budget_extend_reply(query) or is_cancel_command(query)
+            )
+            and await has_expired_pause(room_id, user_id)
+        ):
+            ctx_prompt = ""
+            try:
+                ctx_prompt = await get_context_prompt() or ""
+            except Exception:
+                pass
+            ctx_prompt = await _with_persona_identity(room_id, user_id, ctx_prompt)
+            env_block = await _environment_block()
+            mem_sum = await load_memory_summary(adaptive_context) or ""
+            turn_box["agent_ran"] = True
+            await _relay_agent_events(resume_after_expiry(
+                context=_agent_context(),
+                preferences=user_preferences,
+                context_prompt=ctx_prompt,
+                memory_summary=mem_sum,
+                environment_block=env_block,
+            ))
+            pending_handled = True
 
         # --- Agent loop confirmation resume ---
         if not pending_handled:
@@ -1019,14 +1047,21 @@ class OrchestrationCoordinator:
                         )
                     pending_handled = True
                 else:
-                    # Anything else is not consent: drop the pending action, say so,
-                    # and handle the message as a new turn.
-                    await dismiss_pending_confirmation(room_id, user_id)
-                    await broadcast_chunk("I did not run the pending action; it is cancelled.\n\n", harness=True)
+                    # D8: a question or another request is not consent. The
+                    # action stays pending; this message runs as a new Turn that
+                    # sees a harness note, and the prompt is shown again last.
+                    info = await pending_approval_prompt(room_id, user_id)
+                    prompt = info.get("message") or "An action is waiting for your approval."
+                    short = info.get("short_id") or ""
+                    turn_box["pending_note"] = (
+                        "[Harness: an action is waiting for your approval: "
+                        f"{prompt}" + (f" (approval id {short})" if short else "") + "]"
+                    )
+                    pending_left = True
 
         # --- Agent loop budget / quota resume (T-F3, T-F3b) ---
         if not pending_handled and pending_budget:
-            if is_budget_extend_reply(query):
+            if is_budget_extend_reply(query) or is_approval_reply(query):
                 ctx_prompt = ""
                 try:
                     ctx_prompt = await get_context_prompt() or ""
@@ -1036,10 +1071,6 @@ class OrchestrationCoordinator:
                 env_block = await _environment_block()
                 mem_sum = await load_memory_summary(adaptive_context) or ""
                 if pending_pause == "quota":
-                    # The hourly limit stopped the turn. It must not be claimed to
-                    # have freed unless that was checked (T-F3b): a check that
-                    # still blocks keeps the paused turn and says so, so a resume
-                    # during a full hour never shows the "freed up" line.
                     still_blocked = await _quota_resume_still_blocked(user_id)
                     if still_blocked is not None:
                         if turn_box["ref"] is not None and turn_box["ref"].state == "paused":
@@ -1049,8 +1080,6 @@ class OrchestrationCoordinator:
                             harness=True,
                         )
                     elif await _resume_turn(turn_box["ref"]):
-                        # Resuming it is not a budget grant, and the wording is
-                        # about the hour (T-F3b).
                         await broadcast_chunk(
                             "The hourly token limit has freed up. Continuing from where it stopped.\n\n",
                             harness=True,
@@ -1080,13 +1109,21 @@ class OrchestrationCoordinator:
                 )
                 pending_handled = True
             else:
-                # Anything else the user writes starts a new turn, as today; the
-                # paused budget turn is discarded, and the reply says so once.
-                clear_loop_state(room_id, user_id)
-                await broadcast_chunk(
-                    "I dropped the paused work and started fresh with this message.\n\n",
-                    harness=True,
+                # D8 also applies to a budget/quota pause: the work stays paused
+                # and the offer is shown again after this new turn.
+                turn_box["pending_note"] = (
+                    "[Harness: a turn is paused waiting for more budget. It was "
+                    "not dropped. If the user wants it to continue, they can "
+                    "reply continue or grant more budget.]"
                 )
+                pending_left = True
+
+        if handled_directive and (pending_confirmation or pending_budget):
+            pending_left = True
+
+        if not pending_handled and not pending_confirmation and not pending_budget:
+            if is_approval_reply(query) or is_decline_reply(query):
+                turn_box["nothing_pending"] = True
 
         if not pending_handled:
             # --- Agentic loop path ---
@@ -1123,6 +1160,24 @@ class OrchestrationCoordinator:
                 )
                 await broadcast_chunk("Something went wrong on my side. Nothing further was run.", harness=True)
                 await _finish_turn("error")
+
+        # The harness shows a still-pending prompt last, so a bare yes answers
+        # the shown action rather than the model's own question (D8).
+        if pending_left and not turn_box.get("new_pause_shown"):
+            info = await pending_approval_prompt(room_id, user_id)
+            if info.get("message"):
+                suffix = f" (approval id {info['short_id']})" if info.get("short_id") else ""
+                await broadcast_chunk(
+                    "\\n\\n" + str(info["message"]) + suffix,
+                    harness=True,
+                )
+            elif pending_budget:
+                await broadcast_chunk(
+                    "\\n\\nThis turn is still paused waiting for more budget. "
+                    "Reply **continue** (or grant more budget) to pick up where it "
+                    "stopped, or **no** to drop it.",
+                    harness=True,
+                )
 
         # End stream
         await emit_progress("done", "completed", "Request complete.")

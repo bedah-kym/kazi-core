@@ -8,7 +8,7 @@ from django.test import SimpleTestCase
 
 from orchestration.agent_loop import AgentEvent, run_agent_loop
 from orchestration.coordinator import OrchestrationCoordinator
-from orchestration.testsupport import turn_test_patches
+from tests.turn_support import turn_test_patches
 
 
 def run_async(coro):

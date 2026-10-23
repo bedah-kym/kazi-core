@@ -7,6 +7,7 @@ pipeline (directives, pending confirmations, agent loop) and talks back to the
 consumer through a small set of injected async callbacks so it has no Channels
 dependency of its own.
 """
+import asyncio
 import logging
 import time
 import uuid
@@ -15,13 +16,13 @@ from typing import Awaitable, Callable, Dict, List, Optional
 
 from asgiref.sync import sync_to_async
 from django.core.cache import cache
-from django.utils import timezone
 
 from orchestration.telemetry import record_event
 from orchestration.turns import (
     TERMINAL_STATES,
     TurnRef,
-    acreate_turn,
+    aclaim_turn,
+    afinalize_turn,
     aget_paused_turn,
     alink_message,
     atransition,
@@ -102,6 +103,48 @@ async def _quota_resume_still_blocked(user_id: int) -> Optional[TokenQuotaExceed
     freed (T-F3b); the check fails closed, so a dead cache reads as blocked.
     """
     return await get_llm_client().check_hourly_quota(user_id)
+
+
+async def _end_unexpected_turn(turn_box: Dict, stream_state: Dict, outcome: str) -> None:
+    """Write the honest terminal state for an exception after the claim.
+
+    A cancelled app instance (a closed tab) raises ``CancelledError``, which is
+    a ``BaseException``. The write is shielded so it still lands; the caller
+    re-raises the original exception either way.
+    """
+    ref = turn_box.get("ref")
+    if ref is None or turn_box.get("settled"):
+        return
+    if outcome == "cancelled":
+        to_state = "cancelled"
+        updates: Dict = {"from_state": ref.state, "end_reason": "cancelled"}
+    else:
+        to_state = "failed"
+        updates = {
+            "from_state": ref.state,
+            "end_reason": "error",
+            "partial": bool(stream_state.get("tools") or stream_state.get("model")),
+            "active_seconds": float(stream_state.get("elapsed") or 0),
+        }
+    task = asyncio.ensure_future(
+        atransition(ref.id, ref.version, to_state, **updates),
+    )
+    if outcome != "cancelled":
+        try:
+            await task
+        except Exception:
+            logger.warning("Could not record the turn's unexpected ending.")
+        return
+    try:
+        await asyncio.shield(task)
+    except asyncio.CancelledError:
+        # The inner task keeps running after the shield is cancelled; wait for
+        # it so the row is terminal before this cancellation finishes.
+        try:
+            await task
+        except Exception:
+            pass
+        raise
 
 
 def _tool_record(data: Dict) -> Dict:
@@ -188,6 +231,11 @@ class OrchestrationResult:
     # The durable turn this message belongs to; the consumer links the saved
     # reply to it. Empty only when no turn could be recorded.
     turn_id: str = ""
+    # The fence and state of the turn when this result was produced. A turn in
+    # ``committing`` is completed by ``finalize_turn`` only after the consumer
+    # has saved the reply.
+    turn_version: int = 0
+    turn_state: str = ""
 
 
 class OrchestrationCoordinator:
@@ -225,28 +273,61 @@ class OrchestrationCoordinator:
         further runs; errors during confirmation resume propagate.
         """
         stream_state = {"buffer": [], "last_send": 0, "first_token_sent": False, "full_response": [], "model": [], "harness": [], "tools": [], "chunks": 0, "chars": 0}  # nosec B105 — state keys, not a credential
+        turn_box = {"ref": None, "settled": False, "hold": False, "agent_ran": False}
+        try:
+            return await self._handle_message_body(
+                stream_state=stream_state,
+                turn_box=turn_box,
+                query=query,
+                user_id=user_id,
+                room_id=room_id,
+                username=username,
+                message_id=message_id,
+                send_chunk=send_chunk,
+                send_step_event=send_step_event,
+                get_context_prompt=get_context_prompt,
+                bump_signals=bump_signals,
+                history_messages=history_messages,
+            )
+        except asyncio.CancelledError:
+            await _end_unexpected_turn(turn_box, stream_state, "cancelled")
+            raise
+        except Exception:
+            await _end_unexpected_turn(turn_box, stream_state, "error")
+            raise
+
+    async def _handle_message_body(
+        self,
+        *,
+        stream_state: Dict,
+        turn_box: Dict,
+        query: str,
+        user_id: int,
+        room_id: str,
+        username: str,
+        message_id: Optional[int],
+        send_chunk: Callable[[str, str, bool], Awaitable[None]],
+        send_step_event: Callable[[str, dict], Awaitable[None]],
+        get_context_prompt: Callable[[], Awaitable[str]],
+        bump_signals: Callable[[List[Optional[str]]], None],
+        history_messages: Optional[List[dict]] = None,
+    ) -> OrchestrationResult:
         turn_step_id = f"turn_{message_id}"
         correlation_id = uuid.uuid4().hex
-        turn_box = {"ref": None, "settled": False, "hold": False, "agent_ran": False}
 
         def _turn_id() -> str:
             ref = turn_box.get("ref")
             return ref.id if ref else ""
 
         async def _start_turn() -> Optional[TurnRef]:
-            turn = await acreate_turn(
+            turn = await aclaim_turn(
                 room_id=room_id,
                 user_id=user_id,
                 request_message_id=message_id,
             )
-            ref = ref_from_turn(turn)
-            moved = await atransition(
-                ref.id, ref.version, "running",
-                from_state=ref.state, started_at=timezone.now(),
-            )
-            if not moved:
+            if turn is None:
                 return None
-            ref = TurnRef(id=ref.id, version=ref.version + 1, state="running")
+            ref = ref_from_turn(turn)
             turn_box["ref"] = ref
             return ref
 
@@ -259,6 +340,7 @@ class OrchestrationCoordinator:
             moved = await atransition(
                 ref.id, ref.version, "running",
                 from_state="paused", pause_kind=None, pause_expires_at=None,
+                end_reason=None,
             )
             if not moved:
                 return False
@@ -299,6 +381,15 @@ class OrchestrationCoordinator:
             if ref is None:
                 return
             if reason in ("budget", "asked_for_more"):
+                # At the configured ceiling the loop keeps no state to resume,
+                # so a pause here would strand the turn. End it for good.
+                if reason == "budget" and not await has_pending_budget_state(room_id, user_id):
+                    partial = bool(stream_state["tools"] or stream_state["model"])
+                    await _advance_turn(
+                        "failed", end_reason="budget", partial=partial,
+                        active_seconds=float(stream_state.get("elapsed") or 0),
+                    )
+                    return
                 await _advance_turn(
                     "paused", pause_kind="budget", end_reason=reason,
                     active_seconds=float(stream_state.get("elapsed") or 0),
@@ -313,11 +404,11 @@ class OrchestrationCoordinator:
                 reason = "room_gone"
             if reason in ("finished", "refusal"):
                 if ref.state == "running":
+                    # ``completed`` waits for the consumer to save the reply;
+                    # finalize_turn() is the only writer of that edge.
                     moved = await _advance_turn("committing", end_reason=reason)
                     if not moved:
                         return
-                if turn_box["ref"] and turn_box["ref"].state == "committing":
-                    await _advance_turn("completed", end_reason=reason)
                 return
             # Every other ending is a failure; partial says whether anything
             # the user can see had already happened.
@@ -483,6 +574,8 @@ class OrchestrationCoordinator:
                 full_response="".join(stream_state["full_response"]),
                 persist=False,
                 turn_id=_turn_id(),
+                turn_version=turn_box["ref"].version if turn_box.get("ref") else 0,
+                turn_state=turn_box["ref"].state if turn_box.get("ref") else "",
             )
 
         def _log_telemetry(event_type, payload=None):
@@ -830,10 +923,17 @@ class OrchestrationCoordinator:
         # One logical turn keeps one id. A reply to a pause continues that Turn;
         # anything else supersedes the pause and starts a new record.
         paused_turn = await aget_paused_turn(room_id, user_id)
+        # The arming branch needs a coverable shell command. The continue
+        # decision must use the same predicate, or an autopilot reply that
+        # cannot arm would run a fresh loop under the still-paused Turn.
+        armable_shell = bool(
+            pending_confirmation and is_autopilot_request(query)
+            and await _pending_armable_shell()
+        )
         approval_continues = bool(
             pending_confirmation and (
                 is_cancel_request(query) or is_decline_reply(query)
-                or is_autopilot_request(query) or is_approval_reply(query)
+                or armable_shell or is_approval_reply(query)
             )
         )
         budget_continues = bool(
@@ -864,6 +964,7 @@ class OrchestrationCoordinator:
                 harness=True,
             )
             await emit_progress("done", "completed", "Turn not recorded.")
+            await broadcast_chunk("", is_final=True)
             return OrchestrationResult(
                 full_response="".join(stream_state["full_response"]),
                 persist=False,
@@ -890,7 +991,7 @@ class OrchestrationCoordinator:
                     await _advance_turn("cancelled", end_reason="cancelled")
                     await broadcast_chunk(cancel_msg or "Okay, cancelled.", harness=True)
                     pending_handled = True
-                elif is_autopilot_request(query) and await _pending_armable_shell():
+                elif is_autopilot_request(query) and armable_shell:
                     # Arming confirms the pending command only when it armed;
                     # otherwise the command stays pending for a plain yes/no.
                     if await _arm_autopilot_from_chat():
@@ -1027,4 +1128,20 @@ class OrchestrationCoordinator:
             model_text="".join(stream_state["model"]),
             harness="".join(stream_state["harness"]),
             turn_id=_turn_id(),
+            turn_version=turn_box["ref"].version if turn_box.get("ref") else 0,
+            turn_state=turn_box["ref"].state if turn_box.get("ref") else "",
+        )
+
+    async def finalize_turn(
+        self, result: OrchestrationResult, *, reply_saved: bool,
+    ) -> bool:
+        """Record ``committing -> completed`` (or ``failed(reply_not_saved)``).
+
+        The consumer calls this only after it has tried to persist the reply,
+        so ``completed`` can no longer be written before the reply exists.
+        """
+        if not result.turn_id or result.turn_state != "committing":
+            return False
+        return await afinalize_turn(
+            result.turn_id, result.turn_version, reply_saved=reply_saved,
         )

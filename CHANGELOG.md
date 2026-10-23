@@ -18,10 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `end_reason` and `partial` flag. The user's request and the replies link to
   their Turn through a nullable `Message.turn`; telemetry uses `turn_id` and
   never records tool inputs or message text. The loop's repeated
-  safety-policy stop, pause limit and refusal/unknown stops now end as
-  `safety_stop`, `pause_limit` and `refusal` rather than `finished`, and a
-  confirmation pause emits a paused signal. A room deleted mid-turn records
-  `failed(room_gone)`.
+  safety-policy stop, pause limit and provider refusal now end as
+  `safety_stop`, `pause_limit` and `refusal`; any other stop reason ends
+  `failed(unknown_stop)` rather than a completed refusal. A confirmation pause
+  emits a paused signal. A room deleted mid-turn records `failed(room_gone)`.
+  Every post-claim exit writes a terminal state (cancellation included), a
+  crash-left `running` row is taken over as `failed(abandoned)` when provably
+  stale, and `completed` is written only after the consumer saves the reply
+  (otherwise `failed(reply_not_saved)`).
 
 - A **lite, chat-only profile** (`KAZI_LITE_PROFILE=1`), independent of
   `DEBUG`: one uvicorn web worker, LocMem cache, in-memory Channels, no Redis,
@@ -294,6 +298,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Upgrade notes
 
+- The Turn migration adds the `Message.turn` foreign key, which creates an
+  index on `chatbot_message` (the largest chat table). On PostgreSQL this is a
+  blocking index build: expect the table to be locked for writes while it runs.
+  Apply the migration during low traffic. The migration strategy is unchanged
+  (no concurrent index build); this note is the operational contract.
 - A client that calls `/api/newreply/` now gets 403 unless its user has
   `Api.view_kazireply` (to list) or `Api.add_kazireply` (to create). Grant those
   permissions in the admin, or use a superuser. Nothing in this repository calls

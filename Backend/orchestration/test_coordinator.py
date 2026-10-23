@@ -15,7 +15,7 @@ from asgiref.sync import async_to_sync
 from django.test import SimpleTestCase
 
 from orchestration.coordinator import OrchestrationCoordinator
-from orchestration.testsupport import turn_test_patches
+from tests.turn_support import turn_test_patches
 from orchestration.agent_loop import AgentEvent
 
 

@@ -2708,16 +2708,16 @@ async def run_agent_loop(
             continue
 
         else:
-            # A stop reason we do not handle (a provider refusal, stop_sequence,
-            # ...). End the turn: re-sending the same messages would loop until
-            # the iteration cap and never answer. Any text the model already
-            # wrote was emitted above and is kept.
-            state.end_reason = "refusal"
+            # A stop reason we do not handle. A provider refusal is still an
+            # answer; anything else is an unknown ending and must not be
+            # recorded as a completed refusal.
             if stop_reason == "refusal":
+                state.end_reason = "refusal"
                 yield AgentEvent("text_delta", {
                     "text": "\n\n*(The model declined to answer this request.)*",
                 })
             else:
+                state.end_reason = "unknown_stop"
                 yield AgentEvent("error", {
                     "message": f"The model stopped for an unhandled reason ({stop_reason}).",
                 })

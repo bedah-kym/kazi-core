@@ -12,7 +12,7 @@ from django.test import SimpleTestCase
 
 from orchestration.agent_loop import AgentEvent
 from orchestration.coordinator import OrchestrationCoordinator
-from orchestration.testsupport import turn_test_patches
+from tests.turn_support import turn_test_patches
 
 ERROR_TEXT = "Something went wrong on my side. Nothing further was run."
 

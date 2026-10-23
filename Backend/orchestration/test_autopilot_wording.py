@@ -11,7 +11,7 @@ from django.test import SimpleTestCase
 
 from orchestration.agent_loop import AgentEvent, LoopState
 from orchestration.coordinator import OrchestrationCoordinator
-from orchestration.testsupport import turn_test_patches
+from tests.turn_support import turn_test_patches
 
 CLEAN_REPLY = (
     "Autopilot armed for this room. Shell commands, including root and network "

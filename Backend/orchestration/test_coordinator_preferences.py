@@ -139,7 +139,14 @@ class CoordinatorLoadedProfileFailsClosedTests(TestCase):
             patch("orchestration.coordinator.record_event"),
             patch("orchestration.coordinator.cache", MagicMock()),
             patch("orchestration.coordinator.aget_paused_turn", new=AsyncMock(return_value=None)),
-            patch("orchestration.coordinator.acreate_turn", new=AsyncMock(return_value=__import__("types").SimpleNamespace(pk="00000000-0000-0000-0000-000000000001", version=0, state="queued"))),
+            patch(
+                "orchestration.coordinator.aclaim_turn",
+                new=AsyncMock(return_value=__import__("types").SimpleNamespace(
+                    pk="00000000-0000-0000-0000-000000000001",
+                    version=0,
+                    state="running",
+                )),
+            ),
             patch("orchestration.coordinator.atransition", new=AsyncMock(return_value=True)),
             patch("orchestration.coordinator.alink_message", new=AsyncMock(return_value=True)),
             patch("orchestration.coordinator._room_exists", new=lambda room_id: True),

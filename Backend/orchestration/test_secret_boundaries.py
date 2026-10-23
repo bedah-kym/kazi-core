@@ -22,7 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from django.test import SimpleTestCase, override_settings
 
-from orchestration.testsupport import turn_test_patches
+from tests.turn_support import turn_test_patches
 
 SENTINEL = "fake-token-otter-4471"
 

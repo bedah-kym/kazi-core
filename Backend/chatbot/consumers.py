@@ -793,6 +793,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
         await self._send_plain_ai_message(room_id, ack)
 
     async def new_message(self, data):
+        result = None
+        coordinator = None
+        reply_saved = False
         try:
             logger.info(
                 "=== NEW MESSAGE START === room=%r chars=%s",
@@ -1052,7 +1055,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                     "Several people share this room. Earlier user turns are prefixed with "
                                     f"the speaker's name. The message you are answering is from {member_username}."
                                 )
-                            result = await OrchestrationCoordinator().handle_message(
+                            coordinator = OrchestrationCoordinator()
+                            result = await coordinator.handle_message(
                                 query=ai_query,
                                 user_id=member_user.id,
                                 room_id=room_id,
@@ -1069,6 +1073,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             _release_agent_loop_lock(member_user.id, room_id)
 
                         full_response_text = result.full_response
+                        # A turn with nothing to save still has a true ending:
+                        # only a reply that should persist can be "not saved".
+                        reply_saved = not (result.persist and full_response_text.strip())
 
                         if result.persist and full_response_text.strip():
                             logger.info("Saving AI message to database (%s chars)", len(full_response_text))
@@ -1113,6 +1120,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                     )
 
                                 ai_message = await sync_to_async(_create_ai_message)()
+                                reply_saved = True
 
                                 # Add to chatroom
                                 if current_chat:
@@ -1145,6 +1153,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                     except Exception as e:
                                         logger.warning(f"Context summary refresh skipped: {e}")
 
+                        if coordinator is not None:
+                            try:
+                                await coordinator.finalize_turn(
+                                    result, reply_saved=reply_saved,
+                                )
+                            except Exception:
+                                logger.warning("Turn finalize after saving the reply failed")
+
             else:
                 await self.send_chat_message({
                     'member': 'security system',
@@ -1154,6 +1170,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
         except Exception as e:
             logger.error(f"Error in new_message: {str(e)}")
             logger.error(f"Full traceback: {traceback.format_exc()}")
+            if coordinator is not None and result is not None:
+                try:
+                    await coordinator.finalize_turn(result, reply_saved=reply_saved)
+                except Exception:
+                    logger.warning("Turn finalize after error failed")
             await self.send_chat_message({
                 'member': 'security system',
                 'content': "Error processing message",

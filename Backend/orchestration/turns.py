@@ -15,7 +15,8 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Optional
 
 from asgiref.sync import sync_to_async
-from django.db import IntegrityError
+from django.conf import settings
+from django.db import IntegrityError, transaction
 from django.db.models import F
 from django.utils import timezone
 
@@ -25,6 +26,11 @@ from orchestration.telemetry import record_event
 TERMINAL_STATES = frozenset({
     "completed", "failed", "cancelled", "superseded", "expired",
 })
+
+# A full-profile worker only takes over a running/committing row once its
+# wall-clock guard has certainly expired. The margin absorbs clock skew and a
+# worker that is still writing its own terminal state.
+STALE_TURN_MARGIN_SECONDS = 60
 
 # to-state -> states it may be entered from. A terminal state is never a key,
 # so no transition can leave one.
@@ -73,6 +79,108 @@ def create_turn(
     )
     if request_message_id is not None:
         link_message(str(turn.pk), request_message_id)
+    record_event("turn_created", {
+        "turn_id": str(turn.pk),
+        "room_id": room_id,
+        "user_id": user_id,
+        "state": turn.state,
+        "schema_version": turn.schema_version,
+    })
+    return turn
+
+
+def _active_turn(room_id: Any, user_id: Any) -> Optional[Turn]:
+    return (
+        Turn.objects.filter(
+            room_id=room_id, user_id=user_id, state__in=("running", "committing"),
+        )
+        .order_by("started_at")
+        .first()
+    )
+
+
+def _is_stale(blocker: Turn) -> bool:
+    """Whether a blocking active row cannot still be held by a live worker.
+
+    The lite profile runs exactly one web worker, and the consumer holds a
+    per-process lock for the room, so any blocking row it finds is left over.
+    A full profile can have another worker mid-turn; only a row past the hard
+    wall-clock guard plus a margin is provably abandoned.
+    """
+    if getattr(settings, "KAZI_LITE_PROFILE", False):
+        return True
+    if blocker.started_at is None:
+        return False
+    from orchestration.agent_loop import HARD_TURN_TIMEOUT_SECONDS
+
+    age = (timezone.now() - blocker.started_at).total_seconds()
+    return age > HARD_TURN_TIMEOUT_SECONDS + STALE_TURN_MARGIN_SECONDS
+
+
+def _insert_running(
+    *,
+    room_id: Any,
+    user_id: Any,
+    request_message_id: Optional[int],
+    model: str,
+    budget: Optional[Dict[str, Any]],
+) -> Turn:
+    with transaction.atomic():
+        turn = Turn.objects.create(
+            room_id=room_id,
+            user_id=user_id,
+            state="running",
+            model=(model or "")[:100],
+            budget=budget or {},
+            started_at=timezone.now(),
+            attempt=1,
+        )
+        if request_message_id is not None:
+            link_message(str(turn.pk), request_message_id)
+    return turn
+
+
+def claim_turn(
+    *,
+    room_id: Any,
+    user_id: Any,
+    request_message_id: Optional[int] = None,
+    model: str = "",
+    budget: Optional[Dict[str, Any]] = None,
+) -> Optional[Turn]:
+    """Create the running Turn in one INSERT, taking over a provably stale row.
+
+    A refused claim (the partial unique constraint) is only a hard refusal when
+    the blocking row could still belong to a live worker. Otherwise it is ended
+    ``failed(abandoned)`` and the claim is retried exactly once. Paused rows are
+    never touched: they do not conflict with a running insert.
+    """
+    try:
+        turn = _insert_running(
+            room_id=room_id,
+            user_id=user_id,
+            request_message_id=request_message_id,
+            model=model,
+            budget=budget,
+        )
+    except IntegrityError:
+        blocker = _active_turn(room_id, user_id)
+        if blocker is None or not _is_stale(blocker):
+            return None
+        transition(
+            str(blocker.pk), blocker.version, "failed",
+            from_state=blocker.state, end_reason="abandoned",
+        )
+        try:
+            turn = _insert_running(
+                room_id=room_id,
+                user_id=user_id,
+                request_message_id=request_message_id,
+                model=model,
+                budget=budget,
+            )
+        except IntegrityError:
+            return None
     record_event("turn_created", {
         "turn_id": str(turn.pk),
         "room_id": room_id,
@@ -155,13 +263,14 @@ def transition(
         updates["ended_at"] = timezone.now()
 
     try:
-        updated = (
-            Turn.objects.filter(
-                pk=turn_id,
-                version=expected_version,
-                state__in=allowed_from,
-            ).update(**updates)
-        )
+        with transaction.atomic():
+            updated = (
+                Turn.objects.filter(
+                    pk=turn_id,
+                    version=expected_version,
+                    state__in=allowed_from,
+                ).update(**updates)
+            )
     except (ValueError, TypeError, IntegrityError):
         # A malformed id, an unusable value or a losing insert against the
         # partial unique constraint is a lost write, not a crash.
@@ -191,8 +300,28 @@ def advance(ref: TurnRef, to_state: str, **kwargs) -> Optional[TurnRef]:
     return TurnRef(id=ref.id, version=ref.version + 1, state=to_state)
 
 
+def finalize_turn(turn_id: str, expected_version: int, *, reply_saved: bool) -> bool:
+    """Record the committing turn's true ending after the reply is persisted."""
+    if reply_saved:
+        return transition(turn_id, expected_version, "completed")
+    return transition(
+        turn_id, expected_version, "failed",
+        end_reason="reply_not_saved", partial=True,
+    )
+
+
 async def acreate_turn(**kwargs) -> Turn:
     return await sync_to_async(create_turn)(**kwargs)
+
+
+async def aclaim_turn(**kwargs) -> Optional[Turn]:
+    return await sync_to_async(claim_turn)(**kwargs)
+
+
+async def afinalize_turn(turn_id: str, expected_version: int, *, reply_saved: bool) -> bool:
+    return await sync_to_async(finalize_turn)(
+        turn_id, expected_version, reply_saved=reply_saved,
+    )
 
 
 async def alink_message(turn_id: str, message_id: Optional[int]) -> bool:

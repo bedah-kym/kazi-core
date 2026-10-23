@@ -197,9 +197,9 @@ def conservative_capability_prefs(prefs: Dict[str, Any]) -> Dict[str, Any]:
 
 _SECRET_PATTERNS = [
     re.compile(r"\b(?:sk|pk|rk)-[A-Za-z0-9]{16,}\b"),
-    re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._-]{16,}\b"),
-    re.compile(r"(?i)\b(?:api[_-]?key|apikey|access[_-]?token|auth[_-]?token|refresh[_-]?token)\b\s*[:=]\s*\S+"),
-    re.compile(r"(?i)\b(?:password|passwd|pwd|secret|client[_-]?secret)\b\s*[:=]\s*\S+"),
+    re.compile(r"(?i)\bbearer[ \t]+[A-Za-z0-9._-]{16,}\b"),
+    re.compile(r"(?i)\b(?:api[_-]?key|apikey|access[_-]?token|auth[_-]?token|refresh[_-]?token)\b[ \t]*[:=][ \t]*\S+"),
+    re.compile(r"(?i)\b(?:password|passwd|pwd|secret|client[_-]?secret)\b[ \t]*[:=][ \t]*\S+"),
 ]
 
 _PII_EMAIL_RE = re.compile(r'[\w.+-]+@[\w-]+\.[\w.-]+')

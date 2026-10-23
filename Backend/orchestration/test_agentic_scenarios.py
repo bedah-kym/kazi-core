@@ -12,6 +12,24 @@ from unittest.mock import AsyncMock, patch, MagicMock
 from django.test import SimpleTestCase, override_settings
 
 
+class _AgentLoopTestBase(SimpleTestCase):
+    """Stub the persona lookup for tests that drive the agent loop.
+
+    These are SimpleTestCases, so the real lookup cannot touch the database and
+    fails closed (C3), refusing every tool call. Returning "no persona" keeps
+    each test independent of the order it runs in.
+    """
+
+    def setUp(self):
+        super().setUp()
+        persona_patch = patch(
+            "orchestration.agent_loop._resolve_persona",
+            new=AsyncMock(return_value=None),
+        )
+        persona_patch.start()
+        self.addCleanup(persona_patch.stop)
+
+
 def run_async(coro):
     """Helper to run async generators in sync tests."""
     loop = asyncio.new_event_loop()
@@ -50,7 +68,7 @@ def _tool_use_block(tool_id, name, tool_input):
 #  Scenario 1: Simple single-tool request (weather check)
 # ---------------------------------------------------------------------------
 
-class Scenario1SimpleToolTest(SimpleTestCase):
+class Scenario1SimpleToolTest(_AgentLoopTestBase):
     """User asks "What's the weather in Nairobi?" → get_weather → answer."""
 
     @patch("orchestration.agent_loop.get_llm_client")
@@ -95,7 +113,7 @@ class Scenario1SimpleToolTest(SimpleTestCase):
 #  Scenario 2: Multi-tool chain (search flights → email)
 # ---------------------------------------------------------------------------
 
-class Scenario2MultiToolChainTest(SimpleTestCase):
+class Scenario2MultiToolChainTest(_AgentLoopTestBase):
     """User: "Find cheapest flight to Mombasa and email it" → search → email confirm."""
 
     @patch("orchestration.agent_loop.save_pending_confirmation", new_callable=AsyncMock)
@@ -144,7 +162,7 @@ class Scenario2MultiToolChainTest(SimpleTestCase):
 #  Scenario 2b: Approval payload carries dry-run effects (issue #168)
 # ---------------------------------------------------------------------------
 
-class Scenario2bConfirmationEffectsTest(SimpleTestCase):
+class Scenario2bConfirmationEffectsTest(_AgentLoopTestBase):
     """The confirmation payload includes connector preview() effects."""
 
     def _run_confirmation(self, mock_preview):
@@ -198,7 +216,7 @@ class Scenario2bConfirmationEffectsTest(SimpleTestCase):
 #  Scenario 3: Error recovery — bad city name → retry
 # ---------------------------------------------------------------------------
 
-class Scenario3ErrorRecoveryTest(SimpleTestCase):
+class Scenario3ErrorRecoveryTest(_AgentLoopTestBase):
     """Tool returns error → LLM retries with corrected params."""
 
     @patch("orchestration.agent_loop.get_llm_client")
@@ -243,7 +261,7 @@ class Scenario3ErrorRecoveryTest(SimpleTestCase):
 #  Scenario 4: Iteration limit reached
 # ---------------------------------------------------------------------------
 
-class Scenario4IterationLimitTest(SimpleTestCase):
+class Scenario4IterationLimitTest(_AgentLoopTestBase):
     """The iteration backstop ends a runaway tool loop gracefully."""
 
     @patch("orchestration.agent_loop.HARD_CAP_ITERATIONS", 2)
@@ -277,7 +295,7 @@ class Scenario4IterationLimitTest(SimpleTestCase):
 #  Scenario 5: Token budget exhausted
 # ---------------------------------------------------------------------------
 
-class Scenario5TokenBudgetTest(SimpleTestCase):
+class Scenario5TokenBudgetTest(_AgentLoopTestBase):
     """The turn's work-token budget ends the loop with a harness note."""
 
     @override_settings(AGENT_TURN_TOKEN_BUDGET=500, AGENT_TURN_TOKEN_BUDGET_MAX=500)
@@ -313,7 +331,7 @@ class Scenario5TokenBudgetTest(SimpleTestCase):
 #  Scenario 6: Parallel tool calls (weather in two cities)
 # ---------------------------------------------------------------------------
 
-class Scenario6ParallelToolsTest(SimpleTestCase):
+class Scenario6ParallelToolsTest(_AgentLoopTestBase):
     """LLM calls get_weather twice in one response → parallel execution."""
 
     @patch("orchestration.agent_loop.get_llm_client")
@@ -354,7 +372,7 @@ class Scenario6ParallelToolsTest(SimpleTestCase):
 #  Scenario 7: Confirmation flow — pause and resume
 # ---------------------------------------------------------------------------
 
-class Scenario7ConfirmationFlowTest(SimpleTestCase):
+class Scenario7ConfirmationFlowTest(_AgentLoopTestBase):
     """High-risk tool pauses the loop → state saved → resume works."""
 
     @patch("orchestration.agent_loop.save_pending_confirmation", new_callable=AsyncMock)
@@ -394,7 +412,7 @@ class Scenario7ConfirmationFlowTest(SimpleTestCase):
 #  Scenario 8: Injection in tool result is sanitized
 # ---------------------------------------------------------------------------
 
-class Scenario8InjectionProtectionTest(SimpleTestCase):
+class Scenario8InjectionProtectionTest(_AgentLoopTestBase):
     """Tool result contains injection attempt → stripped before LLM sees it."""
 
     def test_result_injection_stripped(self):
@@ -412,7 +430,7 @@ class Scenario8InjectionProtectionTest(SimpleTestCase):
 #  Scenario 9: Cancel pending action
 # ---------------------------------------------------------------------------
 
-class Scenario9CancelPendingTest(SimpleTestCase):
+class Scenario9CancelPendingTest(_AgentLoopTestBase):
     def test_cancel_pending(self):
         from orchestration.agent_loop import cancel_pending_action
 
@@ -434,7 +452,7 @@ class Scenario9CancelPendingTest(SimpleTestCase):
 #  Scenario 10: General chat falls through (no tool needed)
 # ---------------------------------------------------------------------------
 
-class Scenario10GeneralChatTest(SimpleTestCase):
+class Scenario10GeneralChatTest(_AgentLoopTestBase):
     """Simple conversational message → LLM responds with text only, no tools."""
 
     @patch("orchestration.agent_loop.get_llm_client")
@@ -464,7 +482,7 @@ class Scenario10GeneralChatTest(SimpleTestCase):
 #  Scenario 11: Thinking event emitted before tool calls
 # ---------------------------------------------------------------------------
 
-class Scenario11ThinkingTransparencyTest(SimpleTestCase):
+class Scenario11ThinkingTransparencyTest(_AgentLoopTestBase):
     """LLM text before tool_use should emit as 'thinking' event."""
 
     @patch("orchestration.agent_loop.get_llm_client")
@@ -504,7 +522,7 @@ class Scenario11ThinkingTransparencyTest(SimpleTestCase):
 #  AL-2: Sub-agent budget caps (iterations / tool calls / tokens)
 # ---------------------------------------------------------------------------
 
-class SubAgentBudgetTests(SimpleTestCase):
+class SubAgentBudgetTests(_AgentLoopTestBase):
     """delegate_task sub-agents must respect hard caps and report why they
     stopped. The tool-call cap in particular must hold WITHIN a single
     response batch, not just between iterations."""
@@ -645,7 +663,7 @@ class SubAgentBudgetTests(SimpleTestCase):
 #  Scenario 12: An identical shell command runs again in the same turn
 # ---------------------------------------------------------------------------
 
-class Scenario12RepeatedShellCommandTest(SimpleTestCase):
+class Scenario12RepeatedShellCommandTest(_AgentLoopTestBase):
     """A repeated shell command is not answered from the earlier result."""
 
     @override_settings(SHELL_EXEC_PROFILE="standard")
@@ -738,7 +756,8 @@ class Scenario12RepeatedShellCommandTest(SimpleTestCase):
         self.assertEqual(mock_exec.await_count, 3)
         self.assertEqual(
             results[-1]["message"],
-            "Stopped retrying run_command after 2 failures in this turn. It can be tried again in a new message.",
+            "Stopped retrying run_command echo hi after 2 failures in this turn. "
+            "It can be tried again in a new message.",
         )
 
     @override_settings(SHELL_EXEC_PROFILE="open", SHELL_EXEC_PROFILES=["open"])
@@ -783,7 +802,7 @@ class Scenario12RepeatedShellCommandTest(SimpleTestCase):
 #  Scenario 13: A repeated non-shell call is not run twice; it is labelled
 # ---------------------------------------------------------------------------
 
-class Scenario13RepeatedNonShellCallTest(SimpleTestCase):
+class Scenario13RepeatedNonShellCallTest(_AgentLoopTestBase):
     """A second identical create_note must not duplicate the side effect."""
 
     @patch("orchestration.agent_loop.get_llm_client")
@@ -823,7 +842,7 @@ class Scenario13RepeatedNonShellCallTest(SimpleTestCase):
 #  T-F4: an unhandled stop reason ends the turn after one model call
 # ---------------------------------------------------------------------------
 
-class UnknownStopReasonTests(SimpleTestCase):
+class UnknownStopReasonTests(_AgentLoopTestBase):
     """Re-sending the same messages on an unrecognised stop reason looped until
     the iteration cap. The turn must end after a single call, keeping the text."""
 
@@ -875,7 +894,7 @@ class UnknownStopReasonTests(SimpleTestCase):
 #  T-F4 follow-up: stop_reason "pause_turn" continues (it is not unhandled)
 # ---------------------------------------------------------------------------
 
-class PauseTurnTests(SimpleTestCase):
+class PauseTurnTests(_AgentLoopTestBase):
     """A provider's server-side tool (Anthropic web search) can pause the turn.
     The paused turn is sent back so the model finishes, but a run of pauses is
     bounded so a provider that pauses forever still ends the turn."""
@@ -924,7 +943,7 @@ class PauseTurnTests(SimpleTestCase):
         self.assertIn("error", [e.kind for e in events])
 
 
-class SubAgentPauseTurnTests(SimpleTestCase):
+class SubAgentPauseTurnTests(_AgentLoopTestBase):
     """The delegated (sub-agent) loop continues a pause_turn the same way."""
 
     def _run(self, side_effect):
@@ -971,12 +990,13 @@ class SubAgentPauseTurnTests(SimpleTestCase):
 #  T-F4 follow-up: a registered search backend makes search_info real
 # ---------------------------------------------------------------------------
 
-class SearchBackendOfferingTests(SimpleTestCase):
+class SearchBackendOfferingTests(_AgentLoopTestBase):
     """With a search backend registered and a non-Anthropic provider, the agent
     is offered search_info; with none it is excluded and the prompt says so.
     The registered-backend path shares the daily search budget and taints."""
 
     def setUp(self):
+        super().setUp()
         from orchestration.tool_router import register_search_backend
         register_search_backend(None)
         self.addCleanup(lambda: register_search_backend(None))

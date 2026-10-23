@@ -78,6 +78,7 @@ class _LoopCase(SimpleTestCase):
             ))
 
         with patch("orchestration.agent_loop.get_llm_client", return_value=llm), \
+                patch("orchestration.agent_loop._resolve_persona", new=AsyncMock(return_value=None)), \
                 patch("orchestration.agent_loop.execute_tool", new=AsyncMock(
                     return_value=execute_result,
                 )), \

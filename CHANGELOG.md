@@ -28,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The reply that confirms **autopilot** is now true in a room that recently
+  read untrusted content (C4). It says that commands reaching the network will
+  still ask while the room holds that content, and that this lifts on its own;
+  in a clean room the reply is unchanged. If the taint state cannot be read,
+  the cautious version is used. The offer text before arming carries the same
+  caveat.
 - A failed room-persona lookup now **fails closed** (C3, AGENTS.md §0.3). "This
   room has no persona" still means today's behaviour, but if the persona lookup
   itself errors, the turn gets no tool reach: the ordinary tool definitions stay

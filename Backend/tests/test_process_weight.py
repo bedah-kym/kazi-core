@@ -714,6 +714,7 @@ class LiteChatTests(TestCase):
         mock_coord.return_value.handle_message = AsyncMock(
             return_value=OrchestrationResult(full_response="hello back", persist=True)
         )
+        mock_coord.return_value.finalize_turn = AsyncMock(return_value=True)
         consumer = self._consumer()
 
         async_to_sync(consumer.new_message)(

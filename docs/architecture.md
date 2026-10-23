@@ -73,6 +73,25 @@ pending confirmations (durable agent-loop approvals), the agent loop, and
 general chat. The WebSocket consumer delegates to it via injected async
 callbacks, so it has no Channels dependency of its own.
 
+### Turn Record (`orchestration/turns.py`)
+
+Every routed message gets one durable `orchestration.Turn` row with a stable
+`turn_id`; an approval, budget or quota resume continues that same row
+(`attempt` increments). The coordinator is the only writer. It claims the row
+directly as `running` in one insert, and a move is one compare-and-set on
+`(id, version)`: a writer that lost the race changes nothing. A crash-left
+`running` row is taken over as `failed(abandoned)` only when it is provably
+stale (always on the one-worker lite profile; past the hard wall-clock guard on
+the full profile); paused rows are untouched. States are coarse (`queued`,
+`running`, `paused`, `committing`, plus the terminals `completed`, `failed`,
+`cancelled`, `superseded`, `expired`). Every post-claim exception writes a
+terminal state and re-raises, including `CancelledError`. `committing` becomes
+`completed` only after the consumer saves the reply (otherwise
+`failed(reply_not_saved)`). `pause_kind` says why a turn is paused, `end_reason`
+and `partial` record how it ended, and `Message.turn` links the request and
+replies to it. Transition telemetry carries ids, states, reasons and counts
+only — never tool inputs or message text.
+
 ### Tool Executor (`orchestration/tool_executor.py`)
 
 The gateway between the agent and connectors. Before executing any tool:

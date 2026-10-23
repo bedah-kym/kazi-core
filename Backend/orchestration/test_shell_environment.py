@@ -11,6 +11,7 @@ from django.test import SimpleTestCase, TestCase, override_settings
 from orchestration.agent_loop import AgentEvent
 from orchestration.agent_prompts import build_environment_block, build_system_prompt
 from orchestration.coordinator import OrchestrationCoordinator
+from tests.turn_support import turn_test_patches
 from orchestration.shell.environment import get_shell_environment
 from orchestration.shell.profiles import get_profile
 from orchestration.shell_exec.backends import LocalBackend, ShellExecConfig
@@ -208,6 +209,7 @@ class CoordinatorEnvironmentTests(SimpleTestCase):
             "orchestration.coordinator.record_event": MagicMock(),
             "orchestration.coordinator.run_agent_loop": _capture,
             "orchestration.shell.environment.get_shell_environment": environment,
+            **turn_test_patches(),
         }
 
         async def run():

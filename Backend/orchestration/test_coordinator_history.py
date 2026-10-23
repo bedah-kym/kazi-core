@@ -9,6 +9,7 @@ from django.test import SimpleTestCase
 from chatbot.transcript import build_history_messages
 from orchestration.agent_loop import AgentEvent
 from orchestration.coordinator import OrchestrationCoordinator
+from tests.turn_support import turn_test_patches
 from orchestration.tool_record import RECORD_STRING_MAX
 
 
@@ -31,6 +32,7 @@ def _run_agent_turn(query, *, history_messages=None, memory_summary=None, contex
         "orchestration.coordinator.cache": cache,
         "orchestration.coordinator.record_event": MagicMock(),
         "orchestration.coordinator.run_agent_loop": _capture,
+        **turn_test_patches(),
     }
 
     async def run():

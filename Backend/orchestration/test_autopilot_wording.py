@@ -11,6 +11,7 @@ from django.test import SimpleTestCase
 
 from orchestration.agent_loop import AgentEvent, LoopState
 from orchestration.coordinator import OrchestrationCoordinator
+from tests.turn_support import turn_test_patches
 
 CLEAN_REPLY = (
     "Autopilot armed for this room. Shell commands, including root and network "
@@ -52,6 +53,7 @@ class AutopilotArmedWordingTests(SimpleTestCase):
             "orchestration.shell.autopilot.is_armed": MagicMock(return_value=False),
             "orchestration.shell.autopilot.arm": MagicMock(return_value=True),
             "orchestration.shell.environment.get_shell_environment": AsyncMock(return_value={}),
+            **turn_test_patches(),
         }
         if isinstance(taint, Exception):
             defaults["orchestration.coordinator._conversation_tainted"] = MagicMock(side_effect=taint)

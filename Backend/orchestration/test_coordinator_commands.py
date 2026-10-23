@@ -7,6 +7,7 @@ from django.test import SimpleTestCase
 
 from orchestration.agent_loop import AgentEvent
 from orchestration.coordinator import OrchestrationCoordinator
+from tests.turn_support import turn_test_patches
 
 ORDINARY_SENTENCES = (
     "run the build in debug mode as a scheduled task",
@@ -43,6 +44,7 @@ class CoordinatorCommandTests(SimpleTestCase):
             "orchestration.coordinator.cache": cache,
             "orchestration.coordinator.record_event": MagicMock(),
             "orchestration.coordinator.run_agent_loop": _capture_loop,
+            **turn_test_patches(),
         }
         defaults.update(patches or {})
         send_chunk = AsyncMock()

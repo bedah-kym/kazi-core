@@ -7,6 +7,7 @@ pipeline (directives, pending confirmations, agent loop) and talks back to the
 consumer through a small set of injected async callbacks so it has no Channels
 dependency of its own.
 """
+import asyncio
 import logging
 import time
 import uuid
@@ -17,6 +18,16 @@ from asgiref.sync import sync_to_async
 from django.core.cache import cache
 
 from orchestration.telemetry import record_event
+from orchestration.turns import (
+    TERMINAL_STATES,
+    TurnRef,
+    aclaim_turn,
+    afinalize_turn,
+    aget_paused_turn,
+    alink_message,
+    atransition,
+    ref_from_turn,
+)
 from orchestration.contracts import build_step_event
 from orchestration.user_preferences import conservative_default_preferences, get_user_preferences
 from orchestration.action_receipts import (
@@ -33,6 +44,7 @@ from orchestration.memory_state import load_memory_summary, clear_memory
 from orchestration.tool_record import tool_record_input
 from orchestration.shell.chat_intents import (
     is_approval_reply,
+    is_autopilot_request,
     is_budget_extend_reply,
     is_decline_reply,
     is_cancel_command,
@@ -93,6 +105,57 @@ async def _quota_resume_still_blocked(user_id: int) -> Optional[TokenQuotaExceed
     return await get_llm_client().check_hourly_quota(user_id)
 
 
+async def _end_unexpected_turn(turn_box: Dict, stream_state: Dict, outcome: str) -> None:
+    """Write the honest terminal state for an exception after the claim.
+
+    A cancelled app instance (a closed tab) raises ``CancelledError``, which is
+    a ``BaseException``. The write is shielded so it still lands; the caller
+    re-raises the original exception either way.
+    """
+    ref = turn_box.get("ref")
+    if ref is None or turn_box.get("settled"):
+        return
+    if outcome == "cancelled":
+        if ref.state == "committing":
+            # committing has no cancelled edge; the reply was never saved.
+            to_state = "failed"
+            updates: Dict = {
+                "from_state": ref.state,
+                "end_reason": "cancelled",
+                "partial": bool(stream_state.get("tools") or stream_state.get("model")),
+            }
+        else:
+            to_state = "cancelled"
+            updates = {"from_state": ref.state, "end_reason": "cancelled"}
+    else:
+        to_state = "failed"
+        updates = {
+            "from_state": ref.state,
+            "end_reason": "error",
+            "partial": bool(stream_state.get("tools") or stream_state.get("model")),
+            "active_seconds": float(stream_state.get("elapsed") or 0),
+        }
+    task = asyncio.ensure_future(
+        atransition(ref.id, ref.version, to_state, **updates),
+    )
+    if outcome != "cancelled":
+        try:
+            await task
+        except Exception:
+            logger.warning("Could not record the turn's unexpected ending.")
+        return
+    try:
+        await asyncio.shield(task)
+    except asyncio.CancelledError:
+        # The inner task keeps running after the shield is cancelled; wait for
+        # it so the row is terminal before this cancellation finishes.
+        try:
+            await task
+        except Exception:
+            pass
+        raise
+
+
 def _tool_record(data: Dict) -> Dict:
     """One tool call of the turn: the call's input (sanitised) and the text the model saw."""
     result = data.get("result")
@@ -142,6 +205,12 @@ _AUTOPILOT_HINT_TAINTED = (
 )
 
 
+def _room_exists(room_id) -> bool:
+    from chatbot.models import Chatroom
+
+    return Chatroom.objects.filter(pk=room_id).exists()
+
+
 def _history_replays_untrusted(history_msgs: Optional[List[dict]]) -> bool:
     """Whether the built history carries a replayed result from an untrusted tool."""
     for message in history_msgs or []:
@@ -168,6 +237,14 @@ class OrchestrationResult:
     # The reply in two parts: what the model wrote and what the harness wrote.
     model_text: str = ""
     harness: str = ""
+    # The durable turn this message belongs to; the consumer links the saved
+    # reply to it. Empty only when no turn could be recorded.
+    turn_id: str = ""
+    # The fence and state of the turn when this result was produced. A turn in
+    # ``committing`` is completed by ``finalize_turn`` only after the consumer
+    # has saved the reply.
+    turn_version: int = 0
+    turn_state: str = ""
 
 
 class OrchestrationCoordinator:
@@ -205,8 +282,150 @@ class OrchestrationCoordinator:
         further runs; errors during confirmation resume propagate.
         """
         stream_state = {"buffer": [], "last_send": 0, "first_token_sent": False, "full_response": [], "model": [], "harness": [], "tools": [], "chunks": 0, "chars": 0}  # nosec B105 — state keys, not a credential
+        turn_box = {"ref": None, "settled": False, "hold": False, "agent_ran": False}
+        try:
+            return await self._handle_message_body(
+                stream_state=stream_state,
+                turn_box=turn_box,
+                query=query,
+                user_id=user_id,
+                room_id=room_id,
+                username=username,
+                message_id=message_id,
+                send_chunk=send_chunk,
+                send_step_event=send_step_event,
+                get_context_prompt=get_context_prompt,
+                bump_signals=bump_signals,
+                history_messages=history_messages,
+            )
+        except asyncio.CancelledError:
+            await _end_unexpected_turn(turn_box, stream_state, "cancelled")
+            raise
+        except Exception:
+            await _end_unexpected_turn(turn_box, stream_state, "error")
+            raise
+
+    async def _handle_message_body(
+        self,
+        *,
+        stream_state: Dict,
+        turn_box: Dict,
+        query: str,
+        user_id: int,
+        room_id: str,
+        username: str,
+        message_id: Optional[int],
+        send_chunk: Callable[[str, str, bool], Awaitable[None]],
+        send_step_event: Callable[[str, dict], Awaitable[None]],
+        get_context_prompt: Callable[[], Awaitable[str]],
+        bump_signals: Callable[[List[Optional[str]]], None],
+        history_messages: Optional[List[dict]] = None,
+    ) -> OrchestrationResult:
         turn_step_id = f"turn_{message_id}"
         correlation_id = uuid.uuid4().hex
+
+        def _turn_id() -> str:
+            ref = turn_box.get("ref")
+            return ref.id if ref else ""
+
+        async def _start_turn() -> Optional[TurnRef]:
+            turn = await aclaim_turn(
+                room_id=room_id,
+                user_id=user_id,
+                request_message_id=message_id,
+            )
+            if turn is None:
+                return None
+            ref = ref_from_turn(turn)
+            turn_box["ref"] = ref
+            return ref
+
+        async def _resume_turn(ref: TurnRef) -> bool:
+            if ref.state == "running":
+                # A paused Turn was missing (an older turn or a test double);
+                # the new record is already running, so only link the reply.
+                await alink_message(ref.id, message_id)
+                return True
+            moved = await atransition(
+                ref.id, ref.version, "running",
+                from_state="paused", pause_kind=None, pause_expires_at=None,
+                end_reason=None,
+            )
+            if not moved:
+                return False
+            ref = TurnRef(id=ref.id, version=ref.version + 1, state="running")
+            turn_box["ref"] = ref
+            await alink_message(ref.id, message_id)
+            return True
+
+        async def _advance_turn(to_state: str, **kwargs) -> bool:
+            if turn_box["settled"]:
+                return False
+            ref = turn_box.get("ref")
+            if ref is None:
+                return False
+            moved = await atransition(
+                ref.id, ref.version, to_state, from_state=ref.state, **kwargs,
+            )
+            if not moved:
+                return False
+            turn_box["ref"] = TurnRef(
+                id=ref.id, version=ref.version + 1, state=to_state,
+            )
+            if to_state in TERMINAL_STATES or to_state == "paused":
+                turn_box["settled"] = True
+            return True
+
+        async def _cancel_other_turn(turn, reason: str) -> None:
+            await atransition(
+                str(turn.pk), turn.version, "cancelled",
+                from_state=turn.state, end_reason=reason,
+            )
+
+        async def _finish_turn(reason: str) -> None:
+            """Record the loop's ending honestly (mapping table in #216a)."""
+            if turn_box["settled"] or turn_box["hold"]:
+                return
+            ref = turn_box.get("ref")
+            if ref is None:
+                return
+            if reason in ("budget", "asked_for_more"):
+                # At the configured ceiling the loop keeps no state to resume,
+                # so a pause here would strand the turn. End it for good.
+                if reason == "budget" and not await has_pending_budget_state(room_id, user_id):
+                    partial = bool(stream_state["tools"] or stream_state["model"])
+                    await _advance_turn(
+                        "failed", end_reason="budget", partial=partial,
+                        active_seconds=float(stream_state.get("elapsed") or 0),
+                    )
+                    return
+                await _advance_turn(
+                    "paused", pause_kind="budget", end_reason=reason,
+                    active_seconds=float(stream_state.get("elapsed") or 0),
+                )
+                return
+            if reason == "quota":
+                await _advance_turn(
+                    "paused", pause_kind="quota", end_reason="quota",
+                )
+                return
+            if not await sync_to_async(_room_exists)(room_id):
+                reason = "room_gone"
+            if reason in ("finished", "refusal"):
+                if ref.state == "running":
+                    # ``completed`` waits for the consumer to save the reply;
+                    # finalize_turn() is the only writer of that edge.
+                    moved = await _advance_turn("committing", end_reason=reason)
+                    if not moved:
+                        return
+                return
+            # Every other ending is a failure; partial says whether anything
+            # the user can see had already happened.
+            partial = bool(stream_state["tools"] or stream_state["model"])
+            await _advance_turn(
+                "failed", end_reason=reason, partial=partial,
+                active_seconds=float(stream_state.get("elapsed") or 0),
+            )
 
         async def broadcast_chunk(chunk_text, is_final=False, harness=False):
             # Store all chunks to build full response
@@ -245,7 +464,7 @@ class OrchestrationCoordinator:
                                     "chars": stream_state["chars"],
                                     "room_id": room_id,
                                     "user_id": user_id,
-                                    "correlation_id": correlation_id,
+                                    "turn_id": _turn_id(),
                                 },
                             )
                     stream_state["buffer"] = []
@@ -272,7 +491,7 @@ class OrchestrationCoordinator:
                         "state": state,
                         "room_id": room_id,
                         "user_id": user_id,
-                        "correlation_id": correlation_id,
+                        "turn_id": _turn_id(),
                         "sent": send_ok,
                     },
                 )
@@ -340,6 +559,10 @@ class OrchestrationCoordinator:
         # One read per turn: the reset and pause checks below share this state.
         loop_state = None
         if is_reset_command(query):
+            paused_turn = await aget_paused_turn(room_id, user_id)
+            if paused_turn is not None:
+                await _cancel_other_turn(paused_turn, "reset")
+            await _start_turn()
             await clear_task_state(adaptive_context)
             await clear_result_sets(adaptive_context)
             await clear_memory(adaptive_context)
@@ -350,12 +573,19 @@ class OrchestrationCoordinator:
                 {
                     "user_id": user_id,
                     "room_id": room_id,
-                    "correlation_id": correlation_id,
+                    "turn_id": _turn_id(),
                 },
             )
             await broadcast_chunk("Okay, starting fresh. What would you like to do?", harness=True)
             await emit_progress("done", "completed", "Context reset.")
-            return OrchestrationResult(full_response="".join(stream_state["full_response"]), persist=False)
+            await _finish_turn("finished")
+            return OrchestrationResult(
+                full_response="".join(stream_state["full_response"]),
+                persist=False,
+                turn_id=_turn_id(),
+                turn_version=turn_box["ref"].version if turn_box.get("ref") else 0,
+                turn_state=turn_box["ref"].state if turn_box.get("ref") else "",
+            )
 
         def _log_telemetry(event_type, payload=None):
             try:
@@ -481,6 +711,12 @@ class OrchestrationCoordinator:
                     result = event.data.get("result", {})
                     status = result.get("status", "")
                     await emit_progress("executing", "completed", f"{tool.replace('_', ' ')}: {status}")
+                elif event.kind == "paused":
+                    await _advance_turn(
+                        "paused",
+                        pause_kind=event.data.get("pause_kind") or "approval",
+                        end_reason="awaiting_approval",
+                    )
                 elif event.kind == "confirmation":
                     await broadcast_chunk(event.data.get("message", "Please confirm.") + await _autopilot_hint(), harness=True)
                     await emit_progress("validating", "completed", "Waiting for confirmation.")
@@ -496,6 +732,9 @@ class OrchestrationCoordinator:
                     await broadcast_chunk(event.data.get("message", "Something went wrong."), harness=True)
                     await emit_progress("executing", "completed", "Error encountered.")
                 elif event.kind == "done":
+                    stream_state["elapsed"] = event.data.get("elapsed")
+                    turn_box["end_reason"] = event.data.get("end_reason") or "finished"
+                    await _finish_turn(turn_box["end_reason"])
                     await emit_progress("done", "completed", "Request complete.")
 
         def _agent_context(extra=None):
@@ -505,6 +744,7 @@ class OrchestrationCoordinator:
                 "username": username,
                 "preferences": user_preferences,
                 "refresh_shell_autonomy": _refresh_shell_autonomy,
+                "turn_id": _turn_id(),
             }
             if extra:
                 context.update(extra)
@@ -512,6 +752,7 @@ class OrchestrationCoordinator:
 
         async def _handle_agent_loop(query_text: str, history_msgs, ctx_prompt: str, mem_summary: str, env_block: str = ""):
             """Run the agentic loop and map AgentEvents to WebSocket frames."""
+            turn_box["agent_ran"] = True
             await emit_progress("planning", "started", "Thinking…")
             await _relay_agent_events(run_agent_loop(
                 user_message=query_text,
@@ -526,6 +767,7 @@ class OrchestrationCoordinator:
 
         async def _handle_agent_resume(ctx_prompt: str, mem_summary: str, env_block: str = ""):
             """Resume a paused agent loop after user confirms."""
+            turn_box["agent_ran"] = True
             await _relay_agent_events(resume_after_confirmation(
                 context=_agent_context(),
                 preferences=user_preferences,
@@ -536,6 +778,7 @@ class OrchestrationCoordinator:
 
         async def _handle_agent_budget_resume(ctx_prompt: str, mem_summary: str, env_block: str = ""):
             """Continue a turn after the user granted it more budget (T-F3)."""
+            turn_box["agent_ran"] = True
             await _relay_agent_events(resume_with_more_budget(
                 context=_agent_context(),
                 preferences=user_preferences,
@@ -546,6 +789,7 @@ class OrchestrationCoordinator:
 
         async def _handle_agent_quota_resume(ctx_prompt: str, mem_summary: str, env_block: str = ""):
             """Continue a turn the hourly limit stopped, without more budget (T-F3b)."""
+            turn_box["agent_ran"] = True
             await _relay_agent_events(resume_after_quota(
                 context=_agent_context(),
                 preferences=user_preferences,
@@ -685,11 +929,60 @@ class OrchestrationCoordinator:
             if pending_budget:
                 clear_loop_state(room_id, user_id)
 
+        # One logical turn keeps one id. A reply to a pause continues that Turn;
+        # anything else supersedes the pause and starts a new record.
+        paused_turn = await aget_paused_turn(room_id, user_id)
+        # The arming branch needs a coverable shell command. The continue
+        # decision must use the same predicate, or an autopilot reply that
+        # cannot arm would run a fresh loop under the still-paused Turn.
+        armable_shell = bool(
+            pending_confirmation and is_autopilot_request(query)
+            and await _pending_armable_shell()
+        )
+        approval_continues = bool(
+            pending_confirmation and (
+                is_cancel_request(query) or is_decline_reply(query)
+                or armable_shell or is_approval_reply(query)
+            )
+        )
+        budget_continues = bool(
+            pending_budget and (
+                is_budget_extend_reply(query) or is_decline_reply(query)
+                or is_cancel_command(query)
+            )
+        )
+        continues_paused = approval_continues or budget_continues
+        if (
+            paused_turn is not None
+            and not (pending_handled and keeps_pending)
+            and not continues_paused
+        ):
+            await _cancel_other_turn(paused_turn, "dropped")
+            paused_turn = None
+        if continues_paused and paused_turn is not None:
+            turn_box["ref"] = ref_from_turn(paused_turn)
+            await alink_message(turn_box["ref"].id, message_id)
+        else:
+            await _start_turn()
+        if not pending_handled and turn_box["ref"] is None:
+            # Another writer owns this room's active turn (the partial unique
+            # constraint refused the claim). Fail closed instead of running
+            # the work a second time with no record.
+            await broadcast_chunk(
+                "This turn could not be recorded, so nothing was run. Please try again.",
+                harness=True,
+            )
+            await emit_progress("done", "completed", "Turn not recorded.")
+            await broadcast_chunk("", is_final=True)
+            return OrchestrationResult(
+                full_response="".join(stream_state["full_response"]),
+                persist=False,
+                turn_id="",
+            )
+
         # --- Agent loop confirmation resume ---
         if not pending_handled:
             if pending_confirmation:
-                from orchestration.shell.chat_intents import is_autopilot_request
-
                 async def _resume_confirmed():
                     ctx_prompt = ""
                     try:
@@ -704,16 +997,26 @@ class OrchestrationCoordinator:
                 # Cancel is checked first: a refusal must never be read as consent.
                 if is_cancel_request(query) or is_decline_reply(query):
                     cancel_msg = await cancel_pending_action(room_id, user_id)
+                    await _advance_turn("cancelled", end_reason="cancelled")
                     await broadcast_chunk(cancel_msg or "Okay, cancelled.", harness=True)
                     pending_handled = True
-                elif is_autopilot_request(query) and await _pending_armable_shell():
+                elif is_autopilot_request(query) and armable_shell:
                     # Arming confirms the pending command only when it armed;
                     # otherwise the command stays pending for a plain yes/no.
                     if await _arm_autopilot_from_chat():
-                        await _resume_confirmed()
+                        if await _resume_turn(turn_box["ref"]):
+                            await _resume_confirmed()
+                    elif turn_box["ref"] is not None and turn_box["ref"].state == "paused":
+                        turn_box["hold"] = True
                     pending_handled = True
                 elif is_approval_reply(query):
-                    await _resume_confirmed()
+                    if await _resume_turn(turn_box["ref"]):
+                        await _resume_confirmed()
+                    else:
+                        await broadcast_chunk(
+                            "This turn was already resumed elsewhere. Nothing further was run.",
+                            harness=True,
+                        )
                     pending_handled = True
                 else:
                     # Anything else is not consent: drop the pending action, say so,
@@ -739,11 +1042,13 @@ class OrchestrationCoordinator:
                     # during a full hour never shows the "freed up" line.
                     still_blocked = await _quota_resume_still_blocked(user_id)
                     if still_blocked is not None:
+                        if turn_box["ref"] is not None and turn_box["ref"].state == "paused":
+                            turn_box["hold"] = True
                         await broadcast_chunk(
                             _quota_resume_blocked_note(still_blocked),
                             harness=True,
                         )
-                    else:
+                    elif await _resume_turn(turn_box["ref"]):
                         # Resuming it is not a budget grant, and the wording is
                         # about the hour (T-F3b).
                         await broadcast_chunk(
@@ -751,13 +1056,24 @@ class OrchestrationCoordinator:
                             harness=True,
                         )
                         await _handle_agent_quota_resume(ctx_prompt, mem_sum, env_block)
-                else:
+                    else:
+                        await broadcast_chunk(
+                            "This turn was already resumed elsewhere. Nothing further was run.",
+                            harness=True,
+                        )
+                elif await _resume_turn(turn_box["ref"]):
                     await broadcast_chunk("Continuing with more budget.\n\n", harness=True)
                     await _handle_agent_budget_resume(ctx_prompt, mem_sum, env_block)
+                else:
+                    await broadcast_chunk(
+                        "This turn was already resumed elsewhere. Nothing further was run.",
+                        harness=True,
+                    )
                 pending_handled = True
             elif is_decline_reply(query) or is_cancel_command(query):
                 # A whole-message no/stop ends the paused turn for good.
                 clear_loop_state(room_id, user_id)
+                await _advance_turn("cancelled", end_reason="cancelled")
                 await broadcast_chunk(
                     "Okay, I've stopped there and dropped the paused work.\n\n",
                     harness=True,
@@ -801,15 +1117,17 @@ class OrchestrationCoordinator:
                     {
                         "user_id": user_id,
                         "room_id": room_id,
-                        "correlation_id": correlation_id,
+                        "turn_id": _turn_id(),
                         "error_class": agent_exc.__class__.__name__,
                     },
                 )
                 await broadcast_chunk("Something went wrong on my side. Nothing further was run.", harness=True)
+                await _finish_turn("error")
 
         # End stream
         await emit_progress("done", "completed", "Request complete.")
         await broadcast_chunk("", is_final=True)
+        await _finish_turn(turn_box.get("end_reason") or ("error" if turn_box["agent_ran"] else "finished"))
 
         full_response_text = "".join(stream_state["full_response"])
 
@@ -818,4 +1136,21 @@ class OrchestrationCoordinator:
             tools=_cap_tool_records(stream_state["tools"]),
             model_text="".join(stream_state["model"]),
             harness="".join(stream_state["harness"]),
+            turn_id=_turn_id(),
+            turn_version=turn_box["ref"].version if turn_box.get("ref") else 0,
+            turn_state=turn_box["ref"].state if turn_box.get("ref") else "",
+        )
+
+    async def finalize_turn(
+        self, result: OrchestrationResult, *, reply_saved: bool,
+    ) -> bool:
+        """Record ``committing -> completed`` (or ``failed(reply_not_saved)``).
+
+        The consumer calls this only after it has tried to persist the reply,
+        so ``completed`` can no longer be written before the reply exists.
+        """
+        if not result.turn_id or result.turn_state != "committing":
+            return False
+        return await afinalize_turn(
+            result.turn_id, result.turn_version, reply_saved=reply_saved,
         )

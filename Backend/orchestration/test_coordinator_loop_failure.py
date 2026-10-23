@@ -12,6 +12,7 @@ from django.test import SimpleTestCase
 
 from orchestration.agent_loop import AgentEvent
 from orchestration.coordinator import OrchestrationCoordinator
+from tests.turn_support import turn_test_patches
 
 ERROR_TEXT = "Something went wrong on my side. Nothing further was run."
 
@@ -51,6 +52,7 @@ class CoordinatorLoopFailureTests(SimpleTestCase):
             "orchestration.coordinator.cache": cache,
             "orchestration.coordinator.record_event": record,
             "orchestration.coordinator.run_agent_loop": run_agent_loop,
+            **turn_test_patches(),
         }
 
     def _run(self, run_agent_loop, record, send_step_event=None):

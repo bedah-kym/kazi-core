@@ -792,7 +792,27 @@ class ChatConsumer(AsyncWebsocketConsumer):
             ack = "Message sent to the admin. They'll see it in their inbox."
         await self._send_plain_ai_message(room_id, ack)
 
+    async def _finalize_turn(self, coordinator, result, reply_saved):
+        """Finalize the turn, shielding the terminal write from cancellation."""
+        task = asyncio.ensure_future(
+            coordinator.finalize_turn(result, reply_saved=reply_saved)
+        )
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            try:
+                await task
+            except Exception:
+                logger.warning("Turn finalize after cancellation failed")
+            raise
+        except Exception:
+            logger.warning("Turn finalize after saving the reply failed")
+
     async def new_message(self, data):
+        result = None
+        coordinator = None
+        reply_saved = False
+        finalized = False
         try:
             logger.info(
                 "=== NEW MESSAGE START === room=%r chars=%s",
@@ -1034,115 +1054,134 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                 update_proactive_signals(room_id, member_user.id, action)
 
                         agent_lock = _get_agent_loop_lock(member_user.id, room_id)
+                        await agent_lock.acquire()
                         try:
-                            await agent_lock.acquire()
-                            # Read history under the lock, so a message queued behind a
-                            # running turn sees that turn's reply.
-                            history_rows = await self.get_history_rows(room_id, limit=8, room=current_chat)
-                            multi_user = len(human_members) > 1 or has_several_speakers(history_rows)
-                            history_messages = build_history_messages(
-                                history_rows,
-                                exclude_message_id=message.id,
-                                multi_user=multi_user,
-                                max_chars=int(getattr(settings, "HISTORY_MAX_CHARS", 60000)),
-                                viewer_user_id=member_user.id,
-                            )
-                            if multi_user:
-                                speaker_note = (
-                                    "Several people share this room. Earlier user turns are prefixed with "
-                                    f"the speaker's name. The message you are answering is from {member_username}."
+                            try:
+                                # Read history under the lock, so a message queued behind a
+                                # running turn sees that turn's reply.
+                                history_rows = await self.get_history_rows(room_id, limit=8, room=current_chat)
+                                multi_user = len(human_members) > 1 or has_several_speakers(history_rows)
+                                history_messages = build_history_messages(
+                                    history_rows,
+                                    exclude_message_id=message.id,
+                                    multi_user=multi_user,
+                                    max_chars=int(getattr(settings, "HISTORY_MAX_CHARS", 60000)),
+                                    viewer_user_id=member_user.id,
                                 )
-                            result = await OrchestrationCoordinator().handle_message(
-                                query=ai_query,
-                                user_id=member_user.id,
-                                room_id=room_id,
-                                username=member_username,
-                                message_id=message.id,
-                                history_messages=history_messages,
-                                send_chunk=send_chunk,
-                                send_step_event=send_step_event,
-                                get_context_prompt=get_context_prompt,
-                                bump_signals=bump_signals,
-                            )
+                                if multi_user:
+                                    speaker_note = (
+                                        "Several people share this room. Earlier user turns are prefixed with "
+                                        f"the speaker's name. The message you are answering is from {member_username}."
+                                    )
+                                coordinator = OrchestrationCoordinator()
+                                result = await coordinator.handle_message(
+                                    query=ai_query,
+                                    user_id=member_user.id,
+                                    room_id=room_id,
+                                    username=member_username,
+                                    message_id=message.id,
+                                    history_messages=history_messages,
+                                    send_chunk=send_chunk,
+                                    send_step_event=send_step_event,
+                                    get_context_prompt=get_context_prompt,
+                                    bump_signals=bump_signals,
+                                )
+
+                                full_response_text = result.full_response
+                                # A turn with nothing to save still has a true ending:
+                                # only a reply that should persist can be "not saved".
+                                reply_saved = not (result.persist and full_response_text.strip())
+
+                                if result.persist and full_response_text.strip():
+                                    logger.info("Saving AI message to database (%s chars)", len(full_response_text))
+
+                                    # Encrypt the AI response
+                                    encrypted_message = await self.encrypt_message({
+                                        'content': full_response_text,
+                                        'timestamp': str(timezone.now()),
+                                        'tools': result.tools,
+                                        'by': member_user.id,
+                                        'model': result.model_text,
+                                        'harness': result.harness,
+                                    })
+
+                                    if encrypted_message:
+                                        # Create Kazi user/member if not exists
+                                        def _create_ai_message():
+                                            ai_user, _ = User.objects.get_or_create(
+                                                username='kazi',
+                                                defaults={
+                                                    'first_name': 'Kazi',
+                                                    'last_name': 'AI',
+                                                    'is_active': True,
+                                                    'email': 'kazi@kwikchat.ai'
+                                                }
+                                            )
+                                            # Use filter().first() to handle duplicate Members
+                                            ai_member = Member.objects.filter(User=ai_user).first()
+                                            if not ai_member:
+                                                ai_member = Member.objects.create(User=ai_user)
+
+                                            payload = json.dumps({
+                                                'data': encrypted_message['data'],
+                                                'nonce': encrypted_message['nonce'],
+                                            })
+
+                                            return Message.objects.create(
+                                                member=ai_member,
+                                                content=payload,
+                                                timestamp=timezone.now(),
+                                                turn_id=(result.turn_id or None),
+                                            )
+
+                                        ai_message = await sync_to_async(_create_ai_message)()
+                                        reply_saved = True
+
+                                        # Add to chatroom
+                                        if current_chat:
+                                            await sync_to_async(current_chat.chats.add)(ai_message)
+                                            await self.upgrade_legacy_room_key(current_chat)
+                                            logger.info(f"AI message saved with ID: {ai_message.id}")
+
+                                            # Trigger Kazi Voice Response (TTS) only in voice mode
+                                            voice_enabled = False
+                                            try:
+                                                prefs = await sync_to_async(get_user_preferences)(member_user.id)
+                                                voice_enabled = bool(prefs.get("ai_voice_enabled", False))
+                                            except Exception as e:
+                                                logger.warning(f"Voice preference check failed: {e}")
+                                            if voice_enabled:
+                                                dispatch_task(generate_voice_response, ai_message.id)
+
+                                            # Broadcast saved message to clients for proper rendering
+                                            message_json = await self.message_to_json(ai_message)
+                                            await self.channel_layer.group_send(
+                                                self.room_group_name,
+                                                {
+                                                    "type": "ai_message_saved",
+                                                    "message": message_json
+                                                }
+                                            )
+
+                                            try:
+                                                await self.schedule_context_summary(room_id, ai_message.id)
+                                            except Exception as e:
+                                                logger.warning(f"Context summary refresh skipped: {e}")
+                            finally:
+                                if (
+                                    not finalized
+                                    and coordinator is not None
+                                    and result is not None
+                                    and result.turn_id
+                                    and result.turn_state == "committing"
+                                ):
+                                    finalized = True
+                                    await self._finalize_turn(
+                                        coordinator, result, reply_saved,
+                                    )
                         finally:
                             agent_lock.release()
                             _release_agent_loop_lock(member_user.id, room_id)
-
-                        full_response_text = result.full_response
-
-                        if result.persist and full_response_text.strip():
-                            logger.info("Saving AI message to database (%s chars)", len(full_response_text))
-
-                            # Encrypt the AI response
-                            encrypted_message = await self.encrypt_message({
-                                'content': full_response_text,
-                                'timestamp': str(timezone.now()),
-                                'tools': result.tools,
-                                'by': member_user.id,
-                                'model': result.model_text,
-                                'harness': result.harness,
-                            })
-
-                            if encrypted_message:
-                                # Create Kazi user/member if not exists
-                                def _create_ai_message():
-                                    ai_user, _ = User.objects.get_or_create(
-                                        username='kazi',
-                                        defaults={
-                                            'first_name': 'Kazi',
-                                            'last_name': 'AI',
-                                            'is_active': True,
-                                            'email': 'kazi@kwikchat.ai'
-                                        }
-                                    )
-                                    # Use filter().first() to handle duplicate Members
-                                    ai_member = Member.objects.filter(User=ai_user).first()
-                                    if not ai_member:
-                                        ai_member = Member.objects.create(User=ai_user)
-
-                                    payload = json.dumps({
-                                        'data': encrypted_message['data'],
-                                        'nonce': encrypted_message['nonce'],
-                                    })
-
-                                    return Message.objects.create(
-                                        member=ai_member,
-                                        content=payload,
-                                        timestamp=timezone.now()
-                                    )
-
-                                ai_message = await sync_to_async(_create_ai_message)()
-
-                                # Add to chatroom
-                                if current_chat:
-                                    await sync_to_async(current_chat.chats.add)(ai_message)
-                                    await self.upgrade_legacy_room_key(current_chat)
-                                    logger.info(f"AI message saved with ID: {ai_message.id}")
-
-                                    # Trigger Kazi Voice Response (TTS) only in voice mode
-                                    voice_enabled = False
-                                    try:
-                                        prefs = await sync_to_async(get_user_preferences)(member_user.id)
-                                        voice_enabled = bool(prefs.get("ai_voice_enabled", False))
-                                    except Exception as e:
-                                        logger.warning(f"Voice preference check failed: {e}")
-                                    if voice_enabled:
-                                        dispatch_task(generate_voice_response, ai_message.id)
-
-                                    # Broadcast saved message to clients for proper rendering
-                                    message_json = await self.message_to_json(ai_message)
-                                    await self.channel_layer.group_send(
-                                        self.room_group_name,
-                                        {
-                                            "type": "ai_message_saved",
-                                            "message": message_json
-                                        }
-                                    )
-
-                                    try:
-                                        await self.schedule_context_summary(room_id, ai_message.id)
-                                    except Exception as e:
-                                        logger.warning(f"Context summary refresh skipped: {e}")
 
             else:
                 await self.send_chat_message({

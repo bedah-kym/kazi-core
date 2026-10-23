@@ -3429,6 +3429,8 @@ async def resume_after_expiry(
             "text": f"{_expiry_text(turn.pause_expires_at)}; nothing ran.",
         })
         return
+    # The expired turn is answered now; it must not trigger again.
+    await turns_mod.aclear_paused_state(turn.pk)
     state.pending_tools = list(
         state.pending_tools or ([state.pending_tool] if state.pending_tool else [])
     )

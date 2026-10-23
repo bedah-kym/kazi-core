@@ -28,6 +28,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A failed room-persona lookup now **fails closed** (C3, AGENTS.md §0.3). "This
+  room has no persona" still means today's behaviour, but if the persona lookup
+  itself errors, the turn gets no tool reach: the ordinary tool definitions stay
+  in the request so replayed tool history and the confirmation-resume path stay
+  valid on every provider, but every call is refused before dispatch. The model
+  is told as harness data that tools are unavailable because the room's settings
+  could not be checked, and any tool call that still arrives gets that reason.
+  A delegated run makes no tool call and ends with the same reason. The failure
+  is logged once with the exception class only, and telemetry records it as
+  `persona_lookup_failed`.
 - A replayed tool call now marks an input value the record shortened, and says
   how long the call's value was, so the model no longer reads the record's cut
   as the content the call sent and tries to repair it (C1). Receipts keep their

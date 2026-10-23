@@ -12,7 +12,6 @@ because ``record_event`` does blocking file I/O.
 from __future__ import annotations
 
 import base64
-import hashlib
 import json
 import os
 from dataclasses import dataclass
@@ -294,7 +293,7 @@ def _room_cipher(room_id: Any):
 
 
 def _encode_b64(data: bytes) -> str:
-    return base64.b64encode(data).decode("utf-8").rstrip("=") + "=" * (-len(data) % 4)
+    return base64.b64encode(data).decode("utf-8")
 
 
 def encrypt_paused_state(room_id: Any, payload: Dict[str, Any]) -> Optional[str]:
@@ -324,7 +323,11 @@ def decrypt_paused_state(room_id: Any, blob: Optional[str]) -> Optional[Dict[str
         nonce = base64.b64decode(envelope["nonce"].encode("utf-8"))
         data = base64.b64decode(envelope["data"].encode("utf-8"))
         return json.loads(cipher.decrypt(nonce, data, None).decode("utf-8"))
-    except Exception:
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning(
+            "paused state decrypt failed: %s", type(exc).__name__,
+        )
         return None
 
 
@@ -376,7 +379,7 @@ def pause_turn(
         paused_state_enc=encrypted,
         tainted=bool(tainted),
         budget=budget if budget is not None else {},
-        active_seconds=active_seconds,
+        active_seconds=active_seconds if active_seconds is not None else 0.0,
     )
 
 
@@ -559,8 +562,12 @@ async def alink_message(turn_id: str, message_id: Optional[int]) -> bool:
     return await sync_to_async(link_message)(turn_id, message_id)
 
 
-async def aget_paused_turn(room_id: Any, user_id: Any) -> Optional[Turn]:
-    return await sync_to_async(get_paused_turn)(room_id, user_id)
+async def aget_paused_turn(
+    room_id: Any, user_id: Any, *, include_expired: bool = False,
+) -> Optional[Turn]:
+    return await sync_to_async(get_paused_turn)(
+        room_id, user_id, include_expired=include_expired,
+    )
 
 
 async def atransition(turn_id: str, expected_version: int, to_state: str, **kwargs) -> bool:

@@ -28,6 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A failed room-persona lookup now **fails closed** (C3, AGENTS.md §0.3). "This
+  room has no persona" still means today's behaviour, but if the persona lookup
+  itself errors, the turn gets no tool reach at all: no tools are offered, the
+  model is told as harness data that tools are unavailable because the room's
+  settings could not be checked, and any tool call that still arrives is
+  refused with that reason. A delegated run makes no tool call and ends with
+  the same reason. The failure is logged once with the exception class only,
+  and telemetry records it as `persona_lookup_failed`.
 - Reminder delivery now claims through the shared cache (`cache.add`) instead of
   a direct Redis call. The claim works on LocMem and Redis and **fails closed**:
   a claim-store error skips the delivery instead of risking a duplicate. This is

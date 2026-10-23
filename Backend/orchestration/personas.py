@@ -1,10 +1,13 @@
 """Agent personas (v0.7 W-G, issue #203).
 
 Deterministic bounds applied in the tool path — never by prompt. A room
-resolves to at most one active persona owned by the requesting user; a lookup
-failure or a persona owned by someone else means "no persona = today's
-behavior". An out-of-scope call is denied; above the risk ceiling or on the
-approval boundary it escalates through the existing confirmation pause.
+resolves to at most one active persona owned by the requesting user; a persona
+owned by someone else or an inactive persona means "no persona = today's
+behavior". A lookup *failure* is different: callers that must not run with no
+bounds use ``lookup_room_persona``, which raises ``PersonaLookupError`` so the
+loop can remove tool reach for that turn (AGENTS.md §0.3). An out-of-scope call
+is denied; above the risk ceiling or on the approval boundary it escalates
+through the existing confirmation pause.
 """
 from __future__ import annotations
 
@@ -16,24 +19,56 @@ logger = logging.getLogger(__name__)
 RISK_RANK = {"low": 0, "medium": 1, "high": 2}
 
 
-def resolve_room_persona(room_id: Optional[int], user_id: Optional[int]):
+class PersonaLookupError(RuntimeError):
+    """The persona lookup itself failed — not "this room has no persona"."""
+
+    def __init__(self, cause_type: str):
+        self.cause_type = cause_type
+        super().__init__(cause_type)
+
+
+class PersonaLookupFailed:
+    """Marker for a failed lookup, distinct from ``None`` ("no persona")."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "PERSONA_LOOKUP_FAILED"
+
+
+PERSONA_LOOKUP_FAILED = PersonaLookupFailed()
+
+
+def lookup_room_persona(room_id: Optional[int], user_id: Optional[int]):
     """The active persona bound to a room, owned by ``user_id`` — or None.
 
-    Fail closed: another user's persona is invisible, an inactive persona is
-    invisible, and any lookup error yields None.
+    Raises ``PersonaLookupError`` when the lookup itself fails, so a caller
+    that must fail closed can tell that apart from "no persona". Another user's
+    persona and an inactive persona are still simply invisible (None).
     """
     if not room_id or not user_id:
         return None
     try:
         from workflows.models import Persona
 
-        persona = Persona.objects.filter(
+        return Persona.objects.filter(
             room_id=room_id, user_id=user_id, status="active",
         ).first()
     except Exception as exc:
-        logger.warning("Persona resolution failed: %s", exc)
+        raise PersonaLookupError(type(exc).__name__) from exc
+
+
+def resolve_room_persona(room_id: Optional[int], user_id: Optional[int]):
+    """Compatibility wrapper: the persona, or None when absent *or* failed.
+
+    Callers that cannot act on a failure keep today's behaviour. The live agent
+    loop uses ``lookup_room_persona`` so a failure is never read as "no bounds".
+    """
+    try:
+        return lookup_room_persona(room_id, user_id)
+    except PersonaLookupError as exc:
+        logger.warning("Persona resolution failed: %s", exc.cause_type)
         return None
-    return persona
 
 
 def create_persona(

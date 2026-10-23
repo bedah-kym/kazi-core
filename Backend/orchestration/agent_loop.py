@@ -81,6 +81,19 @@ MAX_SEARCHES_PER_REQUEST = 5
 # The meta-tool the model calls to ask the user for more of the turn's budget.
 REQUEST_MORE_BUDGET_TOOL = "request_more_budget"
 
+# C3: a persona lookup that fails removes tool reach for the turn. The model is
+# told why as harness data, never left to invent a reason (S10).
+PERSONA_LOOKUP_UNAVAILABLE_NOTE = (
+    "[Harness: tools are unavailable this turn because this room's settings "
+    "could not be checked. Do not claim that a tool ran. Tell the user plainly "
+    "that the room's settings could not be checked and that tools are "
+    "unavailable until they try again.]"
+)
+PERSONA_LOOKUP_DENIED_REASON = (
+    "Refused: tools are unavailable this turn because this room's settings "
+    "could not be checked."
+)
+
 
 # --------------------------------------------------------------------------- #
 #  Data structures                                                            #
@@ -269,15 +282,34 @@ def _taint_gated(action: str) -> bool:
 
 
 async def _resolve_persona(room_id: Optional[int], user_id: Optional[int]):
-    """The active room persona for the requesting user, or None (fail closed)."""
+    """The active room persona, or None when the room has none.
+
+    A lookup failure returns ``PERSONA_LOOKUP_FAILED`` instead of None: the loop
+    must be able to remove tool reach for the turn (AGENTS.md §0.3). Logged
+    once per call with the exception class only — never its message.
+    """
     if not room_id or not user_id:
         return None
-    try:
-        from orchestration.personas import resolve_room_persona
+    from orchestration.personas import (
+        PERSONA_LOOKUP_FAILED,
+        PersonaLookupError,
+        lookup_room_persona,
+    )
 
-        return await sync_to_async(resolve_room_persona)(room_id, user_id)
-    except Exception:
-        return None
+    try:
+        return await sync_to_async(lookup_room_persona)(room_id, user_id)
+    except PersonaLookupError as exc:
+        cause_type = exc.cause_type
+    except Exception as exc:
+        cause_type = type(exc).__name__
+    logger.error("Persona lookup failed for room %s: %s", room_id, cause_type)
+    record_event("persona_lookup_failed", {
+        "reason": "persona_lookup_failed",
+        "room_id": room_id,
+        "user_id": user_id,
+        "error_class": cause_type,
+    })
+    return PERSONA_LOOKUP_FAILED
 
 
 _HANDOFF_TOOL_NAME = "handoff_to_workflow"
@@ -327,6 +359,13 @@ def _bucket_tool_calls(
     auto: List[Dict[str, Any]] = []
     pause: List[Tuple[Dict[str, Any], Optional[str]]] = []
     denied: List[Tuple[Dict[str, Any], str]] = []
+    if persona is not None:
+        from orchestration.personas import PERSONA_LOOKUP_FAILED
+
+        if persona is PERSONA_LOOKUP_FAILED:
+            # The room's bounds are unknown, so nothing may run this turn.
+            denied.extend((tc, PERSONA_LOOKUP_DENIED_REASON) for tc in tool_calls)
+            return auto, pause, denied
     risk_preferences = _taint_preferences(preferences, tainted)
     for tc in tool_calls:
         risk = get_tool_risk_info(tc["name"], risk_preferences, tc.get("input"))
@@ -1593,6 +1632,22 @@ async def _run_sub_agent(
         granted_cap = 0
     tool_call_cap = min(granted_cap, HARD_CAP_TOOL_CALLS) if granted_cap > 0 else SUB_AGENT_MAX_TOOL_CALLS
     persona = await _resolve_persona(context.get("room_id"), context.get("user_id"))
+    from orchestration.personas import PERSONA_LOOKUP_FAILED
+
+    if persona is PERSONA_LOOKUP_FAILED:
+        # The room's bounds are unknown: make no tool call and end with the
+        # same reason the main loop gives the model (C3).
+        return {
+            "status": "error",
+            "message": PERSONA_LOOKUP_DENIED_REASON,
+            "summary": PERSONA_LOOKUP_DENIED_REASON,
+            "tools_used": [],
+            "iterations": 0,
+            "tokens_used": 0,
+            "tool_calls": 0,
+            "stopped_reason": "persona_lookup_failed",
+            HARNESS_REFUSAL_KEY: True,
+        }
     prev_input_tokens = 0
 
     while iteration < HARD_CAP_ITERATIONS:
@@ -1900,47 +1955,58 @@ async def run_agent_loop(
 
     # Build tool definitions (connector-configured, capability-gated, and
     # bounded by a room persona's scope — T-F2). The persona is resolved once
-    # and reused for the execution bounds below.
+    # and reused for the execution bounds below. A lookup failure means the
+    # room's bounds are unknown, so this turn gets no reach at all (C3).
     persona = await _resolve_persona(room_id, user_id)
-    persona_tool_scope = list(persona.tool_scope) if persona is not None and persona.tool_scope else None
+    from orchestration.personas import PERSONA_LOOKUP_FAILED
 
-    tools = get_tool_definitions(
-        user_capabilities=user_caps,
-        exclude_actions=[] if backend_search else ["search_info"],
-        tool_scope=persona_tool_scope,
-    )
-    # Add meta-tools (delegate_task, handoff_to_workflow, skills).
-    if persona_tool_scope:
-        from orchestration.action_catalog import resolve_action_alias
-
-        scope_set = {resolve_action_alias(name) for name in persona_tool_scope}
-        tools.extend(
-            tool for tool in META_TOOL_DEFINITIONS
-            if resolve_action_alias(tool["name"]) in scope_set
-        )
-    else:
-        tools.extend(META_TOOL_DEFINITIONS)
-
-    # The budget tool is harness machinery, not a room action, so it is offered
-    # even under a persona scope that would filter the other meta-tools (T-F3).
-    if not any(t.get("name") == REQUEST_MORE_BUDGET_TOOL for t in tools):
-        tools.append(next(t for t in META_TOOL_DEFINITIONS if t["name"] == REQUEST_MORE_BUDGET_TOOL))
-
+    persona_unavailable = persona is PERSONA_LOOKUP_FAILED
     web_search_tool = None
     user_location_hint = None
-    if native_search:
-        if preferences:
-            loc = preferences.get("location")
-            tz = preferences.get("timezone")
-            if loc or tz:
-                user_location_hint = {"type": "approximate"}
-                if loc:
-                    user_location_hint["city"] = loc
-                if tz:
-                    user_location_hint["timezone"] = tz
-        web_search_tool = _build_web_search_tool(user_id, user_location_hint)
-    if web_search_tool:
-        tools.append(web_search_tool)
+    if persona_unavailable:
+        native_search = False
+        tools: List[Dict[str, Any]] = []
+    else:
+        persona_tool_scope = (
+            list(persona.tool_scope)
+            if persona is not None and persona.tool_scope else None
+        )
+        tools = get_tool_definitions(
+            user_capabilities=user_caps,
+            exclude_actions=[] if backend_search else ["search_info"],
+            tool_scope=persona_tool_scope,
+        )
+        # Add meta-tools (delegate_task, handoff_to_workflow, skills).
+        if persona_tool_scope:
+            from orchestration.action_catalog import resolve_action_alias
+
+            scope_set = {resolve_action_alias(name) for name in persona_tool_scope}
+            tools.extend(
+                tool for tool in META_TOOL_DEFINITIONS
+                if resolve_action_alias(tool["name"]) in scope_set
+            )
+        else:
+            tools.extend(META_TOOL_DEFINITIONS)
+
+        # The budget tool is harness machinery, not a room action, so it is
+        # offered even under a persona scope that would filter the other
+        # meta-tools (T-F3).
+        if not any(t.get("name") == REQUEST_MORE_BUDGET_TOOL for t in tools):
+            tools.append(next(t for t in META_TOOL_DEFINITIONS if t["name"] == REQUEST_MORE_BUDGET_TOOL))
+
+        if native_search:
+            if preferences:
+                loc = preferences.get("location")
+                tz = preferences.get("timezone")
+                if loc or tz:
+                    user_location_hint = {"type": "approximate"}
+                    if loc:
+                        user_location_hint["city"] = loc
+                    if tz:
+                        user_location_hint["timezone"] = tz
+            web_search_tool = _build_web_search_tool(user_id, user_location_hint)
+        if web_search_tool:
+            tools.append(web_search_tool)
 
     # Build system prompt
     tool_names = [tool["name"] for tool in tools]
@@ -1951,7 +2017,9 @@ async def run_agent_loop(
         tool_names=tool_names,
         environment_block=environment_block,
     )
-    if not web_search_tool and not backend_search:
+    if persona_unavailable:
+        system += "\n\n" + PERSONA_LOOKUP_UNAVAILABLE_NOTE
+    elif not web_search_tool and not backend_search:
         system += "\n\n" + NO_SEARCH_TOOL_NOTE
 
     # ------------------------------------------------------------------ #
@@ -1966,10 +2034,14 @@ async def run_agent_loop(
         # Another member may have tainted the room while this run was paused.
         state.tainted = state.tainted or await sync_to_async(_conversation_tainted)(room_id)
 
-        # Execute the previously paused tool
+        # Execute the previously paused tool — unless the room's bounds cannot
+        # be checked, in which case the confirmation cannot authorize it (C3).
         pending = state.pending_tool
         state.pending_tool = None
-        if pending["name"] in _META_TOOL_NAMES:
+        if persona_unavailable:
+            granted = None
+            result = {"status": "error", "message": PERSONA_LOOKUP_DENIED_REASON}
+        elif pending["name"] in _META_TOOL_NAMES:
             # `_execute_with_timeout` only knows catalog tools; a paused
             # meta-tool (a schedule handoff) must go through its own executor.
             # The main path hands it the turn's taint, so a delegated run
@@ -1989,15 +2061,16 @@ async def run_agent_loop(
             # A delegated run spent work tokens; charge them to the turn so the
             # single bound reflects it (T-F3).
             _apply_delegated_spend(state, result, granted)
-        state.tool_call_count += 1
-        state.tool_call_log.append({
-            "name": pending["name"],
-            "input": pending["input"],
-            "output": result,
-            "iteration": state.iteration,
-        })
-        if _untrusted_source(pending["name"]):
-            _taint_run(state, room_id)
+        if not persona_unavailable:
+            state.tool_call_count += 1
+            state.tool_call_log.append({
+                "name": pending["name"],
+                "input": pending["input"],
+                "output": result,
+                "iteration": state.iteration,
+            })
+            if _untrusted_source(pending["name"]):
+                _taint_run(state, room_id)
 
         yield AgentEvent("tool_result", {
             "name": pending["name"],
@@ -2007,7 +2080,8 @@ async def run_agent_loop(
         })
 
         # Receipt for confirmed tool
-        await _record_receipt(pending["name"], pending["input"], result, context, basis="human")
+        if not persona_unavailable:
+            await _record_receipt(pending["name"], pending["input"], result, context, basis="human")
 
         # Append tool result to messages (with the live budget note).
         state.messages.append({
@@ -2264,7 +2338,7 @@ async def run_agent_loop(
             # The model asking for more budget ends the turn honestly: answer
             # every call so the message contract stays valid, save the state,
             # and wait for the user. Nothing else in the batch runs (T-F3).
-            if any(tc["name"] == REQUEST_MORE_BUDGET_TOOL for tc in tool_calls):
+            if not persona_unavailable and any(tc["name"] == REQUEST_MORE_BUDGET_TOOL for tc in tool_calls):
                 # The turn's budget is already at the configured maximum either
                 # because it was granted up to the ceiling or because spending
                 # reached it: a further grant could not raise it, so it is an

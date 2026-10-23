@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from django.test import SimpleTestCase
 
-from orchestration.agent_loop import _run_sub_agent, run_agent_loop
+from orchestration.agent_loop import LoopState, _run_sub_agent, run_agent_loop
 
 REASON = "settings could not be checked"
 
@@ -45,6 +45,26 @@ def _tool_use(call_id, name, tool_input):
     return {"type": "tool_use", "id": call_id, "name": name, "input": tool_input}
 
 
+HISTORY_WITH_TOOLS = [
+    {"role": "user", "content": "What's the weather?"},
+    {"role": "assistant", "content": [_tool_use("hist-1", "get_weather", {"city": "Nairobi"})]},
+    {"role": "user", "content": [{
+        "type": "tool_result", "tool_use_id": "hist-1", "content": "22C",
+    }]},
+]
+
+
+def _has_tool_blocks(messages):
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, list) and any(
+            isinstance(block, dict) and block.get("type") in ("tool_use", "tool_result")
+            for block in content
+        ):
+            return True
+    return False
+
+
 class PersonaLookupDistinctionTests(SimpleTestCase):
     def test_lookup_raises_with_the_cause_class_and_no_message_text(self):
         from orchestration.personas import PersonaLookupError, lookup_room_persona
@@ -70,7 +90,7 @@ class PersonaLookupDistinctionTests(SimpleTestCase):
 
 
 class PersonaLookupFailureMainLoopTests(SimpleTestCase):
-    def _run_loop(self, llm):
+    def _run_loop(self, llm, history=None, resumed_state=None, confirmed_tool=False):
         executor = AsyncMock(return_value={"status": "success"})
         record = MagicMock()
         logger = MagicMock()
@@ -87,6 +107,9 @@ class PersonaLookupFailureMainLoopTests(SimpleTestCase):
                     "user_id": 1, "room_id": 1, "username": "test",
                     "caps_enforced": True,
                 },
+                history=history,
+                resumed_state=resumed_state,
+                confirmed_tool=confirmed_tool,
             )))
         return events, executor, llm, record, logger
 
@@ -96,7 +119,14 @@ class PersonaLookupFailureMainLoopTests(SimpleTestCase):
         self.assertEqual(args[2], "RuntimeError")
         self.assertNotIn("secret", str(args))
 
-    def test_no_tools_are_offered_and_the_model_is_told_why(self):
+    def _assert_request_is_valid(self, kwargs, label):
+        if _has_tool_blocks(kwargs["messages"]):
+            self.assertTrue(
+                kwargs["tools"],
+                f"{label}: tool blocks need tool definitions",
+            )
+
+    def test_no_tool_blocks_still_gets_the_harness_note(self):
         llm = MagicMock()
         llm.create_message = AsyncMock(return_value=_response([
             {"type": "text", "text": "I could not check this room's settings."},
@@ -106,14 +136,13 @@ class PersonaLookupFailureMainLoopTests(SimpleTestCase):
         executor.assert_not_awaited()
         self.assertNotIn("tool_start", [event.kind for event in events])
         kwargs = llm.create_message.await_args.kwargs
-        self.assertIsNone(kwargs["tools"])
         self.assertIn(REASON, kwargs["system"])
 
         self._assert_failure_logged_once(logger)
         events_logged = [call.args[0] for call in record.call_args_list]
         self.assertIn("persona_lookup_failed", events_logged)
 
-    def test_a_tool_call_that_still_arrives_is_refused_with_the_same_reason(self):
+    def test_replayed_tool_blocks_keep_the_request_valid_and_calls_refused(self):
         llm = MagicMock()
         llm.create_message = AsyncMock(side_effect=[
             _response(
@@ -122,12 +151,56 @@ class PersonaLookupFailureMainLoopTests(SimpleTestCase):
             ),
             _response([{"type": "text", "text": "Tools are unavailable."}]),
         ])
-        events, executor, llm, record, logger = self._run_loop(llm)
+        events, executor, llm, record, logger = self._run_loop(
+            llm, history=HISTORY_WITH_TOOLS,
+        )
 
         executor.assert_not_awaited()
         self.assertNotIn("tool_start", [event.kind for event in events])
-        second_messages = llm.create_message.await_args_list[1].kwargs["messages"]
-        self.assertIn(REASON, json.dumps(second_messages, default=str))
+        calls = llm.create_message.await_args_list
+        for index, call in enumerate(calls):
+            self.assertIn(REASON, call.kwargs["system"])
+            self._assert_request_is_valid(call.kwargs, f"call {index + 1}")
+        self.assertIn(REASON, json.dumps(calls[1].kwargs["messages"], default=str))
+        self._assert_failure_logged_once(logger)
+
+    def test_confirmation_resume_with_tool_history_keeps_the_request_valid(self):
+        pending = {
+            "id": "t-resume", "name": "send_email",
+            "input": {"to": "example@example.com", "subject": "Hi", "text": "Hello"},
+        }
+        state = LoopState(
+            messages=[
+                {"role": "user", "content": "Email john"},
+                {"role": "assistant", "content": [
+                    _tool_use("hist-1", "get_weather", {"city": "Nairobi"}),
+                ]},
+                {"role": "user", "content": [{
+                    "type": "tool_result", "tool_use_id": "hist-1", "content": "22C",
+                }]},
+                {"role": "assistant", "content": [_tool_use("t-resume", "send_email", pending["input"])]},
+            ],
+            pending_tool=pending,
+            pending_tier="destructive",
+        )
+        llm = MagicMock()
+        llm.create_message = AsyncMock(return_value=_response([
+            {"type": "text", "text": "The room's settings could not be checked."},
+        ]))
+        events, executor, llm, record, logger = self._run_loop(
+            llm, resumed_state=state, confirmed_tool=True,
+        )
+
+        executor.assert_not_awaited()
+        self.assertIsNone(state.pending_tool)
+        self.assertNotIn("tool_start", [event.kind for event in events])
+        kwargs = llm.create_message.await_args.kwargs
+        self.assertIn(REASON, kwargs["system"])
+        self._assert_request_is_valid(kwargs, "resume")
+        self.assertIn(
+            REASON, json.dumps(kwargs["messages"], default=str),
+            "the pending call must be answered with the refusal reason",
+        )
         self._assert_failure_logged_once(logger)
 
 

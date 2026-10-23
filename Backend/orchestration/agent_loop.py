@@ -1964,49 +1964,56 @@ async def run_agent_loop(
     web_search_tool = None
     user_location_hint = None
     if persona_unavailable:
+        # The history may replay a tool_use/tool_result pair, and the resume
+        # path appends a tool_result. Both providers reject tool blocks when no
+        # tools are defined, so keep the ordinary definitions in the request;
+        # every call is refused before dispatch (_bucket_tool_calls). Only a
+        # server-side tool (native search) is dropped: it would run without the
+        # harness ever seeing the call.
         native_search = False
-        tools: List[Dict[str, Any]] = []
+        persona_tool_scope = None
     else:
         persona_tool_scope = (
             list(persona.tool_scope)
             if persona is not None and persona.tool_scope else None
         )
-        tools = get_tool_definitions(
-            user_capabilities=user_caps,
-            exclude_actions=[] if backend_search else ["search_info"],
-            tool_scope=persona_tool_scope,
+
+    tools = get_tool_definitions(
+        user_capabilities=user_caps,
+        exclude_actions=[] if backend_search else ["search_info"],
+        tool_scope=persona_tool_scope,
+    )
+    # Add meta-tools (delegate_task, handoff_to_workflow, skills).
+    if persona_tool_scope:
+        from orchestration.action_catalog import resolve_action_alias
+
+        scope_set = {resolve_action_alias(name) for name in persona_tool_scope}
+        tools.extend(
+            tool for tool in META_TOOL_DEFINITIONS
+            if resolve_action_alias(tool["name"]) in scope_set
         )
-        # Add meta-tools (delegate_task, handoff_to_workflow, skills).
-        if persona_tool_scope:
-            from orchestration.action_catalog import resolve_action_alias
+    else:
+        tools.extend(META_TOOL_DEFINITIONS)
 
-            scope_set = {resolve_action_alias(name) for name in persona_tool_scope}
-            tools.extend(
-                tool for tool in META_TOOL_DEFINITIONS
-                if resolve_action_alias(tool["name"]) in scope_set
-            )
-        else:
-            tools.extend(META_TOOL_DEFINITIONS)
+    # The budget tool is harness machinery, not a room action, so it is
+    # offered even under a persona scope that would filter the other
+    # meta-tools (T-F3).
+    if not any(t.get("name") == REQUEST_MORE_BUDGET_TOOL for t in tools):
+        tools.append(next(t for t in META_TOOL_DEFINITIONS if t["name"] == REQUEST_MORE_BUDGET_TOOL))
 
-        # The budget tool is harness machinery, not a room action, so it is
-        # offered even under a persona scope that would filter the other
-        # meta-tools (T-F3).
-        if not any(t.get("name") == REQUEST_MORE_BUDGET_TOOL for t in tools):
-            tools.append(next(t for t in META_TOOL_DEFINITIONS if t["name"] == REQUEST_MORE_BUDGET_TOOL))
-
-        if native_search:
-            if preferences:
-                loc = preferences.get("location")
-                tz = preferences.get("timezone")
-                if loc or tz:
-                    user_location_hint = {"type": "approximate"}
-                    if loc:
-                        user_location_hint["city"] = loc
-                    if tz:
-                        user_location_hint["timezone"] = tz
-            web_search_tool = _build_web_search_tool(user_id, user_location_hint)
-        if web_search_tool:
-            tools.append(web_search_tool)
+    if not persona_unavailable and native_search:
+        if preferences:
+            loc = preferences.get("location")
+            tz = preferences.get("timezone")
+            if loc or tz:
+                user_location_hint = {"type": "approximate"}
+                if loc:
+                    user_location_hint["city"] = loc
+                if tz:
+                    user_location_hint["timezone"] = tz
+        web_search_tool = _build_web_search_tool(user_id, user_location_hint)
+    if web_search_tool:
+        tools.append(web_search_tool)
 
     # Build system prompt
     tool_names = [tool["name"] for tool in tools]

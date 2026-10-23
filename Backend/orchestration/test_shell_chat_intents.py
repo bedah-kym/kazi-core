@@ -212,3 +212,12 @@ class ConfirmationPromptTests(SimpleTestCase):
         prompt = build_confirmation_prompt("run_command", {"command": "curl http://example.test"})
         self.assertNotIn("always allow", prompt)
         self.assertNotIn("autopilot", prompt)
+
+    def test_plain_delete_prompt_says_the_command_deletes_files(self):
+        for command in ("del notes.txt", "rm notes.txt", "Remove-Item notes.txt", "git clean -fd"):
+            prompt = build_confirmation_prompt("run_command", {"command": command})
+            self.assertIn("deletes files", prompt, command)
+
+    def test_recursive_delete_prompt_does_not_claim_a_plain_delete(self):
+        prompt = build_confirmation_prompt("run_command", {"command": "rm -rf build"})
+        self.assertNotIn("deletes files", prompt)

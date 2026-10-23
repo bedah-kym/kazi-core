@@ -150,6 +150,11 @@ def _git_delete_kind(words: List[str]) -> str:
     return ""
 
 
+def is_plain_delete(command: str) -> bool:
+    """True when a segment is a plain, non-recursive file delete in verb position."""
+    return _delete_kind(command) == "plain"
+
+
 def _delete_kind(command: str) -> str:
     """``plain``, ``recursive`` or empty for a delete in verb position."""
     found = ""

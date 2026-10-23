@@ -344,8 +344,19 @@ def build_confirmation_prompt(
         param_lines.append(f"  - **{key}**: {value}")
     params_text = "\n".join(param_lines) if param_lines else "  (no parameters)"
 
+    reason_line = ""
+    if tool_name in ("run_command", "run_shell", "shell_command"):
+        try:
+            from orchestration.shell.classifier import is_plain_delete
+
+            if is_plain_delete(str(tool_input.get("command") or "")):
+                reason_line = "This command deletes files.\n\n"
+        except Exception:
+            reason_line = ""
+
     return (
         f"I'd like to **{readable}** with the following details:\n"
         f"{params_text}\n\n"
+        f"{reason_line}"
         f"Should I go ahead? (yes / no)"
     )

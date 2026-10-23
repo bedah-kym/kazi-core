@@ -439,7 +439,13 @@ class OrchestrationCoordinator:
             return getattr(state, "pending_tier", None) in ("safe", "bounded")
 
         async def _room_is_tainted() -> bool:
-            """Whether the room holds untrusted content. Unreadable means yes."""
+            """Whether the turn starts tainted. Unreadable means yes.
+
+            The loop starts tainted for the room window or a replayed untrusted
+            history, so the wording must use the same decision (C4).
+            """
+            if _history_replays_untrusted(history_messages):
+                return True
             try:
                 return bool(await sync_to_async(_conversation_tainted)(room_id))
             except Exception as exc:

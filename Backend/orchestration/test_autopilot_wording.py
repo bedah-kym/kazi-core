@@ -30,7 +30,7 @@ def _confirmation_state():
 
 
 class AutopilotArmedWordingTests(SimpleTestCase):
-    def _arm(self, taint):
+    def _arm(self, taint, history_messages=None):
         """Reply to **autopilot** with a pending shell command; return sent text."""
         send_chunk = AsyncMock()
 
@@ -69,6 +69,7 @@ class AutopilotArmedWordingTests(SimpleTestCase):
                 send_step_event=AsyncMock(),
                 get_context_prompt=AsyncMock(return_value=""),
                 bump_signals=MagicMock(),
+                history_messages=history_messages,
             )
 
         with ExitStack() as stack:
@@ -98,3 +99,20 @@ class AutopilotArmedWordingTests(SimpleTestCase):
         self.assertIn(TAINT_NOTE, sent)
         self.assertIn("untrusted content", sent)
         self.assertIn("lifts on its own", sent)
+
+    def test_replayed_untrusted_history_uses_the_tainted_reply_in_a_clean_window(self):
+        history = [
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "h1", "name": "run_command", "input": {"command": "ls"}},
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "h1", "content": "listed"},
+            ]},
+        ]
+
+        sent = self._arm(False, history_messages=history)
+
+        self.assertIn(TAINT_NOTE, sent)
+        self.assertIn("untrusted content", sent)
+        self.assertIn("lifts on its own", sent)
+        self.assertNotIn("including root and network ones", sent)

@@ -29,6 +29,47 @@ class RedactSensitiveTextTests(SimpleTestCase):
         self.assertIn("[REDACTED EMAIL]", out)
         self.assertIn("[REDACTED PHONE]", out)
 
+    def test_heading_does_not_redact_the_next_line(self):
+        cases = [
+            "router password:\n1. Open the admin page",
+            "api_key:\n1. Open the admin page",
+            "secret=\n1. Open the admin page",
+            "password:\r\n1. Open the admin page",
+            "Bearer\nabcdefghijklmnopqrstuvwxyz123456",
+        ]
+        for text in cases:
+            with self.subTest(text=text):
+                self.assertEqual(redact_sensitive_text(text), text)
+
+    def test_single_line_secrets_are_still_redacted(self):
+        cases = [
+            "password: hunter2",
+            "password=hunter2",
+            "API_KEY = sk-abcdefghijklmnop123456",
+            "client_secret:\tabc",
+            "Bearer abcdefghijklmnopqrstuvwxyz123456",
+            "password: 'hunter2'",
+        ]
+        for text in cases:
+            with self.subTest(text=text):
+                self.assertIn("[REDACTED SECRET]", redact_sensitive_text(text))
+
+    def test_each_keyword_is_redacted_on_one_line(self):
+        keywords = (
+            "api_key", "apikey", "access_token", "auth_token", "refresh_token",
+            "password", "passwd", "pwd", "secret", "client_secret",
+        )
+        for keyword in keywords:
+            with self.subTest(keyword=keyword):
+                self.assertIn(
+                    "[REDACTED SECRET]",
+                    redact_sensitive_text(f"{keyword}: hunter2"),
+                )
+                self.assertIn(
+                    "[REDACTED SECRET]",
+                    redact_sensitive_text(f"{keyword} = hunter2"),
+                )
+
     def test_leaves_plain_text_untouched(self):
         text = "The weather in Nairobi is warm today."
         self.assertEqual(redact_sensitive_text(text), text)

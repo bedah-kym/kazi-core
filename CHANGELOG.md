@@ -34,6 +34,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in a clean room the reply is unchanged. If the taint state cannot be read,
   the cautious version is used. The offer text before arming carries the same
   caveat.
+- The in-turn retry bound now counts failures **per identical call**, not per
+  tool name (#261). Different inputs to one tool no longer share a count, and a
+  success of an unrelated call no longer resets a failing call's count. The
+  refusal names the stopped call, and paused loop state stores a digest of the
+  call rather than its raw input. A state paused before this change still loads
+  and resumes; its old name-keyed counts are ignored (at most one extra retry,
+  still bounded by the cap).
 - A failed room-persona lookup now **fails closed** (C3, AGENTS.md §0.3). "This
   room has no persona" still means today's behaviour, but if the persona lookup
   itself errors, the turn gets no tool reach: the ordinary tool definitions stay
@@ -224,6 +231,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- A `password:`-style heading followed by a line break no longer redacts the
+  next line. A key-value secret is now only redacted when its keyword,
+  separator and value stay on one line, so a heading like `router password:`
+  over a numbered list leaves the list intact. Same-line secrets (`password:
+  hunter2`, `API_KEY = sk-...`, `client_secret:\tabc`) and `sk-`/`Bearer`
+  tokens are still redacted. A secret written on the line after a bare
+  `password:` (`password:\nhunter2`) is no longer caught by the key-value
+  pattern; this is the accepted trade-off.
 - An `open`-profile shell command no longer inherits the sidecar's environment, so values such as `DEEPSEEK_API_KEY`, `DJANGO_SECRET_KEY`, `ENCRYPTION_KEY` or `SHELL_EXEC_TOKEN` no longer reach it that way; the sidecar passes only a minimal allowlist (`PATH`, a home and temp directory, locale, and what `cmd.exe` needs), and a variable an operator added is dropped too. The `locked` profile's room workspace is mounted read-only again, so a command can read it but not create, change or delete anything in it. `open` still runs as the sidecar's operating-system user with that user's file access, so it can read any file that user can read, including `.env`: run an `open` sidecar as a separate user that cannot read the Kazi checkout, or do not enable `open`. (GHSA-ppxm-j4p7-9cw2)
 - Payment, email and WhatsApp actions are now refused when a user's capability preferences cannot be read, both in workflow steps and in chat turns. A failed lookup — or a workflow step with no owner — turns those three gates off instead of allowing the action; search, travel, reminders and calendar keep working. In the same failure, a standing grant no longer decides for the user (their "always ask" choice could not be read, so the workflow asks), and a chat turn applies no learned approval shortcut. A preferences object handed to a workflow step is reused only when it carries all three of those gates; an empty or partial one is reloaded, and a gate that is still missing is denied.
 - `/api/newreply/` requires a signed-in user with the reply model's permissions:

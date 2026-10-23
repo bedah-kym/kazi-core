@@ -27,11 +27,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   runs on active time, so a long human wait cannot trip it. The confirmation
   prompt (shown once and again after a question) is rebuilt from the encrypted
   paused state and shows the exact input that will run; a restricted value
-  (token, password, API key) appears as a named placeholder instead of being
-  dropped, while the plaintext approval row keeps only the masked display. If
-  a newer budget or quota pause supersedes a pending approval, the reply names
-  the dropped action first. A late reply to an expired budget or quota pause
-  no longer duplicates the previous step's results or re-pauses immediately.
+  (token, password, API key) is dropped before dispatch, so it appears as
+  `[secret value, not sent]`, while the plaintext approval row keeps only the
+  masked display. Harness notices (a dropped older action, an expiry line) are
+  stored as harness text, never as the model's words. If a newer budget or
+  quota pause supersedes a pending approval, the reply names the dropped
+  action first. A late reply to an expired pause no longer duplicates the
+  previous step's results or re-pauses immediately; a late yes/continue
+  resumes with fresh headroom, while a late no/cancel runs nothing.
 
 ### Added
 

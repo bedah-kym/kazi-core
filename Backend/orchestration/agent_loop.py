@@ -116,7 +116,7 @@ PERSONA_LOOKUP_DENIED_REASON = (
 @dataclass
 class AgentEvent:
     """A single event yielded by the agent loop to the consumer."""
-    kind: str  # "text", "tool_start", "tool_result", "confirmation", "error", "done"
+    kind: str  # "text", "harness", "tool_start", "tool_result", "confirmation", "error", "done"
     data: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -677,15 +677,15 @@ def _display_params(tool_input: Any) -> Dict[str, Any]:
     return tool_record_input(tool_input)
 
 
-_RESTRICTED_SHOWN_AS = "[hidden secret value]"
+_RESTRICTED_SHOWN_AS = "[secret value, not sent]"
 
 
 def _approval_display_value(value: Any) -> Any:
     """The exact input shown for approval, except restricted values.
 
-    What the user approves is what runs, so values are not redacted or
-    shortened here. A value under a restricted key is replaced by a visible
-    placeholder that keeps the key, so the user knows the call carries it.
+    What the user approves is what runs, so ordinary values are not redacted
+    or shortened here. A value under a restricted key is dropped before
+    dispatch, so it is shown as a visible placeholder that keeps the key.
     """
     if isinstance(value, dict):
         return {
@@ -2850,7 +2850,7 @@ async def run_agent_loop(
                     context, context.get("turn_id"),
                 )
             if dropped:
-                yield AgentEvent("text_delta", {
+                yield AgentEvent("harness", {
                     "text": _dropped_actions_note(dropped) + "\n\n",
                 })
             saved = await _persist_pause_state(context, state, "budget")
@@ -2927,7 +2927,7 @@ async def run_agent_loop(
                     context, context.get("turn_id"),
                 )
             if dropped:
-                yield AgentEvent("text_delta", {
+                yield AgentEvent("harness", {
                     "text": _dropped_actions_note(dropped) + "\n\n",
                 })
             saved = await _persist_pause_state(context, state, "quota", ttl=quota_ttl)
@@ -3070,7 +3070,7 @@ async def run_agent_loop(
                         context, context.get("turn_id"),
                     )
                 if dropped:
-                    yield AgentEvent("text_delta", {
+                    yield AgentEvent("harness", {
                         "text": _dropped_actions_note(dropped) + "\n\n",
                     })
                 saved = await _persist_pause_state(context, state, "budget")
@@ -3830,7 +3830,7 @@ async def resume_after_expiry(
         return
     state = await sync_to_async(_load_turn_state_sync)(turn)
     if state is None:
-        yield AgentEvent("text_delta", {
+        yield AgentEvent("harness", {
             "text": f"{_expiry_text(turn.pause_expires_at)}; nothing ran.",
         })
         return
@@ -3845,7 +3845,7 @@ async def resume_after_expiry(
         state.pending_tools or ([state.pending_tool] if state.pending_tool else [])
     )
     noun = "approval" if turn.pause_kind == "approval" else "pause"
-    yield AgentEvent("text_delta", {
+    yield AgentEvent("harness", {
         "text": f"{_expiry_text(turn.pause_expires_at, noun=noun)}; nothing ran.\n\n",
     })
     try:
@@ -3863,6 +3863,47 @@ async def resume_after_expiry(
     finally:
         # The synthetic results have been produced; keep no encrypted body.
         await turns_mod.aclear_paused_state(turn.pk)
+
+
+async def decline_after_expiry(
+    *,
+    context: Dict[str, Any],
+) -> AsyncGenerator[AgentEvent, None]:
+    """Answer a late no/cancel honestly and run nothing.
+
+    The expired pause is closed for good: its held calls get synthetic
+    ``is_error`` results so the history pairing stays valid, the pending row is
+    marked timed out, and no model call is made.
+    """
+    from orchestration import turns as turns_mod
+
+    room_id = context.get("room_id")
+    user_id = context.get("user_id")
+    turn = await turns_mod.aget_expired_pause(room_id, user_id)
+    if turn is None:
+        yield AgentEvent("error", {
+            "message": "There is no expired pause to answer.",
+        })
+        return
+    state = await sync_to_async(_load_turn_state_sync)(turn)
+    if room_id and user_id:
+        await _resolve_pending_approval(
+            room_id, user_id, "timed_out",
+            comment="Approval expired before the reply.",
+            turn_id=turn.pk,
+        )
+    if state is not None:
+        state.pending_tools = list(
+            state.pending_tools
+            or ([state.pending_tool] if state.pending_tool else [])
+        )
+        _append_terminal_results(state, "approval expired")
+    noun = "approval" if turn.pause_kind == "approval" else "pause"
+    yield AgentEvent("harness", {
+        "text": f"{_expiry_text(turn.pause_expires_at, noun=noun)}; nothing ran.\n\n",
+    })
+    # The synthetic results have been produced; keep no encrypted body.
+    await turns_mod.aclear_paused_state(turn.pk)
 
 
 async def resume_after_quota(

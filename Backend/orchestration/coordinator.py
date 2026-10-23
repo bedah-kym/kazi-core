@@ -63,6 +63,7 @@ from orchestration.agent_loop import (
     resume_with_more_budget,
     resume_after_quota,
     resume_after_expiry,
+    decline_after_expiry,
     has_expired_pause,
     pending_approval_prompt,
     load_pending_state,
@@ -720,6 +721,8 @@ class OrchestrationCoordinator:
                     await broadcast_chunk(event.data.get("text", ""))
                 elif event.kind == "text_delta":
                     await broadcast_chunk(event.data.get("text", ""))
+                elif event.kind == "harness":
+                    await broadcast_chunk(event.data.get("text", ""), harness=True)
                 elif event.kind == "thinking":
                     await emit_progress("thinking", "started", "Reasoning…")
                 elif event.kind == "tool_start":
@@ -1004,24 +1007,34 @@ class OrchestrationCoordinator:
         pending_left = False
 
         # A late reply to a pause that already expired is answered honestly,
-        # never treated as consent. The model still sees the is_error results.
+        # never treated as consent. A late yes/continue resumes with is_error
+        # results for the calls that never ran; a late no/cancel closes the
+        # pause and runs nothing.
         if late_reply and expired_pause:
-            ctx_prompt = ""
-            try:
-                ctx_prompt = await get_context_prompt() or ""
-            except Exception:
-                pass
-            ctx_prompt = await _with_persona_identity(room_id, user_id, ctx_prompt)
-            env_block = await _environment_block()
-            mem_sum = await load_memory_summary(adaptive_context) or ""
             turn_box["agent_ran"] = True
-            await _relay_agent_events(resume_after_expiry(
-                context=_agent_context(),
-                preferences=user_preferences,
-                context_prompt=ctx_prompt,
-                memory_summary=mem_sum,
-                environment_block=env_block,
-            ))
+            if is_decline_reply(query) or is_cancel_command(query):
+                # A late no/cancel closes the expired pause; it is never consent
+                # and must not restart the old task.
+                await _relay_agent_events(decline_after_expiry(
+                    context=_agent_context(),
+                ))
+                turn_box["end_reason"] = "finished"
+            else:
+                ctx_prompt = ""
+                try:
+                    ctx_prompt = await get_context_prompt() or ""
+                except Exception:
+                    pass
+                ctx_prompt = await _with_persona_identity(room_id, user_id, ctx_prompt)
+                env_block = await _environment_block()
+                mem_sum = await load_memory_summary(adaptive_context) or ""
+                await _relay_agent_events(resume_after_expiry(
+                    context=_agent_context(),
+                    preferences=user_preferences,
+                    context_prompt=ctx_prompt,
+                    memory_summary=mem_sum,
+                    environment_block=env_block,
+                ))
             pending_handled = True
 
         # --- Agent loop confirmation resume ---

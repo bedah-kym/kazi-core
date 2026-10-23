@@ -396,7 +396,7 @@ class ApprovalPromptShowsExactInputTests(_PauseHarness):
             self.assertIn(item, message)
         self.assertIn(rich["command"], message)
         self.assertIn("api_key", message)
-        self.assertIn("[hidden secret value]", message)
+        self.assertIn("[secret value, not sent]", message)
         self.assertNotIn("sk-live-supersecret-0123456789", message)
 
         # The plaintext row keeps the masked display, never the raw input.
@@ -481,7 +481,7 @@ class ExpiryAndTimeTests(_PauseHarness):
             context=self._context(turn), preferences={},
         )))
         self.assertTrue(any(
-            e.kind == "text_delta" and "expired" in e.data.get("text", "").lower()
+            e.kind == "harness" and "expired" in e.data.get("text", "").lower()
             for e in events
         ))
         messages = llm.create_message.await_args.kwargs["messages"]
@@ -732,7 +732,7 @@ class CoordinatorRestartTests(_PauseHarness):
             self.assertIn(item, question_output)
         self.assertIn(rich["command"], question_output)
         self.assertIn("api_key", question_output)
-        self.assertIn("[hidden secret value]", question_output)
+        self.assertIn("[secret value, not sent]", question_output)
         self.assertEqual(self.execute_tool.await_count, 0)
 
     @override_settings(AGENT_TURN_TOKEN_BUDGET=10, AGENT_TURN_TOKEN_BUDGET_MAX=100000)
@@ -755,13 +755,15 @@ class CoordinatorRestartTests(_PauseHarness):
         run("send it")
         run.sent.clear()
 
-        run("what does that do?")
+        question_result = run("what does that do?")
 
         question_output = "".join(run.sent)
         self.assertIn("send email", question_output)
         self.assertIn("not run", question_output)
         self.assertIn("dropped", question_output)
         self.assertIn("more budget", question_output)
+        self.assertIn("dropped", question_result.harness)
+        self.assertNotIn("dropped", question_result.model_text)
         self.assertLess(
             question_output.index("send email"),
             question_output.index("more budget"),
@@ -816,10 +818,12 @@ class CoordinatorRestartTests(_PauseHarness):
         run = self._coordinator()
         run.sent.clear()
 
-        run("yes")
+        result = run("yes")
 
         sent = "".join(run.sent)
         self.assertIn("approval expired at", sent)
+        self.assertIn("approval expired at", result.harness)
+        self.assertEqual(result.model_text, "It expired.")
         self.assertEqual(self.execute_tool.await_count, 0)
         messages = llm.create_message.await_args.kwargs["messages"]
         _assert_history_paired(messages)
@@ -828,6 +832,72 @@ class CoordinatorRestartTests(_PauseHarness):
             for message in messages if isinstance(message.get("content"), list)
             for block in message["content"] if isinstance(block, dict)
         ))
+
+    def test_late_no_or_cancel_after_expiry_never_restarts_the_task(self):
+        for kind in ("approval", "budget", "quota"):
+            for reply in ("no", "cancel"):
+                with self.subTest(kind=kind, reply=reply):
+                    # A fresh room keeps each expired pause the newest for its
+                    # own case, exactly like the live routing check.
+                    self.room = Chatroom.objects.create()
+                    turn = self._turn()
+                    if kind == "approval":
+                        call = {
+                            "id": "c1", "name": "send_email",
+                            "input": {"to": "a@b.c"},
+                        }
+                        self._pause(turn, [call], kind="approval")
+                    elif kind == "budget":
+                        self._pause(turn, [], kind="budget", state={
+                            "messages": [
+                                {"role": "user", "content": "keep going"},
+                            ],
+                            "awaiting_budget": True,
+                            "end_reason": "asked_for_more",
+                            "token_budget": 10,  # nosec B105 — test fixture, not a credential
+                            "tokens_used": 10,
+                            "active_seconds": 0.0,
+                        })
+                    else:
+                        self._pause(turn, [], kind="quota", state={
+                            "messages": [
+                                {"role": "user", "content": "keep going"},
+                            ],
+                            "awaiting_budget": True,
+                            "awaiting_quota": True,
+                            "end_reason": "quota",
+                            "token_budget": 10,  # nosec B105 — test fixture, not a credential
+                            "tokens_used": 10,
+                            "active_seconds": 0.0,
+                        })
+                    turn.refresh_from_db()
+                    turns_mod.transition(
+                        str(turn.pk), turn.version, "expired",
+                        from_state="paused", end_reason="pause_expired",
+                    )
+                    Turn.objects.filter(pk=turn.pk).update(
+                        pause_expires_at=timezone.now() - timedelta(minutes=1),
+                    )
+                    llm = self._llm([_response([_text("must not run")])])
+                    self.execute_tool.reset_mock()
+                    run = self._coordinator()
+                    run.sent.clear()
+
+                    result = run(reply)
+
+                    sent = "".join(run.sent)
+                    self.assertIn("expired at", sent)
+                    self.assertIn("nothing ran", sent)
+                    self.assertIn("nothing ran", result.harness)
+                    self.assertEqual(result.model_text, "")
+                    self.assertEqual(llm.create_message.await_count, 0)
+                    self.assertEqual(self.execute_tool.await_count, 0)
+                    ended = Turn.objects.filter(room=self.room).order_by(
+                        "-created_at",
+                    ).first()
+                    self.assertEqual(
+                        (ended.state, ended.end_reason), ("completed", "finished"),
+                    )
 
 
 class MixedStepTests(_PauseHarness):

@@ -25,8 +25,12 @@ def create_user_profile(sender, instance, created, **kwargs):
             UserProfile.objects.create(user=instance)
 
             # Auto-create General Room
-            from chatbot.models import Chatroom, Member, Message
-            import django.utils.timezone
+            from chatbot.kazi_messages import (
+                ORIGIN_WELCOME,
+                get_kazi_member,
+                persist_kazi_message,
+            )
+            from chatbot.models import Chatroom, Member
 
             # Create Member for new user
             user_member, _ = Member.objects.get_or_create(User=instance)
@@ -38,27 +42,17 @@ def create_user_profile(sender, instance, created, **kwargs):
             # Ensure the Kazi bot exists, then add it so the General room is
             # AI-ready even on a fresh database (bot created before first user).
             try:
-                kazi_user, _ = User.objects.get_or_create(
-                    username='kazi',
-                    defaults={
-                        'first_name': 'Kazi',
-                        'last_name': 'AI',
-                        'is_active': True,
-                        'email': 'kazi@kwikchat.ai',
-                    },
-                )
-                kazi_member, _ = Member.objects.get_or_create(User=kazi_user)
-
+                kazi_member = get_kazi_member()
                 general_room.participants.add(kazi_member)
-
-                # Add a welcome message
-                welcome_msg = Message.objects.create(
-                    member=kazi_member,
-                    content="Hello! I'm Kazi, your AI assistant. This is your General room where you can ask me anything.",
-                    timestamp=django.utils.timezone.now()
+                persist_kazi_message(
+                    general_room,
+                    content=(
+                        "Hello! I'm Kazi, your AI assistant. This is your General room "
+                        "where you can ask me anything."
+                    ),
+                    origin=ORIGIN_WELCOME,
+                    broadcast=False,
                 )
-                general_room.chats.add(welcome_msg)
-
             except Exception as e:
                 # Log error but don't fail user creation
                 print(f"Error adding Kazi to room: {e}")

@@ -1,6 +1,7 @@
 """Tests for @admin chat escalation (Workstream C)."""
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from asgiref.sync import async_to_sync
@@ -66,8 +67,42 @@ class AdminEscalationTests(TransactionTestCase):
         self.assertTrue(
             Notification.objects.filter(user=superuser, event_type="message.mention").exists()
         )
-        # The bot acknowledged in-room.
-        consumer.send_chat_message.assert_awaited()
+        # The bot acknowledged in-room through the shared door.
+        consumer.channel_layer.group_send.assert_awaited()
+
+    def test_admin_acknowledgement_is_stored_encrypted(self):
+        from chatbot.tasks import _get_room_cipher
+
+        alice = User.objects.create_user(
+            username="alice_admin_cipher", password="fake-token",  # nosec B106 — test fixture — fake credential
+        )
+        User.objects.create_user(
+            username="rootadmin_cipher", password="fake-token",  # nosec B106 — test fixture — fake credential
+            is_superuser=True, is_staff=True,
+        )
+        member = Member.objects.select_related("User").get(User=alice)
+        chatroom = Chatroom.objects.get(participants=member)
+        consumer = self._make_consumer(alice, member, chatroom)
+
+        async_to_sync(consumer.new_message)({
+            "from": "alice_admin_cipher",
+            "message": "@admin please check the schedule",
+            "chatid": str(chatroom.id),
+        })
+
+        message = chatroom.chats.filter(
+            member__User__username="kazi"
+        ).order_by("-id").first()
+        stored = json.loads(message.content)
+        self.assertIn("data", stored)
+        self.assertIn("nonce", stored)
+        self.assertNotIn("Message sent to the admin", message.content)
+
+        reader = ChatConsumer()
+        reader.aes_gcm = _get_room_cipher(chatroom)
+        content, payload = async_to_sync(reader._decrypt_stored)(message)
+        self.assertIn("Message sent to the admin", content)
+        self.assertEqual(payload.get("origin"), "admin_ack")
 
     def test_persona_request_creates_row(self):
         from workflows.models import PersonaRequest

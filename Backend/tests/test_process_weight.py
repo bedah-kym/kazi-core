@@ -724,10 +724,13 @@ class LiteChatTests(TestCase):
         mock_coord.return_value.handle_message.assert_awaited_once()
         self.assertTrue(Message.objects.filter(member=self.member).exists())
         self.assertTrue(Message.objects.filter(member__User__username="kazi").exists())
-        consumer.channel_layer.group_send.assert_awaited_once_with(
-            consumer.room_group_name,
-            {"type": "ai_message_saved", "message": {"id": 1}},
-        )
+        consumer.channel_layer.group_send.assert_awaited_once()
+        group, event = consumer.channel_layer.group_send.await_args.args
+        self.assertEqual(group, consumer.room_group_name)
+        self.assertEqual(event["type"], "ai_message_saved")
+        self.assertEqual(event["message"]["member"], "kazi")
+        self.assertEqual(event["message"]["content"], "hello back")
+        self.assertIsNotNone(event["message"]["id"])
         sent = [
             call.args[0] if call.args else call.kwargs
             for call in consumer.send_chat_message.await_args_list

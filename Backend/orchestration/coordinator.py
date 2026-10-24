@@ -425,6 +425,9 @@ class OrchestrationCoordinator:
                         turn_box["settled"] = True
                         unregister_live_turn(ref.id)
                         return True
+                # The write was lost: another writer owns or ended this row, so
+                # this process must stop renewing it.
+                unregister_live_turn(ref.id)
                 return False
             turn_box["ref"] = TurnRef(
                 id=ref.id, version=ref.version + 1, state=to_state,
@@ -616,34 +619,6 @@ class OrchestrationCoordinator:
             user_preferences["_shell_autopilot"] = False
         # One read per turn: the reset and pause checks below share this state.
         loop_state = None
-        if is_reset_command(query):
-            paused_turn = await aget_paused_turn(room_id, user_id)
-            if paused_turn is not None:
-                await _cancel_other_turn(paused_turn, "reset")
-            await _start_turn()
-            await clear_task_state(adaptive_context)
-            await clear_result_sets(adaptive_context)
-            await clear_memory(adaptive_context)
-            # A reset is not consent: nothing pending may survive it for a later "yes".
-            await dismiss_pending_confirmation(room_id, user_id)
-            record_event(
-                "context_reset",
-                {
-                    "user_id": user_id,
-                    "room_id": room_id,
-                    "turn_id": _turn_id(),
-                },
-            )
-            await broadcast_chunk("Okay, starting fresh. What would you like to do?", harness=True)
-            await emit_progress("done", "completed", "Context reset.")
-            await _finish_turn("finished")
-            return OrchestrationResult(
-                full_response="".join(stream_state["full_response"]),
-                persist=False,
-                turn_id=_turn_id(),
-                turn_version=turn_box["ref"].version if turn_box.get("ref") else 0,
-                turn_state=turn_box["ref"].state if turn_box.get("ref") else "",
-            )
 
         def _log_telemetry(event_type, payload=None):
             try:
@@ -970,6 +945,11 @@ class OrchestrationCoordinator:
                 immediate_directive = True
 
         handled_directive = immediate_directive or bool(host_request)
+        if not handled_directive and is_reset_command(query):
+            # Reset clears memory, so it is an acting directive: it waits for
+            # ownership and never runs on BUSY_LIVE (#216b-1, item 8).
+            deferred_directive = ("reset", None)
+            handled_directive = True
         if not handled_directive and is_dismiss_suggestions_command(query):
             deferred_directive = ("dismiss", None)
             handled_directive = True
@@ -980,13 +960,36 @@ class OrchestrationCoordinator:
             deferred_directive = ("undo", None)
             handled_directive = True
 
-        async def _run_deferred_directive() -> None:
+        async def _run_deferred_directive() -> bool:
             nonlocal deferred_directive
             action = deferred_directive
             deferred_directive = None
             if action is None:
-                return
+                return False
             kind, value = action
+            if kind == "reset":
+                paused = await aget_paused_turn(room_id, user_id)
+                if paused is not None:
+                    await _cancel_other_turn(paused, "reset")
+                await clear_task_state(adaptive_context)
+                await clear_result_sets(adaptive_context)
+                await clear_memory(adaptive_context)
+                # A reset is not consent: nothing pending may survive it for a
+                # later "yes".
+                await dismiss_pending_confirmation(room_id, user_id)
+                record_event(
+                    "context_reset",
+                    {
+                        "user_id": user_id,
+                        "room_id": room_id,
+                        "turn_id": _turn_id(),
+                    },
+                )
+                await broadcast_chunk(
+                    "Okay, starting fresh. What would you like to do?",
+                    harness=True,
+                )
+                return True
             if kind == "allow_host":
                 from orchestration.shell import host_grants as host_grants_mod
                 from orchestration.shell.egress import proxy_enabled
@@ -1048,6 +1051,7 @@ class OrchestrationCoordinator:
                 await broadcast_chunk(
                     undo_result.get("message") or "Okay.", harness=True,
                 )
+            return False
 
         pending_handled = immediate_directive
         directive_handled = immediate_directive
@@ -1114,9 +1118,23 @@ class OrchestrationCoordinator:
             )
 
         if deferred_directive is not None:
-            await _run_deferred_directive()
+            reset_ran = await _run_deferred_directive()
             pending_handled = True
             directive_handled = True
+            if reset_ran:
+                await emit_progress("done", "completed", "Context reset.")
+                await _finish_turn("finished")
+                return OrchestrationResult(
+                    full_response="".join(stream_state["full_response"]),
+                    persist=False,
+                    turn_id=_turn_id(),
+                    turn_version=(
+                        turn_box["ref"].version if turn_box.get("ref") else 0
+                    ),
+                    turn_state=(
+                        turn_box["ref"].state if turn_box.get("ref") else ""
+                    ),
+                )
 
         pending_left = False
 

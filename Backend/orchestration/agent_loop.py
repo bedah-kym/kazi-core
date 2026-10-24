@@ -2054,6 +2054,21 @@ def _load_skill(tool_input: Dict[str, Any], context: Dict[str, Any]) -> Dict[str
         return {"status": "error", "message": f"Could not load skill: {exc}"}
 
 
+def _context_lease_live(context: Dict[str, Any]) -> bool:
+    """Whether the caller may still act for this context's turn.
+
+    Fail closed: a Turn-backed context with no hook is not live. A context
+    without a turn id (a test or a no-turn path) keeps its old behaviour.
+    """
+    check = context.get("turn_live")
+    if not callable(check):
+        return not context.get("turn_id")
+    try:
+        return bool(check())
+    except Exception:
+        return False
+
+
 async def _execute_scoped_tool_calls(
     tool_calls: List[Dict[str, Any]],
     context: Dict[str, Any],
@@ -2061,6 +2076,8 @@ async def _execute_scoped_tool_calls(
     sub_tool_log: List[Dict[str, Any]],
     tool_call_cap: Optional[int] = None,
     persona=None,
+    fence_check=None,
+    lease_lost: Optional[List[bool]] = None,
 ) -> Tuple[List[Dict[str, Any]], bool]:
     """Execute one response's tool_use batch under the sub-agent cap.
 
@@ -2078,6 +2095,11 @@ async def _execute_scoped_tool_calls(
     for tc in tool_calls:
         if len(sub_tool_log) >= effective_cap:
             return result_blocks, True
+        if fence_check is not None and not fence_check():
+            # The parent lost its lease mid-batch: dispatch nothing further.
+            if lease_lost is not None:
+                lease_lost.append(True)
+            return result_blocks, False
 
         # Sub-agents cannot pause for confirmation; block anything that would.
         # Persona scope and receipts are the same as in the main loop.
@@ -2195,6 +2217,11 @@ async def _run_sub_agent(
     prev_input_tokens = 0
 
     while iteration < HARD_CAP_ITERATIONS:
+        if not _context_lease_live(context):
+            # The parent lost its lease: the child stops before its next call.
+            stopped_reason = "lease_lost"
+            break
+
         if len(sub_tool_log) >= tool_call_cap:
             stopped_reason = "max_tool_calls"
             break
@@ -2256,11 +2283,17 @@ async def _run_sub_agent(
         if stop_reason == "tool_use":
             consecutive_pauses = 0
             tool_calls = _extract_tool_calls(content_blocks)
+            child_lease_lost: List[bool] = []
             result_blocks, capped = await _execute_scoped_tool_calls(
                 tool_calls, context, preferences, sub_tool_log,
                 tool_call_cap=tool_call_cap, persona=persona,
+                fence_check=lambda: _context_lease_live(context),
+                lease_lost=child_lease_lost,
             )
             sub_messages.append({"role": "user", "content": result_blocks})
+            if child_lease_lost:
+                stopped_reason = "lease_lost"
+                break
             if capped:
                 stopped_reason = "max_tool_calls"
                 break
@@ -2482,13 +2515,7 @@ async def run_agent_loop(
 
     def _lease_live() -> bool:
         """The coordinator's self-fence; fail closed when it cannot answer."""
-        check = context.get("turn_live")
-        if not callable(check):
-            return True
-        try:
-            return bool(check())
-        except Exception:
-            return False
+        return _context_lease_live(context)
 
     # One work-token bound per turn (T-F3). The old all-or-nothing caps switch
     # no longer turns caps off; a legacy install where it was off maps to the
@@ -2590,6 +2617,7 @@ async def run_agent_loop(
     # ------------------------------------------------------------------ #
     #  Initialise or resume loop state                                    #
     # ------------------------------------------------------------------ #
+    lease_lost_before_loop = False
     if resumed_state and confirmed_tool and (resumed_state.pending_tools or resumed_state.pending_tool):
         state = resumed_state
         state.paused_for_confirmation = False
@@ -2607,6 +2635,7 @@ async def run_agent_loop(
         for pending in held:
             if not _lease_live():
                 state.end_reason = "lease_lost"
+                lease_lost_before_loop = True
                 yield AgentEvent("harness", {"text": LEASE_LOST_NOTE})
                 break
             call_id = str(pending.get("id") or "")
@@ -2830,7 +2859,7 @@ async def run_agent_loop(
     # ------------------------------------------------------------------ #
     #  Main ReAct loop                                                    #
     # ------------------------------------------------------------------ #
-    while state.iteration < HARD_CAP_ITERATIONS:
+    while state.iteration < HARD_CAP_ITERATIONS and not lease_lost_before_loop:
         # The self-fence sits before the next model call. A worker that lost its
         # lease must not dispatch anything more (#216b-1).
         if not _lease_live():

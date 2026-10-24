@@ -642,26 +642,44 @@ REAP_NOTICE = (
 )
 
 
-def _notice_text(expired_queued: int) -> str:
+def _queued_notice(expired_queued: int) -> str:
+    return (
+        f"{expired_queued} waiting message(s) weren't answered; please send "
+        "them again."
+    )
+
+
+def _notice_text(expired_queued: int, *, completed: bool = False) -> str:
+    if completed:
+        # The turn's own reply was already saved; only the dropped queued
+        # messages need explaining (item 9).
+        return _queued_notice(expired_queued)
     if expired_queued:
-        return (
-            f"{REAP_NOTICE} {expired_queued} waiting message(s) weren't "
-            "answered; please send them again."
-        )
+        return f"{REAP_NOTICE} {_queued_notice(expired_queued)}"
     return REAP_NOTICE
 
 
 def _saved_reply_exists(turn_id: Any) -> bool:
-    """A Kazi-authored message with this Turn id is the saved reply (R8).
+    """A Kazi-authored reply saved *after* the turn's latest human message (R8).
 
     A ``turn_notice`` never sets ``turn=`` and the request message belongs to a
-    human member, so neither can be mistaken for the reply.
+    human member, so neither can be mistaken for the reply. The latest linked
+    human message is the one that resumed the turn, so the "Please confirm…"
+    reply of a segment that ended paused is never counted (M1).
     """
     from chatbot.models import Message
 
-    return Message.objects.filter(
-        turn_id=turn_id, member__User__username="kazi",
-    ).exists()
+    messages = Message.objects.filter(turn_id=turn_id)
+    latest_human = (
+        messages.exclude(member__User__username="kazi")
+        .order_by("-timestamp")
+        .values_list("timestamp", flat=True)
+        .first()
+    )
+    replies = messages.filter(member__User__username="kazi")
+    if latest_human is not None:
+        replies = replies.filter(timestamp__gt=latest_human)
+    return replies.exists()
 
 
 def expire_queued_for_key(
@@ -687,7 +705,9 @@ def expire_queued_for_key(
     )
 
 
-def _save_reap_notice(turn: Turn, expired_queued: int) -> bool:
+def _save_reap_notice(
+    turn: Turn, expired_queued: int, *, completed: bool = False,
+) -> bool:
     """Save and broadcast one ``turn_notice`` for a reaped key."""
     from chatbot.kazi_messages import (
         KaziMessageError,
@@ -704,7 +724,7 @@ def _save_reap_notice(turn: Turn, expired_queued: int) -> bool:
     try:
         persist_kazi_message(
             room,
-            content=_notice_text(expired_queued),
+            content=_notice_text(expired_queued, completed=completed),
             origin=ORIGIN_TURN_NOTICE,
         )
     except KaziMessageError:
@@ -781,7 +801,7 @@ def reap_turn(
     # A completed turn already gave the user its reply; a notice would be
     # false. It is still needed when queued messages were dropped.
     if target != "completed" or expired:
-        _save_reap_notice(turn, expired)
+        _save_reap_notice(turn, expired, completed=target == "completed")
     return True
 
 

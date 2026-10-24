@@ -34,10 +34,13 @@ PROCESS_OWNER_ID = (
     f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex}"
 )[:128]
 
+# Turn id -> the monotonic time this process registered its current segment.
 _LIVE_TURNS: dict[str, float] = {}
 _FENCED_TURNS: set[str] = set()
 _REGISTRY_LOCK = threading.Lock()
-_LAST_RENEWAL = 0.0
+# Turn id -> the monotonic time of its last successful renewal. It is per turn
+# so one turn's failing beats can never reset another turn's fence clock.
+_LAST_RENEWAL: dict[str, float] = {}
 _HEARTBEAT_TASK: asyncio.Task | None = None
 _MONOTONIC = time.monotonic
 
@@ -86,12 +89,12 @@ def register_live_turn(turn_id) -> None:
     if not tid:
         return
     with _REGISTRY_LOCK:
-        _LIVE_TURNS[tid] = _MONOTONIC()
+        now = _MONOTONIC()
+        # A fresh segment starts a fresh fence clock for this turn only. A
+        # resumed turn therefore is not capped from its first start (H1).
+        _LIVE_TURNS[tid] = now
         _FENCED_TURNS.discard(tid)
-        global _LAST_RENEWAL
-        # A fresh registration starts a fresh fence clock, even if a previous
-        # turn in this process left a stale renewal time behind.
-        _LAST_RENEWAL = _MONOTONIC()
+        _LAST_RENEWAL[tid] = now
     ensure_heartbeat()
 
 
@@ -102,6 +105,7 @@ def unregister_live_turn(turn_id) -> None:
     with _REGISTRY_LOCK:
         _LIVE_TURNS.pop(tid, None)
         _FENCED_TURNS.discard(tid)
+        _LAST_RENEWAL.pop(tid, None)
 
 
 def live_turn_ids() -> list[str]:
@@ -109,18 +113,28 @@ def live_turn_ids() -> list[str]:
         return list(_LIVE_TURNS)
 
 
-def _renew_one(turn_id: str) -> bool:
-    """Renew one registry Turn, never past the hard timeout. One UPDATE."""
+def _renew_one(turn_id: str, *, monotonic_now: float) -> bool:
+    """Renew one registry Turn, never past this segment's hard timeout.
+
+    The cap is measured from when this process registered the segment, never
+    from the turn's first ``started_at``. A resumed turn gets a fresh segment,
+    so a long human pause cannot starve its heartbeat (H1).
+    """
     hard = hard_timeout_seconds()
+    with _REGISTRY_LOCK:
+        segment_started = _LIVE_TURNS.get(turn_id)
+    if segment_started is None:
+        return False
+    if monotonic_now - segment_started > hard + HARD_TURN_MARGIN_SECONDS:
+        return False
     try:
         updated = (
             Turn.objects.filter(
                 pk=turn_id,
                 state__in=("running", "committing"),
-                started_at__isnull=False,
-                started_at__gt=Now() - timedelta(
-                    seconds=hard + HARD_TURN_MARGIN_SECONDS,
-                ),
+                # A row another worker now owns is not this process's to renew;
+                # the owner fences itself instead of stealing it back (item 5).
+                owner_id=PROCESS_OWNER_ID,
             ).update(
                 owner_id=PROCESS_OWNER_ID,
                 lease_expires_at=lease_expiry(),
@@ -144,7 +158,11 @@ def beat_once(*, monotonic_now: float | None = None) -> int:
     now = _MONOTONIC() if monotonic_now is None else monotonic_now
     renewed = 0
     for turn_id in snapshot:
-        if _renew_one(turn_id):
+        if _renew_one(turn_id, monotonic_now=now):
+            with _REGISTRY_LOCK:
+                # A concurrent unregister wins: never re-add its clock.
+                if turn_id in _LIVE_TURNS:
+                    _LAST_RENEWAL[turn_id] = now
             renewed += 1
             continue
         active = Turn.objects.filter(
@@ -157,10 +175,7 @@ def beat_once(*, monotonic_now: float | None = None) -> int:
             with _REGISTRY_LOCK:
                 _LIVE_TURNS.pop(turn_id, None)
                 _FENCED_TURNS.discard(turn_id)
-    if renewed:
-        global _LAST_RENEWAL
-        with _REGISTRY_LOCK:
-            _LAST_RENEWAL = now
+                _LAST_RENEWAL.pop(turn_id, None)
     return renewed
 
 
@@ -190,7 +205,9 @@ def turn_live(turn_id) -> bool:
             return False
         if tid in _FENCED_TURNS:
             return False
-        last = _LAST_RENEWAL
+        last = _LAST_RENEWAL.get(tid)
+    if last is None:
+        return False
     margin = fence_margin_seconds()
     budget = max(1, lease_seconds() - margin)
     return (_MONOTONIC() - last) <= budget

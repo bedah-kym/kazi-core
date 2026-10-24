@@ -182,6 +182,9 @@ class _PauseHarness(TransactionTestCase):
             "room_id": self.room.id,
             "username": self.user.username,
             "turn_id": str(turn.pk),
+            # These tests own a live turn; the real coordinator passes this
+            # hook, and a Turn context without one fails closed (#216b-1).
+            "turn_live": lambda: True,
         }
 
     def _pause(self, turn, calls, *, kind="approval", state=None, budget=None):

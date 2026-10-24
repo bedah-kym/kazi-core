@@ -812,6 +812,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     async def _fail_running_turn(self, result):
         """End a row this consumer still sees running; the reaper's backstop."""
+        from orchestration.turn_leases import unregister_live_turn
         from orchestration.turns import atransition
 
         timeout = self._terminal_write_timeout()
@@ -831,6 +832,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
             raise
         except Exception:
             logger.warning("Turn error write failed; the reaper will end it")
+        finally:
+            # Whatever the write did, this process no longer holds the turn
+            # and must stop renewing it (#216b-1, item 6).
+            unregister_live_turn(result.turn_id)
 
     async def new_message(self, data):
         result = None

@@ -20,12 +20,15 @@ from orchestration import turn_leases
 from orchestration.agent_loop import (
     AgentEvent,
     HARD_TURN_TIMEOUT_SECONDS,
+    LoopState,
+    _run_sub_agent,
     run_agent_loop,
 )
 from orchestration.coordinator import OrchestrationCoordinator
 from orchestration.models import Turn
 from orchestration.turn_leases import (
     beat_once,
+    live_turn_ids,
     register_live_turn,
     turn_live,
     unregister_live_turn,
@@ -85,7 +88,7 @@ class _TurnLeaseBase(TransactionTestCase):
         self.room.participants.add(self.member)
         turn_leases._LIVE_TURNS.clear()
         turn_leases._FENCED_TURNS.clear()
-        turn_leases._LAST_RENEWAL = 0.0
+        turn_leases._LAST_RENEWAL.clear()
         layer = MagicMock()
         layer.group_send = AsyncMock()
         patcher = patch(
@@ -97,6 +100,7 @@ class _TurnLeaseBase(TransactionTestCase):
     def tearDown(self):
         turn_leases._LIVE_TURNS.clear()
         turn_leases._FENCED_TURNS.clear()
+        turn_leases._LAST_RENEWAL.clear()
         super().tearDown()
 
     def _running(
@@ -216,10 +220,83 @@ class ReapTests(_TurnLeaseBase):
         self.assertEqual(old.state, "failed")
         self.assertEqual(queued.state, "expired")
 
+    def test_lite_with_a_fresh_lease_is_still_busy(self):
+        # The old lite shortcut treated any blocker as stale; it is gone.
+        self._running(lease_delta=90, owner="another-worker")
+
+        with self.settings(KAZI_LITE_PROFILE=True):
+            claim = claim_turn(room_id=self.room.id, user_id=self.user.id)
+
+        self.assertEqual(claim.status, BUSY_LIVE)
+        self.assertIsNone(claim.turn)
+
+    def test_a_reply_from_before_the_resume_does_not_count_as_saved(self):
+        # M1: the paused segment's "Please confirm…" is not this segment's
+        # reply. The resumed committing row must fail with a notice.
+        from chatbot.kazi_messages import persist_kazi_message
+        from chatbot.models import Message
+
+        turn = self._running(state="committing")
+        confirm = persist_kazi_message(
+            self.room, content="Please confirm.", origin="turn", turn=turn,
+            model_text="Please confirm.", broadcast=False,
+        )
+        Message.objects.filter(pk=confirm.pk).update(
+            timestamp=timezone.now() - timedelta(minutes=10),
+        )
+        resume = Message.objects.create(
+            member=self.member,
+            content="yes",
+            timestamp=timezone.now() - timedelta(minutes=1),
+            turn=turn,
+        )
+        self.room.chats.add(resume)
+
+        self.assertTrue(reap_turn(turn, require_lapsed=True))
+
+        turn.refresh_from_db()
+        self.assertEqual(turn.state, "failed")
+        self.assertEqual(turn.end_reason, "lease_lost")
+        notices = [
+            payload for payload in _kazi_payloads(self.room)
+            if payload.get("origin") == "turn_notice"
+        ]
+        self.assertEqual(len(notices), 1)
+        self.assertIn("server restarted", notices[0]["content"])
+
+    def test_a_completed_reap_with_dropped_queue_only_mentions_the_queue(self):
+        from chatbot.kazi_messages import persist_kazi_message
+
+        turn = self._running(state="committing")
+        persist_kazi_message(
+            self.room, content="done", origin="turn", turn=turn,
+            model_text="done", broadcast=False,
+        )
+        queued = Turn.objects.create(
+            room=self.room, user=self.user, state="queued",
+        )
+        Turn.objects.filter(pk=queued.pk).update(
+            created_at=timezone.now() - timedelta(minutes=5),
+        )
+
+        self.assertTrue(reap_turn(turn, require_lapsed=True))
+
+        turn.refresh_from_db()
+        self.assertEqual(turn.state, "completed")
+        notices = [
+            payload for payload in _kazi_payloads(self.room)
+            if payload.get("origin") == "turn_notice"
+        ]
+        self.assertEqual(len(notices), 1)
+        self.assertIn("1 waiting message(s)", notices[0]["content"])
+        self.assertNotIn("stopped partway", notices[0]["content"])
+
 
 class HeartbeatTests(_TurnLeaseBase):
     def test_the_beat_advances_the_lease_for_a_registry_turn(self):
-        turn = self._running(lease_delta=-5)
+        turn = self._running(
+            lease_delta=-5, owner=turn_leases.PROCESS_OWNER_ID,
+        )
         register_live_turn(str(turn.pk))
 
         renewed = beat_once(monotonic_now=1000.0)
@@ -249,15 +326,16 @@ class HeartbeatTests(_TurnLeaseBase):
         self.assertGreater(live.lease_expires_at, timezone.now())
         unregister_live_turn(str(live.pk))
 
-    def test_the_beat_never_renews_a_turn_past_the_hard_timeout(self):
+    def test_the_first_segment_cannot_renew_forever(self):
         old = self._running(
-            lease_delta=-5,
-            owner=turn_leases.PROCESS_OWNER_ID,
-            started_at=timezone.now() - timedelta(
-                seconds=HARD_TURN_TIMEOUT_SECONDS + 120,
-            ),
+            lease_delta=-5, owner=turn_leases.PROCESS_OWNER_ID,
         )
         register_live_turn(str(old.pk))
+        # This segment has been running past the hard timeout.
+        with turn_leases._REGISTRY_LOCK:
+            turn_leases._LIVE_TURNS[str(old.pk)] = (
+                1000.0 - HARD_TURN_TIMEOUT_SECONDS - 120
+            )
 
         self.assertEqual(beat_once(monotonic_now=1000.0), 0)
 
@@ -265,6 +343,51 @@ class HeartbeatTests(_TurnLeaseBase):
         self.assertLess(old.lease_expires_at, timezone.now())
         self.assertFalse(turn_live(str(old.pk)))
         unregister_live_turn(str(old.pk))
+
+    def test_a_turn_resumed_long_after_its_first_start_keeps_its_lease(self):
+        # H1: the cap is per run segment, never the turn's first started_at.
+        resumed = self._running(
+            lease_delta=-5, owner=turn_leases.PROCESS_OWNER_ID,
+            started_at=timezone.now() - timedelta(minutes=45),
+        )
+        register_live_turn(str(resumed.pk))
+
+        self.assertEqual(beat_once(monotonic_now=1000.0), 1)
+
+        resumed.refresh_from_db()
+        self.assertGreater(resumed.lease_expires_at, timezone.now())
+        with patch.object(turn_leases, "_MONOTONIC", return_value=1000.0):
+            self.assertTrue(turn_live(str(resumed.pk)))
+        unregister_live_turn(str(resumed.pk))
+
+    def test_a_row_taken_over_by_another_owner_is_not_renewed(self):
+        # Item 5: renewal never steals a row another worker now owns.
+        stolen = self._running(lease_delta=-5, owner="another-worker")
+        register_live_turn(str(stolen.pk))
+
+        self.assertEqual(beat_once(monotonic_now=1000.0), 0)
+
+        stolen.refresh_from_db()
+        self.assertLess(stolen.lease_expires_at, timezone.now())
+        self.assertFalse(turn_live(str(stolen.pk)))
+        unregister_live_turn(str(stolen.pk))
+
+    def test_another_turns_registration_does_not_refresh_a_failing_turn(self):
+        # H2: the fence clock is per turn. A's failed beats must not be
+        # forgiven when B registers in the same process.
+        with patch.object(turn_leases, "_MONOTONIC", return_value=1000.0):
+            a = self._running(
+                lease_delta=90, owner=turn_leases.PROCESS_OWNER_ID,
+            )
+            register_live_turn(str(a.pk))
+
+        # A never renews; B registers later in the same process.
+        with patch.object(turn_leases, "_MONOTONIC", return_value=2000.0):
+            register_live_turn("turn-b")
+            self.assertFalse(turn_live(str(a.pk)))
+            self.assertTrue(turn_live("turn-b"))
+        unregister_live_turn(str(a.pk))
+        unregister_live_turn("turn-b")
 
     def test_a_fake_clock_fences_the_owner_before_the_lease_lapses(self):
         turn = self._running(lease_delta=90, owner=turn_leases.PROCESS_OWNER_ID)
@@ -323,7 +446,8 @@ class HeartbeatTests(_TurnLeaseBase):
 
 
 class AgentLoopFenceTests(SimpleTestCase):
-    def _loop(self, responses, *, context, patches=None):
+    def _loop(self, responses, *, context, patches=None, resumed_state=None,
+              confirmed_tool=False):
         mock_llm = MagicMock()
         mock_llm.return_value = mock_llm
         mock_llm.default_provider.return_value = "anthropic"
@@ -345,14 +469,16 @@ class AgentLoopFenceTests(SimpleTestCase):
                 stack.enter_context(patch(target, new=value))
             return _collect(run_agent_loop(
                 user_message="do it", context=context, preferences={},
+                resumed_state=resumed_state, confirmed_tool=confirmed_tool,
             ))
 
     def _lease_clock(self, turn_id="turn-1"):
         clock = {"t": 1000.0}
         turn_leases._LIVE_TURNS[turn_id] = clock["t"]
-        turn_leases._LAST_RENEWAL = clock["t"]
+        turn_leases._LAST_RENEWAL[turn_id] = clock["t"]
         self.addCleanup(turn_leases._LIVE_TURNS.pop, turn_id, None)
         self.addCleanup(turn_leases._FENCED_TURNS.discard, turn_id)
+        self.addCleanup(turn_leases._LAST_RENEWAL.pop, turn_id, None)
         return clock
 
     def test_a_fenced_owner_dispatches_no_further_batch_and_keeps_receipts(self):
@@ -453,6 +579,179 @@ class AgentLoopFenceTests(SimpleTestCase):
         done = next(event for event in events if event.kind == "done")
         self.assertEqual(done.data["end_reason"], "lease_lost")
 
+    def test_a_raising_turn_live_hook_stops_the_loop(self):
+        def _boom():
+            raise RuntimeError("the lease store is down")
+
+        events = self._loop(
+            [AsyncMock(side_effect=AssertionError("the model must not be called"))],
+            context={
+                "user_id": None, "room_id": 1, "username": "test",
+                "turn_id": "turn-x", "turn_live": _boom,
+            },
+        )
+
+        done = next(event for event in events if event.kind == "done")
+        self.assertEqual(done.data["end_reason"], "lease_lost")
+        self.assertFalse(any(event.kind == "tool_result" for event in events))
+
+    def test_a_turn_context_without_a_hook_fails_closed(self):
+        events = self._loop(
+            [AsyncMock(side_effect=AssertionError("the model must not be called"))],
+            context={
+                "user_id": None, "room_id": 1, "username": "test",
+                "turn_id": "turn-x",
+            },
+        )
+
+        done = next(event for event in events if event.kind == "done")
+        self.assertEqual(done.data["end_reason"], "lease_lost")
+
+    def test_a_fenced_resumed_held_call_yields_one_note_and_runs_nothing(self):
+        # Drives the real turn_live through the resumed held-call loop.
+        self._lease_clock("turn-held")
+        state = LoopState(
+            messages=[],
+            pending_tools=[{
+                "id": "t1", "name": "get_weather", "input": {"city": "a"},
+            }],
+        )
+        execute = AsyncMock()
+        fence_at = (
+            1000.0 + turn_leases.lease_seconds()
+            - turn_leases.fence_margin_seconds() + 0.1
+        )
+        with patch.object(turn_leases, "_MONOTONIC", return_value=fence_at):
+            events = self._loop(
+                [AsyncMock(side_effect=AssertionError("no model call"))],
+                context={
+                    "user_id": None, "room_id": 1, "username": "test",
+                    "turn_id": "turn-held",
+                    "turn_live": lambda: turn_live("turn-held"),
+                },
+                patches={
+                    "orchestration.agent_loop.execute_tool": execute,
+                    "orchestration.agent_loop._record_receipt": AsyncMock(),
+                },
+                resumed_state=state, confirmed_tool=True,
+            )
+
+        execute.assert_not_called()
+        notes = [
+            event.data.get("text", "")
+            for event in events if event.kind == "harness"
+        ]
+        self.assertEqual(
+            sum("marked interrupted" in text for text in notes), 1,
+        )
+        done = next(event for event in events if event.kind == "done")
+        self.assertEqual(done.data["end_reason"], "lease_lost")
+
+
+class SubAgentFenceTests(SimpleTestCase):
+    def test_a_fence_during_a_delegate_stops_further_child_dispatch(self):
+        calls = []
+
+        async def _execute(name, _tool_input, _context):
+            calls.append(name)
+            return {"status": "success"}
+
+        # Loop-top check, then the first tool: both live. The second tool is
+        # dispatched after the fence trips.
+        checks = {"n": 0}
+
+        def _turn_live():
+            checks["n"] += 1
+            return checks["n"] <= 2
+
+        llm = MagicMock()
+        llm.create_message = AsyncMock(return_value=_response([
+            _tool_use("get_weather", {"city": "a"}, "t1"),
+            _tool_use("get_weather", {"city": "b"}, "t2"),
+        ], "tool_use"))
+
+        with patch(
+            "orchestration.agent_loop.get_llm_client", return_value=llm,
+        ), patch(
+            "orchestration.agent_loop._resolve_persona",
+            new=AsyncMock(return_value=None),
+        ), patch(
+            "orchestration.agent_loop._execute_with_timeout",
+            new=AsyncMock(side_effect=_execute),
+        ), patch(
+            "orchestration.agent_loop._record_receipt", new=AsyncMock(),
+        ), patch(
+            "orchestration.agent_loop.record_event",
+        ):
+            result = _run(_run_sub_agent(
+                {"task": "check the weather"},
+                {
+                    "user_id": 1, "room_id": 2, "turn_id": "turn-1",
+                    "turn_live": _turn_live,
+                },
+                None, "system", [],
+            ))
+
+        self.assertEqual(calls, ["get_weather"])
+        self.assertEqual(result["stopped_reason"], "lease_lost")
+
+
+class ConsumerBackstopTests(_TurnLeaseBase):
+    def test_the_running_row_backstop_unregisters_the_turn(self):
+        from chatbot.consumers import ChatConsumer
+
+        turn = self._running(owner=turn_leases.PROCESS_OWNER_ID)
+        register_live_turn(str(turn.pk))
+        result = SimpleNamespace(turn_id=str(turn.pk), turn_version=turn.version)
+
+        _run(ChatConsumer()._fail_running_turn(result))
+
+        turn.refresh_from_db()
+        self.assertEqual(turn.state, "failed")
+        self.assertEqual(turn.end_reason, "error")
+        self.assertNotIn(str(turn.pk), live_turn_ids())
+
+
+class LostAdvanceTests(SimpleTestCase):
+    def test_a_lost_advance_write_unregisters_the_turn(self):
+        turn_id = "00000000-0000-0000-0000-000000000001"
+
+        async def _fake_loop(**_kwargs):
+            yield AgentEvent("done", {"end_reason": "finished"})
+
+        patches = {
+            "orchestration.coordinator.load_memory_summary": AsyncMock(return_value=None),
+            "orchestration.coordinator.get_user_preferences": lambda *a, **k: {},
+            "orchestration.coordinator.has_pending_agent_state": AsyncMock(return_value=False),
+            "orchestration.coordinator.has_expired_pause": AsyncMock(return_value=False),
+            "orchestration.coordinator.run_agent_loop": _fake_loop,
+            "orchestration.coordinator.record_event": MagicMock(),
+            "orchestration.coordinator.cache": MagicMock(),
+            **turn_test_patches(),
+        }
+        patches["orchestration.coordinator.atransition"] = AsyncMock(
+            return_value=False,
+        )
+        patches["orchestration.coordinator.aget_turn"] = AsyncMock(
+            return_value=None,
+        )
+        with ExitStack() as stack:
+            for target, value in patches.items():
+                stack.enter_context(patch(target, new=value))
+            async_to_sync(OrchestrationCoordinator().handle_message)(
+                query="hello",
+                user_id=1,
+                room_id="1",
+                username="alice",
+                message_id=42,
+                send_chunk=AsyncMock(),
+                send_step_event=AsyncMock(),
+                get_context_prompt=AsyncMock(return_value=""),
+                bump_signals=MagicMock(),
+            )
+
+        self.assertNotIn(turn_id, live_turn_ids())
+
 
 class DirectiveOwnershipTests(SimpleTestCase):
     def _run(self, query, *, claim_status=BUSY_LIVE, patches=None):
@@ -489,6 +788,14 @@ class DirectiveOwnershipTests(SimpleTestCase):
                 get_context_prompt=AsyncMock(return_value=""),
                 bump_signals=MagicMock(),
             )
+
+    def test_reset_while_busy_does_not_clear_memory(self):
+        clear = AsyncMock()
+        self._run(
+            "reset",
+            patches={"orchestration.coordinator.clear_memory": clear},
+        )
+        clear.assert_not_called()
 
     def test_undo_while_busy_does_not_run_and_saves_a_notice(self):
         undo = MagicMock(return_value={"message": "undone"})

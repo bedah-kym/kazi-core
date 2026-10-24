@@ -75,6 +75,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- On the **open** shell profile, a plain file delete (`del`, `erase`, `rm`,
+  `unlink`, `Remove-Item` and its aliases, `rmdir`/`rd` without `/s`, `git rm`
+  of a tracked file, `git clean -f`) now asks before it runs, in a clean turn as
+  well as a tainted one; an armed autopilot window covers it. Recursive or
+  wildcard deletes (`rd /s`, `rm -rf`, `rm -r`, `del /s *`, `del *.txt`,
+  `Remove-Item -Recurse`) still match the destructive tripwire and still ask
+  under autopilot. Sandboxed profiles are unchanged.
 - Every message Kazi authors now goes through one persistence door
   (`chatbot.kazi_messages.persist_kazi_message`): it encrypts with the room key,
   records an `origin` (`turn`, `reminder`, `nudge`, `admin_ack`, `welcome`),

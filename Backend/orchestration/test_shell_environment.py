@@ -34,6 +34,7 @@ class EnvironmentBlockTests(SimpleTestCase):
         self.assertIn("not sandboxed", block)
         self.assertIn("about 15 minutes", block)
         self.assertIn("needs root", block)
+        self.assertIn("deletes files", block)
         self.assertIn("ask them yourself", block)
         self.assertIn("`autopilot` as the reply to a shell prompt", block)
         self.assertNotIn("always ask", block)
@@ -104,8 +105,9 @@ class BlockMatchesTheGateTests(SimpleTestCase):
 
     def test_the_destructive_list_asks_even_under_autopilot_but_is_not_complete(self):
         self.assertTrue(self._asks("open", "rd /s /q build", _shell_autopilot=True))
-        # Why the block tells the model to ask the user itself before deleting.
-        self.assertFalse(self._asks("open", "del notes.txt"))
+        self.assertTrue(self._asks("open", "del notes.txt"))
+        # Why the block tells the model to ask the user itself before other deletes or moves.
+        self.assertFalse(self._asks("open", "mv notes.txt archived.txt"))
 
     def test_standard_asks_for_a_recognised_network_tool_only(self):
         self.assertFalse(self._asks("standard", "ls"))

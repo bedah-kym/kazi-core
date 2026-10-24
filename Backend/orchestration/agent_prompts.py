@@ -213,8 +213,9 @@ def build_environment_block(env: Optional[Dict[str, Any]]) -> str:
         lines.append("- This room's shell has full network access.")
         lines.append(
             f"- The harness asks the user before a command {recently}, when the command needs "
-            "root, or when it is on the harness's short destructive list. Otherwise the command "
-            "runs at once. While the user has autopilot armed, only the destructive list asks."
+            "root, when it deletes files on this unsandboxed host, or when it is on the harness's "
+            "short destructive list. Otherwise the command runs at once. While the user has "
+            "autopilot armed, a plain delete runs without asking and only the destructive list asks."
         )
         lines.append(
             "- Your part is to call the tool. The harness then asks the user and shows them "
@@ -346,9 +347,20 @@ def build_confirmation_prompt(
         param_lines.append(f"  - **{key}**: {value}")
     params_text = "\n".join(param_lines) if param_lines else "  (no parameters)"
 
+    reason_line = ""
+    if tool_name in ("run_command", "run_shell", "shell_command"):
+        try:
+            from orchestration.shell.classifier import is_plain_delete
+
+            if is_plain_delete(str(tool_input.get("command") or "")):
+                reason_line = "This command deletes files.\n\n"
+        except Exception:
+            reason_line = ""
+
     return (
         f"I'd like to **{readable}** with the following details:\n"
         f"{params_text}\n\n"
+        f"{reason_line}"
         f"Should I go ahead? (yes / no)"
     )
 

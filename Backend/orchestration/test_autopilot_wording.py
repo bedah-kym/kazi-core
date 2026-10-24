@@ -40,20 +40,20 @@ class AutopilotArmedWordingTests(SimpleTestCase):
             yield AgentEvent("done", {})
 
         defaults = {
+            **turn_test_patches(),
             "orchestration.coordinator.load_memory_summary": AsyncMock(return_value=None),
             "orchestration.coordinator.get_user_preferences": lambda user_id, profile_obj=None: {
                 "shell_profile": "open",
             },
             "orchestration.coordinator.has_pending_agent_state": AsyncMock(return_value=True),
             "orchestration.coordinator.has_pending_budget_state": AsyncMock(return_value=False),
-            "orchestration.coordinator.load_loop_state": MagicMock(return_value=_confirmation_state()),
+            "orchestration.coordinator.load_pending_state": AsyncMock(return_value=_confirmation_state()),
             "orchestration.coordinator.resume_after_confirmation": _resume,
             "orchestration.coordinator.cache": MagicMock(),
             "orchestration.coordinator.record_event": MagicMock(),
             "orchestration.shell.autopilot.is_armed": MagicMock(return_value=False),
             "orchestration.shell.autopilot.arm": MagicMock(return_value=True),
             "orchestration.shell.environment.get_shell_environment": AsyncMock(return_value={}),
-            **turn_test_patches(),
         }
         if isinstance(taint, Exception):
             defaults["orchestration.coordinator._conversation_tainted"] = MagicMock(side_effect=taint)

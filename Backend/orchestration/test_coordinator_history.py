@@ -29,6 +29,7 @@ def _run_agent_turn(query, *, history_messages=None, memory_summary=None, contex
         "orchestration.coordinator.load_memory_summary": AsyncMock(return_value=memory_summary),
         "orchestration.coordinator.get_user_preferences": load_preferences if load_preferences is not None else (lambda user_id, profile_obj=None: {}),
         "orchestration.coordinator.has_pending_agent_state": AsyncMock(return_value=False),
+        "orchestration.coordinator.has_expired_pause": AsyncMock(return_value=False),
         "orchestration.coordinator.cache": cache,
         "orchestration.coordinator.record_event": MagicMock(),
         "orchestration.coordinator.run_agent_loop": _capture,

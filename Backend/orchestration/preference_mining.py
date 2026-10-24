@@ -166,17 +166,28 @@ def mine_approval_overrides(window_days: Optional[int] = None, min_approvals: Op
         WorkflowApprovalRecord.objects
         .filter(kind="agent_loop", created_at__gte=since)
         .exclude(status="pending")
-        .values("requested_by_id", "room_id", "action", "status")
+        .values("requested_by_id", "room_id", "action", "status", "metadata")
     )
-    records: List[Dict[str, Any]] = [
-        {
-            "user_id": row["requested_by_id"],
-            "room_id": row["room_id"],
-            "action": row["action"],
-            "status": row["status"],
-        }
-        for row in rows
-    ]
+    records: List[Dict[str, Any]] = []
+    for row in rows:
+        calls = (row.get("metadata") or {}).get("calls") or []
+        # A held batch is one row but every call is its own approve/decline
+        # signal. Deduplicate within the row so one batch cannot inflate the
+        # count for a repeated action.
+        actions = list(dict.fromkeys(
+            str(call.get("tool") or "")
+            for call in calls
+            if isinstance(call, dict) and call.get("tool")
+        )) or [str(row.get("action") or "")]
+        for action in actions:
+            if not action:
+                continue
+            records.append({
+                "user_id": row["requested_by_id"],
+                "room_id": row["room_id"],
+                "action": action,
+                "status": row["status"],
+            })
 
     mined = mine_overrides(records, threshold)
     for user_id, rooms in mined.items():

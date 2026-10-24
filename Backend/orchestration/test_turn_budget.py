@@ -306,7 +306,9 @@ class RequestMoreBudgetTests(_LoopHarness):
 
     @override_settings(AGENT_TURN_TOKEN_BUDGET=50000, AGENT_TURN_TOKEN_BUDGET_MAX=500000)
     def test_resuming_after_extend_does_not_repeat_a_finished_call(self):
-        from orchestration.agent_loop import resume_with_more_budget, run_agent_loop
+        from orchestration.agent_loop import (
+            load_loop_state, resume_with_more_budget, run_agent_loop,
+        )
 
         patches = self._patch_stack()
         mocks = [p.start() for p in patches]
@@ -350,9 +352,20 @@ class RequestMoreBudgetTests(_LoopHarness):
                 usage={"input_tokens": 6400, "output_tokens": 10},
             ),
         ])
-        events = self._run(collect_events(resume_with_more_budget(
-            context={"user_id": 7, "room_id": 9, "username": "t"},
-        )))
+        resume_state = load_loop_state(9, 7)
+        with (
+            patch(
+                "orchestration.agent_loop._claim_turn_for_resume",
+                new=AsyncMock(return_value=(MagicMock(state="running", pause_expires_at=None), True)),
+            ),
+            patch(
+                "orchestration.agent_loop._load_resume_state",
+                new=AsyncMock(return_value=resume_state),
+            ),
+        ):
+            events = self._run(collect_events(resume_with_more_budget(
+                context={"user_id": 7, "room_id": 9, "username": "t"},
+            )))
 
         self.assertEqual(mock_exec.await_count, 1)
         done = next(e for e in events if e.kind == "done")
@@ -411,9 +424,19 @@ class RequestMoreBudgetTests(_LoopHarness):
                 usage={"input_tokens": 6400, "output_tokens": 10},
             ),
         ])
-        events = self._run(collect_events(resume_with_more_budget(
-            context={"user_id": 7, "room_id": 9, "username": "t"},
-        )))
+        with (
+            patch(
+                "orchestration.agent_loop._claim_turn_for_resume",
+                new=AsyncMock(return_value=(MagicMock(state="running", pause_expires_at=None), True)),
+            ),
+            patch(
+                "orchestration.agent_loop._load_resume_state",
+                new=AsyncMock(return_value=state),
+            ),
+        ):
+            events = self._run(collect_events(resume_with_more_budget(
+                context={"user_id": 7, "room_id": 9, "username": "t"},
+            )))
         self.assertEqual(mock_exec.await_count, 1)
         done = next(e for e in events if e.kind == "done")
         self.assertEqual(done.data["end_reason"], "finished")
@@ -1019,7 +1042,7 @@ class GrantCeilingTests(_LoopHarness):
     @override_settings(AGENT_TURN_TOKEN_BUDGET=1000, AGENT_TURN_TOKEN_BUDGET_MAX=3000)
     def test_a_grant_never_raises_the_budget_above_the_maximum(self):
         from orchestration.agent_loop import (
-            LoopState, resume_with_more_budget, save_loop_state,
+            LoopState, load_loop_state, resume_with_more_budget, save_loop_state,
         )
 
         patches = self._patch_stack()
@@ -1045,9 +1068,20 @@ class GrantCeilingTests(_LoopHarness):
             end_reason="budget",
         ))
 
-        events = self._run(collect_events(resume_with_more_budget(
-            context={"user_id": 1, "room_id": 1, "username": "t"},
-        )))
+        resume_state = load_loop_state(1, 1)
+        with (
+            patch(
+                "orchestration.agent_loop._claim_turn_for_resume",
+                new=AsyncMock(return_value=(MagicMock(state="running", pause_expires_at=None), True)),
+            ),
+            patch(
+                "orchestration.agent_loop._load_resume_state",
+                new=AsyncMock(return_value=resume_state),
+            ),
+        ):
+            events = self._run(collect_events(resume_with_more_budget(
+                context={"user_id": 1, "room_id": 1, "username": "t"},
+            )))
 
         done = next(e for e in events if e.kind == "done")
         self.assertEqual(done.data["budget"], 3000)

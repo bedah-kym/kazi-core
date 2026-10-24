@@ -224,6 +224,21 @@ value from an earlier install is left untouched and maps to
 a smaller bound. Hard runaway backstops remain far above the bound: 10k
 iterations, 10k tool calls and a 30-minute wall clock.
 
+## Turn approvals
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `CONSENT_SKEW_SECONDS` | `2` | A reply counts as approval only when its message arrived more than this many seconds after the pending prompt was created. |
+
+A whole-message **yes** or **autopilot** is consent only if it was sent after
+the prompt it answers. A reply that waited on a running turn, or came from a
+second tab, cannot approve a prompt created after it was sent: the action stays
+pending and the message runs as a new turn, with the prompt shown again last. A
+**no** or **stop** still cancels, whichever timestamp it carries.
+
+The margin absorbs small clock differences between app hosts, so keep every
+host on NTP. A missing or unreadable timestamp fails closed and runs nothing.
+
 ## Skills
 
 | Variable | Default | Purpose |

@@ -325,6 +325,7 @@ class _CoordinatorTurnBase(TransactionTestCase):
             "orchestration.coordinator.load_memory_summary": AsyncMock(return_value=None),
             "orchestration.coordinator.get_user_preferences": lambda user_id, profile_obj=None: {},
             "orchestration.coordinator.has_pending_agent_state": AsyncMock(return_value=pending),
+            "orchestration.coordinator._consent_postdates_prompt": AsyncMock(return_value=True),
             "orchestration.coordinator.has_pending_budget_state": AsyncMock(return_value=budget),
             "orchestration.coordinator.pending_resume_kind": AsyncMock(
                 return_value=pause_kind or "budget",

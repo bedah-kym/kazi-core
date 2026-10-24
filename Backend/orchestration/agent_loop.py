@@ -836,9 +836,12 @@ async def save_pending_confirmation(
             or str(record.turn_id) != str(turn_id)
         ):
             # Refresh a stale-or-other-turn row so this pause owns the row.
+            # created_at is the consent anchor, so a reused row must not keep
+            # the timestamp of the prompt it used to represent.
             for attr_name, value in defaults.items():
                 setattr(record, attr_name, value)
-            record.save(update_fields=list(defaults.keys()))
+            record.created_at = now
+            record.save(update_fields=[*defaults.keys(), "created_at"])
         return record.id
 
     return await sync_to_async(_create)()

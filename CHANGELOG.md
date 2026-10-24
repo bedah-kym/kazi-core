@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed — consent semantics
 
+- **A reply only approves a prompt it could have seen** (#216b-0). A **yes** or
+  **autopilot** reply sent before the pending prompt existed (it waited on a
+  running turn or came from a second tab) no longer approves the action. It is
+  handled as a new turn, the action stays pending, and the prompt is shown
+  again last. The comparison allows `CONSENT_SKEW_SECONDS` (default 2) of clock
+  skew; a missing timestamp fails closed. A **no** or **stop** still cancels. A
+  refreshed paused approval row now gets a fresh `created_at`, so a reused row
+  cannot borrow the old prompt's timestamp.
 - **Pauses are durable and a question no longer cancels them** (#216, P3-3).
   Approval, budget and quota pauses now live on the `Turn` in
   `paused_state_enc`, encrypted with the room key, instead of a ten-minute

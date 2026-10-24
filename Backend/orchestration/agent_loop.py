@@ -63,6 +63,12 @@ HARD_CAP_ITERATIONS = 10000
 HARD_CAP_TOOL_CALLS = 10000
 HARD_TURN_TIMEOUT_SECONDS = 1800  # wall-clock runaway guard (30 min)
 TURN_TOKEN_WARNING_RATIO = 0.80  # tell the user once we pass this share
+# A fenced owner stops before the next model call or batch, keeps what already
+# ran, and says so honestly (#216b-1, E10).
+LEASE_LOST_NOTE = (
+    "[Harness: this turn was marked interrupted because its worker lost the "
+    "lease. Nothing further was run; the steps above already happened.]\n\n"
+)
 # A delegated run gets a share of what its parent has left, never a fixed table.
 DELEGATED_BUDGET_SHARE = 0.5
 MIN_DELEGATED_BUDGET = 5000
@@ -2474,6 +2480,16 @@ async def run_agent_loop(
     room_id = context.get("room_id")
     user_caps = preferences or {}
 
+    def _lease_live() -> bool:
+        """The coordinator's self-fence; fail closed when it cannot answer."""
+        check = context.get("turn_live")
+        if not callable(check):
+            return True
+        try:
+            return bool(check())
+        except Exception:
+            return False
+
     # One work-token bound per turn (T-F3). The old all-or-nothing caps switch
     # no longer turns caps off; a legacy install where it was off maps to the
     # largest bound (_turn_token_budget). Sub-agents inherit the flag via
@@ -2589,6 +2605,10 @@ async def run_agent_loop(
         held = list(state.pending_tools or [state.pending_tool])
         gated_blocks: Dict[str, Dict[str, Any]] = {}
         for pending in held:
+            if not _lease_live():
+                state.end_reason = "lease_lost"
+                yield AgentEvent("harness", {"text": LEASE_LOST_NOTE})
+                break
             call_id = str(pending.get("id") or "")
             if call_id and call_id in state.dispatched_calls:
                 result = {
@@ -2811,6 +2831,13 @@ async def run_agent_loop(
     #  Main ReAct loop                                                    #
     # ------------------------------------------------------------------ #
     while state.iteration < HARD_CAP_ITERATIONS:
+        # The self-fence sits before the next model call. A worker that lost its
+        # lease must not dispatch anything more (#216b-1).
+        if not _lease_live():
+            state.end_reason = "lease_lost"
+            yield AgentEvent("harness", {"text": LEASE_LOST_NOTE})
+            break
+
         # The hard backstop runs on active time, never on a human's wait.
         if _active_elapsed() > HARD_TURN_TIMEOUT_SECONDS:
             state.end_reason = "backstop"
@@ -2844,6 +2871,10 @@ async def run_agent_loop(
                 break
             state.awaiting_budget = True
             _accumulate_active()
+            if not _lease_live():
+                state.end_reason = "lease_lost"
+                yield AgentEvent("harness", {"text": LEASE_LOST_NOTE})
+                break
             dropped = []
             if turn_backed:
                 dropped = await sync_to_async(_supersede_older_pause_sync)(
@@ -2921,6 +2952,10 @@ async def run_agent_loop(
             state.awaiting_quota = True
             _accumulate_active()
             quota_ttl = _quota_pause_ttl(quota_exc.retry_after_seconds)
+            if not _lease_live():
+                state.end_reason = "lease_lost"
+                yield AgentEvent("harness", {"text": LEASE_LOST_NOTE})
+                break
             dropped = []
             if turn_backed:
                 dropped = await sync_to_async(_supersede_older_pause_sync)(
@@ -3064,6 +3099,10 @@ async def run_agent_loop(
                 state.awaiting_budget = True
                 state.end_reason = "asked_for_more"
                 _accumulate_active()
+                if not _lease_live():
+                    state.end_reason = "lease_lost"
+                    yield AgentEvent("harness", {"text": LEASE_LOST_NOTE})
+                    break
                 dropped = []
                 if turn_backed:
                     dropped = await sync_to_async(_supersede_older_pause_sync)(
@@ -3128,6 +3167,13 @@ async def run_agent_loop(
                 persona=persona,
                 tainted=run_tainted,
             )
+
+            # Checked again immediately before dispatch: a reaper may have
+            # fenced this owner while the batch was being decided (#216b-1).
+            if not _lease_live():
+                state.end_reason = "lease_lost"
+                yield AgentEvent("harness", {"text": LEASE_LOST_NOTE})
+                break
 
             # ---- Execute safe calls (possibly in parallel) ----------- #
             tool_results: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
@@ -3320,6 +3366,10 @@ async def run_agent_loop(
                     effects = call_effects[0]
 
                 _accumulate_active()
+                if not _lease_live():
+                    state.end_reason = "lease_lost"
+                    yield AgentEvent("harness", {"text": LEASE_LOST_NOTE})
+                    break
                 if turn_backed:
                     await sync_to_async(_supersede_older_pause_sync)(
                         context, context.get("turn_id"),
@@ -3327,6 +3377,10 @@ async def run_agent_loop(
 
                 # The durable row is written BEFORE the Turn's paused CAS, so a
                 # paused Turn can never exist without the approval it needs.
+                if not _lease_live():
+                    state.end_reason = "lease_lost"
+                    yield AgentEvent("harness", {"text": LEASE_LOST_NOTE})
+                    break
                 row_saved = True
                 if room_id and user_id:
                     try:
@@ -3657,6 +3711,9 @@ async def _claim_turn_for_resume(context: Dict[str, Any]) -> tuple:
         # A Turn id from another room/user is never a resume handle.
         return None, False
     if turn.state in ("running", "committing"):
+        # The coordinator registers the lease when it wins the paused -> running
+        # CAS. Registering an already-running row here could renew another
+        # writer's lease, so this path only observes it.
         return turn, True
     if turn.state != "paused":
         return turn, False
@@ -3667,6 +3724,10 @@ async def _claim_turn_for_resume(context: Dict[str, Any]) -> tuple:
         str(turn.pk), turn.version, "running",
         from_state="paused", pause_kind=None, pause_expires_at=None, end_reason=None,
     )
+    if moved:
+        from orchestration.turn_leases import register_live_turn
+
+        register_live_turn(str(turn.pk))
     return turn, moved
 
 

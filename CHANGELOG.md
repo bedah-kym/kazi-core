@@ -36,6 +36,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   previous step's results or re-pauses immediately; a late yes/continue
   resumes with fresh headroom, while a late no/cancel runs nothing.
 
+### Added — turn leases
+
+- **A crashed or redeployed worker no longer locks its room** (#216b-1). A
+  running Turn now carries a `host:pid:boot-uuid` owner and a database-clock
+  lease (`TURN_LEASE_SECONDS`, default 90). One heartbeat per process renews
+  only the Turn ids still in its in-memory registry (`TURN_HEARTBEAT_SECONDS`,
+  default 30), and the owner fences itself before the lease can lapse, so it
+  dispatches nothing further and still saves what already ran. One reap routine
+  (used by claim takeover, the 30-second `reap_lapsed_turns` beat task and the
+  lite boot sweep) ends lapsed `running` turns as `failed(lease_lost)` and a
+  lapsed `committing` turn as `completed` when its reply is already saved. It
+  saves one `turn_notice` per key so the user sees an honest ending after a
+  reload. Paused turns are never reaped, and rows from before leases keep the
+  old 31-minute rule. Permission-reducing directives (autopilot disarm, host
+  revoke) stay immediate; acting directives (undo, allow host, receipts) now
+  wait for a successful claim. A busy claim saves a notice instead of a
+  transient broadcast. Graceful shutdown waits
+  `TURN_SHUTDOWN_GRACE_SECONDS` (default 20) and bounds the terminal write.
+
 ### Added
 
 - Every routed chat message now gets one durable **Turn** row (`orchestration.Turn`)

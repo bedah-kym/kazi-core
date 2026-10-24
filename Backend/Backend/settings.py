@@ -526,6 +526,15 @@ WORKFLOW_APPROVAL_SWEEP_SECONDS = int(os.environ.get('WORKFLOW_APPROVAL_SWEEP_SE
 # its approval row share this TTL; expiry is applied lazily on read and by the
 # approval sweep.
 AGENT_PAUSE_TTL_SECONDS = int(os.environ.get('AGENT_PAUSE_TTL_SECONDS', 600))
+# Turn ownership leases (#216b-1). A worker writes one owner id and a
+# database-clock lease on the running Turn; the heartbeat renews only the turns
+# it still holds in memory. The owner fences itself before the lease can lapse,
+# a periodic sweep reaps lapsed rows, and shutdown gets a bounded grace.
+TURN_LEASE_SECONDS = int(os.environ.get('TURN_LEASE_SECONDS', 90))
+TURN_HEARTBEAT_SECONDS = int(os.environ.get('TURN_HEARTBEAT_SECONDS', 30))
+TURN_LEASE_FENCE_MARGIN_SECONDS = int(os.environ.get('TURN_LEASE_FENCE_MARGIN_SECONDS', 30))
+TURN_REAPER_SECONDS = int(os.environ.get('TURN_REAPER_SECONDS', 30))
+TURN_SHUTDOWN_GRACE_SECONDS = int(os.environ.get('TURN_SHUTDOWN_GRACE_SECONDS', 20))
 PROMOTION_MIN_OCCURRENCES = int(os.environ.get('PROMOTION_MIN_OCCURRENCES', 3))
 PROMOTION_MIN_SUCCESS_RATE = float(os.environ.get('PROMOTION_MIN_SUCCESS_RATE', 0.8))
 ROUTINE_ABSENCE_IDLE_DAYS = int(os.environ.get('ROUTINE_ABSENCE_IDLE_DAYS', 14))
@@ -570,6 +579,10 @@ CELERY_BEAT_SCHEDULE = {
     'sweep-stuck-approvals': {
         'task': 'workflows.tasks.sweep_stuck_approvals',
         'schedule': float(WORKFLOW_APPROVAL_SWEEP_SECONDS),
+    },
+    'reap-lapsed-turns': {
+        'task': 'orchestration.tasks.reap_lapsed_turns',
+        'schedule': float(TURN_REAPER_SECONDS),
     },
     'roll-telemetry': {
         'task': 'orchestration.tasks.roll_telemetry',

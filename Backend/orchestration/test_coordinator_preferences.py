@@ -1,5 +1,6 @@
 """A chat turn's capability gate denies when the preference lookup fails."""
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from asgiref.sync import async_to_sync
@@ -9,6 +10,7 @@ from django.test import SimpleTestCase, TestCase
 from orchestration.agent_loop import AgentEvent
 from orchestration.coordinator import OrchestrationCoordinator
 from orchestration.test_coordinator_history import _run_agent_turn
+from orchestration.turns import CLAIMED, ClaimResult
 from orchestration.user_preferences import conservative_default_preferences
 
 
@@ -141,11 +143,11 @@ class CoordinatorLoadedProfileFailsClosedTests(TestCase):
             patch("orchestration.coordinator.aget_paused_turn", new=AsyncMock(return_value=None)),
             patch(
                 "orchestration.coordinator.aclaim_turn",
-                new=AsyncMock(return_value=__import__("types").SimpleNamespace(
+                new=AsyncMock(return_value=ClaimResult(CLAIMED, SimpleNamespace(
                     pk="00000000-0000-0000-0000-000000000001",
                     version=0,
                     state="running",
-                )),
+                ))),
             ),
             patch("orchestration.coordinator.atransition", new=AsyncMock(return_value=True)),
             patch("orchestration.coordinator.alink_message", new=AsyncMock(return_value=True)),

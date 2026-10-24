@@ -12,9 +12,11 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable, Dict, List, Optional
+from datetime import timedelta
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from asgiref.sync import sync_to_async
+from django.conf import settings
 from django.core.cache import cache
 
 from orchestration.telemetry import record_event
@@ -55,6 +57,7 @@ from orchestration.shell.chat_intents import (
     is_undo_command,
 )
 from orchestration.agent_loop import (
+    AGENT_LOOP_APPROVAL_KIND,
     run_agent_loop,
     has_pending_agent_state,
     has_pending_budget_state,
@@ -108,6 +111,57 @@ async def _quota_resume_still_blocked(user_id: int) -> Optional[TokenQuotaExceed
     freed (T-F3b); the check fails closed, so a dead cache reads as blocked.
     """
     return await get_llm_client().check_hourly_quota(user_id)
+
+
+async def _consent_postdates_prompt(
+    room_id: Any, user_id: int, message_id: Optional[int],
+) -> bool:
+    """Whether the reply was sent after the pending prompt existed.
+
+    A reply that waited on the room's turn lock, or came from a second tab,
+    must never approve a prompt created after it was sent. Any missing piece
+    (no request message, no approval row, an unreadable clock) denies consent.
+    """
+    if message_id is None:
+        return False
+
+    def _check() -> bool:
+        from django.utils import timezone
+
+        from chatbot.models import Message
+        from workflows.models import WorkflowApprovalRecord
+
+        try:
+            sent_at = (
+                Message.objects.filter(pk=message_id)
+                .values_list("timestamp", flat=True)
+                .first()
+            )
+            if sent_at is None:
+                return False
+            record = (
+                WorkflowApprovalRecord.objects.filter(
+                    kind=AGENT_LOOP_APPROVAL_KIND,
+                    room_id=room_id,
+                    requested_by_id=user_id,
+                    status="pending",
+                )
+                .order_by("-created_at")
+                .only("created_at", "expires_at")
+                .first()
+            )
+            if record is None:
+                return False
+            now = timezone.now()
+            if record.expires_at is not None and record.expires_at <= now:
+                return False
+            skew = int(getattr(settings, "CONSENT_SKEW_SECONDS", 2))
+            return sent_at > record.created_at + timedelta(seconds=skew)
+        except Exception as exc:
+            logger.warning("Consent timestamp check failed: %s", exc)
+            return False
+
+    return await sync_to_async(_check)()
 
 
 async def _end_unexpected_turn(turn_box: Dict, stream_state: Dict, outcome: str) -> None:
@@ -966,14 +1020,23 @@ class OrchestrationCoordinator:
         # that Turn; anything else (a question, another request) keeps the pause
         # armed and starts a new record (D8).
         paused_turn = await aget_paused_turn(room_id, user_id)
+        consent_reply = bool(
+            pending_confirmation
+            and (is_autopilot_request(query) or is_approval_reply(query))
+        )
+        consent_postdates_prompt = bool(
+            consent_reply
+            and await _consent_postdates_prompt(room_id, user_id, message_id)
+        )
         autopilot_request = bool(
-            pending_confirmation and is_autopilot_request(query)
+            consent_postdates_prompt and is_autopilot_request(query)
         )
         armable_shell = bool(autopilot_request and await _pending_armable_shell())
         approval_continues = bool(
             pending_confirmation and (
                 is_cancel_request(query) or is_decline_reply(query)
-                or autopilot_request or is_approval_reply(query)
+                or autopilot_request
+                or (is_approval_reply(query) and consent_postdates_prompt)
             )
         )
         budget_continues = bool(
@@ -1084,7 +1147,7 @@ class OrchestrationCoordinator:
                             turn_box["hold"] = True
                         pending_left = True
                         pending_handled = True
-                elif is_approval_reply(query):
+                elif is_approval_reply(query) and consent_postdates_prompt:
                     if await _resume_turn(turn_box["ref"]):
                         await _resume_confirmed()
                     else:

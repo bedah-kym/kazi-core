@@ -46,6 +46,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Every message Kazi authors now goes through one persistence door
+  (`chatbot.kazi_messages.persist_kazi_message`): it encrypts with the room key,
+  records an `origin` (`turn`, `reminder`, `nudge`, `admin_ack`, `welcome`),
+  links a reply to its Turn, and broadcasts the standard `ai_message_saved`
+  frame. Welcome and `@admin` acknowledgements are therefore encrypted at rest
+  instead of stored in plaintext, and the kazi User/Member lookup exists once.
+  The transcript replays every non-turn origin as a `[Harness: …]` note rather
+  than as assistant speech, so a delivered reminder or idle nudge is no longer
+  mistaken for something Kazi said (#219).
+
 - The reply that confirms **autopilot** is now true in a room that recently
   read untrusted content (C4). It says that commands reaching the network will
   still ask while the room holds that content, and that this lifts on its own;

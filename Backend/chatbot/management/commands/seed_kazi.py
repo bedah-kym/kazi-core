@@ -11,9 +11,14 @@ Usage:
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
-from django.utils import timezone
 
-from chatbot.models import Chatroom, Member, Message
+from chatbot.kazi_messages import (
+    ORIGIN_WELCOME,
+    get_kazi_member,
+    get_kazi_user,
+    persist_kazi_message,
+)
+from chatbot.models import Chatroom, Member
 from users.naming import account_has_owner
 
 User = get_user_model()
@@ -32,21 +37,13 @@ class Command(BaseCommand):
                 "account, then run seed_kazi again. Nothing was changed."
             )
 
-        kazi_user, created = User.objects.get_or_create(
-            username="kazi",
-            defaults={
-                "first_name": "Kazi",
-                "last_name": "AI",
-                "is_active": True,
-                "email": "kazi@kwikchat.ai",
-            },
-        )
+        _kazi_user, created = get_kazi_user()
         if created:
             self.stdout.write(self.style.SUCCESS("Created Kazi user"))
         else:
             self.stdout.write("Kazi user already exists")
 
-        kazi_member, _ = Member.objects.get_or_create(User=kazi_user)
+        kazi_member = get_kazi_member()
 
         with transaction.atomic():
             users = list(
@@ -67,12 +64,12 @@ class Command(BaseCommand):
                 user_member, _ = Member.objects.get_or_create(User=user)
                 room.participants.add(user_member, kazi_member)
 
-                welcome_msg = Message.objects.create(
-                    member=kazi_member,
+                persist_kazi_message(
+                    room,
                     content="Hello! I'm Kazi, your AI assistant. Ask me anything!",
-                    timestamp=timezone.now(),
+                    origin=ORIGIN_WELCOME,
+                    broadcast=False,
                 )
-                room.chats.add(welcome_msg)
                 self.stdout.write(
                     self.style.SUCCESS(f"Created AI room for {user.username}")
                 )

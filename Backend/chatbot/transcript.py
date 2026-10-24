@@ -103,6 +103,22 @@ def _model_text(content: str, extra: Any) -> str:
     return model.strip() if isinstance(model, str) else content
 
 
+def _origin_of(extra: Any) -> str:
+    """Where a Kazi message came from; empty for rows written before origins."""
+    origin = extra.get("origin") if isinstance(extra, dict) else None
+    return origin.strip() if isinstance(origin, str) else ""
+
+
+def _is_out_of_turn(extra: Any) -> bool:
+    origin = _origin_of(extra)
+    return bool(origin) and origin != "turn"
+
+
+def _out_of_turn_note(origin: str, text: str) -> str:
+    """A message the harness delivered, phrased so it is not mistaken for speech."""
+    return f"{origin}: {text}"
+
+
 def _assistant_messages(
     message_id: int,
     text: str,
@@ -111,6 +127,9 @@ def _assistant_messages(
 ) -> List[Tuple[str, Any]]:
     """The assistant/user messages one stored reply becomes."""
     out: List[Tuple[str, Any]] = []
+
+    if _is_out_of_turn(extra):
+        return out
 
     tools = extra.get("tools") if isinstance(extra, dict) else None
     replay = (
@@ -251,7 +270,10 @@ def build_history_messages(
         if (username or "").lower() == BOT_USERNAME:
             for role, blocks in _assistant_messages(message_id, text, extra, viewer_user_id):
                 _append(messages, role, blocks)
-            harness = _harness_of(extra)
+            if _is_out_of_turn(extra):
+                harness = _out_of_turn_note(_origin_of(extra), text)
+            else:
+                harness = _harness_of(extra)
             if harness:
                 note = _harness_note(harness)
                 pending_note = f"{pending_note}\n{note}" if pending_note else note

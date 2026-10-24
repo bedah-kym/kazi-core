@@ -63,6 +63,12 @@ HARD_CAP_ITERATIONS = 10000
 HARD_CAP_TOOL_CALLS = 10000
 HARD_TURN_TIMEOUT_SECONDS = 1800  # wall-clock runaway guard (30 min)
 TURN_TOKEN_WARNING_RATIO = 0.80  # tell the user once we pass this share
+# A fenced owner stops before the next model call or batch, keeps what already
+# ran, and says so honestly (#216b-1, E10).
+LEASE_LOST_NOTE = (
+    "[Harness: this turn was marked interrupted because its worker lost the "
+    "lease. Nothing further was run; the steps above already happened.]\n\n"
+)
 # A delegated run gets a share of what its parent has left, never a fixed table.
 DELEGATED_BUDGET_SHARE = 0.5
 MIN_DELEGATED_BUDGET = 5000
@@ -2051,6 +2057,21 @@ def _load_skill(tool_input: Dict[str, Any], context: Dict[str, Any]) -> Dict[str
         return {"status": "error", "message": f"Could not load skill: {exc}"}
 
 
+def _context_lease_live(context: Dict[str, Any]) -> bool:
+    """Whether the caller may still act for this context's turn.
+
+    Fail closed: a Turn-backed context with no hook is not live. A context
+    without a turn id (a test or a no-turn path) keeps its old behaviour.
+    """
+    check = context.get("turn_live")
+    if not callable(check):
+        return not context.get("turn_id")
+    try:
+        return bool(check())
+    except Exception:
+        return False
+
+
 async def _execute_scoped_tool_calls(
     tool_calls: List[Dict[str, Any]],
     context: Dict[str, Any],
@@ -2058,6 +2079,8 @@ async def _execute_scoped_tool_calls(
     sub_tool_log: List[Dict[str, Any]],
     tool_call_cap: Optional[int] = None,
     persona=None,
+    fence_check=None,
+    lease_lost: Optional[List[bool]] = None,
 ) -> Tuple[List[Dict[str, Any]], bool]:
     """Execute one response's tool_use batch under the sub-agent cap.
 
@@ -2075,6 +2098,11 @@ async def _execute_scoped_tool_calls(
     for tc in tool_calls:
         if len(sub_tool_log) >= effective_cap:
             return result_blocks, True
+        if fence_check is not None and not fence_check():
+            # The parent lost its lease mid-batch: dispatch nothing further.
+            if lease_lost is not None:
+                lease_lost.append(True)
+            return result_blocks, False
 
         # Sub-agents cannot pause for confirmation; block anything that would.
         # Persona scope and receipts are the same as in the main loop.
@@ -2192,6 +2220,11 @@ async def _run_sub_agent(
     prev_input_tokens = 0
 
     while iteration < HARD_CAP_ITERATIONS:
+        if not _context_lease_live(context):
+            # The parent lost its lease: the child stops before its next call.
+            stopped_reason = "lease_lost"
+            break
+
         if len(sub_tool_log) >= tool_call_cap:
             stopped_reason = "max_tool_calls"
             break
@@ -2253,11 +2286,17 @@ async def _run_sub_agent(
         if stop_reason == "tool_use":
             consecutive_pauses = 0
             tool_calls = _extract_tool_calls(content_blocks)
+            child_lease_lost: List[bool] = []
             result_blocks, capped = await _execute_scoped_tool_calls(
                 tool_calls, context, preferences, sub_tool_log,
                 tool_call_cap=tool_call_cap, persona=persona,
+                fence_check=lambda: _context_lease_live(context),
+                lease_lost=child_lease_lost,
             )
             sub_messages.append({"role": "user", "content": result_blocks})
+            if child_lease_lost:
+                stopped_reason = "lease_lost"
+                break
             if capped:
                 stopped_reason = "max_tool_calls"
                 break
@@ -2477,6 +2516,10 @@ async def run_agent_loop(
     room_id = context.get("room_id")
     user_caps = preferences or {}
 
+    def _lease_live() -> bool:
+        """The coordinator's self-fence; fail closed when it cannot answer."""
+        return _context_lease_live(context)
+
     # One work-token bound per turn (T-F3). The old all-or-nothing caps switch
     # no longer turns caps off; a legacy install where it was off maps to the
     # largest bound (_turn_token_budget). Sub-agents inherit the flag via
@@ -2577,6 +2620,7 @@ async def run_agent_loop(
     # ------------------------------------------------------------------ #
     #  Initialise or resume loop state                                    #
     # ------------------------------------------------------------------ #
+    lease_lost_before_loop = False
     if resumed_state and confirmed_tool and (resumed_state.pending_tools or resumed_state.pending_tool):
         state = resumed_state
         state.paused_for_confirmation = False
@@ -2592,6 +2636,11 @@ async def run_agent_loop(
         held = list(state.pending_tools or [state.pending_tool])
         gated_blocks: Dict[str, Dict[str, Any]] = {}
         for pending in held:
+            if not _lease_live():
+                state.end_reason = "lease_lost"
+                lease_lost_before_loop = True
+                yield AgentEvent("harness", {"text": LEASE_LOST_NOTE})
+                break
             call_id = str(pending.get("id") or "")
             if call_id and call_id in state.dispatched_calls:
                 result = {
@@ -2813,7 +2862,14 @@ async def run_agent_loop(
     # ------------------------------------------------------------------ #
     #  Main ReAct loop                                                    #
     # ------------------------------------------------------------------ #
-    while state.iteration < HARD_CAP_ITERATIONS:
+    while state.iteration < HARD_CAP_ITERATIONS and not lease_lost_before_loop:
+        # The self-fence sits before the next model call. A worker that lost its
+        # lease must not dispatch anything more (#216b-1).
+        if not _lease_live():
+            state.end_reason = "lease_lost"
+            yield AgentEvent("harness", {"text": LEASE_LOST_NOTE})
+            break
+
         # The hard backstop runs on active time, never on a human's wait.
         if _active_elapsed() > HARD_TURN_TIMEOUT_SECONDS:
             state.end_reason = "backstop"
@@ -2847,6 +2903,10 @@ async def run_agent_loop(
                 break
             state.awaiting_budget = True
             _accumulate_active()
+            if not _lease_live():
+                state.end_reason = "lease_lost"
+                yield AgentEvent("harness", {"text": LEASE_LOST_NOTE})
+                break
             dropped = []
             if turn_backed:
                 dropped = await sync_to_async(_supersede_older_pause_sync)(
@@ -2924,6 +2984,10 @@ async def run_agent_loop(
             state.awaiting_quota = True
             _accumulate_active()
             quota_ttl = _quota_pause_ttl(quota_exc.retry_after_seconds)
+            if not _lease_live():
+                state.end_reason = "lease_lost"
+                yield AgentEvent("harness", {"text": LEASE_LOST_NOTE})
+                break
             dropped = []
             if turn_backed:
                 dropped = await sync_to_async(_supersede_older_pause_sync)(
@@ -3067,6 +3131,10 @@ async def run_agent_loop(
                 state.awaiting_budget = True
                 state.end_reason = "asked_for_more"
                 _accumulate_active()
+                if not _lease_live():
+                    state.end_reason = "lease_lost"
+                    yield AgentEvent("harness", {"text": LEASE_LOST_NOTE})
+                    break
                 dropped = []
                 if turn_backed:
                     dropped = await sync_to_async(_supersede_older_pause_sync)(
@@ -3131,6 +3199,13 @@ async def run_agent_loop(
                 persona=persona,
                 tainted=run_tainted,
             )
+
+            # Checked again immediately before dispatch: a reaper may have
+            # fenced this owner while the batch was being decided (#216b-1).
+            if not _lease_live():
+                state.end_reason = "lease_lost"
+                yield AgentEvent("harness", {"text": LEASE_LOST_NOTE})
+                break
 
             # ---- Execute safe calls (possibly in parallel) ----------- #
             tool_results: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
@@ -3323,6 +3398,10 @@ async def run_agent_loop(
                     effects = call_effects[0]
 
                 _accumulate_active()
+                if not _lease_live():
+                    state.end_reason = "lease_lost"
+                    yield AgentEvent("harness", {"text": LEASE_LOST_NOTE})
+                    break
                 if turn_backed:
                     await sync_to_async(_supersede_older_pause_sync)(
                         context, context.get("turn_id"),
@@ -3330,6 +3409,10 @@ async def run_agent_loop(
 
                 # The durable row is written BEFORE the Turn's paused CAS, so a
                 # paused Turn can never exist without the approval it needs.
+                if not _lease_live():
+                    state.end_reason = "lease_lost"
+                    yield AgentEvent("harness", {"text": LEASE_LOST_NOTE})
+                    break
                 row_saved = True
                 if room_id and user_id:
                     try:
@@ -3660,6 +3743,9 @@ async def _claim_turn_for_resume(context: Dict[str, Any]) -> tuple:
         # A Turn id from another room/user is never a resume handle.
         return None, False
     if turn.state in ("running", "committing"):
+        # The coordinator registers the lease when it wins the paused -> running
+        # CAS. Registering an already-running row here could renew another
+        # writer's lease, so this path only observes it.
         return turn, True
     if turn.state != "paused":
         return turn, False
@@ -3670,6 +3756,10 @@ async def _claim_turn_for_resume(context: Dict[str, Any]) -> tuple:
         str(turn.pk), turn.version, "running",
         from_state="paused", pause_kind=None, pause_expires_at=None, end_reason=None,
     )
+    if moved:
+        from orchestration.turn_leases import register_live_turn
+
+        register_live_turn(str(turn.pk))
     return turn, moved
 
 

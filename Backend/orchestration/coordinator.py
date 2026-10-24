@@ -21,6 +21,7 @@ from django.core.cache import cache
 
 from orchestration.telemetry import record_event
 from orchestration.turns import (
+    BUSY_LIVE,
     TERMINAL_STATES,
     TurnRef,
     aclaim_turn,
@@ -30,6 +31,11 @@ from orchestration.turns import (
     alink_message,
     atransition,
     ref_from_turn,
+)
+from orchestration.turn_leases import (
+    register_live_turn,
+    turn_live,
+    unregister_live_turn,
 )
 from orchestration.contracts import build_step_event
 from orchestration.user_preferences import conservative_default_preferences, get_user_preferences
@@ -82,6 +88,10 @@ logger = logging.getLogger(__name__)
 
 MAX_TOOL_RECORDS = 10
 _SHOWN_LIMIT = 2000
+BUSY_TURN_NOTICE = (
+    "Another reply is still being written for you in this room; send this "
+    "again when it finishes."
+)
 
 
 def _quota_resume_blocked_note(exc: TokenQuotaExceeded) -> str:
@@ -174,6 +184,7 @@ async def _end_unexpected_turn(turn_box: Dict, stream_state: Dict, outcome: str)
     ref = turn_box.get("ref")
     if ref is None or turn_box.get("settled"):
         return
+    unregister_live_turn(ref.id)
     if outcome == "cancelled":
         if ref.state == "committing":
             # committing has no cancelled edge; the reply was never saved.
@@ -270,6 +281,29 @@ def _room_exists(room_id) -> bool:
     return Chatroom.objects.filter(pk=room_id).exists()
 
 
+def _persist_turn_notice(room_id, text: str) -> bool:
+    """Save and broadcast one harness note outside a Turn."""
+    from chatbot.kazi_messages import (
+        KaziMessageError,
+        ORIGIN_TURN_NOTICE,
+        persist_kazi_message,
+    )
+    from chatbot.models import Chatroom
+
+    room = Chatroom.objects.filter(pk=room_id).first()
+    if room is None:
+        return False
+    try:
+        persist_kazi_message(room, content=text, origin=ORIGIN_TURN_NOTICE)
+    except KaziMessageError:
+        logger.warning("Turn notice not saved: the room key is unavailable")
+        return False
+    except Exception as exc:
+        logger.warning("Turn notice not saved: %s", type(exc).__name__)
+        return False
+    return True
+
+
 def _history_replays_untrusted(history_msgs: Optional[List[dict]]) -> bool:
     """Whether the built history carries a replayed result from an untrusted tool."""
     for message in history_msgs or []:
@@ -341,7 +375,10 @@ class OrchestrationCoordinator:
         further runs; errors during confirmation resume propagate.
         """
         stream_state = {"buffer": [], "last_send": 0, "first_token_sent": False, "full_response": [], "model": [], "harness": [], "tools": [], "chunks": 0, "chars": 0}  # nosec B105 — state keys, not a credential
-        turn_box = {"ref": None, "settled": False, "hold": False, "agent_ran": False}
+        turn_box = {
+            "ref": None, "settled": False, "hold": False, "agent_ran": False,
+            "claim_status": "",
+        }
         try:
             return await self._handle_message_body(
                 stream_state=stream_state,
@@ -388,15 +425,18 @@ class OrchestrationCoordinator:
             return ref.id if ref else ""
 
         async def _start_turn() -> Optional[TurnRef]:
-            turn = await aclaim_turn(
+            claim = await aclaim_turn(
                 room_id=room_id,
                 user_id=user_id,
                 request_message_id=message_id,
             )
+            turn_box["claim_status"] = claim.status
+            turn = claim.turn
             if turn is None:
                 return None
             ref = ref_from_turn(turn)
             turn_box["ref"] = ref
+            register_live_turn(ref.id)
             return ref
 
         async def _resume_turn(ref: TurnRef) -> bool:
@@ -404,6 +444,7 @@ class OrchestrationCoordinator:
                 # A paused Turn was missing (an older turn or a test double);
                 # the new record is already running, so only link the reply.
                 await alink_message(ref.id, message_id)
+                register_live_turn(ref.id)
                 return True
             moved = await atransition(
                 ref.id, ref.version, "running",
@@ -414,6 +455,7 @@ class OrchestrationCoordinator:
                 return False
             ref = TurnRef(id=ref.id, version=ref.version + 1, state="running")
             turn_box["ref"] = ref
+            register_live_turn(ref.id)
             await alink_message(ref.id, message_id)
             return True
 
@@ -435,13 +477,18 @@ class OrchestrationCoordinator:
                     if current is not None and current.state == to_state:
                         turn_box["ref"] = ref_from_turn(current)
                         turn_box["settled"] = True
+                        unregister_live_turn(ref.id)
                         return True
+                # The write was lost: another writer owns or ended this row, so
+                # this process must stop renewing it.
+                unregister_live_turn(ref.id)
                 return False
             turn_box["ref"] = TurnRef(
                 id=ref.id, version=ref.version + 1, state=to_state,
             )
             if to_state in TERMINAL_STATES or to_state == "paused":
                 turn_box["settled"] = True
+                unregister_live_turn(ref.id)
             return True
 
         async def _cancel_other_turn(turn, reason: str) -> None:
@@ -626,34 +673,6 @@ class OrchestrationCoordinator:
             user_preferences["_shell_autopilot"] = False
         # One read per turn: the reset and pause checks below share this state.
         loop_state = None
-        if is_reset_command(query):
-            paused_turn = await aget_paused_turn(room_id, user_id)
-            if paused_turn is not None:
-                await _cancel_other_turn(paused_turn, "reset")
-            await _start_turn()
-            await clear_task_state(adaptive_context)
-            await clear_result_sets(adaptive_context)
-            await clear_memory(adaptive_context)
-            # A reset is not consent: nothing pending may survive it for a later "yes".
-            await dismiss_pending_confirmation(room_id, user_id)
-            record_event(
-                "context_reset",
-                {
-                    "user_id": user_id,
-                    "room_id": room_id,
-                    "turn_id": _turn_id(),
-                },
-            )
-            await broadcast_chunk("Okay, starting fresh. What would you like to do?", harness=True)
-            await emit_progress("done", "completed", "Context reset.")
-            await _finish_turn("finished")
-            return OrchestrationResult(
-                full_response="".join(stream_state["full_response"]),
-                persist=False,
-                turn_id=_turn_id(),
-                turn_version=turn_box["ref"].version if turn_box.get("ref") else 0,
-                turn_state=turn_box["ref"].state if turn_box.get("ref") else "",
-            )
 
         def _log_telemetry(event_type, payload=None):
             try:
@@ -831,6 +850,7 @@ class OrchestrationCoordinator:
                 "preferences": user_preferences,
                 "refresh_shell_autonomy": _refresh_shell_autonomy,
                 "turn_id": _turn_id(),
+                "turn_live": lambda: turn_live(_turn_id()) if _turn_id() else True,
             }
             if extra:
                 context.update(extra)
@@ -946,64 +966,149 @@ class OrchestrationCoordinator:
             elif explicit_disarm:
                 await broadcast_chunk("Autopilot was not armed for this room.", harness=True)
 
+        deferred_directive = None
+        immediate_directive = bool(explicit_disarm)
+
         # Host grants for the sandboxed shell's egress proxy: exact replies only.
+        # Revoking a host only reduces permission, so it runs now. Allowing one
+        # acts, so it waits for a successful claim (#216b-1, R1).
         from orchestration.shell.chat_intents import host_grant_request
         host_request = host_grant_request(query)
         if host_request:
-            from orchestration.shell import host_grants as host_grants_mod
-            from orchestration.shell.egress import proxy_enabled
-
             verb, raw_host = host_request
-            try:
-                if verb == "allow":
-                    granted = await sync_to_async(host_grants_mod.grant)(user_id, room_id, raw_host)
-                    if granted:
-                        reply = (
-                            f"Approved `{granted}` for this room's sandboxed shell. It expires on its "
-                            f"own; reply **revoke host {granted}** to remove it sooner."
-                        )
-                        if not proxy_enabled():
-                            reply += " The egress proxy is off on this install, so it has no effect yet."
-                    else:
-                        why = await sync_to_async(host_grants_mod.denial_reason)(user_id, room_id, raw_host)
-                        reply = "I couldn't approve that host. " + (why or "Nothing was changed.")
-                else:
-                    revoked = await sync_to_async(host_grants_mod.revoke)(user_id, room_id, raw_host)
-                    reply = "Host approval revoked." if revoked else "That host was not approved for this room."
-            except Exception as exc:
-                logger.warning("Host grant request failed: %s", exc)
-                reply = "I couldn't change the host approvals just now. Nothing was changed."
-            await broadcast_chunk(reply, harness=True)
+            if verb == "allow":
+                deferred_directive = ("allow_host", raw_host)
+            else:
+                from orchestration.shell import host_grants as host_grants_mod
 
-        handled_directive = explicit_disarm or bool(host_request)
+                try:
+                    revoked = await sync_to_async(host_grants_mod.revoke)(
+                        user_id, room_id, raw_host,
+                    )
+                    reply = (
+                        "Host approval revoked."
+                        if revoked else "That host was not approved for this room."
+                    )
+                except Exception as exc:
+                    logger.warning("Host revoke request failed: %s", exc)
+                    reply = (
+                        "I couldn't change the host approvals just now. "
+                        "Nothing was changed."
+                    )
+                await broadcast_chunk(reply, harness=True)
+                immediate_directive = True
+
+        handled_directive = immediate_directive or bool(host_request)
+        if not handled_directive and is_reset_command(query):
+            # Reset clears memory, so it is an acting directive: it waits for
+            # ownership and never runs on BUSY_LIVE (#216b-1, item 8).
+            deferred_directive = ("reset", None)
+            handled_directive = True
         if not handled_directive and is_dismiss_suggestions_command(query):
-            last_reason_key = f"proactive:last_reason:{room_id}:{user_id}"
-            dismissed_key = f"proactive:dismissed:{room_id}:{user_id}"
-            last_reason = cache.get(last_reason_key)
-            if last_reason:
-                dismissed = cache.get(dismissed_key) or []
-                if last_reason not in dismissed:
-                    dismissed.append(last_reason)
-                    cache.set(dismissed_key, dismissed, timeout=60 * 60 * 24 * 14)
-            await broadcast_chunk("Got it. I will stop showing that kind of suggestion here.", harness=True)
+            deferred_directive = ("dismiss", None)
             handled_directive = True
         if not handled_directive and is_receipts_command(query):
-            receipts = await fetch_recent_receipts(
-                user_id=user_id,
-                room_id=room_id,
-                limit=3,
-            )
-            await broadcast_chunk(format_receipt_list(receipts), harness=True)
+            deferred_directive = ("receipts", None)
             handled_directive = True
         if not handled_directive and is_undo_command(query):
-            undo_result = await undo_last_action(
-                user_id=user_id,
-                room_id=room_id,
-            )
-            await broadcast_chunk(undo_result.get("message") or "Okay.", harness=True)
+            deferred_directive = ("undo", None)
             handled_directive = True
 
-        pending_handled = handled_directive
+        async def _run_deferred_directive() -> bool:
+            nonlocal deferred_directive
+            action = deferred_directive
+            deferred_directive = None
+            if action is None:
+                return False
+            kind, value = action
+            if kind == "reset":
+                paused = await aget_paused_turn(room_id, user_id)
+                if paused is not None:
+                    await _cancel_other_turn(paused, "reset")
+                await clear_task_state(adaptive_context)
+                await clear_result_sets(adaptive_context)
+                await clear_memory(adaptive_context)
+                # A reset is not consent: nothing pending may survive it for a
+                # later "yes".
+                await dismiss_pending_confirmation(room_id, user_id)
+                record_event(
+                    "context_reset",
+                    {
+                        "user_id": user_id,
+                        "room_id": room_id,
+                        "turn_id": _turn_id(),
+                    },
+                )
+                await broadcast_chunk(
+                    "Okay, starting fresh. What would you like to do?",
+                    harness=True,
+                )
+                return True
+            if kind == "allow_host":
+                from orchestration.shell import host_grants as host_grants_mod
+                from orchestration.shell.egress import proxy_enabled
+
+                try:
+                    granted = await sync_to_async(host_grants_mod.grant)(
+                        user_id, room_id, value,
+                    )
+                    if granted:
+                        reply = (
+                            f"Approved `{granted}` for this room's sandboxed shell. "
+                            f"It expires on its own; reply **revoke host {granted}** "
+                            "to remove it sooner."
+                        )
+                        if not proxy_enabled():
+                            reply += (
+                                " The egress proxy is off on this install, so it "
+                                "has no effect yet."
+                            )
+                    else:
+                        why = await sync_to_async(host_grants_mod.denial_reason)(
+                            user_id, room_id, value,
+                        )
+                        reply = "I couldn't approve that host. " + (
+                            why or "Nothing was changed."
+                        )
+                except Exception as exc:
+                    logger.warning("Host grant request failed: %s", exc)
+                    reply = (
+                        "I couldn't change the host approvals just now. "
+                        "Nothing was changed."
+                    )
+                await broadcast_chunk(reply, harness=True)
+            elif kind == "dismiss":
+                last_reason_key = f"proactive:last_reason:{room_id}:{user_id}"
+                dismissed_key = f"proactive:dismissed:{room_id}:{user_id}"
+                last_reason = cache.get(last_reason_key)
+                if last_reason:
+                    dismissed = cache.get(dismissed_key) or []
+                    if last_reason not in dismissed:
+                        dismissed.append(last_reason)
+                        cache.set(dismissed_key, dismissed, timeout=60 * 60 * 24 * 14)
+                await broadcast_chunk(
+                    "Got it. I will stop showing that kind of suggestion here.",
+                    harness=True,
+                )
+            elif kind == "receipts":
+                receipts = await fetch_recent_receipts(
+                    user_id=user_id,
+                    room_id=room_id,
+                    limit=3,
+                )
+                await broadcast_chunk(format_receipt_list(receipts), harness=True)
+            elif kind == "undo":
+                undo_result = await undo_last_action(
+                    user_id=user_id,
+                    room_id=room_id,
+                )
+                await broadcast_chunk(
+                    undo_result.get("message") or "Okay.", harness=True,
+                )
+            return False
+
+        pending_handled = immediate_directive
+        directive_handled = immediate_directive
 
         # Check an expired pause BEFORE claiming a new Turn: has_expired_pause
         # requires the expired Turn to still be the newest for this room.
@@ -1051,14 +1156,22 @@ class OrchestrationCoordinator:
             await alink_message(turn_box["ref"].id, message_id)
         else:
             await _start_turn()
-        if not pending_handled and turn_box["ref"] is None:
-            # Another writer owns this room's active turn (the partial unique
-            # constraint refused the claim). Fail closed instead of running
-            # the work a second time with no record.
-            await broadcast_chunk(
-                "This turn could not be recorded, so nothing was run. Please try again.",
-                harness=True,
-            )
+        if turn_box["ref"] is None and (
+            deferred_directive is not None or not pending_handled
+        ):
+            # A refused claim really ran nothing. A live owner gets a saved
+            # notice; any other refusal keeps the fail-closed line. Acting
+            # directives never run without ownership (#216b-1, items 8-9).
+            if turn_box.get("claim_status") == BUSY_LIVE:
+                await sync_to_async(_persist_turn_notice)(
+                    room_id, BUSY_TURN_NOTICE,
+                )
+            else:
+                await broadcast_chunk(
+                    "This turn could not be recorded, so nothing was run. "
+                    "Please try again.",
+                    harness=True,
+                )
             await emit_progress("done", "completed", "Turn not recorded.")
             await broadcast_chunk("", is_final=True)
             return OrchestrationResult(
@@ -1066,6 +1179,25 @@ class OrchestrationCoordinator:
                 persist=False,
                 turn_id="",
             )
+
+        if deferred_directive is not None:
+            reset_ran = await _run_deferred_directive()
+            pending_handled = True
+            directive_handled = True
+            if reset_ran:
+                await emit_progress("done", "completed", "Context reset.")
+                await _finish_turn("finished")
+                return OrchestrationResult(
+                    full_response="".join(stream_state["full_response"]),
+                    persist=False,
+                    turn_id=_turn_id(),
+                    turn_version=(
+                        turn_box["ref"].version if turn_box.get("ref") else 0
+                    ),
+                    turn_state=(
+                        turn_box["ref"].state if turn_box.get("ref") else ""
+                    ),
+                )
 
         pending_left = False
 
@@ -1238,7 +1370,7 @@ class OrchestrationCoordinator:
                 )
                 pending_left = True
 
-        if handled_directive and (pending_confirmation or pending_budget):
+        if directive_handled and (pending_confirmation or pending_budget):
             pending_left = True
 
         if not pending_handled and not pending_confirmation and not pending_budget:
@@ -1326,6 +1458,9 @@ class OrchestrationCoordinator:
         """
         if not result.turn_id or result.turn_state != "committing":
             return False
-        return await afinalize_turn(
-            result.turn_id, result.turn_version, reply_saved=reply_saved,
-        )
+        try:
+            return await afinalize_turn(
+                result.turn_id, result.turn_version, reply_saved=reply_saved,
+            )
+        finally:
+            unregister_live_turn(result.turn_id)

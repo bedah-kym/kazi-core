@@ -114,9 +114,10 @@ class _DurableTurnCoordinator:
         self.claims = 0
 
     async def handle_message(self, *, query, user_id, room_id, message_id, **_kwargs):
-        turn = await aclaim_turn(
+        claim = await aclaim_turn(
             room_id=room_id, user_id=user_id, request_message_id=message_id,
         )
+        turn = claim.turn
         if turn is None:
             return OrchestrationResult(full_response="", persist=False)
         self.claims += 1

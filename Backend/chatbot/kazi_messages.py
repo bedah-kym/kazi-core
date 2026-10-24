@@ -35,12 +35,14 @@ ORIGIN_REMINDER = "reminder"
 ORIGIN_NUDGE = "nudge"
 ORIGIN_ADMIN_ACK = "admin_ack"
 ORIGIN_WELCOME = "welcome"
+ORIGIN_TURN_NOTICE = "turn_notice"
 ORIGINS = frozenset({
     ORIGIN_TURN,
     ORIGIN_REMINDER,
     ORIGIN_NUDGE,
     ORIGIN_ADMIN_ACK,
     ORIGIN_WELCOME,
+    ORIGIN_TURN_NOTICE,
 })
 
 _KAZI_DEFAULTS = {

@@ -1,0 +1,315 @@
+"""Turn ownership leases and the one heartbeat per process (#216b-1).
+
+A worker claims a Turn by writing its process owner id and a database-clock
+lease. The heartbeat renews only the Turn ids this process still holds in
+memory, so a leaked or hung row lapses instead of being kept alive forever.
+The owner also fences itself before the lease can lapse, which stops it from
+dispatching more work or touching a newer pause.
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import socket
+import threading
+import time
+import uuid
+from datetime import timedelta
+
+from asgiref.sync import sync_to_async
+from django.conf import settings
+from django.db.models.functions import Now
+
+from orchestration.models import Turn
+
+logger = logging.getLogger(__name__)
+
+# Mirrors orchestration.agent_loop.HARD_TURN_TIMEOUT_SECONDS. It is imported
+# lazily at the one place that needs it so this module has no import cycle.
+HARD_TURN_TIMEOUT_FALLBACK_SECONDS = 1800
+HARD_TURN_MARGIN_SECONDS = 60
+
+PROCESS_OWNER_ID = (
+    f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex}"
+)[:128]
+
+# Turn id -> the monotonic time this process registered its current segment.
+_LIVE_TURNS: dict[str, float] = {}
+_FENCED_TURNS: set[str] = set()
+_REGISTRY_LOCK = threading.Lock()
+# Turn id -> the monotonic time of its last successful renewal. It is per turn
+# so one turn's failing beats can never reset another turn's fence clock.
+_LAST_RENEWAL: dict[str, float] = {}
+_HEARTBEAT_TASK: asyncio.Task | None = None
+_MONOTONIC = time.monotonic
+
+DEFAULT_LEASE_SECONDS = 90
+DEFAULT_HEARTBEAT_SECONDS = 30
+DEFAULT_FENCE_MARGIN_SECONDS = 30
+_WARNED_LEASE_CONFIGS: set[tuple[int, int, int]] = set()
+_LEASE_CONFIG_LOCK = threading.Lock()
+
+
+def _int_setting(name: str, default: int) -> int:
+    try:
+        value = int(getattr(settings, name, default))
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+def _lease_settings() -> tuple[int, int, int]:
+    """Read the lease trio together and fall back to a safe default set.
+
+    A heartbeat that is not shorter than ``lease - margin`` (or a margin that
+    is at least the lease) fences every turn between beats, so the three
+    settings are only meaningful as one combination.
+    """
+    lease = _int_setting("TURN_LEASE_SECONDS", DEFAULT_LEASE_SECONDS)
+    heartbeat = _int_setting("TURN_HEARTBEAT_SECONDS", DEFAULT_HEARTBEAT_SECONDS)
+    raw_margin = getattr(
+        settings, "TURN_LEASE_FENCE_MARGIN_SECONDS", DEFAULT_FENCE_MARGIN_SECONDS,
+    )
+    try:
+        margin = int(raw_margin)
+    except (TypeError, ValueError):
+        margin = -1
+    if margin >= 0 and 0 < heartbeat < lease - margin:
+        return lease, heartbeat, margin
+    config = (lease, heartbeat, margin)
+    with _LEASE_CONFIG_LOCK:
+        first = config not in _WARNED_LEASE_CONFIGS
+        _WARNED_LEASE_CONFIGS.add(config)
+    if first:
+        logger.warning(
+            "Invalid turn lease settings (lease=%s, heartbeat=%s, margin=%s); "
+            "using the defaults lease=%s, heartbeat=%s, margin=%s",
+            lease, heartbeat, margin,
+            DEFAULT_LEASE_SECONDS, DEFAULT_HEARTBEAT_SECONDS,
+            DEFAULT_FENCE_MARGIN_SECONDS,
+        )
+    return (
+        DEFAULT_LEASE_SECONDS,
+        DEFAULT_HEARTBEAT_SECONDS,
+        DEFAULT_FENCE_MARGIN_SECONDS,
+    )
+
+
+def lease_seconds() -> int:
+    return _lease_settings()[0]
+
+
+def heartbeat_seconds() -> int:
+    return _lease_settings()[1]
+
+
+def fence_margin_seconds() -> int:
+    return _lease_settings()[2]
+
+
+def shutdown_grace_seconds() -> int:
+    return _int_setting("TURN_SHUTDOWN_GRACE_SECONDS", 20)
+
+
+def hard_timeout_seconds() -> int:
+    try:
+        from orchestration.agent_loop import HARD_TURN_TIMEOUT_SECONDS
+
+        return int(HARD_TURN_TIMEOUT_SECONDS)
+    except Exception:
+        return HARD_TURN_TIMEOUT_FALLBACK_SECONDS
+
+
+def lease_expiry():
+    """DB ``Now()`` plus one lease; never the application host's clock."""
+    lease, _heartbeat, _margin = _lease_settings()
+    return Now() + timedelta(seconds=lease)
+
+
+def register_live_turn(turn_id) -> None:
+    """Add this process's Turn to the heartbeat registry and start the beat."""
+    tid = str(turn_id or "")
+    if not tid:
+        return
+    with _REGISTRY_LOCK:
+        now = _MONOTONIC()
+        # A fresh segment starts a fresh fence clock for this turn only. A
+        # resumed turn therefore is not capped from its first start (H1).
+        _LIVE_TURNS[tid] = now
+        _FENCED_TURNS.discard(tid)
+        _LAST_RENEWAL[tid] = now
+    ensure_heartbeat()
+
+
+def unregister_live_turn(turn_id) -> None:
+    tid = str(turn_id or "")
+    if not tid:
+        return
+    with _REGISTRY_LOCK:
+        _LIVE_TURNS.pop(tid, None)
+        _FENCED_TURNS.discard(tid)
+        _LAST_RENEWAL.pop(tid, None)
+
+
+def live_turn_ids() -> list[str]:
+    with _REGISTRY_LOCK:
+        return list(_LIVE_TURNS)
+
+
+def _renew_one(turn_id: str, *, monotonic_now: float) -> bool:
+    """Renew one registry Turn, never past this segment's hard timeout.
+
+    The cap is measured from when this process registered the segment, never
+    from the turn's first ``started_at``. A resumed turn gets a fresh segment,
+    so a long human pause cannot starve its heartbeat (H1).
+    """
+    hard = hard_timeout_seconds()
+    with _REGISTRY_LOCK:
+        segment_started = _LIVE_TURNS.get(turn_id)
+    if segment_started is None:
+        return False
+    if monotonic_now - segment_started > hard + HARD_TURN_MARGIN_SECONDS:
+        return False
+    try:
+        updated = (
+            Turn.objects.filter(
+                pk=turn_id,
+                state__in=("running", "committing"),
+                # A row another worker now owns is not this process's to renew;
+                # the owner fences itself instead of stealing it back (item 5).
+                owner_id=PROCESS_OWNER_ID,
+            ).update(
+                owner_id=PROCESS_OWNER_ID,
+                lease_expires_at=lease_expiry(),
+            )
+        )
+    except (ValueError, TypeError):
+        return False
+    return updated == 1
+
+
+def beat_once(*, monotonic_now: float | None = None) -> int:
+    """Renew every registered live Turn once and record the fence state.
+
+    A Turn that is no longer active is dropped from the registry (it ended or
+    paused). An active Turn that could not be renewed is fenced: the owner must
+    stop before the lease lapses.
+    """
+    snapshot = live_turn_ids()
+    if not snapshot:
+        return 0
+    now = _MONOTONIC() if monotonic_now is None else monotonic_now
+    renewed = 0
+    for turn_id in snapshot:
+        if _renew_one(turn_id, monotonic_now=now):
+            with _REGISTRY_LOCK:
+                # A concurrent unregister wins: never re-add its clock.
+                if turn_id in _LIVE_TURNS:
+                    _LAST_RENEWAL[turn_id] = now
+            renewed += 1
+            continue
+        active = Turn.objects.filter(
+            pk=turn_id, state__in=("running", "committing"),
+        ).exists()
+        if active:
+            with _REGISTRY_LOCK:
+                _FENCED_TURNS.add(turn_id)
+        else:
+            with _REGISTRY_LOCK:
+                _LIVE_TURNS.pop(turn_id, None)
+                _FENCED_TURNS.discard(turn_id)
+                _LAST_RENEWAL.pop(turn_id, None)
+    return renewed
+
+
+def _beat_and_close() -> int:
+    """Run one beat and close this thread's DB connection (E2, E13)."""
+    try:
+        return beat_once()
+    finally:
+        try:
+            from django.db import connection
+
+            connection.close()
+        except Exception:
+            pass
+
+
+def turn_live(turn_id) -> bool:
+    """Whether this process may still act for ``turn_id``.
+
+    Fail closed: an unregistered, fenced, or lapsed owner is not live.
+    """
+    tid = str(turn_id or "")
+    if not tid:
+        return False
+    with _REGISTRY_LOCK:
+        if tid not in _LIVE_TURNS:
+            return False
+        if tid in _FENCED_TURNS:
+            return False
+        last = _LAST_RENEWAL.get(tid)
+    if last is None:
+        return False
+    lease, _heartbeat, margin = _lease_settings()
+    budget = max(1, lease - margin)
+    return (_MONOTONIC() - last) <= budget
+
+
+async def _heartbeat_loop() -> None:
+    _lease, heartbeat, _margin = _lease_settings()
+    interval = max(1, heartbeat)
+    while True:
+        await asyncio.sleep(interval)
+        if not live_turn_ids():
+            continue
+        try:
+            await sync_to_async(_beat_and_close, thread_sensitive=False)()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("Turn heartbeat beat failed", exc_info=True)
+
+
+def ensure_heartbeat() -> asyncio.Task | None:
+    """Start the one heartbeat task for the running event loop, if needed."""
+    global _HEARTBEAT_TASK
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+    current = _HEARTBEAT_TASK
+    if current is not None and not current.done() and current.get_loop() is loop:
+        return current
+    _HEARTBEAT_TASK = loop.create_task(
+        _heartbeat_loop(), name="kazi-turn-heartbeat",
+    )
+    return _HEARTBEAT_TASK
+
+
+async def stop_heartbeat() -> None:
+    global _HEARTBEAT_TASK
+    task = _HEARTBEAT_TASK
+    _HEARTBEAT_TASK = None
+    if task is None or task.done():
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
+async def wait_for_idle(grace_seconds: int | None = None) -> bool:
+    """Wait for this process's live turns to finish, bounded by the grace.
+
+    Returns True when the registry emptied, False on timeout. The reaper is the
+    backstop for anything still running after the grace.
+    """
+    grace = shutdown_grace_seconds() if grace_seconds is None else grace_seconds
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max(0, grace)
+    while live_turn_ids() and loop.time() < deadline:
+        await asyncio.sleep(0.1)
+    return not live_turn_ids()

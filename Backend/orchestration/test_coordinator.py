@@ -98,6 +98,7 @@ class OrchestrationCoordinatorTests(SimpleTestCase):
         with (
             patch("orchestration.coordinator.load_memory_summary", new_callable=AsyncMock) as mem,
             patch("orchestration.coordinator.get_user_preferences", side_effect=_empty_preferences),
+            patch("orchestration.coordinator.has_pending_agent_state", new_callable=AsyncMock) as pending,
             patch("orchestration.coordinator.is_reset_command", return_value=True),
             patch("orchestration.coordinator.dismiss_pending_confirmation", new_callable=AsyncMock),
             patch("orchestration.coordinator.clear_task_state", new_callable=AsyncMock),
@@ -107,6 +108,7 @@ class OrchestrationCoordinatorTests(SimpleTestCase):
             patch("orchestration.coordinator.record_event"),
         ):
             mem.return_value = None
+            pending.return_value = False
 
             send_chunk = AsyncMock()
             result = self._handle("reset", send_chunk=send_chunk)

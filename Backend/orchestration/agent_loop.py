@@ -23,15 +23,20 @@ from django.utils import timezone
 
 from orchestration.agent_prompts import (
     NO_SEARCH_TOOL_NOTE,
-    build_confirmation_prompt,
+    build_confirmation_prompt_many,
     build_system_prompt,
 )
 from orchestration.llm_client import TokenQuotaExceeded, _humanize_seconds, get_llm_client
 from orchestration.memory_state import update_memory_state_batch
 from orchestration.model_catalog import find_model, parse_model_id, provider_configured
-from orchestration.security_policy import redact_sensitive_text, sanitize_parameters
+from orchestration.security_policy import (
+    RESTRICTED_PARAM_KEYS,
+    redact_sensitive_text,
+    sanitize_parameters,
+)
 from orchestration.telemetry import record_event
 from orchestration.tool_executor import execute_tool, get_tool_risk_info, preview_tool
+from orchestration.tool_record import tool_record_input
 from orchestration.tool_schemas import get_tool_definitions
 from orchestration.user_preferences import enforce_agent_caps
 
@@ -75,6 +80,14 @@ CONFIRMATION_STATE_TTL = 600  # 10 minutes
 AGENT_STATE_KEY = "orchestration:agent_state:{room_id}:{user_id}"
 AGENT_LOOP_APPROVAL_KIND = "agent_loop"
 
+
+def _pause_ttl_seconds() -> int:
+    """One clock for every pause (D7)."""
+    from orchestration.turns import pause_ttl_seconds
+
+    return pause_ttl_seconds()
+
+
 # Web search rate limits
 DAILY_SEARCH_LIMIT = 10
 MAX_SEARCHES_PER_REQUEST = 5
@@ -103,7 +116,7 @@ PERSONA_LOOKUP_DENIED_REASON = (
 @dataclass
 class AgentEvent:
     """A single event yielded by the agent loop to the consumer."""
-    kind: str  # "text", "tool_start", "tool_result", "confirmation", "error", "done"
+    kind: str  # "text", "harness", "tool_start", "tool_result", "confirmation", "error", "done"
     data: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -120,6 +133,17 @@ class LoopState:
     paused_for_confirmation: bool = False
     pending_tool: Optional[Dict[str, Any]] = None
     pending_tier: Optional[str] = None
+    # D9: every gated call in one model step is held and resolved together.
+    pending_tools: List[Dict[str, Any]] = field(default_factory=list)
+    pending_tiers: List[Optional[str]] = field(default_factory=list)
+    # Results from the same model step that were not gated. They are kept with
+    # the pause so resume/decline/expiry emit one paired user message.
+    pending_step_results: List[Dict[str, Any]] = field(default_factory=list)
+    # Hashes of the exact arguments shown, kept only in the encrypted state.
+    pending_args_hashes: Dict[str, str] = field(default_factory=dict)
+    # Calls already dispatched before a crash; they are never retried (F8).
+    dispatched_calls: List[str] = field(default_factory=list)
+    approval_short_id: str = ""
     budget_warning_sent: bool = False
     # T-F3: the single work-token bound for this turn, the baseline total input
     # of the previous call (so only newly-read input counts), how the turn
@@ -136,6 +160,13 @@ class LoopState:
     # search) enters context. Tainted runs escalate external-write and
     # credential-scoped actions to a durable approval one tier up.
     tainted: bool = False
+    # P3-3 time accounting: active_seconds is the sum of the segments the turn
+    # actually ran; wall_started_at is the epoch when the turn began. A human
+    # wait is wall time, never active time, so the hard backstop cannot fire
+    # the moment a long-paused turn resumes.
+    active_seconds: float = 0.0
+    wall_started_at: float = 0.0
+    segment_started_monotonic: float = 0.0
 
 
 # --------------------------------------------------------------------------- #
@@ -146,14 +177,9 @@ def _state_key(room_id: int, user_id: int) -> str:
     return AGENT_STATE_KEY.format(room_id=room_id, user_id=user_id)
 
 
-def save_loop_state(room_id: int, user_id: int, state: LoopState, ttl: Optional[int] = None) -> None:
-    """Persist the loop state to Redis so it survives a confirmation pause.
-
-    ``ttl`` overrides the default window. A quota pause uses it to outlive the
-    wait until enough of the hour rolls out, so the paused work can resume
-    (T-F3b).
-    """
-    serialisable = {
+def loop_state_payload(state: LoopState) -> Dict[str, Any]:
+    """The JSON body of a paused loop state (encrypted before it is stored)."""
+    return {
         "messages": state.messages,
         "iteration": state.iteration,
         "tool_call_count": state.tool_call_count,
@@ -162,6 +188,12 @@ def save_loop_state(room_id: int, user_id: int, state: LoopState, ttl: Optional[
         "retry_counts": state.retry_counts,
         "pending_tool": state.pending_tool,
         "pending_tier": state.pending_tier,
+        "pending_tools": state.pending_tools,
+        "pending_tiers": state.pending_tiers,
+        "pending_step_results": state.pending_step_results,
+        "pending_args_hashes": state.pending_args_hashes,
+        "dispatched_calls": state.dispatched_calls,
+        "approval_short_id": state.approval_short_id,
         "budget_warning_sent": state.budget_warning_sent,
         "tainted": state.tainted,
         "token_budget": state.token_budget,
@@ -170,23 +202,12 @@ def save_loop_state(room_id: int, user_id: int, state: LoopState, ttl: Optional[
         "awaiting_budget": state.awaiting_budget,
         "awaiting_quota": state.awaiting_quota,
         "budget_extensions": state.budget_extensions,
+        "active_seconds": state.active_seconds,
+        "wall_started_at": state.wall_started_at,
     }
-    cache.set(
-        _state_key(room_id, user_id),
-        json.dumps(serialisable, default=str),
-        ttl or CONFIRMATION_STATE_TTL,
-    )
 
 
-def load_loop_state(room_id: int, user_id: int) -> Optional[LoopState]:
-    """Load a previously paused loop state from Redis."""
-    raw = cache.get(_state_key(room_id, user_id))
-    if not raw:
-        return None
-    try:
-        data = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        return None
+def loop_state_from_payload(data: Dict[str, Any]) -> LoopState:
     state = LoopState(
         messages=data.get("messages", []),
         iteration=data.get("iteration", 0),
@@ -196,6 +217,12 @@ def load_loop_state(room_id: int, user_id: int) -> Optional[LoopState]:
         retry_counts=data.get("retry_counts", {}),
         pending_tool=data.get("pending_tool"),
         pending_tier=data.get("pending_tier"),
+        pending_tools=list(data.get("pending_tools") or []),
+        pending_tiers=list(data.get("pending_tiers") or []),
+        pending_step_results=list(data.get("pending_step_results") or []),
+        pending_args_hashes=dict(data.get("pending_args_hashes") or {}),
+        dispatched_calls=list(data.get("dispatched_calls") or []),
+        approval_short_id=str(data.get("approval_short_id") or ""),
         budget_warning_sent=data.get("budget_warning_sent", False),
         tainted=bool(data.get("tainted", False)),
         token_budget=data.get("token_budget", 0),
@@ -204,8 +231,39 @@ def load_loop_state(room_id: int, user_id: int) -> Optional[LoopState]:
         awaiting_budget=bool(data.get("awaiting_budget", False)),
         awaiting_quota=bool(data.get("awaiting_quota", False)),
         budget_extensions=data.get("budget_extensions", 0),
+        active_seconds=float(data.get("active_seconds") or 0.0),
+        wall_started_at=float(data.get("wall_started_at") or 0.0),
     )
+    if not state.pending_tools and state.pending_tool:
+        state.pending_tools = [state.pending_tool]
+        state.pending_tiers = [state.pending_tier]
+    state.segment_started_monotonic = time.monotonic()
     return state
+
+
+def save_loop_state(room_id: int, user_id: int, state: LoopState, ttl: Optional[int] = None) -> None:
+    """Legacy cache persistence, used only when a turn has no durable record.
+
+    A production pause is stored on the Turn; this stays for callers and tests
+    that run the loop without a Turn.
+    """
+    cache.set(
+        _state_key(room_id, user_id),
+        json.dumps(loop_state_payload(state), default=str),
+        ttl or CONFIRMATION_STATE_TTL,
+    )
+
+
+def load_loop_state(room_id: int, user_id: int) -> Optional[LoopState]:
+    """Legacy cache load, used only when no paused Turn exists."""
+    raw = cache.get(_state_key(room_id, user_id))
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return loop_state_from_payload(data)
 
 
 def clear_loop_state(room_id: int, user_id: int) -> None:
@@ -582,7 +640,7 @@ def _is_harness_refusal(output: Any) -> bool:
 #  Durable approval records (WorkflowApprovalRecord)                          #
 # --------------------------------------------------------------------------- #
 
-def _pending_approval_record(room_id: int, user_id: int):
+def _pending_approval_record(room_id: int, user_id: int, *, turn_id=None):
     """Return the pending, unexpired agent-loop approval row, or None.
 
     Sync-only helper — callers wrap it in ``sync_to_async``. Only
@@ -598,10 +656,115 @@ def _pending_approval_record(room_id: int, user_id: int):
         requested_by_id=user_id,
         status="pending",
     )
+    if turn_id:
+        candidates = candidates.filter(turn_id=turn_id)
     for record in candidates:
         if record.expires_at is None or record.expires_at > now:
             return record
     return None
+
+
+def _args_hash(tool_input: Any) -> str:
+    """Stable hash of the exact arguments shown when the pause was made."""
+    body = json.dumps(tool_input if isinstance(tool_input, dict) else {}, sort_keys=True, default=str)
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def _display_params(tool_input: Any) -> Dict[str, Any]:
+    """Sanitised display values only; raw input never lands in the row."""
+    if not isinstance(tool_input, dict):
+        return {}
+    return tool_record_input(tool_input)
+
+
+_RESTRICTED_SHOWN_AS = "[secret value, not sent]"
+
+
+def _approval_display_value(value: Any) -> Any:
+    """The exact input shown for approval, except restricted values.
+
+    What the user approves is what runs, so ordinary values are not redacted
+    or shortened here. A value under a restricted key is dropped before
+    dispatch, so it is shown as a visible placeholder that keeps the key.
+    """
+    if isinstance(value, dict):
+        return {
+            key: (
+                _RESTRICTED_SHOWN_AS
+                if key in RESTRICTED_PARAM_KEYS
+                else _approval_display_value(nested)
+            )
+            for key, nested in value.items()
+        }
+    if isinstance(value, list):
+        return [_approval_display_value(item) for item in value]
+    return value
+
+
+def _approval_display_params(tool_input: Any) -> Dict[str, Any]:
+    if not isinstance(tool_input, dict):
+        return {}
+    return _approval_display_value(tool_input)
+
+
+def _approval_prompt_calls(calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [
+        {
+            "name": str(call.get("name") or ""),
+            "input": _approval_display_params(call.get("input")),
+        }
+        for call in calls
+    ]
+
+
+def _approval_prompt_for_calls(
+    calls: List[Dict[str, Any]], short_id: str = "",
+) -> str:
+    if not calls:
+        return ""
+    return build_confirmation_prompt_many(
+        _approval_prompt_calls(calls), short_id=short_id,
+    )
+
+
+def _approval_prompt_for_state(state: Optional[LoopState]) -> str:
+    if state is None:
+        return ""
+    calls = list(
+        state.pending_tools
+        or ([state.pending_tool] if state.pending_tool else [])
+    )
+    return _approval_prompt_for_calls(calls, state.approval_short_id)
+
+
+def _display_calls(calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Per-call display rows for the plaintext columns (no raw arguments)."""
+    return [
+        {
+            "tool_call_id": str(call.get("id") or ""),
+            "tool": str(call.get("name") or ""),
+            "params": _display_params(call.get("input")),
+            "args_hash": _args_hash(call.get("input")),
+        }
+        for call in calls
+    ]
+
+
+def _calls_metadata(calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Clear metadata: only call ids and tool names, never arguments or hashes."""
+    return [
+        {
+            "tool_call_id": str(call.get("id") or ""),
+            "tool": str(call.get("name") or ""),
+        }
+        for call in calls
+    ]
+
+
+def _display_effects(effects: Optional[List[str]]) -> Optional[List[str]]:
+    if effects is None:
+        return None
+    return [redact_sensitive_text(str(effect)) for effect in effects]
 
 
 async def save_pending_confirmation(
@@ -610,26 +773,48 @@ async def save_pending_confirmation(
     tool: Dict[str, Any],
     confirmation_text: str,
     effects: Optional[List[str]] = None,
+    *,
+    turn_id=None,
+    calls: Optional[List[Dict[str, Any]]] = None,
+    expires_at=None,
+    short_id: str = "",
 ) -> Optional[int]:
-    """Durably persist a pending high-risk tool confirmation (DB)."""
+    """Durably persist one held batch of high-risk calls (one row per batch)."""
 
     def _create():
         from workflows.models import WorkflowApprovalRecord
 
         now = timezone.now()
-        expires_at = now + timedelta(seconds=CONFIRMATION_STATE_TTL)
+        calls_list = list(calls or [tool])
+        display_calls = _display_calls(calls_list)
+        safe_effects = _display_effects(effects)
+        expires = expires_at or (now + timedelta(seconds=CONFIRMATION_STATE_TTL))
         defaults = {
             "workflow_id": None,
             "execution_id": None,
+            "turn_id": turn_id,
             "step_id": f"agent_loop:{room_id}:{user_id}",
             "service": "",
             "action": tool.get("name", ""),
-            "approval_message": confirmation_text,
-            "sanitized_params": tool.get("input", {}),
-            "expires_at": expires_at,
+            # The row is plaintext: keep only the sanitised, redacted display
+            # of every call. Raw arguments live in the encrypted Turn state.
+            "approval_message": redact_sensitive_text(confirmation_text),
+            "sanitized_params": {
+                "calls": [
+                    {
+                        "tool_call_id": entry["tool_call_id"],
+                        "tool": entry["tool"],
+                        "params": entry["params"],
+                    }
+                    for entry in display_calls
+                ],
+            },
+            "expires_at": expires,
             "metadata": {
                 "tool_id": tool.get("id", ""),
-                "effects": effects,
+                "effects": safe_effects,
+                "calls": _calls_metadata(calls_list),
+                "short_id": short_id,
             },
         }
         record, created = WorkflowApprovalRecord.objects.get_or_create(
@@ -639,8 +824,12 @@ async def save_pending_confirmation(
             status="pending",
             defaults=defaults,
         )
-        if not created and (record.expires_at is None or record.expires_at <= now):
-            # Refresh a stale-but-unswept row so the new pause is durable.
+        if not created and (
+            record.expires_at is None
+            or record.expires_at <= now
+            or str(record.turn_id) != str(turn_id)
+        ):
+            # Refresh a stale-or-other-turn row so this pause owns the row.
             for attr_name, value in defaults.items():
                 setattr(record, attr_name, value)
             record.save(update_fields=list(defaults.keys()))
@@ -655,11 +844,13 @@ async def _resolve_pending_approval(
     status: str,
     reviewed_by_id: Optional[int] = None,
     comment: str = "",
+    *,
+    turn_id=None,
 ) -> None:
     """Move a pending agent-loop approval to a terminal status (durable)."""
 
     def _update():
-        record = _pending_approval_record(room_id, user_id)
+        record = _pending_approval_record(room_id, user_id, turn_id=turn_id)
         if record is None:
             return
         record.status = status
@@ -672,7 +863,9 @@ async def _resolve_pending_approval(
     await sync_to_async(_update)()
 
 
-def _consume_pending_approval_sync(room_id: int, user_id: int, reviewer_id: int) -> bool:
+def _consume_pending_approval_sync(
+    room_id: int, user_id: int, reviewer_id: int, turn_id=None,
+) -> bool:
     """Atomically flip the pending agent-loop approval to ``approved``.
 
     Returns True only for the caller that performed the transition, so a
@@ -680,17 +873,312 @@ def _consume_pending_approval_sync(room_id: int, user_id: int, reviewer_id: int)
     """
     from workflows.models import WorkflowApprovalRecord
 
-    updated = WorkflowApprovalRecord.objects.filter(
+    query = WorkflowApprovalRecord.objects.filter(
         kind=AGENT_LOOP_APPROVAL_KIND,
         room_id=room_id,
         requested_by_id=user_id,
         status="pending",
-    ).update(
+    )
+    if turn_id:
+        query = query.filter(turn_id=turn_id)
+    updated = query.update(
         status="approved",
         reviewed_by_id=reviewer_id,
         reviewed_at=timezone.now(),
     )
     return updated == 1
+
+
+def _pending_approval_metadata(room_id: int, user_id: int) -> Dict[str, Any]:
+    record = _pending_approval_record(room_id, user_id)
+    if record is None:
+        return {}
+    return {
+        "message": record.approval_message,
+        "short_id": str((record.metadata or {}).get("short_id") or ""),
+        "action": record.action,
+        "turn_id": str(record.turn_id) if record.turn_id else "",
+    }
+
+
+def _load_turn_state_sync(turn) -> Optional[LoopState]:
+    from orchestration import turns as turns_mod
+
+    payload = turns_mod.get_turn_paused_state(turn)
+    if payload is None:
+        return None
+    return loop_state_from_payload(payload)
+
+
+async def load_pending_state(
+    room_id: int, user_id: int, *, turn_id=None,
+) -> Optional[LoopState]:
+    """The paused Turn's decrypted state, else the legacy cache state.
+
+    ``turn_id`` reads a Turn the coordinator has already moved to ``running``.
+    A Turn that exists but cannot be decrypted returns None and the caller
+    denies the resume (fail closed).
+    """
+    from orchestration import turns as turns_mod
+
+    if turn_id:
+        turn = await turns_mod.aget_turn(turn_id)
+        if turn is None:
+            return None
+    else:
+        turn = await turns_mod.aget_paused_turn(room_id, user_id, include_expired=True)
+    if turn is not None:
+        if turn.state == "paused" and turn.pause_expires_at and turn.pause_expires_at <= timezone.now():
+            return None
+        state = await sync_to_async(_load_turn_state_sync)(turn)
+        if state is not None:
+            return state
+        # A Turn exists but has no readable state: fail closed, no cache fallback.
+        return None
+    return await sync_to_async(load_loop_state)(room_id, user_id)
+
+
+async def _load_resume_state(context: Dict[str, Any]):
+    """Load the current Turn's state; a resume always has a Turn."""
+    return await load_pending_state(
+        context.get("room_id"),
+        context.get("user_id"),
+        turn_id=context.get("turn_id"),
+    )
+
+
+async def _persist_pause_state(
+    context: Dict[str, Any],
+    state: LoopState,
+    pause_kind: str,
+    *,
+    ttl: Optional[int] = None,
+) -> bool:
+    """Persist a pause on the Turn (encrypted), or the legacy cache.
+
+    Returns False only when a Turn exists but its state could not be stored:
+    the caller must then refuse to leave a gated action pending.
+    """
+    from orchestration import turns as turns_mod
+
+    room_id = context.get("room_id")
+    user_id = context.get("user_id")
+    turn_id = context.get("turn_id")
+    state.segment_started_monotonic = time.monotonic()
+    if turn_id:
+        turn = await turns_mod.aget_turn(turn_id)
+        if turn is None:
+            return False
+        ok = await turns_mod.apause_turn(
+            str(turn.pk),
+            turn.version,
+            state_payload=loop_state_payload(state),
+            pause_kind=pause_kind,
+            ttl=ttl,
+            tainted=state.tainted,
+            budget={"token_budget": state.token_budget},
+            active_seconds=state.active_seconds,
+        )
+        return ok
+    if room_id and user_id:
+        save_loop_state(room_id, user_id, state, ttl=ttl)
+    return True
+
+
+async def _fail_turn_now(context: Dict[str, Any], end_reason: str) -> None:
+    """End a Turn that could not be recorded safely (fail closed)."""
+    turn_id = context.get("turn_id")
+    if not turn_id:
+        return
+    from orchestration import turns as turns_mod
+
+    turn = await turns_mod.aget_turn(turn_id)
+    if turn is None or turn.state not in ("queued", "running", "paused"):
+        return
+    await turns_mod.atransition(
+        str(turn.pk), turn.version, "failed",
+        from_state=turn.state, end_reason=end_reason,
+    )
+
+
+async def _refresh_dispatched_marker(context: Dict[str, Any], state: LoopState) -> bool:
+    """Persist the dispatched-call marker before the side effect starts.
+
+    The write is fenced by the Turn's version: a stale writer loses it and the
+    caller must not run the action.
+    """
+    turn_id = context.get("turn_id")
+    if not turn_id:
+        return True
+    from orchestration import turns as turns_mod
+
+    turn = await turns_mod.aget_turn(turn_id)
+    if turn is None:
+        return False
+    return await turns_mod.aupdate_paused_state(
+        turn_id, loop_state_payload(state), expected_version=turn.version,
+    )
+
+
+def _supersede_older_pause_sync(
+    context: Dict[str, Any], new_turn_id,
+) -> List[str]:
+    """End an older pause with synthetic, never-executed results (D9).
+
+    The new turn is the only running Turn; the older paused row becomes
+    ``superseded`` so there is never more than one armed action. Returns the
+    names of the older held actions when it was an approval that this new pause
+    dropped, so the caller can tell the user plainly.
+    """
+    from orchestration import turns as turns_mod
+
+    room_id = context.get("room_id")
+    user_id = context.get("user_id")
+    if not room_id or not user_id:
+        return []
+    older = turns_mod.get_paused_turn(room_id, user_id, include_expired=False)
+    if older is None or str(older.pk) == str(new_turn_id or ""):
+        return []
+    state = _load_turn_state_sync(older)
+    dropped: List[str] = []
+    if older.pause_kind == "approval" and state is not None:
+        calls = list(
+            state.pending_tools
+            or ([state.pending_tool] if state.pending_tool else [])
+        )
+        dropped = [
+            (str(call.get("name") or "action")).replace("_", " ")
+            for call in calls
+        ]
+    if state is not None:
+        _append_terminal_results(state, "superseded by a newer request")
+        turns_mod.update_paused_state(older.pk, loop_state_payload(state))
+    superseded = turns_mod.supersede_pause(older, new_turn_id)
+    if superseded:
+        # The synthetic results have been produced; a superseded pause can
+        # never be answered, so it keeps no encrypted body.
+        turns_mod.clear_paused_state(older.pk)
+    from workflows.models import WorkflowApprovalRecord
+
+    pending_rows = WorkflowApprovalRecord.objects.filter(
+        kind=AGENT_LOOP_APPROVAL_KIND,
+        room_id=room_id,
+        requested_by_id=user_id,
+        status="pending",
+    )
+    if older.pause_kind == "approval" and not dropped:
+        # The encrypted state could not be read; the row still names the action
+        # that is being dropped, so the user is never left without a name.
+        fallback_action = pending_rows.values_list("action", flat=True).first()
+        if fallback_action:
+            dropped = [str(fallback_action).replace("_", " ")]
+    pending_rows.update(
+        status="cancelled",
+        reviewed_at=timezone.now(),
+        review_comment="Superseded by a newer request.",
+    )
+    return dropped
+
+
+def _dropped_actions_note(names: List[str]) -> str:
+    labels = ", ".join(name for name in names if name) or "the earlier action"
+    return (
+        f"The earlier pending action ({labels}) was not run and has been "
+        "dropped because this request took its place."
+    )
+
+
+def _last_tool_use_ids(state: LoopState) -> List[str]:
+    """Tool_use ids in model order for the newest assistant tool step."""
+    for message in reversed(state.messages):
+        if message.get("role") != "assistant":
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        ids = [
+            str(block.get("id") or "")
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "tool_use"
+        ]
+        if ids:
+            return ids
+    return []
+
+
+def _ordered_step_results(
+    state: LoopState,
+    gated_blocks: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
+    """Build one result list in model order for the paused step.
+
+    Non-gated results were saved when the pause was made; gated results are
+    supplied now. A missing result becomes an ``is_error`` block so every
+    tool_use is answered in the same user message.
+    """
+    gated = dict(gated_blocks or {})
+    stored = {
+        str(block.get("tool_use_id") or ""): block
+        for block in state.pending_step_results
+        if isinstance(block, dict)
+    }
+    ordered_ids = _last_tool_use_ids(state)
+    if not ordered_ids:
+        ordered_ids = [
+            str(call.get("id") or "")
+            for call in (state.pending_tools or ([state.pending_tool] if state.pending_tool else []))
+        ]
+        ordered_ids.extend(
+            call_id for call_id in stored if call_id not in ordered_ids
+        )
+    blocks: List[Dict[str, Any]] = []
+    for call_id in ordered_ids:
+        block = gated.get(call_id) or stored.get(call_id)
+        if block is None:
+            block = {
+                "type": "tool_result",
+                "tool_use_id": call_id,
+                "content": "not executed: no result was recorded",
+                "is_error": True,
+            }
+        blocks.append(block)
+    state.pending_step_results = []
+    return blocks
+
+
+def _append_terminal_results(state: LoopState, reason: str) -> None:
+    """Close every held tool_use with an honest ``is_error`` result.
+
+    Only held calls are closed. A budget/quota pause has no held call, and its
+    newest tool step was already answered, so building results from the last
+    assistant message again would duplicate the tool_result blocks and leave
+    two user messages adjacent.
+    """
+    calls = list(state.pending_tools or ([state.pending_tool] if state.pending_tool else []))
+    if calls:
+        gated = {
+            str(call.get("id") or ""): {
+                "type": "tool_result",
+                "tool_use_id": str(call.get("id") or ""),
+                "content": f"not executed: {reason}",
+                "is_error": True,
+            }
+            for call in calls
+        }
+        blocks = _ordered_step_results(state, gated)
+        if blocks:
+            state.messages.append({
+                "role": "user",
+                "content": _with_budget_note(blocks, state),
+            })
+    else:
+        state.pending_step_results = []
+    state.pending_tools = []
+    state.pending_tiers = []
+    state.pending_tool = None
+    state.pending_tier = None
+    state.pending_args_hashes = {}
+    state.paused_for_confirmation = False
 
 
 # --------------------------------------------------------------------------- #
@@ -1957,6 +2445,9 @@ async def run_agent_loop(
     confirmed_tool: bool = False,
     budget_extended: bool = False,
     quota_resumed: bool = False,
+    expired_pending: bool = False,
+    pending_note: str = "",
+    nothing_pending: bool = False,
 ) -> AsyncGenerator[AgentEvent, None]:
     """
     Run the agentic loop. Yields AgentEvent objects for the consumer to handle.
@@ -2083,73 +2574,127 @@ async def run_agent_loop(
     # ------------------------------------------------------------------ #
     #  Initialise or resume loop state                                    #
     # ------------------------------------------------------------------ #
-    if resumed_state and confirmed_tool and resumed_state.pending_tool:
+    if resumed_state and confirmed_tool and (resumed_state.pending_tools or resumed_state.pending_tool):
         state = resumed_state
-        state.start_time = time.monotonic()
         state.paused_for_confirmation = False
         # A state saved before the single bound existed has no budget yet.
         state.token_budget = state.token_budget or default_budget
         # Another member may have tainted the room while this run was paused.
         state.tainted = state.tainted or await sync_to_async(_conversation_tainted)(room_id)
+        state.segment_started_monotonic = time.monotonic()
 
-        # Execute the previously paused tool — unless the room's bounds cannot
-        # be checked, in which case the confirmation cannot authorize it (C3).
-        pending = state.pending_tool
-        state.pending_tool = None
-        if persona_unavailable:
-            granted = None
-            result = {"status": "error", "message": PERSONA_LOOKUP_DENIED_REASON}
-        elif pending["name"] in _META_TOOL_NAMES:
-            # `_execute_with_timeout` only knows catalog tools; a paused
-            # meta-tool (a schedule handoff) must go through its own executor.
-            # The main path hands it the turn's taint, so a delegated run
-            # paused in a tainted turn does not resume as if it were clean.
-            meta_context = _meta_tool_context(pending["name"], context, state)
-            granted = _granted_sub_budget(meta_context)
-            result = await _execute_meta_tool(
-                pending["name"], pending["input"], meta_context,
-                _taint_preferences(preferences, state.tainted), system, tools,
-            )
-        else:
-            granted = None
-            result = await _execute_with_timeout(
-                pending["name"], pending["input"], context,
-            )
-        if pending["name"] == "delegate_task":
-            # A delegated run spent work tokens; charge them to the turn so the
-            # single bound reflects it (T-F3).
-            _apply_delegated_spend(state, result, granted)
-        if not persona_unavailable:
-            state.tool_call_count += 1
-            state.tool_call_log.append({
+        # D9: every held call runs, in model order, on the one approval. The
+        # stored tool_use input is the only thing that runs; a call already
+        # dispatched before a crash is marked outcome_unknown and never retried.
+        held = list(state.pending_tools or [state.pending_tool])
+        gated_blocks: Dict[str, Dict[str, Any]] = {}
+        for pending in held:
+            call_id = str(pending.get("id") or "")
+            if call_id and call_id in state.dispatched_calls:
+                result = {
+                    "status": "error",
+                    "outcome_unknown": True,
+                    "message": (
+                        "outcome_unknown: this call was dispatched before a "
+                        "restart, so it was not run again."
+                    ),
+                }
+            elif persona_unavailable:
+                granted = None
+                result = {"status": "error", "message": PERSONA_LOOKUP_DENIED_REASON}
+            else:
+                # Mark the call as dispatched *before* it runs. A crash after
+                # this write is never retried automatically.
+                state.dispatched_calls.append(call_id)
+                marker_ok = await _refresh_dispatched_marker(context, state)
+                if not marker_ok:
+                    state.dispatched_calls.remove(call_id)
+                    result = {
+                        "status": "error",
+                        "message": (
+                            "could not record this call as dispatched safely, "
+                            "so nothing was run."
+                        ),
+                    }
+                else:
+                    if pending["name"] in _META_TOOL_NAMES:
+                        meta_context = _meta_tool_context(pending["name"], context, state)
+                        granted = _granted_sub_budget(meta_context)
+                        result = await _execute_meta_tool(
+                            pending["name"], pending["input"], meta_context,
+                            _taint_preferences(preferences, state.tainted), system, tools,
+                        )
+                    else:
+                        granted = None
+                        result = await _execute_with_timeout(
+                            pending["name"], pending["input"], context,
+                        )
+                    if pending["name"] == "delegate_task":
+                        _apply_delegated_spend(state, result, granted)
+                    if _untrusted_source(pending["name"]):
+                        _taint_run(state, room_id)
+
+            if not persona_unavailable:
+                state.tool_call_count += 1
+                state.tool_call_log.append({
+                    "name": pending["name"],
+                    "input": pending["input"],
+                    "output": result,
+                    "iteration": state.iteration,
+                })
+                await _record_receipt(
+                    pending["name"], pending["input"], result, context, basis="human",
+                )
+
+            yield AgentEvent("tool_result", {
                 "name": pending["name"],
+                "result": result,
                 "input": pending["input"],
-                "output": result,
-                "iteration": state.iteration,
+                "shown": _sanitize_tool_result(json.dumps(result, default=str)),
             })
-            if _untrusted_source(pending["name"]):
-                _taint_run(state, room_id)
-
-        yield AgentEvent("tool_result", {
-            "name": pending["name"],
-            "result": result,
-            "input": pending["input"],
-            "shown": _sanitize_tool_result(json.dumps(result, default=str)),
-        })
-
-        # Receipt for confirmed tool
-        if not persona_unavailable:
-            await _record_receipt(pending["name"], pending["input"], result, context, basis="human")
-
-        # Append tool result to messages (with the live budget note).
-        state.messages.append({
-            "role": "user",
-            "content": _with_budget_note([{
+            gated_blocks[call_id] = {
                 "type": "tool_result",
                 "tool_use_id": pending["id"],
                 "content": _sanitize_tool_result(json.dumps(result, default=str)),
-            }], state),
+            }
+
+        state.pending_tools = []
+        state.pending_tiers = []
+        state.pending_tool = None
+        state.pending_tier = None
+        state.pending_args_hashes = {}
+        # Every call in the step is answered in one user message, in model
+        # order: non-gated results saved with the pause, then the gated ones.
+        step_blocks = _ordered_step_results(state, gated_blocks)
+        state.messages.append({
+            "role": "user",
+            "content": _with_budget_note(step_blocks, state),
         })
+
+    elif resumed_state and expired_pending:
+        # The pause expired before the reply. Nothing ran; the model sees an
+        # honest is_error result for every held call so no tool_use is unpaired.
+        state = resumed_state
+        state.paused_for_confirmation = False
+        # The late reply starts with a full base budget of headroom. An expired
+        # budget pause must not re-pause immediately after saying nothing ran.
+        state.token_budget = min(
+            _turn_token_budget(False),
+            max(
+                state.token_budget or default_budget,
+                state.tokens_used + default_budget,
+            ),
+        )
+        state.segment_started_monotonic = time.monotonic()
+        # Another member may have tainted the room while this run was paused.
+        state.tainted = state.tainted or await sync_to_async(_conversation_tainted)(room_id)
+        _append_terminal_results(state, "approval expired")
+        state.pending_tools = []
+        _append_note_to_last_user(
+            state.messages,
+            "[Harness: that pause expired before you replied. Nothing ran. Do "
+            "not claim the action happened.]",
+        )
 
     elif resumed_state and quota_resumed:
         # The hourly quota blocked the turn and has now freed (T-F3b). Continue
@@ -2157,7 +2702,7 @@ async def run_agent_loop(
         # call repeats. This is *not* a budget grant, so the turn's budget and
         # its extension count are untouched; a plain reply resumes it.
         state = resumed_state
-        state.start_time = time.monotonic()
+        state.segment_started_monotonic = time.monotonic()
         state.awaiting_budget = False
         state.awaiting_quota = False
         state.tainted = state.tainted or await sync_to_async(_conversation_tainted)(room_id)
@@ -2172,7 +2717,7 @@ async def run_agent_loop(
         # from exactly where the turn stopped: the tool log is intact, so no
         # finished call repeats. The bound grows by one base budget per grant.
         state = resumed_state
-        state.start_time = time.monotonic()
+        state.segment_started_monotonic = time.monotonic()
         state.awaiting_budget = False
         state.budget_extensions += 1
         # Grow by one base budget per grant, always keeping a full base budget
@@ -2221,6 +2766,8 @@ async def run_agent_loop(
         state = LoopState(
             messages=messages,
             start_time=time.monotonic(),
+            segment_started_monotonic=time.monotonic(),
+            wall_started_at=time.time(),
             tainted=(history_tainted or await sync_to_async(_conversation_tainted)(room_id)),
             token_budget=default_budget,
         )
@@ -2232,6 +2779,15 @@ async def run_agent_loop(
                 state.messages,
                 _harness_budget_note(state.tokens_used, state.token_budget),
             )
+        if pending_note:
+            _append_note_to_last_user(state.messages, pending_note)
+        if nothing_pending:
+            _append_note_to_last_user(
+                state.messages,
+                "[Harness: nothing was pending, so a bare yes or no approved "
+                "nothing. If you are agreeing to something the model said, say "
+                "what you mean.]",
+            )
 
     # Track seen tool calls for dedup
     seen_calls: set = set()
@@ -2240,14 +2796,23 @@ async def run_agent_loop(
 
     # Consecutive pause_turn responses. Reset by any other stop reason.
     consecutive_pauses = 0
+    turn_backed = bool(context.get("turn_id"))
+
+    def _active_elapsed() -> float:
+        return state.active_seconds + max(
+            0.0, time.monotonic() - state.segment_started_monotonic,
+        )
+
+    def _accumulate_active() -> None:
+        state.active_seconds = _active_elapsed()
+        state.segment_started_monotonic = time.monotonic()
 
     # ------------------------------------------------------------------ #
     #  Main ReAct loop                                                    #
     # ------------------------------------------------------------------ #
     while state.iteration < HARD_CAP_ITERATIONS:
-        # Wall-clock runaway backstop; a healthy turn ends on its budget first.
-        elapsed = time.monotonic() - state.start_time
-        if elapsed > HARD_TURN_TIMEOUT_SECONDS:
+        # The hard backstop runs on active time, never on a human's wait.
+        if _active_elapsed() > HARD_TURN_TIMEOUT_SECONDS:
             state.end_reason = "backstop"
             yield AgentEvent("error", {
                 "message": "I ran out of time on this request. "
@@ -2278,11 +2843,41 @@ async def run_agent_loop(
                 })
                 break
             state.awaiting_budget = True
-            if room_id and user_id:
+            _accumulate_active()
+            dropped = []
+            if turn_backed:
+                dropped = await sync_to_async(_supersede_older_pause_sync)(
+                    context, context.get("turn_id"),
+                )
+            if dropped:
+                yield AgentEvent("harness", {
+                    "text": _dropped_actions_note(dropped) + "\n\n",
+                })
+            saved = await _persist_pause_state(context, state, "budget")
+            if turn_backed and not saved:
+                # Fail closed: never tell the user to reply "more budget" when
+                # the paused work could not be recorded.
+                state.end_reason = "pause_not_recorded"
+                _append_terminal_results(state, "could not record the pause")
+                await _fail_turn_now(context, "pause_not_recorded")
+                yield AgentEvent("error", {
+                    "message": (
+                        "I couldn't save this turn's pause safely, so I stopped "
+                        "here. Send a new message to continue."
+                    ),
+                })
+                return
+            if room_id and user_id and not turn_backed:
                 save_loop_state(room_id, user_id, state)
             yield AgentEvent("error", {
                 "message": _bound_reached_note(state),
             })
+            if turn_backed:
+                yield AgentEvent("paused", {
+                    "pause_kind": "budget",
+                    "active_seconds": state.active_seconds,
+                })
+                return
             break
 
         state.iteration += 1
@@ -2324,12 +2919,40 @@ async def run_agent_loop(
             # Mark it as a quota pause, not a budget one, so a reply resumes the
             # turn without inflating its budget (T-F3b).
             state.awaiting_quota = True
-            if room_id and user_id:
+            _accumulate_active()
+            quota_ttl = _quota_pause_ttl(quota_exc.retry_after_seconds)
+            dropped = []
+            if turn_backed:
+                dropped = await sync_to_async(_supersede_older_pause_sync)(
+                    context, context.get("turn_id"),
+                )
+            if dropped:
+                yield AgentEvent("harness", {
+                    "text": _dropped_actions_note(dropped) + "\n\n",
+                })
+            saved = await _persist_pause_state(context, state, "quota", ttl=quota_ttl)
+            if turn_backed and not saved:
+                state.end_reason = "pause_not_recorded"
+                _append_terminal_results(state, "could not record the pause")
+                await _fail_turn_now(context, "pause_not_recorded")
+                yield AgentEvent("error", {
+                    "message": (
+                        "I couldn't save this turn's pause safely, so I stopped "
+                        "here. Send a new message to continue."
+                    ),
+                })
+                return
+            if room_id and user_id and not turn_backed:
                 save_loop_state(
-                    room_id, user_id, state,
-                    ttl=_quota_pause_ttl(quota_exc.retry_after_seconds),
+                    room_id, user_id, state, ttl=quota_ttl,
                 )
             yield AgentEvent("error", {"message": _quota_reached_note(state, quota_exc)})
+            if turn_backed:
+                yield AgentEvent("paused", {
+                    "pause_kind": "quota",
+                    "active_seconds": state.active_seconds,
+                })
+                return
             break
         except Exception as exc:
             logger.error("Agent loop LLM call failed: %s", exc, exc_info=True)
@@ -2440,7 +3063,28 @@ async def run_agent_loop(
                     break
                 state.awaiting_budget = True
                 state.end_reason = "asked_for_more"
-                if room_id and user_id:
+                _accumulate_active()
+                dropped = []
+                if turn_backed:
+                    dropped = await sync_to_async(_supersede_older_pause_sync)(
+                        context, context.get("turn_id"),
+                    )
+                if dropped:
+                    yield AgentEvent("harness", {
+                        "text": _dropped_actions_note(dropped) + "\n\n",
+                    })
+                saved = await _persist_pause_state(context, state, "budget")
+                if turn_backed and not saved:
+                    state.end_reason = "pause_not_recorded"
+                    await _fail_turn_now(context, "pause_not_recorded")
+                    yield AgentEvent("error", {
+                        "message": (
+                            "I couldn't save this turn's pause safely, so I "
+                            "stopped here. Send a new message to continue."
+                        ),
+                    })
+                    return
+                if room_id and user_id and not turn_backed:
                     save_loop_state(room_id, user_id, state)
                 if not text:
                     reason = next(
@@ -2462,6 +3106,12 @@ async def run_agent_loop(
                     "used": state.tokens_used,
                     "budget": state.token_budget,
                 })
+                if turn_backed and saved:
+                    yield AgentEvent("paused", {
+                        "pause_kind": "budget",
+                        "active_seconds": state.active_seconds,
+                    })
+                    return
                 break
 
             # Re-read room autonomy each iteration so a mid-run arm/revoke/expiry
@@ -2621,61 +3271,140 @@ async def run_agent_loop(
 
             # ---- Handle calls that need confirmation ------------------ #
             if pause_calls:
-                # Every pending tool_use except the first still needs a result
-                # so the model's message contract stays valid; the first one
-                # becomes the pause.
-                for tc, _tier in pause_calls[1:]:
-                    tool_result_blocks.append({
-                        "type": "tool_result",
-                        "tool_use_id": tc["id"],
-                        "content": "Skipped: another action requires confirmation first.",
-                        "is_error": True,
-                    })
-
-                # Flush all tool_result blocks before pausing
-                if tool_result_blocks:
-                    state.messages.append({
-                        "role": "user",
-                        "content": tool_result_blocks,
-                    })
-
-                # Only handle the first one; the LLM will re-call the rest after
-                tc, tier = pause_calls[0]
-                state.pending_tool = tc
-                state.pending_tier = tier
+                # D9: hold every gated call in this step. They are shown in one
+                # prompt and resolved together; no call is answered with
+                # "Skipped" here. Non-gated results are kept in the paused
+                # state and emitted in one user message on resolution.
+                held_calls = [tc for tc, _tier in pause_calls]
+                held_tiers = [tier for _tc, tier in pause_calls]
+                state.pending_tools = held_calls
+                state.pending_tiers = held_tiers
+                state.pending_tool = held_calls[0]
+                state.pending_tier = held_tiers[0]
+                state.pending_step_results = list(tool_result_blocks)
+                state.pending_args_hashes = {
+                    str(tc.get("id") or ""): _args_hash(tc.get("input"))
+                    for tc in held_calls
+                }
                 state.paused_for_confirmation = True
+                short_id = hashlib.sha256(
+                    f"{room_id}:{user_id}:{time.time()}:{len(held_calls)}".encode("utf-8")
+                ).hexdigest()[:8]
+                state.approval_short_id = short_id
 
-                confirmation_text = build_confirmation_prompt(
-                    tc["name"], tc["input"],
+                safe_calls = [
+                    {"name": tc["name"], "input": _display_params(tc["input"])}
+                    for tc in held_calls
+                ]
+                display_text = build_confirmation_prompt_many(
+                    safe_calls, short_id=short_id,
+                )
+                # The chat prompt is what the user approves, so it shows the
+                # exact stored input (restricted values as named placeholders).
+                # The plaintext row keeps the masked display.
+                confirmation_text = _approval_prompt_for_calls(
+                    held_calls, short_id,
                 )
 
                 # Dry-run effects for the approval card (never executes).
-                try:
-                    effects = await preview_tool(tc["name"], tc["input"], context)
-                except Exception as exc:
-                    logger.warning("Preview failed for %s: %s", tc["name"], exc)
-                    effects = None
+                effects = None
+                call_effects = []
+                for tc in held_calls:
+                    try:
+                        preview = await preview_tool(tc["name"], tc["input"], context)
+                    except Exception as exc:
+                        logger.warning("Preview failed for %s: %s", tc["name"], exc)
+                        preview = None
+                    call_effects.append(preview)
+                if call_effects:
+                    effects = call_effects[0]
 
-                # Persist loop state (Redis) always. A `bounded` (inline) pause
-                # is chat-scoped and writes no durable record; `destructive`
-                # (and every non-shell high-risk action) keeps the durable path.
+                _accumulate_active()
+                if turn_backed:
+                    await sync_to_async(_supersede_older_pause_sync)(
+                        context, context.get("turn_id"),
+                    )
+
+                # The durable row is written BEFORE the Turn's paused CAS, so a
+                # paused Turn can never exist without the approval it needs.
+                row_saved = True
                 if room_id and user_id:
-                    save_loop_state(room_id, user_id, state)
-                    if tier != "bounded":
+                    try:
                         await save_pending_confirmation(
-                            room_id, user_id, tc, confirmation_text, effects=effects,
+                            room_id, user_id, held_calls[0], display_text,
+                            effects=effects,
+                            turn_id=context.get("turn_id"),
+                            calls=held_calls,
+                            expires_at=(
+                                timezone.now() + timedelta(seconds=_pause_ttl_seconds())
+                            ),
+                            short_id=short_id,
                         )
+                    except Exception as exc:
+                        logger.error(
+                            "Could not save the approval row: %s",
+                            exc.__class__.__name__,
+                        )
+                        row_saved = False
+
+                if not row_saved:
+                    _append_terminal_results(state, "could not record the approval")
+                    await _fail_turn_now(context, "approval_not_recorded")
+                    yield AgentEvent("error", {
+                        "message": (
+                            "I could not record that approval safely, so I did "
+                            "not run it. Please try again."
+                        ),
+                    })
+                    return
+
+                if turn_backed:
+                    saved = await _persist_pause_state(context, state, "approval")
+                else:
+                    saved = True
+                    if room_id and user_id:
+                        save_loop_state(room_id, user_id, state)
+                if not saved:
+                    # Fail closed: an unrecorded pause must never leave a gated
+                    # action armed for a later reply.
+                    if room_id and user_id:
+                        await _resolve_pending_approval(
+                            room_id, user_id, "cancelled",
+                            comment="The pause could not be recorded.",
+                            turn_id=context.get("turn_id"),
+                        )
+                    _append_terminal_results(state, "could not record the pause")
+                    await _fail_turn_now(context, "pause_not_recorded")
+                    yield AgentEvent("error", {
+                        "message": (
+                            "I could not record that approval safely, so I did "
+                            "not run it. Please try again."
+                        ),
+                    })
+                    return
+
                 yield AgentEvent("confirmation", {
                     "message": confirmation_text,
-                    "tool_name": tc["name"],
-                    "tool_input": tc["input"],
+                    "tool_name": held_calls[0]["name"],
+                    "tool_input": held_calls[0]["input"],
+                    "calls": [
+                        {
+                            "tool_name": tc["name"],
+                            "tool_input": tc["input"],
+                            "effects": call_effects[index]
+                            if index < len(call_effects) else None,
+                        }
+                        for index, tc in enumerate(held_calls)
+                    ],
                     "effects": effects,
-                    "tier": tier,
+                    "tier": held_tiers[0],
+                    "approval_id": short_id,
                 })
-                # The durable record gets an honest pause signal instead of the
-                # loop returning silently; no user-facing frame changes.
-                yield AgentEvent("paused", {"pause_kind": "approval"})
-                # Pause the loop — consumer will resume after user confirms
+                yield AgentEvent("paused", {
+                    "pause_kind": "approval",
+                    "active_seconds": state.active_seconds,
+                })
+                # Pause the loop — the same Turn resumes after an exact approval.
                 return
 
             if tool_result_blocks:
@@ -2727,15 +3456,27 @@ async def run_agent_loop(
             break
 
     # ---- Loop finished ----------------------------------------------- #
-    # A budget pause keeps its state so the user can extend it; every other
-    # ending clears it.
-    if room_id and user_id and not state.awaiting_budget:
+    # This is a terminal ending: a Turn-backed pause returned above and kept
+    # its state. A legacy cache budget pause stays too, so it can be resumed.
+    if room_id and user_id and not (not turn_backed and state.awaiting_budget):
         clear_loop_state(room_id, user_id)
+    if turn_backed:
+        from orchestration import turns as turns_mod
+
+        try:
+            await turns_mod.aclear_paused_state(context.get("turn_id"))
+        except Exception:
+            # Cleanup must never turn a finished reply into an error.
+            pass
 
     if not state.end_reason:
         state.end_reason = "finished"
 
-    elapsed = round(time.monotonic() - state.start_time, 2)
+    _accumulate_active()
+    if state.wall_started_at:
+        elapsed = round(max(0.0, time.time() - state.wall_started_at), 2)
+    else:
+        elapsed = round(state.active_seconds, 2)
 
     # One tracker pass for the whole turn, not one per tool call. The summary
     # the next turn reads carries the entities/actions, never a success claim.
@@ -2771,6 +3512,7 @@ async def run_agent_loop(
         "end_reason": state.end_reason,
         "budget_extensions": state.budget_extensions,
         "elapsed": elapsed,
+        "active_seconds": state.active_seconds,
         "tools_used": list({e["name"] for e in state.tool_call_log}),
         "transcript": transcript,
     })
@@ -2779,6 +3521,7 @@ async def run_agent_loop(
         "iterations": state.iteration,
         "tool_calls": state.tool_call_count,
         "elapsed": elapsed,
+        "active_seconds": state.active_seconds,
         "budget": state.token_budget,
         "budget_used": state.tokens_used,
         "end_reason": state.end_reason,
@@ -2789,10 +3532,142 @@ async def run_agent_loop(
 #  Public helpers for the consumer                                            #
 # --------------------------------------------------------------------------- #
 
+_STATE_UNSET = object()
+
+
 async def has_pending_agent_state(room_id: int, user_id: int) -> bool:
-    """Check (durably) whether a high-risk action is paused for confirmation."""
+    """Whether an approval pause is waiting (Turn first, then the legacy row)."""
+    from orchestration import turns as turns_mod
+
+    turn = await turns_mod.aget_paused_turn(room_id, user_id)
+    if turn is not None and turn.pause_kind == "approval":
+        return True
     record = await sync_to_async(_pending_approval_record)(room_id, user_id)
     return record is not None
+
+
+async def has_pending_budget_state(
+    room_id: int, user_id: int, *, state=_STATE_UNSET,
+) -> bool:
+    """Whether a turn is paused waiting for the user to grant more budget."""
+    if state is _STATE_UNSET:
+        from orchestration import turns as turns_mod
+
+        turn = await turns_mod.aget_paused_turn(room_id, user_id)
+        if turn is not None:
+            return turn.pause_kind in ("budget", "quota")
+        state = await sync_to_async(load_loop_state)(room_id, user_id)
+    return bool(state and state.awaiting_budget)
+
+
+async def pending_resume_kind(
+    room_id: int, user_id: int, *, state=_STATE_UNSET,
+) -> str:
+    """Which pause is waiting for a reply: ``"quota"``, ``"budget"`` or ``""``."""
+    from orchestration import turns as turns_mod
+
+    if state is _STATE_UNSET:
+        turn = await turns_mod.aget_paused_turn(room_id, user_id)
+        if turn is not None and turn.pause_kind in ("budget", "quota"):
+            return turn.pause_kind
+        state = await sync_to_async(load_loop_state)(room_id, user_id)
+    if not state or not state.awaiting_budget:
+        return ""
+    return "quota" if (state.awaiting_quota or state.end_reason == "quota") else "budget"
+
+
+async def pending_approval_prompt(room_id: int, user_id: int) -> Dict[str, Any]:
+    """The pending prompt and its short id, read from the Turn or the row.
+
+    A Turn-backed pause rebuilds the prompt from its encrypted state, so the
+    re-shown prompt is again the exact input that will run (the plaintext row
+    only holds the masked display).
+    """
+    from orchestration import turns as turns_mod
+
+    turn = await turns_mod.aget_paused_turn(room_id, user_id)
+    if turn is not None and turn.pause_kind == "approval":
+        state = await sync_to_async(_load_turn_state_sync)(turn)
+        short_id = state.approval_short_id if state else ""
+        message = _approval_prompt_for_state(state)
+        if not message:
+            record = await sync_to_async(_pending_approval_record)(
+                room_id, user_id, turn_id=turn.pk,
+            )
+            message = record.approval_message if record else ""
+        return {"message": message, "short_id": short_id, "kind": "approval"}
+    record = await sync_to_async(_pending_approval_record)(room_id, user_id)
+    if record is not None:
+        return {
+            "message": record.approval_message,
+            "short_id": str((record.metadata or {}).get("short_id") or ""),
+            "kind": "approval",
+        }
+    return {}
+
+
+async def has_expired_pause(room_id: int, user_id: int) -> bool:
+    """Whether the most recent turn is a pause that just expired.
+
+    A newer turn means the user has moved on; a bare yes then is not a late
+    answer to an old prompt and must not hijack it.
+    """
+    from orchestration import turns as turns_mod
+    from orchestration.models import Turn
+
+    turn = await turns_mod.aget_expired_pause(room_id, user_id, within_seconds=3600)
+    if turn is None:
+        return False
+    latest = await sync_to_async(
+        lambda: Turn.objects.filter(room_id=room_id, user_id=user_id)
+        .order_by("-created_at").first()
+    )()
+    return latest is None or str(latest.pk) == str(turn.pk)
+
+
+def _expiry_text(expires_at, *, noun: str = "pause") -> str:
+    if not expires_at:
+        return f"That {noun} expired"
+    try:
+        when = timezone.localtime(expires_at).strftime("%H:%M")
+        return f"That {noun} expired at {when}"
+    except Exception:
+        return f"That {noun} expired"
+
+
+async def _claim_turn_for_resume(context: Dict[str, Any]) -> tuple:
+    """CAS the paused Turn to running; a coordinator may already have won it.
+
+    A resume without a Turn record is refused: there is no legacy cache path.
+    A ``turn_id`` that points at no Turn is also refused rather than falling
+    back to whichever Turn happens to be paused.
+    """
+    from orchestration import turns as turns_mod
+
+    turn_id = context.get("turn_id")
+    if not turn_id:
+        return None, False
+    turn = await turns_mod.aget_turn(turn_id)
+    if turn is None:
+        return None, False
+    if (
+        (context.get("room_id") is not None and str(turn.room_id) != str(context.get("room_id")))
+        or (context.get("user_id") is not None and str(turn.user_id) != str(context.get("user_id")))
+    ):
+        # A Turn id from another room/user is never a resume handle.
+        return None, False
+    if turn.state in ("running", "committing"):
+        return turn, True
+    if turn.state != "paused":
+        return turn, False
+    if turn.pause_expires_at and turn.pause_expires_at <= timezone.now():
+        await turns_mod.aexpire_pause(turn)
+        return turn, False
+    moved = await turns_mod.atransition(
+        str(turn.pk), turn.version, "running",
+        from_state="paused", pause_kind=None, pause_expires_at=None, end_reason=None,
+    )
+    return turn, moved
 
 
 async def resume_after_confirmation(
@@ -2803,61 +3678,113 @@ async def resume_after_confirmation(
     memory_summary: str = "",
     environment_block: str = "",
 ) -> AsyncGenerator[AgentEvent, None]:
-    """
-    Resume a paused agent loop after the user confirms a high-risk action.
+    """Resume a paused action only on an exact approval.
 
-    Approval is resolved durably before the pending tool executes, and the
-    loop state is reloaded from Redis. If the durable record exists but the
-    loop state was evicted, the action is NOT executed and the record is
-    rejected so it cannot be replayed.
+    The stored tool_use input is the only thing that runs, and it is re-hashed
+    against the value recorded when the pause was made. A conditional update on
+    the approval row and the Turn's ``paused -> running`` CAS together make the
+    dispatch single-consumer, including the bounded tier.
     """
     room_id = context.get("room_id")
     user_id = context.get("user_id")
 
-    record = await sync_to_async(_pending_approval_record)(room_id, user_id)
-    # Read fresh at resume time: several awaits sit between the coordinator's
-    # read and this call, and a second process may have acted on the state.
-    state = load_loop_state(room_id, user_id)
-
-    if record is None:
-        # A `bounded` (inline) pause is chat-scoped: Redis loop state only, no
-        # durable record. Resume it directly.
-        if state and state.pending_tool and state.pending_tier == "bounded":
-            clear_loop_state(room_id, user_id)
-            async for event in run_agent_loop(
-                user_message="",  # Not used on resume
-                context=context,
-                preferences=preferences,
-                context_prompt=context_prompt,
-                memory_summary=memory_summary,
-                environment_block=environment_block,
-                resumed_state=state,
-                confirmed_tool=True,
-            ):
-                yield event
-            return
+    turn, claimed = await _claim_turn_for_resume(context)
+    if not claimed:
+        expires = turn.pause_expires_at if turn is not None else None
         yield AgentEvent("error", {
-            "message": "No pending action found to confirm.",
+            "message": f"{_expiry_text(expires)}; nothing ran.",
         })
         return
 
-    if not state or not state.pending_tool:
+    # The coordinator may have done the paused -> running CAS before calling
+    # us. In that case this request owns the Turn; otherwise another writer
+    # already owns it and a missing row must not end their turn.
+    already_running = bool(turn is not None and turn.state in ("running", "committing"))
+
+    async def _deny(message: str, *, reason: str, reject_row: bool = False):
+        if reject_row and room_id and user_id:
+            await _resolve_pending_approval(
+                room_id, user_id, "rejected", comment=reason,
+                turn_id=turn.pk if turn is not None else None,
+            )
+        _append_terminal_results(state, reason)
+        if turn is not None and not already_running:
+            await _fail_turn_now(context, "approval_not_confirmed")
+        yield AgentEvent("error", {"message": message})
+
+    state = await _load_resume_state(context)
+    if state is None:
+        if turn is not None and not already_running:
+            await _fail_turn_now(context, "approval_state_lost")
         await _resolve_pending_approval(
             room_id, user_id, "rejected",
-            comment="Loop state lost before confirmation.",
+            comment="Loop state lost or unreadable before confirmation.",
         )
         yield AgentEvent("error", {
             "message": "The pending action is no longer available to confirm.",
         })
         return
 
-    # Durable approval BEFORE execution. The conditional update makes the
-    # transition single-consumer: a second concurrent confirm finds no
-    # pending row and is refused instead of executing the tool again.
+    held = list(state.pending_tools or ([state.pending_tool] if state.pending_tool else []))
+    if not held:
+        if turn is not None and not already_running:
+            await _fail_turn_now(context, "approval_no_held_call")
+        await _resolve_pending_approval(
+            room_id, user_id, "rejected", comment="No held call before confirmation.",
+        )
+        yield AgentEvent("error", {
+            "message": "The pending action is no longer available to confirm.",
+        })
+        return
+
+    # A Turn-backed resume needs the row that belongs to this same Turn.
+    record = await sync_to_async(_pending_approval_record)(
+        room_id, user_id, turn_id=turn.pk if turn is not None else None,
+    )
+    if record is None:
+        if already_running:
+            yield AgentEvent("error", {
+                "message": "That action was already confirmed or cancelled.",
+            })
+            return
+        async for event in _deny(
+            "No pending approval matches this turn, so nothing ran. Ask again "
+            "for a fresh approval.",
+            reason="no pending approval row",
+        ):
+            yield event
+        return
+
+    recorded = (record.metadata or {}).get("calls") or []
+    stored_ids = {str(c.get("tool_call_id") or "") for c in recorded}
+    held_ids = {str(call.get("id") or "") for call in held}
+    stored_hashes = dict(state.pending_args_hashes or {})
+    # An approval authorises exactly the call set and arguments that were shown.
+    hashes_valid = (
+        set(stored_hashes) == held_ids
+        and all(stored_hashes.get(call_id) for call_id in held_ids)
+        and all(
+            stored_hashes.get(str(call.get("id") or "")) == _args_hash(call.get("input"))
+            for call in held
+        )
+    )
+    if stored_ids != held_ids or not hashes_valid:
+        async for event in _deny(
+            "The stored action no longer matches what was shown, so nothing "
+            "ran. Ask again for a fresh approval.",
+            reason="stored call set or arguments changed before confirmation",
+            reject_row=True,
+        ):
+            yield event
+        return
+
     consumed = await sync_to_async(_consume_pending_approval_sync)(
         room_id, user_id, user_id,
+        turn.pk if turn is not None else None,
     )
     if not consumed:
+        if not already_running:
+            await _fail_turn_now(context, "approval_consume_failed")
         yield AgentEvent("error", {
             "message": "That action was already confirmed or cancelled.",
         })
@@ -2878,33 +3805,105 @@ async def resume_after_confirmation(
         yield event
 
 
-_STATE_UNSET = object()
+async def resume_after_expiry(
+    *,
+    context: Dict[str, Any],
+    preferences: Optional[Dict[str, Any]] = None,
+    context_prompt: str = "",
+    memory_summary: str = "",
+    environment_block: str = "",
+) -> AsyncGenerator[AgentEvent, None]:
+    """Answer a late reply honestly: the pause expired, nothing ran.
 
-
-async def has_pending_budget_state(
-    room_id: int, user_id: int, *, state=_STATE_UNSET,
-) -> bool:
-    """Whether a turn is paused waiting for the user to grant more budget."""
-    if state is _STATE_UNSET:
-        state = await sync_to_async(load_loop_state)(room_id, user_id)
-    return bool(state and state.awaiting_budget)
-
-
-async def pending_resume_kind(
-    room_id: int, user_id: int, *, state=_STATE_UNSET,
-) -> str:
-    """Which pause is waiting for a reply: ``"quota"``, ``"budget"`` or ``""``.
-
-    Both a budget stop and a quota stop keep the state with ``awaiting_budget``
-    set, so the reply handler needs to tell them apart: a quota resume must not
-    be read as a budget grant (T-F3b).
+    The model still gets one call with an ``is_error`` result for every held
+    tool_use, so history never carries an unpaired block.
     """
-    if state is _STATE_UNSET:
-        state = await sync_to_async(load_loop_state)(room_id, user_id)
-    if not state or not state.awaiting_budget:
-        return ""
-    # ``end_reason`` also covers a state saved before the flag existed.
-    return "quota" if (state.awaiting_quota or state.end_reason == "quota") else "budget"
+    from orchestration import turns as turns_mod
+
+    room_id = context.get("room_id")
+    user_id = context.get("user_id")
+    turn = await turns_mod.aget_expired_pause(room_id, user_id)
+    if turn is None:
+        yield AgentEvent("error", {
+            "message": "There is no expired pause to answer.",
+        })
+        return
+    state = await sync_to_async(_load_turn_state_sync)(turn)
+    if state is None:
+        yield AgentEvent("harness", {
+            "text": f"{_expiry_text(turn.pause_expires_at)}; nothing ran.",
+        })
+        return
+    # The expired turn is answered now; it must not trigger again.
+    if room_id and user_id:
+        await _resolve_pending_approval(
+            room_id, user_id, "timed_out",
+            comment="Approval expired before the reply.",
+            turn_id=turn.pk,
+        )
+    state.pending_tools = list(
+        state.pending_tools or ([state.pending_tool] if state.pending_tool else [])
+    )
+    noun = "approval" if turn.pause_kind == "approval" else "pause"
+    yield AgentEvent("harness", {
+        "text": f"{_expiry_text(turn.pause_expires_at, noun=noun)}; nothing ran.\n\n",
+    })
+    try:
+        async for event in run_agent_loop(
+            user_message="",
+            context=context,
+            preferences=preferences,
+            context_prompt=context_prompt,
+            memory_summary=memory_summary,
+            environment_block=environment_block,
+            resumed_state=state,
+            expired_pending=True,
+        ):
+            yield event
+    finally:
+        # The synthetic results have been produced; keep no encrypted body.
+        await turns_mod.aclear_paused_state(turn.pk)
+
+
+async def decline_after_expiry(
+    *,
+    context: Dict[str, Any],
+) -> AsyncGenerator[AgentEvent, None]:
+    """Answer a late no/cancel honestly and run nothing.
+
+    The expired pause is closed for good: its held calls get synthetic
+    ``is_error`` results so the history pairing stays valid, the pending row is
+    marked timed out, and no model call is made.
+    """
+    from orchestration import turns as turns_mod
+
+    room_id = context.get("room_id")
+    user_id = context.get("user_id")
+    turn = await turns_mod.aget_expired_pause(room_id, user_id)
+    if turn is None:
+        yield AgentEvent("error", {
+            "message": "There is no expired pause to answer.",
+        })
+        return
+    state = await sync_to_async(_load_turn_state_sync)(turn)
+    if room_id and user_id:
+        await _resolve_pending_approval(
+            room_id, user_id, "timed_out",
+            comment="Approval expired before the reply.",
+            turn_id=turn.pk,
+        )
+    if state is not None:
+        state.pending_tools = list(
+            state.pending_tools
+            or ([state.pending_tool] if state.pending_tool else [])
+        )
+        _append_terminal_results(state, "approval expired")
+    noun = "approval" if turn.pause_kind == "approval" else "pause"
+    yield AgentEvent("harness", {
+        "text": f"{_expiry_text(turn.pause_expires_at, noun=noun)}; nothing ran.\n\n",
+    })
+    # The synthetic results have been produced; keep no encrypted body.
+    await turns_mod.aclear_paused_state(turn.pk)
 
 
 async def resume_after_quota(
@@ -2915,15 +3914,17 @@ async def resume_after_quota(
     memory_summary: str = "",
     environment_block: str = "",
 ) -> AsyncGenerator[AgentEvent, None]:
-    """Continue a turn the hourly token quota stopped, from where it stopped.
-
-    The saved loop state carries the conversation and the tool log, so a call
-    that already finished is not repeated. Unlike a budget grant, this never
-    changes the turn's budget or its extension count (T-F3b).
-    """
+    """Continue a turn the hourly token quota stopped, from where it stopped."""
     room_id = context.get("room_id")
     user_id = context.get("user_id")
-    state = await sync_to_async(load_loop_state)(room_id, user_id)
+    turn, claimed = await _claim_turn_for_resume(context)
+    if not claimed:
+        expires = turn.pause_expires_at if turn is not None else None
+        yield AgentEvent("error", {
+            "message": f"{_expiry_text(expires)}; nothing ran.",
+        })
+        return
+    state = await _load_resume_state(context)
     if not state or not (state.awaiting_quota or state.end_reason == "quota"):
         yield AgentEvent("error", {
             "message": "There is no paused turn waiting for the hourly limit to free up.",
@@ -2951,14 +3952,17 @@ async def resume_with_more_budget(
     memory_summary: str = "",
     environment_block: str = "",
 ) -> AsyncGenerator[AgentEvent, None]:
-    """Continue a turn whose model asked for more budget, from where it stopped.
-
-    The saved loop state carries the conversation and the tool log, so a tool
-    call that already finished is not repeated; only the bound grows.
-    """
+    """Continue a turn whose model asked for more budget, from where it stopped."""
     room_id = context.get("room_id")
     user_id = context.get("user_id")
-    state = await sync_to_async(load_loop_state)(room_id, user_id)
+    turn, claimed = await _claim_turn_for_resume(context)
+    if not claimed:
+        expires = turn.pause_expires_at if turn is not None else None
+        yield AgentEvent("error", {
+            "message": f"{_expiry_text(expires)}; nothing ran.",
+        })
+        return
+    state = await _load_resume_state(context)
     if not state or not state.awaiting_budget:
         yield AgentEvent("error", {
             "message": "There is no paused turn waiting for more budget.",
@@ -2982,23 +3986,46 @@ async def cancel_pending_action(
     room_id: int, user_id: int,
 ) -> Optional[str]:
     """Cancel a pending confirmation and clean up state (durable)."""
+    from orchestration import turns as turns_mod
+
+    turn = await turns_mod.aget_paused_turn(room_id, user_id)
+    state = await load_pending_state(room_id, user_id)
+    held = list(state.pending_tools or ([state.pending_tool] if state and state.pending_tool else [])) if state else []
+    if turn is not None:
+        await turns_mod.atransition(
+            str(turn.pk), turn.version, "cancelled",
+            from_state="paused", end_reason="cancelled",
+        )
     record = await sync_to_async(_pending_approval_record)(room_id, user_id)
-    if record is None:
-        state = load_loop_state(room_id, user_id)
+    if record is None and not held:
         clear_loop_state(room_id, user_id)
-        if state and state.pending_tool:
-            name = (state.pending_tool.get("name") or "action").replace("_", " ")
-            return f"Cancelled the pending {name}."
         return None
-    tool_name = record.action or "action"
     await _resolve_pending_approval(
         room_id, user_id, "cancelled", reviewed_by_id=user_id,
+        turn_id=turn.pk if turn is not None else None,
     )
     clear_loop_state(room_id, user_id)
+    if held:
+        names = ", ".join(
+            (call.get("name") or "action").replace("_", " ") for call in held
+        )
+        return f"Cancelled the pending {names}."
+    tool_name = (record.action if record is not None else "") or "action"
     return f"Cancelled the pending {tool_name.replace('_', ' ')}."
 
 
 async def dismiss_pending_confirmation(room_id: int, user_id: int) -> None:
     """Silently clear a pending confirmation the user did not act on."""
-    await _resolve_pending_approval(room_id, user_id, "cancelled")
+    from orchestration import turns as turns_mod
+
+    turn = await turns_mod.aget_paused_turn(room_id, user_id)
+    if turn is not None:
+        await turns_mod.atransition(
+            str(turn.pk), turn.version, "cancelled",
+            from_state="paused", end_reason="dismissed",
+        )
+    await _resolve_pending_approval(
+        room_id, user_id, "cancelled",
+        turn_id=turn.pk if turn is not None else None,
+    )
     clear_loop_state(room_id, user_id)

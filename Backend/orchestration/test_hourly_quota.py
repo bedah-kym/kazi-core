@@ -462,17 +462,22 @@ class QuotaResumeTests(SimpleTestCase):
             end_reason="quota",
         ))
 
-        for _ in range(5):
-            events = run_async(collect_events(resume_after_quota(
-                context={"user_id": 7, "room_id": 9, "username": "t"},
-            )))
-            done = next(e for e in events if e.kind == "done")
-            self.assertEqual(done.data["end_reason"], "quota")
-            # Five replies do not turn a 1,000-token turn into a 5,000-token one.
-            self.assertEqual(done.data["budget"], 1000)
-            reloaded = load_loop_state(9, 7)
-            self.assertTrue(reloaded and reloaded.awaiting_quota)
-            self.assertEqual(reloaded.budget_extensions, 0)
+        turn = MagicMock(state="running", pause_expires_at=None)
+        with patch(
+            "orchestration.agent_loop._claim_turn_for_resume",
+            new=AsyncMock(return_value=(turn, True)),
+        ):
+            for _ in range(5):
+                events = run_async(collect_events(resume_after_quota(
+                    context={"user_id": 7, "room_id": 9, "username": "t"},
+                )))
+                done = next(e for e in events if e.kind == "done")
+                self.assertEqual(done.data["end_reason"], "quota")
+                # Five replies do not turn a 1,000-token turn into a 5,000-token one.
+                self.assertEqual(done.data["budget"], 1000)
+                reloaded = load_loop_state(9, 7)
+                self.assertTrue(reloaded and reloaded.awaiting_quota)
+                self.assertEqual(reloaded.budget_extensions, 0)
 
     @override_settings(AGENT_TURN_TOKEN_BUDGET=100000, AGENT_TURN_TOKEN_BUDGET_MAX=500000)
     def test_resuming_after_the_quota_frees_finishes_without_a_budget_extension(self):
@@ -513,9 +518,14 @@ class QuotaResumeTests(SimpleTestCase):
                 usage={"input_tokens": 6400, "output_tokens": 10},
             ),
         ])
-        events = run_async(collect_events(resume_after_quota(
-            context={"user_id": 7, "room_id": 9, "username": "t"},
-        )))
+        turn = MagicMock(state="running", pause_expires_at=None)
+        with patch(
+            "orchestration.agent_loop._claim_turn_for_resume",
+            new=AsyncMock(return_value=(turn, True)),
+        ):
+            events = run_async(collect_events(resume_after_quota(
+                context={"user_id": 7, "room_id": 9, "username": "t"},
+            )))
 
         self.assertEqual(mock_exec.await_count, 1)  # the finished call is not repeated
         done = next(e for e in events if e.kind == "done")

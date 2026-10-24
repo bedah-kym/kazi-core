@@ -440,6 +440,7 @@ class Scenario9CancelPendingTest(_AgentLoopTestBase):
         with (
             patch("orchestration.agent_loop._pending_approval_record", new=_fake_record),
             patch("orchestration.agent_loop._resolve_pending_approval", new=AsyncMock()),
+            patch("orchestration.turns.aget_paused_turn", new=AsyncMock(return_value=None)),
             patch("orchestration.agent_loop.cache"),
         ):
             result = run_async(cancel_pending_action(1, 1))

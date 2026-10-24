@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — consent semantics
+
+- **Pauses are durable and a question no longer cancels them** (#216, P3-3).
+  Approval, budget and quota pauses now live on the `Turn` in
+  `paused_state_enc`, encrypted with the room key, instead of a ten-minute
+  cache. A restart loses nothing: an exact whole-message **yes** resumes the
+  stored action and runs it exactly once, with the arguments that were shown.
+  Any other reply — a question, another request, another language — keeps the
+  action pending, runs as a new Turn that sees a harness note, and the harness
+  shows the pending prompt again last with a short approval id. A bare yes or
+  no with nothing pending gets an honest harness note. Approval expiry is
+  recorded as data (`AGENT_PAUSE_TTL_SECONDS`, default 600) and a late reply
+  says when it expired and that nothing ran. Every resolved call gets a
+  `tool_result` (`not executed: you declined` / `approval expired` /
+  `superseded by a newer request`), so history stays valid. Several gated calls
+  in one model step are held and shown in one prompt, then run together in
+  model order on one approval. `elapsed` spans the pause; the hard backstop
+  runs on active time, so a long human wait cannot trip it. The confirmation
+  prompt (shown once and again after a question) is rebuilt from the encrypted
+  paused state and shows the exact input that will run; a restricted value
+  (token, password, API key) is dropped before dispatch, so it appears as
+  `[secret value, not sent]`, while the plaintext approval row keeps only the
+  masked display. Harness notices (a dropped older action, an expiry line) are
+  stored as harness text, never as the model's words. If a newer budget or
+  quota pause supersedes a pending approval, the reply names the dropped
+  action first. A late reply to an expired pause no longer duplicates the
+  previous step's results or re-pauses immediately; a late yes/continue
+  resumes with fresh headroom, while a late no/cancel runs nothing.
+
 ### Added
 
 - Every routed chat message now gets one durable **Turn** row (`orchestration.Turn`)
@@ -53,6 +82,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wildcard deletes (`rd /s`, `rm -rf`, `rm -r`, `del /s *`, `del *.txt`,
   `Remove-Item -Recurse`) still match the destructive tripwire and still ask
   under autopilot. Sandboxed profiles are unchanged.
+- Every message Kazi authors now goes through one persistence door
+  (`chatbot.kazi_messages.persist_kazi_message`): it encrypts with the room key,
+  records an `origin` (`turn`, `reminder`, `nudge`, `admin_ack`, `welcome`),
+  links a reply to its Turn, and broadcasts the standard `ai_message_saved`
+  frame. Welcome and `@admin` acknowledgements are therefore encrypted at rest
+  instead of stored in plaintext, and the kazi User/Member lookup exists once.
+  The transcript replays every non-turn origin as a `[Harness: …]` note rather
+  than as assistant speech, so a delivered reminder or idle nudge is no longer
+  mistaken for something Kazi said (#219).
+
 - The reply that confirms **autopilot** is now true in a room that recently
   read untrusted content (C4). It says that commands reaching the network will
   still ask while the room holds that content, and that this lifts on its own;

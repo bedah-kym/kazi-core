@@ -13,6 +13,7 @@ import json
 import os
 import shutil
 import tempfile
+import threading
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -40,9 +41,10 @@ from .consumers import (
     _get_agent_loop_lock,
     _release_agent_loop_lock,
 )
+from .kazi_messages import persist_kazi_message as real_persist_kazi_message
 from .model_api import room_model
 from .models import Chatroom, Member, Message
-from .tasks import transcribe_voice_note
+from .tasks import _get_room_cipher, transcribe_voice_note
 
 
 class ChatConsumerContractTests(SimpleTestCase):
@@ -288,14 +290,18 @@ class ChatConsumerRoutingTests(TransactionTestCase):
         self.assertEqual(kwargs["room_id"], str(chatroom.id))
         self.assertEqual(kwargs["history_messages"], [])
 
-        # The coordinator result was persisted as a Kazi message.
+        # The coordinator result was persisted through the one Kazi-message door.
         from .models import Message
 
-        self.assertTrue(
-            Message.objects.filter(
-                member__User__username="kazi", content__contains="enc"
-            ).exists()
-        )
+        kazi_message = Message.objects.filter(
+            member__User__username="kazi"
+        ).order_by("-id").first()
+        self.assertIsNotNone(kazi_message)
+        reader = ChatConsumer()
+        reader.aes_gcm = _get_room_cipher(chatroom)
+        content, payload = async_to_sync(reader._decrypt_stored)(kazi_message)
+        self.assertEqual(content, "Hi there")
+        self.assertEqual(payload.get("origin"), "turn")
 
     @patch("orchestration.coordinator.OrchestrationCoordinator")
     def test_new_message_serializes_agent_loop_per_room_user(self, mock_coord):
@@ -333,17 +339,15 @@ class ChatConsumerRoutingTests(TransactionTestCase):
         first_consumer = self._make_consumer(alice, member, chatroom)
         second_consumer = self._make_consumer(alice, member, chatroom)
 
-        save_started = asyncio.Event()
-        release_save = asyncio.Event()
+        save_started = threading.Event()
+        release_save = threading.Event()
         coordinator = _DurableTurnCoordinator()
 
-        async def blocking_encrypt(payload):
-            if payload.get("content") == "reply to first":
+        def blocking_persist(room, *, content, **kwargs):
+            if content == "reply to first":
                 save_started.set()
-                await release_save.wait()
-            return {"data": "enc", "nonce": "nonce"}
-
-        first_consumer.encrypt_message = blocking_encrypt
+                release_save.wait(5)
+            return real_persist_kazi_message(room, content=content, **kwargs)
 
         async def second_reached_the_lock():
             lock_key = (alice.id, str(chatroom.id))
@@ -357,6 +361,9 @@ class ChatConsumerRoutingTests(TransactionTestCase):
 
         async def scenario():
             with patch(
+                "chatbot.consumers.persist_kazi_message",
+                side_effect=blocking_persist,
+            ), patch(
                 "orchestration.coordinator.OrchestrationCoordinator",
                 return_value=coordinator,
             ):
@@ -367,7 +374,8 @@ class ChatConsumerRoutingTests(TransactionTestCase):
                 }))
                 second = None
                 try:
-                    await asyncio.wait_for(save_started.wait(), timeout=5)
+                    while not save_started.is_set():
+                        await asyncio.sleep(0.01)
                     second = asyncio.create_task(second_consumer.new_message({
                         "from": alice.username,
                         "message": "@kazi second",
@@ -394,19 +402,20 @@ class ChatConsumerRoutingTests(TransactionTestCase):
         chatroom = Chatroom.objects.get(participants=member)
         consumer = self._make_consumer(alice, member, chatroom)
 
-        save_started = asyncio.Event()
+        save_started = threading.Event()
+        release_save = threading.Event()
         coordinator = _DurableTurnCoordinator()
 
-        async def cancel_during_save(payload):
-            if payload.get("content") == "reply to hello":
-                save_started.set()
-                await asyncio.Event().wait()
-            return {"data": "enc", "nonce": "nonce"}
-
-        consumer.encrypt_message = cancel_during_save
+        def cancel_during_save(*args, **kwargs):
+            save_started.set()
+            release_save.wait(5)
+            return None
 
         async def scenario():
             with patch(
+                "chatbot.consumers.persist_kazi_message",
+                side_effect=cancel_during_save,
+            ), patch(
                 "orchestration.coordinator.OrchestrationCoordinator",
                 return_value=coordinator,
             ):
@@ -415,10 +424,13 @@ class ChatConsumerRoutingTests(TransactionTestCase):
                     "message": "@kazi hello",
                     "chatid": str(chatroom.id),
                 }))
-                await asyncio.wait_for(save_started.wait(), timeout=5)
+                while not save_started.is_set():
+                    await asyncio.sleep(0.01)
                 task.cancel()
                 with self.assertRaises(asyncio.CancelledError):
                     await task
+                release_save.set()
+                await asyncio.sleep(0.05)
 
         async_to_sync(scenario)()
 

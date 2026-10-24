@@ -40,6 +40,7 @@ class CoordinatorCommandTests(SimpleTestCase):
             "orchestration.coordinator.load_memory_summary": AsyncMock(return_value=None),
             "orchestration.coordinator.get_user_preferences": _empty_preferences,
             "orchestration.coordinator.has_pending_agent_state": AsyncMock(return_value=False),
+            "orchestration.coordinator.has_expired_pause": AsyncMock(return_value=False),
             "orchestration.coordinator.dismiss_pending_confirmation": AsyncMock(),
             "orchestration.coordinator.cache": cache,
             "orchestration.coordinator.record_event": MagicMock(),

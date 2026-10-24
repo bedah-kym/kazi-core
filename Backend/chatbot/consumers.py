@@ -20,6 +20,12 @@ import logging
 import asyncio
 from typing import Dict, Tuple
 from .models import Message, Member, Chatroom, UserModerationStatus, ModerationBatch, RoomReadState
+from .kazi_messages import (
+    ORIGIN_ADMIN_ACK,
+    ORIGIN_TURN,
+    KaziMessageError,
+    persist_kazi_message,
+)
 from .tasks import moderate_message_batch, generate_voice_response
 from .dispatch import dispatch_task
 from . import presence
@@ -716,32 +722,22 @@ class ChatConsumer(AsyncWebsocketConsumer):
         return False
 
     async def _send_plain_ai_message(self, room_id, text: str) -> None:
-        """Send a short bot message (used for @admin acknowledgements)."""
-        def _create():
-            kazi_user, _ = User.objects.get_or_create(
-                username='kazi',
-                defaults={
-                    'first_name': 'Kazi',
-                    'last_name': 'AI',
-                    'is_active': True,
-                    'email': 'kazi@kwikchat.ai',
-                },
-            )
-            kazi_member, _ = Member.objects.get_or_create(User=kazi_user)
-            message = Message.objects.create(
-                member=kazi_member, content=text, timestamp=timezone.now(),
-            )
+        """Persist and broadcast a short bot message (used for @admin acknowledgements)."""
+        def _persist():
             room = Chatroom.objects.filter(id=room_id).first()
-            if room:
-                room.chats.add(message)
-                room.save()
-            return message
+            if room is None:
+                return None
+            return persist_kazi_message(
+                room,
+                content=text,
+                origin=ORIGIN_ADMIN_ACK,
+                channel_layer=self.channel_layer,
+            )
 
-        message = await sync_to_async(_create)()
-        await self.send_chat_message({
-            "command": "new_message",
-            "message": await self.message_to_json(message),
-        })
+        try:
+            await sync_to_async(_persist)()
+        except KaziMessageError:
+            logger.warning("Admin acknowledgement not saved: room key unavailable")
 
     async def _handle_admin_escalation(self, room_id, message_content: str, member_user) -> None:
         """Route @admin mentions to superusers; never to the bot."""
@@ -1095,78 +1091,41 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                 if result.persist and full_response_text.strip():
                                     logger.info("Saving AI message to database (%s chars)", len(full_response_text))
 
-                                    # Encrypt the AI response
-                                    encrypted_message = await self.encrypt_message({
-                                        'content': full_response_text,
-                                        'timestamp': str(timezone.now()),
-                                        'tools': result.tools,
-                                        'by': member_user.id,
-                                        'model': result.model_text,
-                                        'harness': result.harness,
-                                    })
+                                    try:
+                                        ai_message = await sync_to_async(persist_kazi_message)(
+                                            current_chat,
+                                            content=full_response_text,
+                                            origin=ORIGIN_TURN,
+                                            turn=result.turn_id or None,
+                                            model_text=result.model_text,
+                                            harness_text=result.harness,
+                                            tools=result.tools,
+                                            by=member_user.id,
+                                            channel_layer=self.channel_layer,
+                                        )
+                                    except KaziMessageError:
+                                        ai_message = None
+                                        logger.warning("AI reply not saved: room key unavailable")
 
-                                    if encrypted_message:
-                                        # Create Kazi user/member if not exists
-                                        def _create_ai_message():
-                                            ai_user, _ = User.objects.get_or_create(
-                                                username='kazi',
-                                                defaults={
-                                                    'first_name': 'Kazi',
-                                                    'last_name': 'AI',
-                                                    'is_active': True,
-                                                    'email': 'kazi@kwikchat.ai'
-                                                }
-                                            )
-                                            # Use filter().first() to handle duplicate Members
-                                            ai_member = Member.objects.filter(User=ai_user).first()
-                                            if not ai_member:
-                                                ai_member = Member.objects.create(User=ai_user)
-
-                                            payload = json.dumps({
-                                                'data': encrypted_message['data'],
-                                                'nonce': encrypted_message['nonce'],
-                                            })
-
-                                            return Message.objects.create(
-                                                member=ai_member,
-                                                content=payload,
-                                                timestamp=timezone.now(),
-                                                turn_id=(result.turn_id or None),
-                                            )
-
-                                        ai_message = await sync_to_async(_create_ai_message)()
+                                    if ai_message is not None:
                                         reply_saved = True
+                                        await self.upgrade_legacy_room_key(current_chat)
+                                        logger.info(f"AI message saved with ID: {ai_message.id}")
 
-                                        # Add to chatroom
-                                        if current_chat:
-                                            await sync_to_async(current_chat.chats.add)(ai_message)
-                                            await self.upgrade_legacy_room_key(current_chat)
-                                            logger.info(f"AI message saved with ID: {ai_message.id}")
+                                        # Trigger Kazi Voice Response (TTS) only in voice mode
+                                        voice_enabled = False
+                                        try:
+                                            prefs = await sync_to_async(get_user_preferences)(member_user.id)
+                                            voice_enabled = bool(prefs.get("ai_voice_enabled", False))
+                                        except Exception as e:
+                                            logger.warning(f"Voice preference check failed: {e}")
+                                        if voice_enabled:
+                                            dispatch_task(generate_voice_response, ai_message.id)
 
-                                            # Trigger Kazi Voice Response (TTS) only in voice mode
-                                            voice_enabled = False
-                                            try:
-                                                prefs = await sync_to_async(get_user_preferences)(member_user.id)
-                                                voice_enabled = bool(prefs.get("ai_voice_enabled", False))
-                                            except Exception as e:
-                                                logger.warning(f"Voice preference check failed: {e}")
-                                            if voice_enabled:
-                                                dispatch_task(generate_voice_response, ai_message.id)
-
-                                            # Broadcast saved message to clients for proper rendering
-                                            message_json = await self.message_to_json(ai_message)
-                                            await self.channel_layer.group_send(
-                                                self.room_group_name,
-                                                {
-                                                    "type": "ai_message_saved",
-                                                    "message": message_json
-                                                }
-                                            )
-
-                                            try:
-                                                await self.schedule_context_summary(room_id, ai_message.id)
-                                            except Exception as e:
-                                                logger.warning(f"Context summary refresh skipped: {e}")
+                                        try:
+                                            await self.schedule_context_summary(room_id, ai_message.id)
+                                        except Exception as e:
+                                            logger.warning(f"Context summary refresh skipped: {e}")
                             finally:
                                 if (
                                     not finalized
@@ -1726,13 +1685,17 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     continue
                 _content, payload = await self._decrypt_stored(msg)
                 extra = None
-                if isinstance(payload, dict) and isinstance(payload.get('tools'), list):
-                    extra = {
-                        'tools': payload.get('tools') or [],
-                        'by': payload.get('by'),
-                        'model': payload.get('model'),
-                        'harness': payload.get('harness') or '',
-                    }
+                if isinstance(payload, dict):
+                    origin = payload.get('origin') or ''
+                    tools = payload.get('tools')
+                    if origin or isinstance(tools, list):
+                        extra = {
+                            'tools': tools if isinstance(tools, list) else [],
+                            'by': payload.get('by'),
+                            'model': payload.get('model'),
+                            'harness': payload.get('harness') or '',
+                            'origin': origin,
+                        }
                 rows.append((msg.id, member, content, extra))
 
             return rows

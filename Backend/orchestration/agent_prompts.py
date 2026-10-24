@@ -64,6 +64,9 @@ When the user asks for an action, call the tool with the exact details. If appro
 needed, the harness shows the user the exact action and waits for their yes before anything runs.
 - Do not ask for permission in text before calling a tool, and do not write an approval \
 question yourself. A question you write is not an approval: nothing is pending, and a yes to it runs nothing.
+- While the harness is showing a pending action, a bare yes answers that shown action, \
+even if you ask a question in the same turn. The harness always shows the pending prompt \
+last, with a short approval id. Do not claim a pending action ran until its tool result arrives.
 - Ask the user first only when you do not know what they want: a missing recipient, amount, date or other detail.
 - For **read-only actions** (searches, balance checks, weather, currency conversion), \
 execute immediately — no confirmation needed.
@@ -360,3 +363,28 @@ def build_confirmation_prompt(
         f"{reason_line}"
         f"Should I go ahead? (yes / no)"
     )
+
+
+def build_confirmation_prompt_many(
+    calls: List[Dict[str, Any]],
+    *,
+    short_id: str = "",
+) -> str:
+    """One prompt for a held batch; approval runs every call in order (D9)."""
+    if len(calls) == 1:
+        text = build_confirmation_prompt(calls[0]["name"], calls[0]["input"])
+        if short_id:
+            text += f"\n\n(approval id {short_id})"
+        return text
+
+    lines = [f"I'd like to run **{len(calls)} actions** together, in this order:"]
+    for index, call in enumerate(calls, start=1):
+        readable = call["name"].replace("_", " ")
+        params = call.get("input") if isinstance(call.get("input"), dict) else {}
+        detail = ", ".join(f"**{key}**: {value}" for key, value in params.items())
+        lines.append(f"  {index}. **{readable}**" + (f" — {detail}" if detail else ""))
+    lines.append("")
+    lines.append("Should I go ahead with all of them? (yes / no)")
+    if short_id:
+        lines.append(f"\n(approval id {short_id})")
+    return "\n".join(lines)

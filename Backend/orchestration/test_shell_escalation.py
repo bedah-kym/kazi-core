@@ -70,7 +70,7 @@ class BoundedResumeTests(SimpleTestCase):
             pending_tier=tier,
         )
 
-    def test_bounded_pause_resumes_without_durable_record(self):
+    def test_a_resume_without_a_turn_is_refused(self):
         state = self._state("bounded")
 
         async def fake_loop(*args, **kwargs):
@@ -83,9 +83,9 @@ class BoundedResumeTests(SimpleTestCase):
                 patch("orchestration.agent_loop.run_agent_loop", side_effect=fake_loop) as run:
             events = asyncio.run(_collect(resume_after_confirmation(
                 context={"room_id": 1, "user_id": 2})))
-        self.assertEqual(events, [])
-        self.assertTrue(cleared.called)
-        self.assertTrue(run.called)
+        self.assertEqual(events[0].kind, "error")
+        self.assertFalse(cleared.called)
+        self.assertFalse(run.called)
 
     def test_missing_record_and_not_bounded_errors(self):
         state = self._state("destructive")

@@ -91,3 +91,54 @@ class MineOverridesDbTests(TestCase):
     @override_settings(PREFERENCE_MINING_ENABLED=False)
     def test_disabled_is_a_noop(self):
         self.assertEqual(mine_approval_overrides().get("enabled"), False)
+
+    @override_settings(PREFERENCE_MINING_ENABLED=True, PREFERENCE_MINING_MIN_APPROVALS=3)
+    def test_a_held_batch_is_attributed_to_every_call_in_it(self):
+        for _ in range(3):
+            WorkflowApprovalRecord.objects.create(
+                requested_by=self.user,
+                kind="agent_loop",
+                room_id=5,
+                step_id="agent_loop:5:1",
+                action="send_email",
+                status="approved",
+                metadata={"calls": [
+                    {"tool_call_id": "a", "tool": "send_email"},
+                    {"tool_call_id": "b", "tool": "archive_file"},
+                ]},
+            )
+        mine_approval_overrides()
+        self.assertEqual(
+            effective_approval_overrides(self.user.id, 5),
+            {"send_email": "auto", "archive_file": "auto"},
+        )
+
+    @override_settings(PREFERENCE_MINING_ENABLED=True, PREFERENCE_MINING_MIN_APPROVALS=3)
+    def test_a_declined_batch_denies_every_call_in_it(self):
+        for _ in range(3):
+            WorkflowApprovalRecord.objects.create(
+                requested_by=self.user,
+                kind="agent_loop",
+                room_id=5,
+                step_id="agent_loop:5:1",
+                action="send_email",
+                status="approved",
+                metadata={"calls": [
+                    {"tool_call_id": "a", "tool": "send_email"},
+                    {"tool_call_id": "b", "tool": "archive_file"},
+                ]},
+            )
+        WorkflowApprovalRecord.objects.create(
+            requested_by=self.user,
+            kind="agent_loop",
+            room_id=5,
+            step_id="agent_loop:5:2",
+            action="send_email",
+            status="rejected",
+            metadata={"calls": [
+                {"tool_call_id": "c", "tool": "send_email"},
+                {"tool_call_id": "d", "tool": "archive_file"},
+            ]},
+        )
+        mine_approval_overrides()
+        self.assertEqual(effective_approval_overrides(self.user.id, 5), {})

@@ -522,6 +522,10 @@ REMINDER_SWEEP_SECONDS = int(os.environ.get(
 ))
 WORKFLOW_REPLAY_SCHEDULE_SECONDS = int(os.environ.get('WORKFLOW_REPLAY_SCHEDULE_SECONDS', 300))
 WORKFLOW_APPROVAL_SWEEP_SECONDS = int(os.environ.get('WORKFLOW_APPROVAL_SWEEP_SECONDS', 300))
+# One clock for every agent pause (approval, budget, quota). A paused Turn and
+# its approval row share this TTL; expiry is applied lazily on read and by the
+# approval sweep.
+AGENT_PAUSE_TTL_SECONDS = int(os.environ.get('AGENT_PAUSE_TTL_SECONDS', 600))
 PROMOTION_MIN_OCCURRENCES = int(os.environ.get('PROMOTION_MIN_OCCURRENCES', 3))
 PROMOTION_MIN_SUCCESS_RATE = float(os.environ.get('PROMOTION_MIN_SUCCESS_RATE', 0.8))
 ROUTINE_ABSENCE_IDLE_DAYS = int(os.environ.get('ROUTINE_ABSENCE_IDLE_DAYS', 14))

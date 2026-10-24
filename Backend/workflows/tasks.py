@@ -250,6 +250,31 @@ def sweep_stuck_approvals(limit: int = None) -> Dict[str, int]:
     batch_limit = limit or APPROVAL_SWEEP_BATCH_LIMIT
     age_cutoff = now - timedelta(seconds=APPROVAL_MAX_PENDING_AGE_SECONDS)
 
+    # D7: the same sweep expires paused Turns past their one TTL.
+    from orchestration import turns as turns_mod
+
+    expired_turns = 0
+    paused = list(
+        turns_mod.Turn.objects.filter(
+            state='paused', pause_expires_at__lte=now,
+        ).values_list('id', 'version')[:batch_limit]
+    )
+    for turn_id, version in paused:
+        if turns_mod.transition(
+            str(turn_id), version, 'expired',
+            from_state='paused', end_reason='pause_expired',
+        ):
+            expired_turns += 1
+
+    # An expired pause keeps its body only long enough for a late reply; a
+    # superseded one is never executable. Clear both after the reply window.
+    reply_window = timedelta(seconds=3600)
+    turns_mod.Turn.objects.filter(
+        state__in=('expired', 'superseded'),
+        ended_at__lte=now - reply_window,
+        paused_state_enc__isnull=False,
+    ).update(paused_state_enc=None)
+
     stuck_ids = list(
         WorkflowApprovalRecord.objects.filter(status='pending').filter(
             models.Q(expires_at__lte=now)
@@ -257,7 +282,7 @@ def sweep_stuck_approvals(limit: int = None) -> Dict[str, int]:
         ).order_by('expires_at', 'created_at').values_list('id', flat=True)[:batch_limit]
     )
     if not stuck_ids:
-        return {"swept": 0, "failed_executions": 0}
+        return {"swept": 0, "failed_executions": 0, "expired_turns": expired_turns}
 
     swept = WorkflowApprovalRecord.objects.filter(
         id__in=stuck_ids,
@@ -298,4 +323,8 @@ def sweep_stuck_approvals(limit: int = None) -> Dict[str, int]:
             pending_approval_id__in=stuck_ids,
         ).update(pending_approval=None)
 
-    return {"swept": swept, "failed_executions": failed_executions}
+    return {
+        "swept": swept,
+        "failed_executions": failed_executions,
+        "expired_turns": expired_turns,
+    }

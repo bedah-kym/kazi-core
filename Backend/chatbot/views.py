@@ -3,7 +3,8 @@ from django.urls import reverse
 from django.contrib.auth.decorators import login_required
 from django.utils.safestring import mark_safe
 from django.templatetags.static import static
-from .models import Chatroom, Message, Member, RoomReadState, Reminder
+from .models import Chatroom, Member, RoomReadState, Reminder
+from .kazi_messages import ORIGIN_WELCOME, KaziMessageError, get_kazi_member, persist_kazi_message
 import json
 from django.http import JsonResponse, StreamingHttpResponse
 from django.contrib.auth import get_user_model
@@ -39,7 +40,6 @@ def _ensure_default_room(user):
     Create a default general room for the user if none exists.
     Adds Kazi when available and seeds a welcome message.
     """
-    User = get_user_model()
     with transaction.atomic():
         existing = Chatroom.objects.filter(participants__User=user).first()
         if existing:
@@ -51,19 +51,17 @@ def _ensure_default_room(user):
         new_room.participants.add(user_member)
 
         try:
-            kazi_user = User.objects.get(username='kazi')
-            kazi_member, _ = Member.objects.get_or_create(User=kazi_user)
+            kazi_member = get_kazi_member()
             new_room.participants.add(kazi_member)
-
-            msg = Message.objects.create(
-                member=kazi_member,
+            persist_kazi_message(
+                new_room,
                 content="Welcome to your new General room! I'm here to help.",
-                timestamp=timezone.now()
+                origin=ORIGIN_WELCOME,
+                broadcast=False,
             )
-            new_room.chats.add(msg)
-        except User.DoesNotExist:
-            # Bot user not provisioned yet; room still created for the user
-            pass
+        except KaziMessageError:
+            # The room still exists; the welcome is simply not written.
+            logger.warning("Welcome message not saved: room key unavailable")
 
         cache.delete(f"user_rooms:{user.id}")
         return new_room
@@ -296,7 +294,6 @@ def create_room(request):
     room_type = request.POST.get('room_type') or request.GET.get('room_type') or 'general'
     persona_id = request.POST.get('persona_id')
 
-    User = get_user_model()
     user_member, _ = Member.objects.get_or_create(User=request.user)
 
     # If the user already has a room and we're not forcing a new one, reuse it to avoid duplicates.
@@ -320,22 +317,18 @@ def create_room(request):
                 new_room.save(update_fields=['persona'])
 
         if room_type == 'general':
-            # Add Kazi
+            # Add Kazi and seed the welcome message
             try:
-                kazi_user = User.objects.get(username='kazi')
-                kazi_member, _ = Member.objects.get_or_create(User=kazi_user)
+                kazi_member = get_kazi_member()
                 new_room.participants.add(kazi_member)
-
-                # Welcome message
-                msg = Message.objects.create(
-                    member=kazi_member,
+                persist_kazi_message(
+                    new_room,
                     content="Welcome to your new General room! I'm here to help.",
-                    timestamp=timezone.now()
+                    origin=ORIGIN_WELCOME,
+                    broadcast=False,
                 )
-                new_room.chats.add(msg)
-
-            except User.DoesNotExist:
-                pass
+            except KaziMessageError:
+                logger.warning("Welcome message not saved: room key unavailable")
 
     cache.delete(f"user_rooms:{request.user.id}")
     return redirect(reverse("chatbot:bot-home", kwargs={"room_name": new_room.id}))

@@ -243,3 +243,39 @@ class DurableApprovalTests(TransactionTestCase):
             ).count(),
             1,
         )
+
+    def _idle_turn(self):
+        return Turn.objects.create(
+            room=self.room, user=self.alice, state="completed",
+        )
+
+    def test_refreshed_expired_row_gets_a_fresh_created_at(self):
+        old_turn = self._idle_turn()
+        new_turn = self._idle_turn()
+        approval_id = self._save_pending(turn_id=old_turn.pk)
+        old_created = timezone.now() - timedelta(days=1)
+        WorkflowApprovalRecord.objects.filter(id=approval_id).update(
+            created_at=old_created,
+            expires_at=old_created + timedelta(seconds=1),
+        )
+
+        new_id = self._save_pending(turn_id=new_turn.pk)
+
+        self.assertEqual(new_id, approval_id)
+        record = WorkflowApprovalRecord.objects.get(id=approval_id)
+        self.assertGreater(record.created_at, old_created)
+        self.assertGreater(record.created_at, timezone.now() - timedelta(seconds=5))
+
+    def test_refreshed_other_turn_row_gets_a_fresh_created_at(self):
+        old_turn = self._idle_turn()
+        new_turn = self._idle_turn()
+        approval_id = self._save_pending(turn_id=old_turn.pk)
+        old_created = timezone.now() - timedelta(days=1)
+        WorkflowApprovalRecord.objects.filter(id=approval_id).update(created_at=old_created)
+
+        new_id = self._save_pending(turn_id=new_turn.pk)
+
+        self.assertEqual(new_id, approval_id)
+        record = WorkflowApprovalRecord.objects.get(id=approval_id)
+        self.assertGreater(record.created_at, old_created)
+        self.assertGreater(record.created_at, timezone.now() - timedelta(seconds=5))

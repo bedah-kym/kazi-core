@@ -526,6 +526,10 @@ WORKFLOW_APPROVAL_SWEEP_SECONDS = int(os.environ.get('WORKFLOW_APPROVAL_SWEEP_SE
 # its approval row share this TTL; expiry is applied lazily on read and by the
 # approval sweep.
 AGENT_PAUSE_TTL_SECONDS = int(os.environ.get('AGENT_PAUSE_TTL_SECONDS', 600))
+# A reply counts as consent only when it was sent this many seconds after the
+# prompt was created. The margin absorbs small clock differences between hosts
+# (all hosts must run NTP); it also makes a skewed clock fail closed.
+CONSENT_SKEW_SECONDS = int(os.environ.get('CONSENT_SKEW_SECONDS', 2))
 PROMOTION_MIN_OCCURRENCES = int(os.environ.get('PROMOTION_MIN_OCCURRENCES', 3))
 PROMOTION_MIN_SUCCESS_RATE = float(os.environ.get('PROMOTION_MIN_SUCCESS_RATE', 0.8))
 ROUTINE_ABSENCE_IDLE_DAYS = int(os.environ.get('ROUTINE_ABSENCE_IDLE_DAYS', 14))

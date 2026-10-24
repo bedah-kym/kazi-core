@@ -23,4 +23,7 @@ def turn_test_patches() -> dict:
         # These read the Turn store in production; a routing test must not.
         "orchestration.coordinator.load_pending_state": AsyncMock(return_value=None),
         "orchestration.coordinator.pending_approval_prompt": AsyncMock(return_value={}),
+        # Consent timing needs the request Message and the approval row; the
+        # dedicated consent tests exercise the real check.
+        "orchestration.coordinator._consent_postdates_prompt": AsyncMock(return_value=True),
     }

@@ -16,7 +16,7 @@ from django.core.cache import cache
 from django.test import TransactionTestCase, override_settings
 from django.utils import timezone
 
-from chatbot.models import Chatroom
+from chatbot.models import Chatroom, Member, Message
 from orchestration import turns as turns_mod
 from orchestration.agent_loop import (
     _append_terminal_results,
@@ -137,6 +137,7 @@ class _PauseHarness(TransactionTestCase):
         User = get_user_model()
         self.user = User.objects.create_user(username="pauseuser", password="pw")  # nosec B106
         self.room = Chatroom.objects.create()
+        self.member = Member.objects.create(User=self.user)
 
         self.persona = patch(
             "orchestration.agent_loop._resolve_persona",
@@ -604,6 +605,7 @@ class ExpiredBudgetQuotaHistoryTests(_PauseHarness):
         self.assertFalse(any(e.kind == "paused" for e in events))
 
 
+@override_settings(CONSENT_SKEW_SECONDS=0)
 class CoordinatorRestartTests(_PauseHarness):
     def _coordinator(self, *, extra_patches=None):
         from asgiref.sync import async_to_sync
@@ -620,13 +622,13 @@ class CoordinatorRestartTests(_PauseHarness):
         async def _send_step(*args, **kwargs):
             return None
 
-        async def _run(query):
+        async def _run(query, message_id):
             return await OrchestrationCoordinator().handle_message(
                 query=query,
                 user_id=self.user.id,
                 room_id=self.room.id,
                 username=self.user.username,
-                message_id=None,
+                message_id=message_id,
                 send_chunk=_send,
                 send_step_event=_send_step,
                 get_context_prompt=AsyncMock(return_value=""),
@@ -644,10 +646,14 @@ class CoordinatorRestartTests(_PauseHarness):
         patches.update(extra_patches or {})
 
         def run(query):
+            message = Message.objects.create(
+                member=self.member, content=query, timestamp=timezone.now(),
+            )
+            self.room.chats.add(message)
             with ExitStack() as stack:
                 for target, new in patches.items():
                     stack.enter_context(patch(target, new))
-                result = async_to_sync(_run)(query)
+                result = async_to_sync(_run)(query, message.id)
                 # The consumer finalizes a committing Turn after saving the
                 # reply; without it the next resume would hit the active-Turn
                 # unique constraint.

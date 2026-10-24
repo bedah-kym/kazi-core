@@ -32,6 +32,10 @@ tool is captured in `action` and `sanitized_params`.
 
 - `requested_by_id` — the user whose loop paused.
 - `expires_at` — `CONFIRMATION_STATE_TTL` (10 minutes) after the pause.
+- `created_at` — when this prompt (or a refreshed paused row) was created. A
+  reply is consent only when its message arrived more than
+  `CONSENT_SKEW_SECONDS` (default 2) after this timestamp; an earlier yes does
+  not run the action.
 - Resolve via the chat surface: confirming resumes the loop (the record is
   marked `approved` **before** the tool executes), cancel/dismiss marks it
   `cancelled`. An approval whose loop state was lost is marked `rejected`

@@ -220,6 +220,29 @@ class ReapTests(_TurnLeaseBase):
         self.assertEqual(old.state, "failed")
         self.assertEqual(queued.state, "expired")
 
+    def test_the_lite_boot_sweep_marks_a_queued_row_whose_room_is_gone(self):
+        gone = Turn.objects.create(
+            room=self.room, user=self.user, state="queued",
+        )
+        live_room = Chatroom.objects.create()
+        live_room.participants.add(self.member)
+        restarted = Turn.objects.create(
+            room=live_room, user=self.user, state="queued",
+        )
+
+        Chatroom.objects.filter(pk=self.room.pk).delete()
+
+        result = reap_boot_rows()
+
+        gone.refresh_from_db()
+        restarted.refresh_from_db()
+        self.assertEqual(gone.state, "expired")
+        self.assertEqual(gone.end_reason, "room_gone")
+        self.assertEqual(restarted.state, "expired")
+        self.assertEqual(restarted.end_reason, "restart")
+        self.assertEqual(result["room_gone"], 1)
+        self.assertEqual(result["queued"], 1)
+
     def test_lite_with_a_fresh_lease_is_still_busy(self):
         # The old lite shortcut treated any blocker as stale; it is gone.
         self._running(lease_delta=90, owner="another-worker")
@@ -290,6 +313,59 @@ class ReapTests(_TurnLeaseBase):
         self.assertEqual(len(notices), 1)
         self.assertIn("1 waiting message(s)", notices[0]["content"])
         self.assertNotIn("stopped partway", notices[0]["content"])
+
+
+class LeaseSettingsTests(SimpleTestCase):
+    def setUp(self):
+        turn_leases._WARNED_LEASE_CONFIGS.clear()
+
+    def tearDown(self):
+        turn_leases._WARNED_LEASE_CONFIGS.clear()
+
+    def test_a_heartbeat_not_shorter_than_the_budget_falls_back(self):
+        with self.settings(
+            TURN_LEASE_SECONDS=90,
+            TURN_HEARTBEAT_SECONDS=60,
+            TURN_LEASE_FENCE_MARGIN_SECONDS=30,
+        ):
+            with self.assertLogs(
+                "orchestration.turn_leases", level="WARNING",
+            ) as logs:
+                self.assertEqual(turn_leases.lease_seconds(), 90)
+                self.assertEqual(turn_leases.heartbeat_seconds(), 30)
+                self.assertEqual(turn_leases.fence_margin_seconds(), 30)
+
+        self.assertEqual(len(logs.records), 1)
+
+    def test_a_margin_at_least_the_lease_falls_back(self):
+        with self.settings(
+            TURN_LEASE_SECONDS=60,
+            TURN_HEARTBEAT_SECONDS=10,
+            TURN_LEASE_FENCE_MARGIN_SECONDS=60,
+        ):
+            self.assertEqual(turn_leases.lease_seconds(), 90)
+            self.assertEqual(turn_leases.heartbeat_seconds(), 30)
+            self.assertEqual(turn_leases.fence_margin_seconds(), 30)
+
+    def test_a_negative_margin_falls_back(self):
+        with self.settings(
+            TURN_LEASE_SECONDS=120,
+            TURN_HEARTBEAT_SECONDS=20,
+            TURN_LEASE_FENCE_MARGIN_SECONDS=-1,
+        ):
+            self.assertEqual(turn_leases.lease_seconds(), 90)
+            self.assertEqual(turn_leases.heartbeat_seconds(), 30)
+            self.assertEqual(turn_leases.fence_margin_seconds(), 30)
+
+    def test_a_good_custom_combination_is_kept(self):
+        with self.settings(
+            TURN_LEASE_SECONDS=120,
+            TURN_HEARTBEAT_SECONDS=20,
+            TURN_LEASE_FENCE_MARGIN_SECONDS=40,
+        ):
+            self.assertEqual(turn_leases.lease_seconds(), 120)
+            self.assertEqual(turn_leases.heartbeat_seconds(), 20)
+            self.assertEqual(turn_leases.fence_margin_seconds(), 40)
 
 
 class HeartbeatTests(_TurnLeaseBase):

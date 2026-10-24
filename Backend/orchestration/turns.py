@@ -877,6 +877,18 @@ def reap_boot_rows() -> Dict[str, int]:
         if reap_turn(turn, require_lapsed=False, foreign_owner=True):
             reaped += 1
 
+    # Room-gone rows must be claimed before the broad queued update, or they
+    # would be labelled ``restart`` and the ``room_gone`` count would be zero.
+    room_gone = Turn.objects.filter(
+        state="queued", room__isnull=True,
+    ).update(
+        state="expired",
+        end_reason="room_gone",
+        version=F("version") + 1,
+        ended_at=Now(),
+        owner_id=None,
+        lease_expires_at=None,
+    )
     expired = (
         Turn.objects.filter(state="queued")
         .exclude(owner_id=PROCESS_OWNER_ID)
@@ -888,16 +900,6 @@ def reap_boot_rows() -> Dict[str, int]:
             owner_id=None,
             lease_expires_at=None,
         )
-    )
-    room_gone = Turn.objects.filter(
-        state="queued", room__isnull=True,
-    ).update(
-        state="expired",
-        end_reason="room_gone",
-        version=F("version") + 1,
-        ended_at=Now(),
-        owner_id=None,
-        lease_expires_at=None,
     )
     return {"reaped": reaped, "queued": expired, "room_gone": room_gone}
 

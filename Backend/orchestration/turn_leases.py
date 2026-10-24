@@ -44,6 +44,12 @@ _LAST_RENEWAL: dict[str, float] = {}
 _HEARTBEAT_TASK: asyncio.Task | None = None
 _MONOTONIC = time.monotonic
 
+DEFAULT_LEASE_SECONDS = 90
+DEFAULT_HEARTBEAT_SECONDS = 30
+DEFAULT_FENCE_MARGIN_SECONDS = 30
+_WARNED_LEASE_CONFIGS: set[tuple[int, int, int]] = set()
+_LEASE_CONFIG_LOCK = threading.Lock()
+
 
 def _int_setting(name: str, default: int) -> int:
     try:
@@ -53,16 +59,53 @@ def _int_setting(name: str, default: int) -> int:
     return value if value > 0 else default
 
 
+def _lease_settings() -> tuple[int, int, int]:
+    """Read the lease trio together and fall back to a safe default set.
+
+    A heartbeat that is not shorter than ``lease - margin`` (or a margin that
+    is at least the lease) fences every turn between beats, so the three
+    settings are only meaningful as one combination.
+    """
+    lease = _int_setting("TURN_LEASE_SECONDS", DEFAULT_LEASE_SECONDS)
+    heartbeat = _int_setting("TURN_HEARTBEAT_SECONDS", DEFAULT_HEARTBEAT_SECONDS)
+    raw_margin = getattr(
+        settings, "TURN_LEASE_FENCE_MARGIN_SECONDS", DEFAULT_FENCE_MARGIN_SECONDS,
+    )
+    try:
+        margin = int(raw_margin)
+    except (TypeError, ValueError):
+        margin = -1
+    if margin >= 0 and 0 < heartbeat < lease - margin:
+        return lease, heartbeat, margin
+    config = (lease, heartbeat, margin)
+    with _LEASE_CONFIG_LOCK:
+        first = config not in _WARNED_LEASE_CONFIGS
+        _WARNED_LEASE_CONFIGS.add(config)
+    if first:
+        logger.warning(
+            "Invalid turn lease settings (lease=%s, heartbeat=%s, margin=%s); "
+            "using the defaults lease=%s, heartbeat=%s, margin=%s",
+            lease, heartbeat, margin,
+            DEFAULT_LEASE_SECONDS, DEFAULT_HEARTBEAT_SECONDS,
+            DEFAULT_FENCE_MARGIN_SECONDS,
+        )
+    return (
+        DEFAULT_LEASE_SECONDS,
+        DEFAULT_HEARTBEAT_SECONDS,
+        DEFAULT_FENCE_MARGIN_SECONDS,
+    )
+
+
 def lease_seconds() -> int:
-    return _int_setting("TURN_LEASE_SECONDS", 90)
+    return _lease_settings()[0]
 
 
 def heartbeat_seconds() -> int:
-    return _int_setting("TURN_HEARTBEAT_SECONDS", 30)
+    return _lease_settings()[1]
 
 
 def fence_margin_seconds() -> int:
-    return _int_setting("TURN_LEASE_FENCE_MARGIN_SECONDS", 30)
+    return _lease_settings()[2]
 
 
 def shutdown_grace_seconds() -> int:
@@ -80,7 +123,8 @@ def hard_timeout_seconds() -> int:
 
 def lease_expiry():
     """DB ``Now()`` plus one lease; never the application host's clock."""
-    return Now() + timedelta(seconds=lease_seconds())
+    lease, _heartbeat, _margin = _lease_settings()
+    return Now() + timedelta(seconds=lease)
 
 
 def register_live_turn(turn_id) -> None:
@@ -208,13 +252,14 @@ def turn_live(turn_id) -> bool:
         last = _LAST_RENEWAL.get(tid)
     if last is None:
         return False
-    margin = fence_margin_seconds()
-    budget = max(1, lease_seconds() - margin)
+    lease, _heartbeat, margin = _lease_settings()
+    budget = max(1, lease - margin)
     return (_MONOTONIC() - last) <= budget
 
 
 async def _heartbeat_loop() -> None:
-    interval = max(1, heartbeat_seconds())
+    _lease, heartbeat, _margin = _lease_settings()
+    interval = max(1, heartbeat)
     while True:
         await asyncio.sleep(interval)
         if not live_turn_ids():

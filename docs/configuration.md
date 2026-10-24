@@ -239,6 +239,31 @@ pending and the message runs as a new turn, with the prompt shown again last. A
 The margin absorbs small clock differences between app hosts, so keep every
 host on NTP. A missing or unreadable timestamp fails closed and runs nothing.
 
+## Turn leases
+
+A running Turn carries an owner (`host:pid:boot-uuid`) and a database-clock
+lease. One heartbeat per process renews only the Turn ids still in its
+in-memory registry, and the owner fences itself before the lease can lapse.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `TURN_LEASE_SECONDS` | `90` | How long a claimed Turn stays owned without a renewal. |
+| `TURN_HEARTBEAT_SECONDS` | `30` | How often the process renews its live Turns. |
+| `TURN_LEASE_FENCE_MARGIN_SECONDS` | `30` | How long before lease expiry the owner stops dispatching. |
+| `TURN_SHUTDOWN_GRACE_SECONDS` | `20` | How long a graceful shutdown waits for live Turns. |
+
+The first three are validated together: unless
+`0 < TURN_HEARTBEAT_SECONDS < TURN_LEASE_SECONDS -
+TURN_LEASE_FENCE_MARGIN_SECONDS` and the margin is not negative, Kazi logs one
+warning and uses `90`/`30`/`30`. A heartbeat that is not shorter than
+`lease - margin`, or a margin at least the lease, would fence every Turn
+between beats.
+
+A 30-second beat task (`reap_lapsed_turns`) ends lapsed Turns. On a
+database-scheduler install, after upgrading run
+`python Backend/manage.py sync_beat_schedule` (or restart beat) so the reaper
+is scheduled.
+
 ## Skills
 
 | Variable | Default | Purpose |

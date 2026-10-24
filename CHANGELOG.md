@@ -58,9 +58,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   saves one `turn_notice` per key so the user sees an honest ending after a
   reload. Paused turns are never reaped, and rows from before leases keep the
   old 31-minute rule. Permission-reducing directives (autopilot disarm, host
-  revoke) stay immediate; acting directives (undo, allow host, receipts) now
-  wait for a successful claim. A busy claim saves a notice instead of a
-  transient broadcast. Graceful shutdown waits
+  revoke) stay immediate. Deferred directives — **reset**, **undo**,
+  **allow host**, **dismiss suggestions** and **receipts** — now wait for a
+  successful claim and run nothing without one; reset clears nothing while
+  another reply is running. A busy claim saves a notice instead of a transient
+  broadcast. After upgrading, run
+  `python Backend/manage.py sync_beat_schedule` (or restart beat) so the
+  30-second reaper is scheduled. Graceful shutdown waits
   `TURN_SHUTDOWN_GRACE_SECONDS` (default 20) and bounds the terminal write.
 
 ### Added

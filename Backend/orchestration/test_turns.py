@@ -20,8 +20,11 @@ from orchestration.llm_client import TokenQuotaExceeded
 from orchestration.models import Turn
 from orchestration.turns import (
     ALLOWED,
+    BUSY_LIVE,
+    CLAIMED,
     STALE_TURN_MARGIN_SECONDS,
     TERMINAL_STATES,
+    TOOK_OVER,
     atransition as real_atransition,
     claim_turn,
     create_turn,
@@ -222,44 +225,53 @@ class ClaimTurnTests(_TurnTelemetryMixin, TransactionTestCase):
         )
 
     def test_a_claim_inserts_running_directly_with_no_queued_row(self):
-        turn = claim_turn(room_id=self.room.id, user_id=self.user.id)
+        claim = claim_turn(room_id=self.room.id, user_id=self.user.id)
+        self.assertEqual(claim.status, CLAIMED)
+        turn = claim.turn
         self.assertIsNotNone(turn)
         self.assertEqual(turn.state, "running")
         self.assertEqual(turn.attempt, 1)
         self.assertEqual(Turn.objects.filter(state="queued").count(), 0)
 
     @override_settings(KAZI_LITE_PROFILE=True)
-    def test_lite_takes_over_any_blocking_row_and_leaves_paused_alone(self):
-        old = self._running()
+    def test_a_lapsed_lease_is_taken_over_and_leaves_paused_alone(self):
+        old = Turn.objects.create(
+            room=self.room, user=self.user, state="running",
+            started_at=timezone.now(), owner_id="another-worker",
+            lease_expires_at=timezone.now() - timedelta(seconds=1),
+        )
         paused = Turn.objects.create(
             room=self.room, user=self.user, state="paused",
             end_reason="awaiting_approval",
         )
-        turn = claim_turn(room_id=self.room.id, user_id=self.user.id)
-        self.assertIsNotNone(turn)
+        claim = claim_turn(room_id=self.room.id, user_id=self.user.id)
+        self.assertEqual(claim.status, TOOK_OVER)
+        self.assertIsNotNone(claim.turn)
         old.refresh_from_db()
         paused.refresh_from_db()
         self.assertEqual(old.state, "failed")
-        self.assertEqual(old.end_reason, "abandoned")
+        self.assertEqual(old.end_reason, "lease_lost")
         self.assertEqual(paused.state, "paused")
         self.assertEqual(paused.end_reason, "awaiting_approval")
 
     @override_settings(KAZI_LITE_PROFILE=False)
     def test_full_profile_refuses_a_fresh_blocking_row(self):
         old = self._running()
-        turn = claim_turn(room_id=self.room.id, user_id=self.user.id)
-        self.assertIsNone(turn)
+        claim = claim_turn(room_id=self.room.id, user_id=self.user.id)
+        self.assertEqual(claim.status, BUSY_LIVE)
+        self.assertIsNone(claim.turn)
         old.refresh_from_db()
         self.assertEqual(old.state, "running")
         self.assertEqual(Turn.objects.count(), 1)
 
     @override_settings(KAZI_LITE_PROFILE=False)
-    def test_full_profile_takes_over_a_row_past_the_hard_guard(self):
+    def test_full_profile_takes_over_a_lease_less_row_past_the_hard_guard(self):
         old = self._running(started_at=timezone.now() - timedelta(
             seconds=HARD_TURN_TIMEOUT_SECONDS + STALE_TURN_MARGIN_SECONDS + 5,
         ))
-        turn = claim_turn(room_id=self.room.id, user_id=self.user.id)
-        self.assertIsNotNone(turn)
+        claim = claim_turn(room_id=self.room.id, user_id=self.user.id)
+        self.assertEqual(claim.status, TOOK_OVER)
+        self.assertIsNotNone(claim.turn)
         old.refresh_from_db()
         self.assertEqual(old.state, "failed")
         self.assertEqual(old.end_reason, "abandoned")
@@ -525,12 +537,51 @@ class CoordinatorTurnTests(_CoordinatorTurnBase):
         self.assertEqual(turn.end_reason, "reply_not_saved")
         self.assertTrue(turn.partial)
 
+    def test_a_fenced_owners_late_reply_is_still_saved_with_a_harness_line(self):
+        from chatbot.kazi_messages import ORIGIN_TURN, persist_kazi_message
+
+        async def _fenced_loop(**kwargs):
+            from orchestration import turns as turns_mod
+
+            turn = await turns_mod.aget_turn(kwargs["context"]["turn_id"])
+            await turns_mod.atransition(
+                str(turn.pk), turn.version, "failed",
+                from_state="running", end_reason="lease_lost",
+            )
+            yield AgentEvent("harness", {
+                "text": "[Harness: this turn was marked interrupted.]\n\n",
+            })
+            yield AgentEvent("text_delta", {"text": "Here is what I had."})
+            yield AgentEvent("done", {"end_reason": "lease_lost"})
+
+        result = self._handle("hello", run_loop=_fenced_loop, finalize=False)
+        turn = Turn.objects.get()
+        self.assertEqual(turn.state, "failed")
+        self.assertEqual(turn.end_reason, "lease_lost")
+        self.assertTrue(result.persist)
+        self.assertEqual(result.turn_id, str(turn.pk))
+        self.assertIn("Here is what I had.", result.full_response)
+        self.assertIn("marked interrupted", result.full_response)
+
+        persist_kazi_message(
+            self.room,
+            content=result.full_response,
+            origin=ORIGIN_TURN,
+            turn=result.turn_id,
+            model_text=result.model_text,
+            harness_text=result.harness,
+            broadcast=False,
+        )
+        self.assertTrue(Message.objects.filter(turn_id=turn.pk).exists())
+
     @override_settings(KAZI_LITE_PROFILE=True)
-    def test_lite_stale_running_row_is_abandoned_and_the_next_message_runs(self):
+    def test_a_lapsed_running_row_is_taken_over_and_the_next_message_runs(self):
         old = Turn.objects.create(
             room=self.room, user=self.user, state="running",
-            started_at=timezone.now(), version=3,
+            started_at=timezone.now(), version=3, owner_id="another-worker",
+            lease_expires_at=timezone.now() - timedelta(seconds=1),
         )
+        kazi_before = Message.objects.filter(member__User__username="kazi").count()
         result = self._handle(
             "hello",
             run_loop=self._loop(
@@ -540,16 +591,21 @@ class CoordinatorTurnTests(_CoordinatorTurnBase):
         )
         old.refresh_from_db()
         self.assertEqual(old.state, "failed")
-        self.assertEqual(old.end_reason, "abandoned")
+        self.assertEqual(old.end_reason, "lease_lost")
         self.assertEqual(Turn.objects.filter(state="completed").count(), 1)
         self.assertEqual(result.turn_state, "committing")
+        self.assertEqual(
+            Message.objects.filter(member__User__username="kazi").count(),
+            kazi_before + 1,
+        )
 
     @override_settings(KAZI_LITE_PROFILE=False)
-    def test_full_profile_refuses_while_a_fresh_turn_is_running(self):
+    def test_busy_live_claim_saves_one_notice_and_runs_nothing(self):
         old = Turn.objects.create(
             room=self.room, user=self.user, state="running",
             started_at=timezone.now(),
         )
+        kazi_before = Message.objects.filter(member__User__username="kazi").count()
         send_chunk = AsyncMock()
         result = self._handle(
             "hello",
@@ -561,18 +617,28 @@ class CoordinatorTurnTests(_CoordinatorTurnBase):
         self.assertEqual(Turn.objects.count(), 1)
         self.assertFalse(result.persist)
         self.assertEqual(result.turn_id, "")
-        self.assertIn("could not be recorded", result.full_response)
+        self.assertNotIn("could not be recorded", result.full_response)
+        self.assertEqual(
+            Message.objects.filter(member__User__username="kazi").count(),
+            kazi_before + 1,
+        )
+        sent_text = [call.args[1] for call in send_chunk.call_args_list if call.args]
+        self.assertNotIn("still being written", "".join(sent_text))
         finals = [call.args for call in send_chunk.call_args_list if call.args[2]]
         self.assertTrue(finals)
         self.assertEqual(finals[-1][1], "")
 
-    def test_fail_closed_path_keeps_the_ack_it_already_sent(self):
+    def test_a_lost_claim_keeps_the_old_fail_closed_ack(self):
         Turn.objects.create(
             room=self.room, user=self.user, state="running",
             started_at=timezone.now(),
         )
-        send_chunk = AsyncMock()
-        with override_settings(KAZI_LITE_PROFILE=False):
+        # A blocker that disappears between the insert and the read is a lost
+        # race, not a live owner: the fail-closed line is still honest.
+        with patch(
+            "orchestration.turns._active_turn", return_value=None,
+        ):
+            send_chunk = AsyncMock()
             result = self._handle(
                 "hello",
                 run_loop=self._loop(),

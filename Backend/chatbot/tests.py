@@ -114,9 +114,10 @@ class _DurableTurnCoordinator:
         self.claims = 0
 
     async def handle_message(self, *, query, user_id, room_id, message_id, **_kwargs):
-        turn = await aclaim_turn(
+        claim = await aclaim_turn(
             room_id=room_id, user_id=user_id, request_message_id=message_id,
         )
+        turn = claim.turn
         if turn is None:
             return OrchestrationResult(full_response="", persist=False)
         self.claims += 1
@@ -346,13 +347,17 @@ class ChatConsumerRoutingTests(TransactionTestCase):
         def blocking_persist(room, *, content, **kwargs):
             if content == "reply to first":
                 save_started.set()
-                release_save.wait(5)
+                # Hold the save until the assertion has run. Websocket ORM calls
+                # share one thread, so the second message may be queued behind
+                # this save rather than waiting on the lock; a save that timed
+                # out first would let it claim before the assertion.
+                release_save.wait(30)
             return real_persist_kazi_message(room, content=content, **kwargs)
 
         async def second_reached_the_lock():
             lock_key = (alice.id, str(chatroom.id))
             loop = asyncio.get_running_loop()
-            deadline = loop.time() + 5
+            deadline = loop.time() + 1.5
             while loop.time() < deadline:
                 lock = _agent_loop_locks.get(lock_key)
                 if coordinator.claims == 2 or (lock is not None and lock._waiters):

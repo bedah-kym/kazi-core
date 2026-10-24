@@ -64,6 +64,14 @@ async def lifespan(scope, receive, send):
         message = await receive()
         if message["type"] == "lifespan.startup":
             try:
+                if getattr(settings, "KAZI_LITE_PROFILE", False):
+                    # Lite is guaranteed one web worker, so anything a previous
+                    # boot left running or queued is provably abandoned here.
+                    from channels.db import database_sync_to_async
+
+                    from orchestration.turns import reap_boot_rows
+
+                    await database_sync_to_async(reap_boot_rows)()
                 if getattr(settings, "IN_PROCESS_SCHEDULER", False):
                     from orchestration.in_process_scheduler import InProcessScheduler
 
@@ -74,6 +82,16 @@ async def lifespan(scope, receive, send):
                 return
             await send({"type": "lifespan.startup.complete"})
         elif message["type"] == "lifespan.shutdown":
+            from orchestration.turn_leases import (
+                shutdown_grace_seconds,
+                stop_heartbeat,
+                wait_for_idle,
+            )
+
+            try:
+                await wait_for_idle(shutdown_grace_seconds())
+            finally:
+                await stop_heartbeat()
             if _in_process_scheduler is not None:
                 await _in_process_scheduler.stop()
                 _in_process_scheduler = None

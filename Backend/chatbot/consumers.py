@@ -788,21 +788,54 @@ class ChatConsumer(AsyncWebsocketConsumer):
             ack = "Message sent to the admin. They'll see it in their inbox."
         await self._send_plain_ai_message(room_id, ack)
 
+    def _terminal_write_timeout(self) -> float:
+        return float(getattr(settings, "TURN_SHUTDOWN_GRACE_SECONDS", 20))
+
     async def _finalize_turn(self, coordinator, result, reply_saved):
         """Finalize the turn, shielding the terminal write from cancellation."""
+        timeout = self._terminal_write_timeout()
         task = asyncio.ensure_future(
             coordinator.finalize_turn(result, reply_saved=reply_saved)
         )
         try:
-            await asyncio.shield(task)
+            await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.warning("Turn finalize timed out after saving the reply")
         except asyncio.CancelledError:
             try:
-                await task
-            except Exception:
+                await asyncio.wait_for(task, timeout=timeout)
+            except (Exception, asyncio.TimeoutError):
                 logger.warning("Turn finalize after cancellation failed")
             raise
         except Exception:
             logger.warning("Turn finalize after saving the reply failed")
+
+    async def _fail_running_turn(self, result):
+        """End a row this consumer still sees running; the reaper's backstop."""
+        from orchestration.turn_leases import unregister_live_turn
+        from orchestration.turns import atransition
+
+        timeout = self._terminal_write_timeout()
+        task = asyncio.ensure_future(atransition(
+            result.turn_id, result.turn_version, "failed",
+            from_state="running", end_reason="error",
+        ))
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.warning("Turn error write timed out; the reaper will end it")
+        except asyncio.CancelledError:
+            try:
+                await asyncio.wait_for(task, timeout=timeout)
+            except (Exception, asyncio.TimeoutError):
+                logger.warning("Turn error write after cancellation failed")
+            raise
+        except Exception:
+            logger.warning("Turn error write failed; the reaper will end it")
+        finally:
+            # Whatever the write did, this process no longer holds the turn
+            # and must stop renewing it (#216b-1, item 6).
+            unregister_live_turn(result.turn_id)
 
     async def new_message(self, data):
         result = None
@@ -1138,6 +1171,17 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                     await self._finalize_turn(
                                         coordinator, result, reply_saved,
                                     )
+                                elif (
+                                    not finalized
+                                    and result is not None
+                                    and result.turn_id
+                                    and result.turn_state == "running"
+                                ):
+                                    # A coordinator exception normally ends the
+                                    # row itself; this is the consumer's safety
+                                    # net if it ever does not (#216b-1, item 10).
+                                    finalized = True
+                                    await self._fail_running_turn(result)
                         finally:
                             agent_lock.release()
                             _release_agent_loop_lock(member_user.id, room_id)

@@ -10,6 +10,18 @@ logger = logging.getLogger(__name__)
 
 
 @shared_task(ignore_result=True)
+def reap_lapsed_turns() -> Dict[str, Any]:
+    """End turns whose worker died, plus orphaned and room-gone queued rows."""
+    from orchestration.turns import reap_lapsed_turns as _reap
+
+    try:
+        return _reap()
+    except Exception:
+        logger.exception("Lapsed turn reap failed")
+        return {"error": "reap_failed"}
+
+
+@shared_task(ignore_result=True)
 def roll_telemetry() -> Dict[str, Any]:
     """Nightly rollup of JSONL telemetry into entity facts + derived watches.
 

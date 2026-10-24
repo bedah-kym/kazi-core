@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 from dataclasses import dataclass
 from datetime import timedelta
@@ -21,19 +22,27 @@ from typing import Any, Dict, Iterable, Optional
 from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.db import IntegrityError, transaction
-from django.db.models import F
+from django.db.models import F, Q
+from django.db.models.functions import Now
 from django.utils import timezone
 
 from orchestration.models import Turn
 from orchestration.telemetry import record_event
+from orchestration.turn_leases import (
+    PROCESS_OWNER_ID,
+    lease_expiry,
+    lease_seconds,
+)
+
+logger = logging.getLogger(__name__)
 
 TERMINAL_STATES = frozenset({
     "completed", "failed", "cancelled", "superseded", "expired",
 })
 
-# A full-profile worker only takes over a running/committing row once its
-# wall-clock guard has certainly expired. The margin absorbs clock skew and a
-# worker that is still writing its own terminal state.
+# Legacy rows (written before leases) are only taken over once their wall-clock
+# guard has certainly expired. The margin absorbs clock skew and a worker that
+# is still writing its own terminal state.
 STALE_TURN_MARGIN_SECONDS = 60
 
 # to-state -> states it may be entered from. A terminal state is never a key,
@@ -50,6 +59,19 @@ ALLOWED: Dict[str, frozenset] = {
 }
 
 _UNSET = object()
+
+CLAIMED = "claimed"
+BUSY_LIVE = "busy_live"
+TOOK_OVER = "took_over"
+LOST = "lost"
+
+
+@dataclass(frozen=True)
+class ClaimResult:
+    """What one claim attempt did, never a bare ``False`` (#216b-1, R7)."""
+
+    status: str
+    turn: Optional[Turn] = None
 
 
 @dataclass(frozen=True)
@@ -104,15 +126,14 @@ def _active_turn(room_id: Any, user_id: Any) -> Optional[Turn]:
 
 
 def _is_stale(blocker: Turn) -> bool:
-    """Whether a blocking active row cannot still be held by a live worker.
+    """Legacy 31-minute rule for rows written before leases existed.
 
-    The lite profile runs exactly one web worker, and the consumer holds a
-    per-process lock for the room, so any blocking row it finds is left over.
-    A full profile can have another worker mid-turn; only a row past the hard
-    wall-clock guard plus a margin is provably abandoned.
+    A row with a lease is judged only by that lease, in the database, by the
+    reap routine. The lite "any blocker is stale" shortcut is gone: one worker
+    is no longer assumed to own every leftover row (#216b-1).
     """
-    if getattr(settings, "KAZI_LITE_PROFILE", False):
-        return True
+    if blocker.lease_expires_at is not None:
+        return False
     if blocker.started_at is None:
         return False
     from orchestration.agent_loop import HARD_TURN_TIMEOUT_SECONDS
@@ -138,7 +159,10 @@ def _insert_running(
             budget=budget or {},
             started_at=timezone.now(),
             attempt=1,
+            owner_id=PROCESS_OWNER_ID,
+            lease_expires_at=lease_expiry(),
         )
+        turn.refresh_from_db(fields=["lease_expires_at"])
         if request_message_id is not None:
             link_message(str(turn.pk), request_message_id)
     return turn
@@ -151,13 +175,15 @@ def claim_turn(
     request_message_id: Optional[int] = None,
     model: str = "",
     budget: Optional[Dict[str, Any]] = None,
-) -> Optional[Turn]:
-    """Create the running Turn in one INSERT, taking over a provably stale row.
+) -> ClaimResult:
+    """Create the running Turn in one INSERT, taking over a lapsed lease.
 
     A refused claim (the partial unique constraint) is only a hard refusal when
-    the blocking row could still belong to a live worker. Otherwise it is ended
-    ``failed(abandoned)`` and the claim is retried exactly once. Paused rows are
-    never touched: they do not conflict with a running insert.
+    the blocking row can still belong to a live worker (``BUSY_LIVE``). A row
+    whose lease lapsed is reaped through the one reap routine and the claim is
+    retried once (``TOOK_OVER``). Legacy rows without a lease keep the old
+    31-minute rule. Paused rows are never touched: they do not conflict with a
+    running insert.
     """
     try:
         turn = _insert_running(
@@ -167,24 +193,50 @@ def claim_turn(
             model=model,
             budget=budget,
         )
+        status = CLAIMED
     except IntegrityError:
         blocker = _active_turn(room_id, user_id)
-        if blocker is None or not _is_stale(blocker):
-            return None
-        transition(
-            str(blocker.pk), blocker.version, "failed",
-            from_state=blocker.state, end_reason="abandoned",
-        )
-        try:
-            turn = _insert_running(
-                room_id=room_id,
-                user_id=user_id,
-                request_message_id=request_message_id,
-                model=model,
-                budget=budget,
+        if blocker is None:
+            return ClaimResult(LOST)
+        took_over = reap_turn(blocker, require_lapsed=True)
+        if not took_over and blocker.lease_expires_at is None and _is_stale(blocker):
+            took_over = transition(
+                str(blocker.pk), blocker.version, "failed",
+                from_state=blocker.state, end_reason="abandoned",
             )
-        except IntegrityError:
-            return None
+            if took_over:
+                expire_queued_for_key(
+                    room_id, user_id, timezone.now(), reason="restart",
+                )
+        if not took_over:
+            live = _active_turn(room_id, user_id)
+            if live is not None:
+                return ClaimResult(BUSY_LIVE)
+            # The blocker ended between the read and the conditional update.
+            # Nothing owns the key now, so one more insert is a plain claim.
+            try:
+                turn = _insert_running(
+                    room_id=room_id,
+                    user_id=user_id,
+                    request_message_id=request_message_id,
+                    model=model,
+                    budget=budget,
+                )
+            except IntegrityError:
+                return ClaimResult(LOST)
+            status = CLAIMED
+        else:
+            try:
+                turn = _insert_running(
+                    room_id=room_id,
+                    user_id=user_id,
+                    request_message_id=request_message_id,
+                    model=model,
+                    budget=budget,
+                )
+            except IntegrityError:
+                return ClaimResult(LOST)
+            status = TOOK_OVER
     record_event("turn_created", {
         "turn_id": str(turn.pk),
         "room_id": room_id,
@@ -192,7 +244,7 @@ def claim_turn(
         "state": turn.state,
         "schema_version": turn.schema_version,
     })
-    return turn
+    return ClaimResult(status, turn)
 
 
 def link_message(turn_id: str, message_id: Optional[int]) -> bool:
@@ -515,6 +567,15 @@ def transition(
         if value is not _UNSET:
             updates[field] = value
 
+    # Ownership follows the running/committing states. A pause or a terminal
+    # edge gives the row back, so no heartbeat and no lease survives it.
+    if to_state == "running":
+        updates["owner_id"] = PROCESS_OWNER_ID
+        updates["lease_expires_at"] = lease_expiry()
+    elif to_state == "paused" or to_state in TERMINAL_STATES:
+        updates["owner_id"] = None
+        updates["lease_expires_at"] = None
+
     if to_state in TERMINAL_STATES and ended_at is _UNSET:
         updates["ended_at"] = timezone.now()
     # A finished turn keeps no resting state. ``expired`` and ``superseded``
@@ -575,11 +636,279 @@ def finalize_turn(turn_id: str, expected_version: int, *, reply_saved: bool) -> 
     )
 
 
+REAP_NOTICE = (
+    "I stopped partway through this because the server restarted. Some steps "
+    "may already have run, so check before asking again."
+)
+
+
+def _queued_notice(expired_queued: int) -> str:
+    return (
+        f"{expired_queued} waiting message(s) weren't answered; please send "
+        "them again."
+    )
+
+
+def _notice_text(expired_queued: int, *, completed: bool = False) -> str:
+    if completed:
+        # The turn's own reply was already saved; only the dropped queued
+        # messages need explaining (item 9).
+        return _queued_notice(expired_queued)
+    if expired_queued:
+        return f"{REAP_NOTICE} {_queued_notice(expired_queued)}"
+    return REAP_NOTICE
+
+
+def _saved_reply_exists(turn_id: Any) -> bool:
+    """A Kazi-authored reply saved *after* the turn's latest human message (R8).
+
+    A ``turn_notice`` never sets ``turn=`` and the request message belongs to a
+    human member, so neither can be mistaken for the reply. The latest linked
+    human message is the one that resumed the turn, so the "Please confirm…"
+    reply of a segment that ended paused is never counted (M1).
+    """
+    from chatbot.models import Message
+
+    messages = Message.objects.filter(turn_id=turn_id)
+    latest_human = (
+        messages.exclude(member__User__username="kazi")
+        .order_by("-timestamp")
+        .values_list("timestamp", flat=True)
+        .first()
+    )
+    replies = messages.filter(member__User__username="kazi")
+    if latest_human is not None:
+        replies = replies.filter(timestamp__gt=latest_human)
+    return replies.exists()
+
+
+def expire_queued_for_key(
+    room_id: Any, user_id: Any, cutoff, *, reason: str = "restart",
+) -> int:
+    """Expire one key's queued rows created before ``cutoff`` (one UPDATE)."""
+    if room_id is None:
+        return 0
+    return (
+        Turn.objects.filter(
+            room_id=room_id,
+            user_id=user_id,
+            state="queued",
+            created_at__lt=cutoff,
+        ).update(
+            state="expired",
+            end_reason=reason,
+            version=F("version") + 1,
+            ended_at=Now(),
+            owner_id=None,
+            lease_expires_at=None,
+        )
+    )
+
+
+def _save_reap_notice(
+    turn: Turn, expired_queued: int, *, completed: bool = False,
+) -> bool:
+    """Save and broadcast one ``turn_notice`` for a reaped key."""
+    from chatbot.kazi_messages import (
+        KaziMessageError,
+        ORIGIN_TURN_NOTICE,
+        persist_kazi_message,
+    )
+    from chatbot.models import Chatroom
+
+    if turn.room_id is None:
+        return False
+    room = Chatroom.objects.filter(pk=turn.room_id).first()
+    if room is None:
+        return False
+    try:
+        persist_kazi_message(
+            room,
+            content=_notice_text(expired_queued, completed=completed),
+            origin=ORIGIN_TURN_NOTICE,
+        )
+    except KaziMessageError:
+        logger.warning("Reap notice not saved: the room key is unavailable")
+        return False
+    except Exception as exc:
+        logger.warning("Reap notice not saved: %s", type(exc).__name__)
+        return False
+    return True
+
+
+def reap_turn(
+    turn: Turn,
+    *,
+    require_lapsed: bool = True,
+    foreign_owner: bool = False,
+) -> bool:
+    """End one lapsed active Turn with a single conditional UPDATE.
+
+    ``running`` becomes ``failed(lease_lost, partial=True)``. ``committing``
+    becomes ``completed`` when its reply is already saved, otherwise
+    ``failed(lease_lost)``. The update re-checks the row's state and (when
+    required) its lapsed lease, so a row renewed after the caller's read is
+    never reaped. The key's earlier queued rows expire and one notice is saved.
+    """
+    if turn.state not in ("running", "committing"):
+        return False
+    if turn.state == "committing" and _saved_reply_exists(turn.pk):
+        target = "completed"
+        updates: Dict[str, Any] = {}
+    else:
+        target = "failed"
+        updates = {
+            "end_reason": "lease_lost",
+            "partial": turn.state == "running",
+        }
+
+    filters: Dict[str, Any] = {"pk": turn.pk, "state": turn.state}
+    if require_lapsed:
+        filters["lease_expires_at__isnull"] = False
+        filters["lease_expires_at__lt"] = Now()
+    query = Turn.objects.filter(**filters)
+    if foreign_owner:
+        query = query.exclude(owner_id=PROCESS_OWNER_ID)
+
+    updates.update({
+        "state": target,
+        "version": F("version") + 1,
+        "ended_at": Now(),
+        "owner_id": None,
+        "lease_expires_at": None,
+        "paused_state_enc": None,
+    })
+    try:
+        updated = query.update(**updates)
+    except (ValueError, TypeError, IntegrityError):
+        return False
+    if updated != 1:
+        return False
+
+    cutoff = turn.lease_expires_at or timezone.now()
+    expired = expire_queued_for_key(
+        turn.room_id, turn.user_id, cutoff, reason="restart",
+    )
+    record_event("turn_transition", {
+        "turn_id": str(turn.pk),
+        "from": turn.state,
+        "to": target,
+        "end_reason": updates.get("end_reason"),
+        "partial": bool(updates.get("partial")),
+        "version": turn.version + 1,
+        "reaped": True,
+    })
+    # A completed turn already gave the user its reply; a notice would be
+    # false. It is still needed when queued messages were dropped.
+    if target != "completed" or expired:
+        _save_reap_notice(turn, expired, completed=target == "completed")
+    return True
+
+
+def reap_lapsed_turns() -> Dict[str, int]:
+    """The periodic sweep: lapsed active rows, orphans and room-gone queued."""
+    reaped = 0
+    candidates = list(
+        Turn.objects.filter(
+            state__in=("running", "committing"),
+            lease_expires_at__isnull=False,
+            lease_expires_at__lt=Now(),
+        )
+    )
+    for turn in candidates:
+        if reap_turn(turn, require_lapsed=True):
+            reaped += 1
+
+    orphaned = 0
+    cutoff = Now() - timedelta(seconds=2 * lease_seconds())
+    orphans = list(
+        Turn.objects.filter(
+            state="queued",
+            room__isnull=False,
+            created_at__lt=cutoff,
+        )
+    )
+    for turn in orphans:
+        live = Turn.objects.filter(
+            Q(lease_expires_at__isnull=True) | Q(lease_expires_at__gt=Now()),
+            room_id=turn.room_id,
+            user_id=turn.user_id,
+            state__in=("running", "committing"),
+        ).exists()
+        if live:
+            continue
+        orphaned += Turn.objects.filter(
+            pk=turn.pk, state="queued",
+        ).update(
+            state="expired",
+            end_reason="restart",
+            version=F("version") + 1,
+            ended_at=Now(),
+            owner_id=None,
+            lease_expires_at=None,
+        )
+
+    room_gone = Turn.objects.filter(
+        state="queued", room__isnull=True,
+    ).update(
+        state="expired",
+        end_reason="room_gone",
+        version=F("version") + 1,
+        ended_at=Now(),
+        owner_id=None,
+        lease_expires_at=None,
+    )
+    return {
+        "reaped": reaped,
+        "orphaned": orphaned,
+        "room_gone": room_gone,
+    }
+
+
+def reap_boot_rows() -> Dict[str, int]:
+    """Lite boot sweep: end anything a previous boot left behind (#216b-1)."""
+    reaped = 0
+    candidates = list(
+        Turn.objects.filter(
+            state__in=("running", "committing"),
+        ).exclude(owner_id=PROCESS_OWNER_ID)
+    )
+    for turn in candidates:
+        if reap_turn(turn, require_lapsed=False, foreign_owner=True):
+            reaped += 1
+
+    # Room-gone rows must be claimed before the broad queued update, or they
+    # would be labelled ``restart`` and the ``room_gone`` count would be zero.
+    room_gone = Turn.objects.filter(
+        state="queued", room__isnull=True,
+    ).update(
+        state="expired",
+        end_reason="room_gone",
+        version=F("version") + 1,
+        ended_at=Now(),
+        owner_id=None,
+        lease_expires_at=None,
+    )
+    expired = (
+        Turn.objects.filter(state="queued")
+        .exclude(owner_id=PROCESS_OWNER_ID)
+        .update(
+            state="expired",
+            end_reason="restart",
+            version=F("version") + 1,
+            ended_at=Now(),
+            owner_id=None,
+            lease_expires_at=None,
+        )
+    )
+    return {"reaped": reaped, "queued": expired, "room_gone": room_gone}
+
+
 async def acreate_turn(**kwargs) -> Turn:
     return await sync_to_async(create_turn)(**kwargs)
 
 
-async def aclaim_turn(**kwargs) -> Optional[Turn]:
+async def aclaim_turn(**kwargs) -> ClaimResult:
     return await sync_to_async(claim_turn)(**kwargs)
 
 

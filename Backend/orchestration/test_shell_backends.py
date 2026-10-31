@@ -17,6 +17,7 @@ from orchestration.shell_exec.backends import (
 )
 
 _SUBPROCESS = "orchestration.shell_exec.backends.asyncio.create_subprocess_exec"
+_SHELL = "orchestration.shell_exec.backends.asyncio.create_subprocess_shell"
 
 # Every secret-bearing variable named in .env.example, with a distinct fake
 # value per variable. A command must never see any of them (GHSA-ppxm-j4p7-9cw2).
@@ -224,6 +225,83 @@ class LocalBackendTests(unittest.TestCase):
         self.assertEqual(get_backend("open", _config()).name, "local")
         self.assertEqual(get_backend("standard", _config()).name, "docker")
         self.assertEqual(get_backend("locked", _config()).name, "docker")
+
+    @unittest.skipUnless(sys.platform != "win32", "sh accepts line breaks")
+    def test_a_multi_line_command_still_runs_every_line_on_linux(self):
+        backend = LocalBackend(_config())
+        result = _run(backend.execute("echo one\necho two", room_id="r"))
+        self.assertEqual(result.exit_code, 0, result.stderr)
+        self.assertIn("one", result.stdout)
+        self.assertIn("two", result.stdout)
+
+
+class WindowsCommandLineTests(unittest.TestCase):
+    """cmd.exe splits a command at a line break; the open backend refuses instead."""
+
+    def _refused(self, command: str):
+        backend = LocalBackend(_config())
+        with patch("orchestration.shell_exec.backends.sys.platform", "win32"), \
+                patch(_SHELL, new=AsyncMock(return_value=_FakeProc())) as spawn:
+            result = _run(backend.execute(command, room_id="r"))
+        return result, spawn
+
+    def test_line_break_forms_are_refused_before_anything_starts(self):
+        for label, separator in (
+            ("lf", "\n"),
+            ("crlf", "\r\n"),
+            ("cr", "\r"),
+        ):
+            with self.subTest(kind=label):
+                result, spawn = self._refused(f"echo first{separator}echo second")
+                self.assertEqual(result.exit_code, 2)
+                self.assertEqual(result.stdout, "")
+                self.assertIn("line breaks", result.stderr)
+                self.assertIn("Nothing was executed", result.stderr)
+                self.assertIn("&&", result.stderr)
+                spawn.assert_not_called()
+
+    def test_a_trailing_line_break_and_non_line_break_characters_still_run(self):
+        cases = (
+            ("trailing-lf", "echo a\n"),
+            ("trailing-crlf", "echo a\r\n"),
+            ("vertical-tab", "echo a\x0becho b"),
+            ("form-feed", "echo a\x0cecho b"),
+            ("line-separator", "echo a\u2028echo b"),
+            ("next-line", "echo a\x85echo b"),
+        )
+        for label, command in cases:
+            with self.subTest(kind=label):
+                backend = LocalBackend(_config())
+                with patch("orchestration.shell_exec.backends.sys.platform", "win32"), \
+                        patch(_SHELL, new=AsyncMock(return_value=_FakeProc(out=b"ok"))) as spawn:
+                    result = _run(backend.execute(command, room_id="r"))
+                self.assertEqual(result.exit_code, 0, result.stderr)
+                self.assertEqual(result.stdout, "ok")
+                spawn.assert_awaited_once()
+
+    @unittest.skipUnless(sys.platform == "win32", "cmd.exe only starts on Windows")
+    def test_no_part_of_a_multi_line_command_runs(self):
+        config = _config()
+        backend = LocalBackend(config)
+        result = _run(backend.execute("echo x> a.txt\necho y> b.txt", room_id="r"))
+        workspace = config.workspace("r")
+        self.assertEqual(result.exit_code, 2)
+        self.assertIn("Nothing was executed", result.stderr)
+        self.assertFalse((workspace / "a.txt").exists())
+        self.assertFalse((workspace / "b.txt").exists())
+
+    @unittest.skipUnless(sys.platform == "win32", "cmd.exe only starts on Windows")
+    def test_the_one_line_script_route_in_the_message_still_works(self):
+        config = _config()
+        backend = LocalBackend(config)
+        command = (
+            f'"{sys.executable}" -c "open(\'s.py\',\'w\').write(\'print(1)\\nprint(2)\\n\')" '
+            f'&& "{sys.executable}" s.py'
+        )
+        result = _run(backend.execute(command, room_id="r"))
+        self.assertEqual(result.exit_code, 0, result.stderr)
+        self.assertIn("1", result.stdout)
+        self.assertIn("2", result.stdout)
 
 
 class LocalBackendEnvironmentTests(unittest.TestCase):

@@ -39,6 +39,16 @@ class EnvironmentBlockTests(SimpleTestCase):
         self.assertIn("`autopilot` as the reply to a shell prompt", block)
         self.assertNotIn("always ask", block)
 
+    def test_cmd_exe_is_told_that_a_command_must_be_a_single_line(self):
+        block = build_environment_block(WINDOWS_OPEN)
+
+        self.assertIn("A command must be a single line; line breaks are refused.", block)
+
+    def test_sh_is_not_told_that_a_command_must_be_a_single_line(self):
+        block = build_environment_block(STANDARD)
+
+        self.assertNotIn("single line", block)
+
     def test_standard_profile_describes_the_container_without_promising_a_prompt(self):
         block = build_environment_block(STANDARD)
 

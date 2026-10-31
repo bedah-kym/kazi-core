@@ -30,12 +30,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   binds to `127.0.0.1` only, compares a random token in constant time and
   writes it to `.kazi/run/control.json` with owner-only permissions where the
   OS allows. `.kazi/` is git- and docker-ignored.
-- `kazi doctor` explains Python version, the lock file, missing required
-  settings, `.env` overrides, Temporal/Redis/database reachability, pending
-  migrations, beat drift, the shell token and profile, free ports, collected
-  static files, the worker-count guard and the pool-size cap. It prints
-  setting names, not values. On the open shell profile it says that the
-  profile is unsandboxed and that with great power comes great responsibility.
+- `kazi doctor` explains Python version, the virtual environment, the lock
+  file, missing required settings, `.env` overrides, Temporal/Redis/database
+  reachability, pending migrations, beat drift, the shell token and profile,
+  free ports, collected static files, the worker-count guard and the pool-size
+  cap. It prints setting names, not values. On the open shell profile it says
+  that the profile is unsandboxed and that with great power comes great
+  responsibility.
 - `kazi autostart enable|disable|status` creates a Windows Startup-folder
   `.cmd` or a systemd **user** unit that runs `kazi run`; `--autostart` waits
   up to three minutes for services at logon. macOS is documented only. Logs

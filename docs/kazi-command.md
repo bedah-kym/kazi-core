@@ -95,8 +95,8 @@ refused. The control file and logs hold no `.env` values.
 
 Each check prints OK, WARN or FAIL with one plain sentence. It covers:
 
-- Python 3.11–3.12, the lock file installed, `.env` present and required
-  settings set;
+- Python 3.11–3.12 inside a virtual environment, the lock file installed,
+  `.env` present and required settings set;
 - process-environment variables that `.env` overrides (names only);
 - Temporal enabled but unreachable (WARN);
 - Redis (full profile) and database reachability;

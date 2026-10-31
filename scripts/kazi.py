@@ -956,6 +956,15 @@ def check_python(version_info: Sequence[int]) -> Check:
     )
 
 
+def check_venv(prefix: str, base_prefix: str) -> Check:
+    if prefix != base_prefix:
+        return Check("Virtual environment", "OK", "Running inside a virtual environment.")
+    return Check(
+        "Virtual environment", "FAIL",
+        "Not running inside a virtual environment; use the checkout .venv.",
+    )
+
+
 def check_lockfile(
     root: Path = REPO_ROOT,
     version_reader: Callable[[str], str] = importlib.metadata.version,
@@ -1175,7 +1184,11 @@ def collect_checks(
     binder=_default_binder,
 ) -> List[Check]:
     connector = connector or _tcp_connect
-    checks = [check_python(sys.version_info), check_lockfile(root)]
+    checks = [
+        check_python(sys.version_info),
+        check_venv(sys.prefix, sys.base_prefix),
+        check_lockfile(root),
+    ]
     checks.append(check_env_file(root / ".env", dotenv))
     checks.append(check_required_keys(dotenv, env))
     checks.append(check_process_overrides(env, dotenv))

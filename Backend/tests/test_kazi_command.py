@@ -195,6 +195,10 @@ class DoctorTests(unittest.TestCase):
         self.assertEqual(K.check_python((3, 12)).level, "OK")
         self.assertEqual(K.check_python((3, 13)).level, "FAIL")
 
+    def test_virtual_environment(self):
+        self.assertEqual(K.check_venv("/repo/.venv", "/usr").level, "OK")
+        self.assertEqual(K.check_venv("/usr", "/usr").level, "FAIL")
+
     def test_required_settings_report_names_not_values(self):
         check = K.check_required_keys({}, {})
         self.assertEqual(check.level, "FAIL")

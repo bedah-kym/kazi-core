@@ -69,6 +69,12 @@ LEASE_LOST_NOTE = (
     "[Harness: this turn was marked interrupted because its worker lost the "
     "lease. Nothing further was run; the steps above already happened.]\n\n"
 )
+# A response cut off at the model's output limit is an honest length ending,
+# not an error: anything after the cut never ran.
+LENGTH_LIMIT_NOTE = (
+    "My response was cut short by the length limit. Anything I was still "
+    "writing did not run."
+)
 # A delegated run gets a share of what its parent has left, never a fixed table.
 DELEGATED_BUDGET_SHARE = 0.5
 MIN_DELEGATED_BUDGET = 5000
@@ -1583,6 +1589,96 @@ def _sanitize_tool_result(result_json: str) -> str:
     return result_json
 
 
+_DELEGATED_RESULT_LEADING_KEYS = (
+    "status", "stopped_reason", "stop_note", "summary_truncated",
+)
+
+
+def _order_delegated_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    ordered: Dict[str, Any] = {
+        key: result[key] for key in _DELEGATED_RESULT_LEADING_KEYS if key in result
+    }
+    ordered.update({key: value for key, value in result.items() if key not in ordered})
+    return ordered
+
+
+def _serialize_delegated_result(result: Dict[str, Any]) -> str:
+    """Serialise a delegated result, keeping its stop fields within the cap.
+
+    The generic cap cuts JSON from the end. A long summary used to push
+    ``stopped_reason`` and the truncation note out of view, so keep those first
+    and shorten only the summary until the whole payload fits. When the summary
+    is shortened, ``summary_truncated`` says how much was kept and dropped.
+
+    Sizing is done on the serialised length, not the raw length: quotes,
+    newlines and non-ASCII characters expand under ``json.dumps``. A binary
+    search finds the largest prefix that still fits, so escaping cannot make
+    the result overshoot or throw the whole summary away.
+    """
+    ordered = _order_delegated_result(result)
+    summary = ordered.get("summary")
+    if not isinstance(summary, str):
+        return _sanitize_tool_result(json.dumps(ordered, default=str))
+    full = json.dumps(ordered, default=str)
+    if len(full) <= _MAX_RESULT_CHARS:
+        return _sanitize_tool_result(full)
+
+    leading = {
+        key: ordered[key] for key in _DELEGATED_RESULT_LEADING_KEYS if key in ordered
+    }
+    extras = {
+        key: value for key, value in ordered.items()
+        if key not in leading and key != "summary"
+    }
+
+    def build(kept_len: int, with_extras: bool) -> Dict[str, Any]:
+        candidate = dict(leading)
+        if with_extras:
+            candidate.update(extras)
+        candidate["summary_truncated"] = {
+            "original_chars": len(summary),
+            "kept_chars": kept_len,
+            "dropped_chars": len(summary) - kept_len,
+        }
+        candidate["summary"] = summary[:kept_len]
+        return _order_delegated_result(candidate)
+
+    def fits(candidate: Dict[str, Any]) -> bool:
+        return len(json.dumps(candidate, default=str)) <= _MAX_RESULT_CHARS
+
+    with_extras = fits(build(0, True))
+    if not with_extras and not fits(build(0, False)):
+        # Even the leading fields do not fit. Nothing can be kept safely.
+        return _sanitize_tool_result(full)
+
+    hi = len(summary)
+    if fits(build(hi, with_extras)):
+        # The summary was not shortened; only extras needed dropping.
+        without_meta = dict(leading)
+        if with_extras:
+            without_meta.update(extras)
+        without_meta["summary"] = summary
+        return _sanitize_tool_result(
+            json.dumps(_order_delegated_result(without_meta), default=str),
+        )
+
+    lo = 0
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if fits(build(mid, with_extras)):
+            lo = mid
+        else:
+            hi = mid - 1
+    return _sanitize_tool_result(json.dumps(build(lo, with_extras), default=str))
+
+
+def _serialize_tool_result(tool_name: str, result: Dict[str, Any]) -> str:
+    """Serialise a tool result, with the delegated stop fields preserved."""
+    if tool_name == "delegate_task":
+        return _serialize_delegated_result(result)
+    return _sanitize_tool_result(json.dumps(result, default=str))
+
+
 # --------------------------------------------------------------------------- #
 #  Model routing                                                              #
 # --------------------------------------------------------------------------- #
@@ -2139,7 +2235,7 @@ async def _execute_scoped_tool_calls(
         result_blocks.append({
             "type": "tool_result",
             "tool_use_id": tc["id"],
-            "content": _sanitize_tool_result(json.dumps(result, default=str)),
+            "content": _serialize_tool_result(tc["name"], result),
         })
     return result_blocks, False
 
@@ -2283,6 +2379,13 @@ async def _run_sub_agent(
             completed = True
             break
 
+        if stop_reason == "max_tokens":
+            stopped_reason = "length_limit"
+            # Always say the run was cut short; text collected before the cut
+            # must not read as a complete summary.
+            collected_text.append(LENGTH_LIMIT_NOTE)
+            break
+
         if stop_reason == "tool_use":
             consecutive_pauses = 0
             tool_calls = _extract_tool_calls(content_blocks)
@@ -2338,15 +2441,20 @@ async def _run_sub_agent(
     if not summary and stopped_reason == "token_budget":
         summary = "Sub-task stopped early: token budget exhausted."
 
-    return {
+    result = {
         "status": "success",
+        "stopped_reason": stopped_reason,
+    }
+    if stopped_reason == "length_limit":
+        result["stop_note"] = LENGTH_LIMIT_NOTE
+    result.update({
         "summary": summary or "Sub-task completed.",
         "tools_used": [e["name"] for e in sub_tool_log],
         "iterations": iteration,
         "tokens_used": tokens_used,
         "tool_calls": len(sub_tool_log),
-        "stopped_reason": stopped_reason,
-    }
+    })
+    return result
 
 
 async def _create_workflow_handoff(
@@ -2702,12 +2810,12 @@ async def run_agent_loop(
                 "name": pending["name"],
                 "result": result,
                 "input": pending["input"],
-                "shown": _sanitize_tool_result(json.dumps(result, default=str)),
+                "shown": _serialize_tool_result(pending["name"], result),
             })
             gated_blocks[call_id] = {
                 "type": "tool_result",
                 "tool_use_id": pending["id"],
-                "content": _sanitize_tool_result(json.dumps(result, default=str)),
+                "content": _serialize_tool_result(pending["name"], result),
             }
 
         state.pending_tools = []
@@ -3074,9 +3182,10 @@ async def run_agent_loop(
             break
 
         if stop_reason == "max_tokens":
-            state.end_reason = "error"
+            state.end_reason = "length_limit"
             yield AgentEvent("error", {
-                "message": "My response was cut short due to length limits.",
+                "message": LENGTH_LIMIT_NOTE,
+                "end_reason": "length_limit",
             })
             break
 
@@ -3320,7 +3429,7 @@ async def run_agent_loop(
                         "name": tc["name"],
                         "result": result,
                         "input": tc["input"],
-                        "shown": _sanitize_tool_result(json.dumps(result, default=str)),
+                        "shown": _serialize_tool_result(tc["name"], result),
                     })
 
                     # Receipt (fire-and-forget)
@@ -3335,7 +3444,7 @@ async def run_agent_loop(
                 tool_result_blocks.append({
                     "type": "tool_result",
                     "tool_use_id": tc["id"],
-                    "content": _sanitize_tool_result(json.dumps(result, default=str)),
+                    "content": _serialize_tool_result(tc["name"], result),
                 })
 
             # Refused calls (shell envelope or persona scope) never run.

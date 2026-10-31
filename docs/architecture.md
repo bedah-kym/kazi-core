@@ -89,8 +89,10 @@ terminal state and re-raises, including `CancelledError`. `committing` becomes
 `completed` only after the consumer saves the reply (otherwise
 `failed(reply_not_saved)`). `pause_kind` says why a turn is paused, `end_reason`
 and `partial` record how it ended, and `Message.turn` links the request and
-replies to it. Transition telemetry carries ids, states, reasons and counts
-only — never tool inputs or message text.
+replies to it. A response cut off at the model's output limit ends
+`failed(length_limit)`; a tool call inside that response is never dispatched.
+Transition telemetry carries ids, states, reasons and counts only — never tool
+inputs or message text.
 
 ### Tool Executor (`orchestration/tool_executor.py`)
 

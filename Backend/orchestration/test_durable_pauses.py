@@ -19,6 +19,7 @@ from django.utils import timezone
 from chatbot.models import Chatroom, Member, Message
 from orchestration import turns as turns_mod
 from orchestration.agent_loop import (
+    LENGTH_LIMIT_NOTE,
     _append_terminal_results,
     _args_hash,
     _quota_pause_ttl,
@@ -272,6 +273,69 @@ class RestartApprovalTests(_PauseHarness):
         self.assertEqual(self.execute_tool.await_count, 1)
         self.assertTrue(any(e.kind == "done" for e in first))
         self.assertTrue(any(e.kind == "error" for e in second))
+
+
+class DelegatedApprovalResumeTests(_PauseHarness):
+    def test_an_approved_delegated_run_keeps_a_length_limit_stop(self):
+        turn = self._turn()
+        long_text = "漢" * 12000
+        call = {
+            "id": "d1",
+            "name": "delegate_task",
+            "input": {"task": "write a long file"},
+        }
+        llm = self._llm([
+            _response(
+                [_tool("d1", "delegate_task", call["input"])],
+                stop_reason="tool_use",
+            ),
+            _response([_text(long_text)], stop_reason="max_tokens"),
+            _response([_text("Done")]),
+        ])
+        preferences = {"approval_overrides": {"delegate_task": "always"}}
+
+        events = _run(_collect(run_agent_loop(
+            user_message="delegate it",
+            context=self._context(turn),
+            preferences=preferences,
+        )))
+        self.assertTrue(any(e.kind == "confirmation" for e in events))
+        turn.refresh_from_db()
+        self.assertEqual(turn.state, "paused")
+        self.assertEqual(turn.pause_kind, "approval")
+
+        cache.clear()
+        resumed = _run(_collect(resume_after_confirmation(
+            context=self._context(turn),
+            preferences=preferences,
+        )))
+        self.assertTrue(any(e.kind == "done" for e in resumed))
+
+        parent_messages = llm.create_message.await_args_list[-1].kwargs["messages"]
+        content = next(
+            block["content"]
+            for message in parent_messages
+            if isinstance(message.get("content"), list)
+            for block in message["content"]
+            if block.get("type") == "tool_result"
+            and block.get("tool_use_id") == "d1"
+        )
+        parsed = json.loads(content)
+        self.assertEqual(parsed["stopped_reason"], "length_limit")
+        self.assertEqual(parsed["stop_note"], LENGTH_LIMIT_NOTE)
+        self.assertIn("summary_truncated", parsed)
+        self.assertLessEqual(len(content), 8000)
+
+        shown = next(
+            event.data["shown"]
+            for event in resumed
+            if event.kind == "tool_result"
+            and event.data.get("name") == "delegate_task"
+        )
+        parsed_shown = json.loads(shown)
+        self.assertEqual(parsed_shown["stopped_reason"], "length_limit")
+        self.assertIn("summary_truncated", parsed_shown)
+        self.assertLessEqual(len(shown), 8000)
 
 
 class HeldBatchTests(_PauseHarness):

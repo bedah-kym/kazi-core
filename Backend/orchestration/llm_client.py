@@ -585,10 +585,12 @@ class LLMClient:
                 "name": fn.get("name"),
                 "input": args,
             })
-        if tool_calls:
-            stop_reason = "tool_use"
-        elif finish == "length":
+        if finish == "length":
+            # A cut-off response is a length stop even if it carries tool
+            # calls: the calls may be incomplete and must not be dispatched.
             stop_reason = "max_tokens"
+        elif tool_calls:
+            stop_reason = "tool_use"
         else:
             stop_reason = "end_turn"
         if not blocks:

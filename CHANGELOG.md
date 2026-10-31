@@ -72,6 +72,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the control file is owner-only from creation on POSIX (Windows ACLs are
   documented).
 
+### Changed — kazi launcher round 3
+
+- Web is started with `--timeout-graceful-shutdown` set to
+  `TURN_SHUTDOWN_GRACE_SECONDS`, and the supervisor's force-kill waits for two
+  graces plus ten seconds. Uvicorn now reaches the ASGI lifespan shutdown while
+  a turn is in flight, so the turn's terminal state is saved before web exits
+  instead of waiting for the reaper.
+- `sync_beat_schedule --check` compares cron fields by meaning, expanding
+  compact and set forms through Celery's parser, so beat's own row rewrite no
+  longer reports false drift.
+- A second `kazi up` that finds the startup lock held says another run is
+  starting and stops, without also claiming Kazi is not running.
+
 ### Fixed — length-limit endings
 
 - A turn stopped by the model's output limit (`max_tokens`) now ends as

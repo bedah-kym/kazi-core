@@ -696,6 +696,11 @@ def cleanup_posix_survivors(paths: RuntimePaths, system: Optional[str] = None, w
     return len(targets)
 
 
+def web_force_kill_seconds(grace: float) -> float:
+    """Uvicorn gets one grace for tasks, then the lifespan gets a second."""
+    return max(10.0, float(grace) * 2 + 10)
+
+
 def worker_node_name() -> str:
     install = hashlib.sha256(str(REPO_ROOT).encode("utf-8")).hexdigest()[:10]
     return f"kazi-{install}@{socket.gethostname()}"
@@ -877,7 +882,7 @@ class Supervisor:
                 self._signal_break(slot)
                 try:
                     if slot.proc is not None:
-                        slot.proc.wait(timeout=self.grace_seconds + 10)
+                        slot.proc.wait(timeout=web_force_kill_seconds(self.grace_seconds))
                 except (OSError, subprocess.TimeoutExpired):
                     self._terminate(slot)
             elif name == "worker":
@@ -1001,10 +1006,14 @@ def build_child_specs(settings: dict, system: Optional[str] = None) -> List[Chil
     for name in plan:
         if name == "web":
             host = settings.get("web", {}).get("host", "127.0.0.1")
-            port = int(settings.get("web", {}).get("port", 8000))
+            port = _as_int(settings.get("web", {}).get("port"), 8000)
+            grace = _as_int(
+                settings.get("profile", {}).get("turn_shutdown_grace_seconds"), 20
+            )
             specs.append(ChildSpec("web", [
                 sys.executable, "-m", "uvicorn", "Backend.asgi:application",
                 "--host", host, "--port", str(port), "--workers", "1",
+                "--timeout-graceful-shutdown", str(grace),
             ], cwd=backend))
         elif name == "sidecar":
             specs.append(ChildSpec(
@@ -1754,8 +1763,11 @@ def cmd_up(paths: RuntimePaths, system: Optional[str], autostart: bool, foregrou
         return 0
     start_lock = SupervisorLock(paths.start_lock, system)
     if not start_lock.acquire():
-        print("Another kazi up is already starting or running.", flush=True)
-        print_status_text(paths, settings, system)
+        print(
+            "Another kazi up is already starting or running; wait for it to finish "
+            "or run `kazi status` in a moment.",
+            flush=True,
+        )
         return 0
     try:
         probe = SupervisorLock(paths.lock, system)

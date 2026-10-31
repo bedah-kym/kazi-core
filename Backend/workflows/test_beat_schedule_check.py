@@ -2,14 +2,49 @@
 from __future__ import annotations
 
 from io import StringIO
+from types import SimpleNamespace
 
+from celery.schedules import crontab
 from django.conf import settings
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TestCase
 from django_celery_beat.models import PeriodicTask
 
-from workflows.management.commands.sync_beat_schedule import beat_schedule_drift
+from workflows.management.commands.sync_beat_schedule import _schedule_matches, beat_schedule_drift
+
+
+def _stored_cron(**fields):
+    base = {
+        "minute": "*", "hour": "*", "day_of_week": "*",
+        "day_of_month": "*", "month_of_year": "*",
+    }
+    base.update(fields)
+    return SimpleNamespace(interval=None, crontab=SimpleNamespace(**base))
+
+
+class CronMeaningTests(TestCase):
+    def test_compact_and_expanded_forms_match(self):
+        declared = crontab(hour=2, minute=0)
+        stored = _stored_cron(minute="0", hour="2", day_of_week="*")
+        self.assertTrue(_schedule_matches(stored, declared))
+
+    def test_star_and_a_full_range_match(self):
+        declared = crontab(hour="*", minute=0)
+        stored = _stored_cron(
+            minute="0", hour="0-23", day_of_week="0-6",
+        )
+        self.assertTrue(_schedule_matches(stored, declared))
+
+    def test_a_real_change_is_drift(self):
+        declared = crontab(hour=2, minute=0)
+        stored = _stored_cron(minute="0", hour="3", day_of_week="*")
+        self.assertFalse(_schedule_matches(stored, declared))
+
+    def test_expanded_set_text_matches_a_compact_row(self):
+        declared = crontab(day_of_week="mon", hour=4, minute=30)
+        stored = _stored_cron(minute="30", hour="4", day_of_week="{1}")
+        self.assertTrue(_schedule_matches(stored, declared))
 
 
 class SyncBeatScheduleCheckTests(TestCase):
@@ -61,3 +96,18 @@ class SyncBeatScheduleCheckTests(TestCase):
         name = next(iter(settings.CELERY_BEAT_SCHEDULE))
         PeriodicTask.objects.filter(name=name).update(task="no.such.task")
         self.assertIn(name, beat_schedule_drift()["changed"])
+
+    def test_a_beat_rewritten_compact_row_is_not_drift(self):
+        call_command("sync_beat_schedule", stdout=StringIO())
+        row = PeriodicTask.objects.select_related("crontab").get(
+            name="nightly_ledger_reconciliation"
+        )
+        cron = row.crontab
+        cron.minute = "0"
+        cron.hour = "2"
+        cron.day_of_week = "*"
+        cron.day_of_month = "*"
+        cron.month_of_year = "*"
+        cron.save()
+        drift = beat_schedule_drift()
+        self.assertEqual(drift, {"missing": [], "extra": [], "changed": []})

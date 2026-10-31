@@ -1,10 +1,42 @@
+import ast
+
 from celery.schedules import crontab as crontab_schedule
+from celery.schedules import crontab_parser
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django_celery_beat.models import CrontabSchedule, IntervalSchedule, PeriodicTask
 
 
-CRONTAB_FIELDS = ("minute", "hour", "day_of_week", "day_of_month", "month_of_year")
+CRONTAB_FIELDS = (
+    ("minute", 60, 0),
+    ("hour", 24, 0),
+    ("day_of_week", 7, 0),
+    ("day_of_month", 31, 1),
+    ("month_of_year", 12, 1),
+)
+
+
+def _cron_set(value, maximum: int, minimum: int) -> set:
+    if isinstance(value, (set, frozenset, list, tuple)):
+        return {int(item) for item in value}
+    if isinstance(value, int):
+        return {value}
+    text = str(value).strip()
+    if text.startswith("{") and text.endswith("}"):
+        parsed = ast.literal_eval(text)
+        return {int(item) for item in parsed}
+    return set(crontab_parser(maximum, minimum).parse(text))
+
+
+def _cron_fields_match(stored, declared) -> bool:
+    try:
+        return all(
+            _cron_set(getattr(stored, name), maximum, minimum)
+            == _cron_set(getattr(declared, name), maximum, minimum)
+            for name, maximum, minimum in CRONTAB_FIELDS
+        )
+    except (TypeError, ValueError, SyntaxError):
+        return False
 
 
 def _schedule_matches(task, spec) -> bool:
@@ -17,9 +49,7 @@ def _schedule_matches(task, spec) -> bool:
         )
     if isinstance(spec, crontab_schedule):
         cron = task.crontab
-        return cron is not None and all(
-            str(getattr(cron, name)) == str(getattr(spec, name)) for name in CRONTAB_FIELDS
-        )
+        return cron is not None and _cron_fields_match(cron, spec)
     return False
 
 

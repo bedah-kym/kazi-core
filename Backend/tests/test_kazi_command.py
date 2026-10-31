@@ -13,9 +13,11 @@ import json
 import os
 import shutil
 import signal
+import socket
 import subprocess  # nosec B404 - real throwaway children in platform tests
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from contextlib import redirect_stdout
@@ -83,6 +85,20 @@ def _stop(proc):
         pass
 
 
+def _port_open(port):
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
+def _free_port():
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
 def _kill_leftovers(paths):
     state = K.read_json(paths.state) or {}
     for child in state.get("children") or []:
@@ -146,6 +162,8 @@ class ProcessPlanTests(unittest.TestCase):
         self.assertIn("--pool=solo", windows["worker"].argv)
         self.assertIn("--pool=prefork", posix["worker"].argv)
         self.assertTrue(any(part.startswith("--hostname=kazi-") for part in windows["worker"].argv))
+        self.assertIn("--timeout-graceful-shutdown", windows["web"].argv)
+        self.assertIn("20", windows["web"].argv)
 
 
 class CreationFlagTests(unittest.TestCase):
@@ -342,6 +360,10 @@ class TextTests(unittest.TestCase):
 
 
 class PlanAndSupervisorTests(unittest.TestCase):
+    def test_web_force_kill_is_later_than_both_graces(self):
+        self.assertEqual(K.web_force_kill_seconds(20), 50)
+        self.assertEqual(K.web_force_kill_seconds(0), 10)
+
     def test_stop_order_is_web_worker_beat_sidecar(self):
         specs = [
             K.ChildSpec("sidecar", ["x"]),
@@ -455,6 +477,30 @@ class UpExitTests(unittest.TestCase):
         self.assertIn("FAIL web did not answer HTTP", output)
         self.assertIn("web.log", output)
 
+    def test_a_second_up_says_it_is_starting_without_claiming_not_running(self):
+        tmp = _tmpdir()
+        try:
+            settings = _settings()
+            paths = K.RuntimePaths(tmp)
+            out = StringIO()
+
+            class BusyLock:
+                def __init__(self, *args, **kwargs):
+                    pass
+
+                def acquire(self):
+                    return False
+
+            with patch.object(K, "load_settings", return_value=(settings, None)), \
+                    patch.object(K, "SupervisorLock", BusyLock), \
+                    redirect_stdout(out):
+                code = K.cmd_up(paths, os.name, autostart=False, foreground=False)
+            self.assertEqual(code, 0)
+            self.assertIn("already starting or running", out.getvalue())
+            self.assertNotIn("Kazi is not running.", out.getvalue())
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
 
 class JobFailureTests(unittest.TestCase):
     class FailingJob:
@@ -545,6 +591,98 @@ class RealSpecImportTests(unittest.TestCase):
                 f"{name} import failed from {spec.cwd}: {result.stdout}{result.stderr}",
             )
             self.assertIn(marker, result.stdout)
+
+
+class WebShutdownTests(unittest.TestCase):
+    def test_uvicorn_lifespan_runs_before_the_force_kill(self):
+        tmp = _tmpdir()
+        marker = tmp / "lifespan"
+        started = tmp / "request-started"
+        port = _free_port()
+        app = tmp / "app.py"
+        app.write_text(
+            """
+import asyncio
+import os
+from pathlib import Path
+
+MARKER = Path(os.environ["KAZI_TEST_MARKER"])
+STARTED = Path(os.environ["KAZI_TEST_STARTED"])
+
+
+async def application(scope, receive, send):
+    if scope["type"] == "lifespan":
+        while True:
+            message = await receive()
+            if message["type"] == "lifespan.startup":
+                await send({"type": "lifespan.startup.complete"})
+            elif message["type"] == "lifespan.shutdown":
+                MARKER.write_text("lifespan")
+                await send({"type": "lifespan.shutdown.complete"})
+                return
+    if scope["type"] == "http":
+        STARTED.write_text("started")
+        await asyncio.sleep(60)
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+""",
+            encoding="utf-8",
+        )
+        settings = _settings(turn_shutdown_grace_seconds=2)
+        settings["web"]["port"] = port
+        web = {spec.name: spec for spec in K.build_child_specs(settings, os.name)}["web"]
+        argv = list(web.argv)
+        argv[argv.index("Backend.asgi:application")] = "app:application"
+        self.assertIn("--timeout-graceful-shutdown", argv)
+        proc = None
+        paths = None
+        thread = None
+        old_marker = os.environ.get("KAZI_TEST_MARKER")
+        old_started = os.environ.get("KAZI_TEST_STARTED")
+        os.environ["KAZI_TEST_MARKER"] = str(marker)
+        os.environ["KAZI_TEST_STARTED"] = str(started)
+        try:
+            proc, paths = _supervise(tmp, [{
+                "name": "web", "argv": argv, "cwd": str(tmp),
+            }])
+            self.assertTrue(_wait_until(lambda: _port_open(port), timeout=30))
+
+            def slow_request():
+                connection = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
+                try:
+                    connection.request("GET", "/slow")
+                    connection.getresponse().read()
+                except OSError:
+                    pass
+                finally:
+                    connection.close()
+
+            thread = threading.Thread(target=slow_request, daemon=True)
+            thread.start()
+            self.assertTrue(_wait_until(started.exists, timeout=20))
+            response = K.control_request(paths, "/stop", method="POST")
+            self.assertEqual(response["status"], 202)
+            self.assertTrue(
+                _wait_until(marker.exists, timeout=20),
+                "lifespan shutdown did not run before the force-kill",
+            )
+            proc.wait(timeout=20)
+            self.assertIsNotNone(proc.poll())
+        finally:
+            _stop(proc)
+            if proc is not None and paths is not None:
+                _kill_leftovers(paths)
+            if thread is not None:
+                thread.join(timeout=2)
+            if old_marker is None:
+                os.environ.pop("KAZI_TEST_MARKER", None)
+            else:
+                os.environ["KAZI_TEST_MARKER"] = old_marker
+            if old_started is None:
+                os.environ.pop("KAZI_TEST_STARTED", None)
+            else:
+                os.environ["KAZI_TEST_STARTED"] = old_started
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 @unittest.skipUnless(WINDOWS, "real Windows process semantics")

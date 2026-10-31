@@ -70,6 +70,11 @@ Every child is started with list-form arguments. There is no `shell=True` and
 no `cmd /c`, which is what made a quoting mistake report success while
 starting nothing during the 2026-10-25 start-up.
 
+On a remote database, beat can take about two minutes to send its first task:
+the `DatabaseScheduler` rewrites every `PeriodicTask` row at startup. A
+measured run here took 107 seconds. This is expected, not a stuck supervisor;
+the reaper's first run waits for it.
+
 ## Restarts, stop order and identity
 
 The supervisor holds an exclusive OS lock, so a second `up` (manual or from
@@ -86,6 +91,16 @@ The worker gets a bounded warm shutdown: the supervisor sends the shutdown and
 waits up to `KAZI_WORKER_SHUTDOWN_SECONDS` (default 300) for a running task,
 then terminates it. Raise or lower that value for tasks that run longer or
 shorter.
+
+Web gets uvicorn's `--timeout-graceful-shutdown` set to
+`TURN_SHUTDOWN_GRACE_SECONDS`. Uvicorn first waits that long for in-flight
+tasks, then runs the ASGI lifespan shutdown, which gives live turns the same
+grace before closing the scheduler and HTTP clients. The supervisor's
+force-kill is later than both: `2 x TURN_SHUTDOWN_GRACE_SECONDS + 10` seconds.
+A long turn therefore ends through uvicorn's cancellation path (saved as a
+terminal Turn) and the lifespan handler runs, instead of the old behaviour
+where uvicorn waited forever for the task and was force-killed before the
+lifespan could run.
 
 On Windows the supervisor is started with `CREATE_NO_WINDOW` and joins its
 own job object with `KILL_ON_JOB_CLOSE` **before** it spawns anything, so

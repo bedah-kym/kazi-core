@@ -164,7 +164,10 @@ object.
 user's Startup folder (`shell:startup`). It runs `kazi up --autostart`, which
 waits and retries Django settings, service checks and migrations for up to
 three minutes because Redis and the database may not be ready at logon.
-`kazi autostart disable` removes exactly that file.
+The generated `.cmd` turns echo off first, creates the log folder before it
+redirects, escapes `%` in paths, and appends the reason to
+`.kazi/logs/autostart.log` when Python, the checkout, `.env` or `kazi up`
+itself fails. `kazi autostart disable` removes exactly that file.
 
 ### Linux
 
@@ -182,17 +185,10 @@ Without `loginctl enable-linger` the unit runs only while you are logged in.
 
 ### macOS
 
-macOS is documented only. A launchd plist can run `kazi run` at login:
-
-```xml
-<key>ProgramArguments</key>
-<array>
-  <string>/path/to/repo/scripts/kazi.py</string>
-  <string>run</string>
-</array>
-<key>RunAtLoad</key><true/>
-<key>KeepAlive</key><true/>
-```
+macOS is **not supported yet**. `kazi` has no reliable process-identity
+implementation there and does not write a launchd unit, so `up`, `down`,
+`status`, `doctor` and `autostart` print a plain unsupported message and exit
+non-zero. Use the manual commands in [Run Locally](run-locally.md) instead.
 
 ## What it does not do
 

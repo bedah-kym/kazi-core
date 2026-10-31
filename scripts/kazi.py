@@ -24,7 +24,6 @@ import json
 import os
 import secrets
 import signal
-import shutil
 import socket
 import subprocess  # nosec B404 - list argv only, no shell
 import sys
@@ -55,7 +54,6 @@ RESTART_MAX_SECONDS = 30
 STOP_ORDER = ("web", "worker", "beat", "sidecar")
 LOG_MAX_BYTES = 10 * 1024 * 1024
 LOG_KEEP = 5
-LIVE_LOG_CHECK_SECONDS = 2
 AUTOSTART_WAIT_SECONDS = 180
 WEB_READY_SECONDS = 240
 WORKER_READY_SECONDS = 120
@@ -78,10 +76,17 @@ WORKER_COUNT_KEYS = (
     "UVICORN_WORKERS",
 )
 AUTOSTART_MARKER = "managed by kazi"
+MACOS_UNSUPPORTED = (
+    "macOS is not supported by kazi yet. Use the manual steps in docs/run-locally.md."
+)
 
 
 def system_name(value: Optional[str] = None) -> str:
-    return value or os.name
+    if value is not None:
+        return value
+    if sys.platform == "darwin":
+        return "darwin"
+    return os.name
 
 
 def is_windows(value: Optional[str] = None) -> bool:
@@ -527,6 +532,7 @@ class ChildSlot:
     next_start: float = 0.0
     given_up: bool = False
     last_exit: Optional[int] = None
+    pump: Optional[object] = None
 
     def as_state(self) -> dict:
         if self.proc is not None:
@@ -626,30 +632,112 @@ def rotate_log(path: Path, max_bytes: int = LOG_MAX_BYTES, keep: int = LOG_KEEP)
     return True
 
 
-def rotate_live_log(path: Path, max_bytes: int = LOG_MAX_BYTES, keep: int = LOG_KEEP) -> bool:
-    """Bound a running child's log without closing its handle.
+class RotatingLogWriter:
+    """The only writer for one child's log; rotation never touches the child."""
 
-    The child's append handle keeps writing at the end of the truncated file.
-    A copy is kept as .1; failures are ignored because a busy reader or an
-    antivirus hold must never stop the stack.
-    """
-    try:
-        if path.stat().st_size < max_bytes:
-            return False
-    except OSError:
-        return False
-    for index in range(keep - 1, 0, -1):
-        older = path.with_name(f"{path.name}.{index}")
-        newer = path.with_name(f"{path.name}.{index + 1}")
-        if older.exists():
-            _replace_log_file(older, newer)
-    try:
-        shutil.copyfile(path, path.with_name(f"{path.name}.1"))
-        with open(path, "r+b") as handle:
-            handle.truncate(0)
-        return True
-    except OSError:
-        return False
+    def __init__(self, path: Path, max_bytes: int = LOG_MAX_BYTES, keep: int = LOG_KEEP):
+        self.path = Path(path)
+        self.max_bytes = max(1, int(max_bytes))
+        self.keep = max(1, int(keep))
+        self._handle = None
+        self.size = 0
+
+    def _open(self) -> None:
+        self._handle = open(self.path, "ab", buffering=0)
+        try:
+            self.size = self.path.stat().st_size
+        except OSError:
+            self.size = 0
+
+    def _close(self) -> None:
+        if self._handle is not None:
+            try:
+                self._handle.close()
+            except OSError:
+                pass
+            self._handle = None
+
+    def _rotate(self) -> None:
+        self._close()
+        try:
+            for index in range(self.keep - 1, 0, -1):
+                older = self.path.with_name(f"{self.path.name}.{index}")
+                newer = self.path.with_name(f"{self.path.name}.{index + 1}")
+                if older.exists():
+                    _replace_log_file(older, newer)
+            os.replace(self.path, self.path.with_name(f"{self.path.name}.1"))
+        except OSError:
+            try:
+                with open(self.path, "wb"):
+                    pass
+            except OSError:
+                pass
+        try:
+            self._open()
+        except OSError:
+            self._handle = None
+
+    def write(self, data: bytes) -> None:
+        if not data:
+            return
+        if len(data) > self.max_bytes:
+            data = data[-self.max_bytes:]
+        try:
+            if self._handle is None:
+                self._open()
+            if self._handle is None:
+                return
+            if self.size + len(data) > self.max_bytes:
+                self._rotate()
+            if self._handle is None:
+                return
+            self._handle.write(data)
+            self.size += len(data)
+        except OSError:
+            self._close()
+
+    def close(self) -> None:
+        self._close()
+
+
+class LogPump:
+    """Drain a child pipe into a rotating writer without blocking the child."""
+
+    def __init__(self, stream, path: Path, max_bytes: int = LOG_MAX_BYTES,
+                 keep: int = LOG_KEEP):
+        self.stream = stream
+        self.writer = RotatingLogWriter(path, max_bytes, keep)
+        self.thread = threading.Thread(
+            target=self.run, name=f"kazi-log-{Path(path).stem}", daemon=True,
+        )
+
+    def start(self) -> None:
+        self.thread.start()
+
+    def run(self) -> None:
+        read = getattr(self.stream, "read1", None) or self.stream.read
+        try:
+            while True:
+                data = read(65536)
+                if not data:
+                    break
+                self.writer.write(data)
+        except (OSError, ValueError):
+            pass
+        finally:
+            self.writer.close()
+
+    def is_alive(self) -> bool:
+        return self.thread.is_alive()
+
+    def join(self, timeout: float = 5.0) -> None:
+        self.thread.join(timeout=max(0.0, timeout))
+
+    def close_stream(self) -> None:
+        try:
+            self.stream.close()
+        except OSError:
+            pass
 
 
 def cleanup_posix_survivors(paths: RuntimePaths, system: Optional[str] = None, wait_seconds: float = 5.0) -> int:
@@ -730,6 +818,8 @@ class Supervisor:
         child_env: Optional[dict] = None,
         grace_seconds: float = 20.0,
         job_factory: Optional[Callable[[], "WindowsJob"]] = None,
+        log_max_bytes: int = LOG_MAX_BYTES,
+        log_keep: int = LOG_KEEP,
     ):
         self.paths = paths
         self.system = system_name(system)
@@ -745,7 +835,8 @@ class Supervisor:
         self.creation: Optional[str] = None
         self.started_at = time.time()
         self.job: Optional[WindowsJob] = None
-        self.last_log_check = 0.0
+        self.log_max_bytes = max(1, int(log_max_bytes))
+        self.log_keep = max(1, int(log_keep))
 
     def stop_names(self) -> List[str]:
         present = {slot.spec.name for slot in self.slots}
@@ -776,6 +867,14 @@ class Supervisor:
                 except (OSError, ValueError):
                     pass
 
+    def _write_control(self, payload: dict, attempts: int = 3) -> bool:
+        for attempt in range(attempts):
+            if write_json(self.paths.control, payload):
+                return True
+            if attempt < attempts - 1:
+                time.sleep(0.2)
+        return False
+
     def _setup_job(self) -> bool:
         if not is_windows(self.system):
             return True
@@ -795,22 +894,28 @@ class Supervisor:
 
     def _spawn(self, slot: ChildSlot) -> None:
         path = self.paths.log_path(slot.spec.name)
+        old = slot.pump
+        if old is not None and old.is_alive():
+            old.join(timeout=0.5)
+            if old.is_alive():
+                old.close_stream()
+                old.join(timeout=0.2)
         rotate_log(path)
-        log = open(path, "ab", buffering=0)
-        try:
-            proc = subprocess.Popen(  # nosec B603 - list argv, no shell
-                slot.spec.argv,
-                cwd=slot.spec.cwd or str(REPO_ROOT),
-                env=self.child_env,
-                stdin=subprocess.DEVNULL,
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                **child_popen_kwargs(self.system),
-            )
-        finally:
-            log.close()
+        proc = subprocess.Popen(  # nosec B603 - list argv, no shell
+            slot.spec.argv,
+            cwd=slot.spec.cwd or str(REPO_ROOT),
+            env=self.child_env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            **child_popen_kwargs(self.system),
+        )
         slot.proc = proc
         slot.creation = process_creation_time(proc.pid, self.system)
+        slot.pump = LogPump(
+            proc.stdout, path, self.log_max_bytes, self.log_keep,
+        )
+        slot.pump.start()
 
     def _posix_owns(self, slot: ChildSlot) -> bool:
         if slot.proc is None or not process_matches(slot.proc.pid, slot.creation, "posix"):
@@ -895,6 +1000,17 @@ class Supervisor:
                 self._terminate(slot)
         for slot in self.slots:
             self._terminate(slot, wait_seconds=1)
+        self._stop_pumps()
+
+    def _stop_pumps(self) -> None:
+        for slot in self.slots:
+            pump = slot.pump
+            if pump is None:
+                continue
+            pump.join(timeout=5)
+            if pump.is_alive():
+                pump.close_stream()
+                pump.join(timeout=1)
 
     def _record_spawn_failure(self, slot: ChildSlot, exc: OSError, now: float) -> None:
         slot.last_exit = f"spawn failed: {exc}"
@@ -943,14 +1059,6 @@ class Supervisor:
                 if now >= slot.next_start:
                     self._try_spawn(slot, now)
 
-    def _rotate_running_logs(self, now: float) -> None:
-        if now - self.last_log_check < LIVE_LOG_CHECK_SECONDS:
-            return
-        self.last_log_check = now
-        for slot in self.slots:
-            if slot.proc is not None and slot.proc.poll() is None:
-                rotate_live_log(self.paths.log_path(slot.spec.name))
-
     def run(self) -> int:
         self.paths.ensure()
         lock = SupervisorLock(self.paths.lock, self.system)
@@ -968,19 +1076,28 @@ class Supervisor:
                 self._try_spawn(slot, now)
             server = ControlServer(self.state, self._request_stop)
             port = server.start()
-            write_json(self.paths.control, {
+            if not self._write_control({
                 "port": port,
                 "token": server.token,
                 "pid": os.getpid(),
                 "creation": self.creation,
-            })
+            }):
+                print(
+                    "FAIL control file: could not write it after retries; shutting down.",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                server.stop()
+                self.stop_all()
+                remove_file(self.paths.control)
+                remove_file(self.paths.state)
+                return 1
             write_json(self.paths.state, {**self.state(), "supervisor_id": self.supervisor_id})
             last_state = time.monotonic()
             try:
                 while not self.stop_requested.is_set():
                     now = time.monotonic()
                     self._reap_children(now)
-                    self._rotate_running_logs(now)
                     if now - last_state >= 1.0:
                         write_json(
                             self.paths.state,
@@ -1227,6 +1344,26 @@ def _host_port(url: Optional[str], default_port: int) -> tuple[Optional[str], in
     return parsed.hostname, int(parsed.port or default_port)
 
 
+DB_DEFAULT_PORTS = {
+    "postgresql": 5432,
+    "postgis": 5432,
+    "mysql": 3306,
+    "oracle": 1521,
+    "mssql": 1433,
+}
+
+
+def database_port(database: dict) -> int:
+    port = _as_int(database.get("port"), 0)
+    if port:
+        return port
+    engine = str(database.get("engine") or "").lower()
+    for name, default in DB_DEFAULT_PORTS.items():
+        if name in engine:
+            return default
+    return 5432
+
+
 def check_tcp(
     name: str,
     host: Optional[str],
@@ -1304,9 +1441,28 @@ def check_shell_profile(profile: str) -> Check:
 
 
 def _default_binder(host: str, port: int) -> bool:
+    """Return True only when nothing is listening and the port can be bound.
+
+    A connect probe catches a listener that also set SO_REUSEADDR (Windows
+    runserver does). The bind then uses SO_EXCLUSIVEADDRUSE on Windows so the
+    same option cannot make a held port look free.
+    """
+    probe_host = "127.0.0.1" if host in ("", "0.0.0.0") else host  # nosec B104 - check only
+    try:
+        with socket.create_connection((probe_host, port), timeout=0.5):
+            return False
+    except OSError:
+        pass
     family = socket.AF_INET6 if ":" in host else socket.AF_INET
     with socket.socket(family, socket.SOCK_STREAM) as sock:
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        exclusive = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+        if exclusive is not None:
+            try:
+                sock.setsockopt(socket.SOL_SOCKET, exclusive, 1)
+            except OSError:
+                pass
+        else:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             sock.bind((host, port))
         except OSError:
@@ -1429,7 +1585,7 @@ def settings_checks(settings: dict, env: dict, connector, binder) -> List[Check]
             connector,
         ),
         check_tcp(
-            "Database", database.get("host"), _as_int(database.get("port"), 5432),
+            "Database", database.get("host"), database_port(database),
             connector, level="FAIL",
         ),
     ]
@@ -1534,7 +1690,9 @@ def wait_for_worker(node: Optional[str] = None, timeout: float = WORKER_READY_SE
                 timeout=10, check=False,
             )
         except (OSError, subprocess.TimeoutExpired):
-            return False
+            next_report = _report_progress("worker", started, next_report, progress)
+            time.sleep(1)
+            continue
         if result.returncode == 0 and "pong" in (result.stdout or "").lower():
             return True
         next_report = _report_progress("worker", started, next_report, progress)
@@ -1566,11 +1724,31 @@ def run_preflight(settings: Optional[dict], paths: RuntimePaths, env: dict, dote
     return 1 if failures else 0
 
 
+def web_child_status(paths: RuntimePaths) -> Optional[dict]:
+    response = control_request(paths, "/status")
+    if response is None or response.get("status") != 200:
+        return None
+    for child in (response.get("body") or {}).get("children") or []:
+        if child.get("name") == "web":
+            return child
+    return None
+
+
+def web_child_ready(child: Optional[dict]) -> bool:
+    return bool(
+        child
+        and child.get("state") == "running"
+        and child.get("pid")
+        and not child.get("restarts")
+    )
+
+
 def readiness_errors(web_ready: bool, worker_ready: bool, plan: Sequence[str],
-                     paths: RuntimePaths) -> List[str]:
+                     paths: RuntimePaths, web_detail: Optional[str] = None) -> List[str]:
     errors = []
     if not web_ready:
-        errors.append(f"web did not answer HTTP; see {paths.log_path('web')}")
+        detail = web_detail or "web did not answer HTTP"
+        errors.append(f"{detail}; see {paths.log_path('web')}")
     if "worker" in plan and not worker_ready:
         errors.append(f"worker did not answer a broker ping; see {paths.log_path('worker')}")
     return errors
@@ -1628,16 +1806,41 @@ def autostart_file(system: Optional[str] = None, env: Optional[dict] = None) -> 
     return Path(env.get("HOME") or Path.home()) / ".config" / "systemd" / "user" / "kazi.service"
 
 
+def _cmd_path(value) -> str:
+    return str(value).replace("%", "%%")
+
+
 def windows_autostart_text(root: Path = REPO_ROOT) -> str:
-    python = Path(sys.executable)
-    script = root / "scripts" / "kazi.py"
-    log = root / ".kazi" / "logs" / "autostart.log"
-    return (
-        f"REM {AUTOSTART_MARKER}\r\n"
-        "@echo off\r\n"
-        f'cd /d "{root}"\r\n'
-        f'"{python}" "{script}" up --autostart >> "{log}" 2>&1\r\n'
-    )
+    EOL = chr(13) + chr(10)
+    python = _cmd_path(sys.executable)
+    script = _cmd_path(root / "scripts" / "kazi.py")
+    root_text = _cmd_path(root)
+    log_dir = _cmd_path(root / ".kazi" / "logs")
+    log = _cmd_path(root / ".kazi" / "logs" / "autostart.log")
+    env_file = _cmd_path(root / ".env")
+    lines = [
+        "@echo off",
+        f"REM {AUTOSTART_MARKER}",
+        "setlocal",
+        f'set "KAZI_LOG={log}"',
+        f'if not exist "{log_dir}" mkdir "{log_dir}"',
+        f'if not exist "{python}" (',
+        f'  echo [%date% %time%] FAIL Python not found: {python}>>"%KAZI_LOG%"',
+        "  exit /b 1",
+        ")",
+        f'if not exist "{env_file}" echo [%date% %time%] NOTE .env not found; '
+        f'using the process environment>>"%KAZI_LOG%"',
+        f'cd /d "{root_text}" 2>>"%KAZI_LOG%"',
+        "if errorlevel 1 (",
+        f'  echo [%date% %time%] FAIL could not change to {root_text}>>"%KAZI_LOG%"',
+        "  exit /b 1",
+        ")",
+        f'"{python}" "{script}" up --autostart >> "%KAZI_LOG%" 2>&1',
+        'if errorlevel 1 echo [%date% %time%] FAIL kazi up exited with '
+        'errorlevel %errorlevel%>>"%KAZI_LOG%"',
+        "endlocal",
+    ]
+    return EOL.join(lines) + EOL
 
 
 def systemd_unit_text(root: Path = REPO_ROOT) -> str:
@@ -1672,7 +1875,7 @@ def autostart_enable(system: Optional[str] = None, env: Optional[dict] = None,
                      root: Path = REPO_ROOT) -> int:
     target = system_name(system)
     if target == "darwin":
-        print("macOS autostart is documented only; see docs/kazi-command.md.")
+        print(MACOS_UNSUPPORTED)
         return 1
     path = autostart_file(system, env)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1683,6 +1886,9 @@ def autostart_enable(system: Optional[str] = None, env: Optional[dict] = None,
 
 
 def autostart_disable(system: Optional[str] = None, env: Optional[dict] = None) -> int:
+    if system_name(system) == "darwin":
+        print(MACOS_UNSUPPORTED)
+        return 1
     path = autostart_file(system, env)
     if not path.exists():
         print("Autostart is not enabled.")
@@ -1701,6 +1907,9 @@ def autostart_disable(system: Optional[str] = None, env: Optional[dict] = None) 
 
 
 def autostart_status(system: Optional[str] = None, env: Optional[dict] = None) -> int:
+    if system_name(system) == "darwin":
+        print(MACOS_UNSUPPORTED)
+        return 1
     path = autostart_file(system, env)
     if path.exists():
         print(f"Autostart is enabled: {path}")
@@ -1711,9 +1920,12 @@ def autostart_status(system: Optional[str] = None, env: Optional[dict] = None) -
 
 # --- commands ---------------------------------------------------------------
 
-def write_plan(specs: Sequence[ChildSpec], paths: RuntimePaths, grace_seconds: float = 20.0) -> None:
-    write_json(paths.plan, {
+def write_plan(specs: Sequence[ChildSpec], paths: RuntimePaths, grace_seconds: float = 20.0,
+               log_max_bytes: int = LOG_MAX_BYTES, log_keep: int = LOG_KEEP) -> bool:
+    return write_json(paths.plan, {
         "grace_seconds": float(grace_seconds),
+        "log_max_bytes": int(log_max_bytes),
+        "log_keep": int(log_keep),
         "children": [
             {"name": spec.name, "argv": list(spec.argv), "cwd": spec.cwd} for spec in specs
         ],
@@ -1804,7 +2016,10 @@ def cmd_up(paths: RuntimePaths, system: Optional[str], autostart: bool, foregrou
         grace = _grace(settings)
         if foreground:
             return Supervisor(specs, paths, system, grace_seconds=grace).run()
-        write_plan(specs, paths, grace)
+        if not write_plan(specs, paths, grace):
+            remove_file(paths.plan)
+            print("FAIL plan: could not write the supervisor plan; nothing was started.", flush=True)
+            return 1
         argv = [
             sys.executable, str(Path(__file__).resolve()), "__supervise",
             "--plan", str(paths.plan),
@@ -1844,6 +2059,13 @@ def cmd_up(paths: RuntimePaths, system: Optional[str], autostart: bool, foregrou
             settings, timeout=WEB_READY_SECONDS,
             progress=lambda seconds: print(f"  web still starting ({seconds:.0f}s)", flush=True),
         )
+        web_detail = None
+        if web_ready:
+            web_child = web_child_status(paths)
+            if not web_child_ready(web_child):
+                state = (web_child or {}).get("state") or "missing"
+                web_detail = f"the URL answered but our web child is {state}"
+                web_ready = False
         worker_ready = True
         if "worker" in plan:
             print("Waiting for the worker...", flush=True)
@@ -1851,7 +2073,7 @@ def cmd_up(paths: RuntimePaths, system: Optional[str], autostart: bool, foregrou
                 timeout=WORKER_READY_SECONDS,
                 progress=lambda seconds: print(f"  worker still starting ({seconds:.0f}s)", flush=True),
             )
-        errors = readiness_errors(web_ready, worker_ready, plan, paths)
+        errors = readiness_errors(web_ready, worker_ready, plan, paths, web_detail)
         if errors:
             for message in errors:
                 print(f"FAIL {message}", flush=True)
@@ -1969,6 +2191,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     system = system_name()
+    if system == "darwin" and not args.command.startswith("__"):
+        print(MACOS_UNSUPPORTED)
+        return 1
     if args.command == "__supervise":
         payload = read_json(Path(args.plan))
         if payload is None:
@@ -1978,8 +2203,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if args.log_dir:
             paths.logs = Path(args.log_dir)
         grace = float(payload.get("grace_seconds") or 20.0)
+        log_max = _as_int(payload.get("log_max_bytes"), LOG_MAX_BYTES)
+        log_keep = _as_int(payload.get("log_keep"), LOG_KEEP)
         return Supervisor(
             specs_from_plan(payload), paths, system, grace_seconds=grace,
+            log_max_bytes=log_max, log_keep=log_keep,
         ).run()
     if args.command == "__lock-holder":
         lock = SupervisorLock(Path(args.path), system)

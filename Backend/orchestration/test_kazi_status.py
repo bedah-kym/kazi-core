@@ -9,7 +9,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.core.management import call_command
-from django.db import OperationalError
+from django.db import OperationalError, connection
 from django.test import TestCase, override_settings
 
 from orchestration.management.commands import kazi_status
@@ -73,6 +73,14 @@ class KaziStatusTests(TestCase):
 
 
 class KaziStatusHostTests(TestCase):
+    def test_a_database_url_without_a_port_uses_the_engine_default(self):
+        with patch.object(connection, "settings_dict", {
+            "ENGINE": "django.db.backends.postgresql",
+            "HOST": "db.example",
+            "PORT": "",
+        }):
+            self.assertEqual(kazi_status._database()["port"], 5432)
+
     @override_settings(TEMPORAL_HOST="localhost:7233")
     def test_temporal_host_without_a_scheme_is_parsed(self):
         temporal = kazi_status._temporal()

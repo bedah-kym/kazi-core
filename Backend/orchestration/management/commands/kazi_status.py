@@ -37,6 +37,26 @@ def _host_port(value: str, default_port: int) -> tuple[str, int]:
         return "", default_port
 
 
+DEFAULT_DB_PORTS = {
+    "postgresql": 5432,
+    "postgis": 5432,
+    "mysql": 3306,
+    "oracle": 1521,
+    "mssql": 1433,
+}
+
+
+def _db_port(engine: str, value) -> int:
+    port = _as_int(value, 0)
+    if port:
+        return port
+    key = str(engine or "").rsplit(".", 1)[-1].lower()
+    for name, default in DEFAULT_DB_PORTS.items():
+        if name in key:
+            return default
+    return 0
+
+
 def _database() -> dict:
     try:
         from django.db import connection
@@ -46,7 +66,7 @@ def _database() -> dict:
         return {
             "engine": engine.rsplit(".", 1)[-1],
             "host": str(config.get("HOST") or ""),
-            "port": _as_int(config.get("PORT"), 0),
+            "port": _db_port(engine, config.get("PORT")),
         }
     except Exception:
         return {"engine": "", "host": "", "port": 0}

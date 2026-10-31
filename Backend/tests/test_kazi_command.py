@@ -8,6 +8,7 @@ exercised for real, not mocked above the layer where it can fail.
 from __future__ import annotations
 
 import http.client
+import http.server
 import importlib.util
 import json
 import os
@@ -20,7 +21,7 @@ import tempfile
 import threading
 import time
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
@@ -110,11 +111,13 @@ def _kill_leftovers(paths):
                 pass
 
 
-def _supervise(tmp: Path, children):
+def _supervise(tmp: Path, children, plan_extra=None):
     plan = tmp / "plan.json"
     state = tmp / "state"
     logs = tmp / "logs"
-    K.write_json(plan, {"children": children})
+    payload = {"children": children}
+    payload.update(plan_extra or {})
+    K.write_json(plan, payload)
     argv = [
         sys.executable, str(SCRIPTS / "kazi.py"), "__supervise",
         "--plan", str(plan), "--state-dir", str(state), "--log-dir", str(logs),
@@ -479,12 +482,16 @@ class UpExitTests(unittest.TestCase):
             settings = _settings()
             paths = K.RuntimePaths(tmp)
             out = StringIO()
+            web_child = {
+                "name": "web", "state": "running", "pid": 123, "restarts": 0,
+            }
             with patch.object(K, "load_settings", return_value=(settings, None)), \
                     patch.object(K, "_bootstrap", return_value=settings), \
                     patch.object(K, "run_manage", return_value=0), \
                     patch.object(K, "wait_for_control", return_value=True), \
                     patch.object(K, "wait_for_web", return_value=web_ready), \
                     patch.object(K, "wait_for_worker", return_value=True), \
+                    patch.object(K, "web_child_status", return_value=web_child), \
                     patch.object(K.subprocess, "Popen", return_value=self.FakeProcess()), \
                     redirect_stdout(out):
                 code = K.cmd_up(paths, os.name, autostart=False, foreground=False)
@@ -503,6 +510,23 @@ class UpExitTests(unittest.TestCase):
         self.assertNotIn("Kazi is up", output)
         self.assertIn("FAIL web did not answer HTTP", output)
         self.assertIn("web.log", output)
+
+    def test_a_failed_plan_write_stops_up(self):
+        tmp = _tmpdir()
+        try:
+            settings = _settings()
+            paths = K.RuntimePaths(tmp)
+            out = StringIO()
+            with patch.object(K, "load_settings", return_value=(settings, None)), \
+                    patch.object(K, "_bootstrap", return_value=settings), \
+                    patch.object(K, "run_manage", return_value=0), \
+                    patch.object(K, "write_plan", return_value=False), \
+                    redirect_stdout(out):
+                code = K.cmd_up(paths, os.name, autostart=False, foreground=False)
+            self.assertEqual(code, 1)
+            self.assertIn("FAIL plan", out.getvalue())
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
     def test_a_second_up_says_it_is_starting_without_claiming_not_running(self):
         tmp = _tmpdir()
@@ -547,22 +571,46 @@ class JobFailureTests(unittest.TestCase):
 
 
 class LiveLogTests(unittest.TestCase):
-    def test_a_live_child_log_is_rotated_and_can_still_be_written(self):
+    def test_a_real_child_log_stays_bounded_without_nul_bytes(self):
         tmp = _tmpdir()
+        max_bytes = 4096
+        keep = 3
+        code = (
+            "import os,time\n"
+            "for index in range(400):\n"
+            "    line = (f'line-{index:05d}-' + 'x' * 32 + '\\n').encode()\n"
+            "    os.write(1, line)\n"
+            "    time.sleep(0.005)\n"
+            "time.sleep(300)\n"
+        )
+        proc = None
+        paths = None
         try:
-            log = tmp / "web.log"
-            handle = open(log, "ab", buffering=0)
-            try:
-                handle.write(b"x" * 20)
-                handle.flush()
-                self.assertTrue(K.rotate_live_log(log, max_bytes=5, keep=3))
-                self.assertEqual(log.stat().st_size, 0)
-                self.assertEqual((tmp / "web.log.1").read_bytes(), b"x" * 20)
-                handle.write(b"still-writing")
-            finally:
-                handle.close()
-            self.assertIn(b"still-writing", log.read_bytes())
+            proc, paths = _supervise(
+                tmp,
+                [{"name": "child", "argv": [sys.executable, "-c", code], "cwd": str(tmp)}],
+                {"log_max_bytes": max_bytes, "log_keep": keep},
+            )
+            self.assertTrue(_wait_until(
+                lambda: (paths.logs / "child.log.1").exists(), timeout=20
+            ))
+            response = K.control_request(paths, "/status")
+            self.assertEqual(response["status"], 200)
+            response = K.control_request(paths, "/stop", method="POST")
+            self.assertEqual(response["status"], 202)
+            proc.wait(timeout=20)
+            files = [item for item in paths.logs.iterdir() if item.name.startswith("child.log")]
+            self.assertGreater(len(files), 1)
+            data = b"".join(item.read_bytes() for item in files)
+            self.assertNotIn(b"\x00", data)
+            self.assertIn(b"line-", data)
+            for item in files:
+                self.assertLessEqual(item.stat().st_size, max_bytes)
+            self.assertGreater((paths.logs / "child.log.1").stat().st_size, 0)
         finally:
+            _stop(proc)
+            if proc is not None and paths is not None:
+                _kill_leftovers(paths)
             shutil.rmtree(tmp, ignore_errors=True)
 
 
@@ -709,6 +757,87 @@ async def application(scope, receive, send):
                 os.environ.pop("KAZI_TEST_STARTED", None)
             else:
                 os.environ["KAZI_TEST_STARTED"] = old_started
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+class PortReadinessTests(unittest.TestCase):
+    def test_a_real_listener_with_reuseaddr_is_not_free(self):
+        listener = socket.socket()
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        port = listener.getsockname()[1]
+        try:
+            self.assertFalse(K._default_binder("127.0.0.1", port))
+        finally:
+            listener.close()
+
+    def test_a_foreign_http_server_answers_but_is_not_our_web_child(self):
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), http.server.BaseHTTPRequestHandler)
+        server.allow_reuse_address = True
+        port = server.server_address[1]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            settings = _settings()
+            settings["web"]["port"] = port
+            self.assertTrue(K.wait_for_web(settings, timeout=2))
+            self.assertFalse(K.web_child_ready(None))
+            self.assertFalse(K.web_child_ready({
+                "name": "web", "state": "restarting", "pid": None, "restarts": 1,
+            }))
+            self.assertTrue(K.web_child_ready({
+                "name": "web", "state": "running", "pid": 123, "restarts": 0,
+            }))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+
+class WorkerPingTests(unittest.TestCase):
+    def test_a_ping_timeout_is_retried_inside_the_overall_bound(self):
+        calls = []
+
+        def fake_run(*args, **kwargs):
+            calls.append(1)
+            if len(calls) == 1:
+                raise subprocess.TimeoutExpired(cmd="celery", timeout=10)
+            return subprocess.CompletedProcess(args[0], 0, stdout="pong", stderr="")
+
+        with patch.object(K.subprocess, "run", side_effect=fake_run), \
+                patch.object(K.time, "sleep", return_value=None):
+            self.assertTrue(K.wait_for_worker(timeout=5))
+        self.assertGreaterEqual(len(calls), 2)
+
+
+class DatabasePortTests(unittest.TestCase):
+    def test_a_missing_port_uses_the_database_default(self):
+        self.assertEqual(K.database_port({"engine": "postgresql", "port": 0}), 5432)
+        self.assertEqual(K.database_port({"engine": "mysql", "port": 0}), 3306)
+        self.assertEqual(K.database_port({"engine": "postgresql", "port": 6543}), 6543)
+
+
+class ControlWriteTests(unittest.TestCase):
+    class NoJob:
+        def assign_current_process(self):
+            pass
+
+    def test_a_failed_control_write_shuts_down_cleanly(self):
+        tmp = _tmpdir()
+        try:
+            paths = K.RuntimePaths(tmp)
+            supervisor = K.Supervisor(
+                [], paths, os.name, job_factory=self.NoJob,
+            )
+            out = StringIO()
+            with patch.object(K, "write_json", return_value=False), redirect_stderr(out):
+                code = supervisor.run()
+            self.assertEqual(code, 1)
+            self.assertIn("FAIL control file", out.getvalue())
+            self.assertFalse(paths.control.exists())
+            self.assertFalse(paths.state.exists())
+        finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
 

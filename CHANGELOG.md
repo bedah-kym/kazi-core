@@ -98,6 +98,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `301` to HTTPS with `DJANGO_DEBUG=False`), instead of following the redirect
   and waiting forever.
 
+### Changed — kazi launcher round 5
+
+- Child output now flows through a pipe into a rotating writer instead of the
+  child writing the log file directly. Rotation is bounded on Windows and
+  POSIX, keeps no NUL gaps, never blocks the child or supervisor loop, and the
+  pump joins at shutdown.
+- The port probe connects before binding and uses an exclusive bind on Windows,
+  so a listener that set `SO_REUSEADDR` still counts as taken. `up` also
+  verifies that its own web child is running and has not restarted before it
+  says Kazi is up.
+- A database URL with no port uses the engine default (for example 5432 for
+  PostgreSQL) instead of failing port 0.
+- A worker ping timeout is retried inside the overall readiness bound.
+- A control-file write is retried; if it still fails, the supervisor says so,
+  stops its children and leaves no control/state files.
+- Windows autostart writes `@echo off` first, creates `.kazi/logs` before the
+  redirect, escapes `%` in paths, and logs why Python, the checkout, `.env` or
+  `kazi up` failed.
+- macOS commands now say plainly that macOS is not supported yet instead of
+  writing a systemd unit or pretending process identity works.
+- A failed supervisor plan write stops `up` with a message and removes the
+  stale plan.
+
 ### Fixed — length-limit endings
 
 - A turn stopped by the model's output limit (`max_tokens`) now ends as

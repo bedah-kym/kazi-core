@@ -145,6 +145,9 @@ Backend/mediafiles/
 # Shell-exec sidecar runtime workspace + snapshots (default SHELL_EXEC_ROOT)
 /shell_workspaces/
 
+# Local launcher runtime: supervisor state, lock, control token and logs
+/.kazi/
+
 Backend/venv/
 Backend/staticfiles/
 Backend/mediafiles/

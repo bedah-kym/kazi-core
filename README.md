@@ -140,6 +140,8 @@ Open `http://localhost:8000`, log in, and say hi to **Kazi** — your General
 room routes messages to the AI automatically.
 
 > **No keys handy?** `bash scripts/demo.sh` boots a demo instead → [run-locally](docs/run-locally.md).
+> **Running from a checkout without Docker?** `./kazi up` (PowerShell: `.\kazi up`) runs
+> doctor, migrations and the process supervisor → [the kazi command](docs/kazi-command.md).
 > **Stuck, or want the full walkthrough** (troubleshooting, non-Docker setup, Temporal)?
 > → [Quick Start guide](docs/quickstart.md).
 
@@ -177,10 +179,11 @@ reminders, contacts, and notes.
 ## Docs
 
 1. [run-locally](docs/run-locally.md) — boot in 10 minutes, no real keys
-2. [add-a-connector](docs/add-a-connector.md) — one file + one test
-3. [add-a-workflow](docs/add-a-workflow.md) — author the JSON; the runtime does the rest
-4. [operate-a-workflow](docs/operate-a-workflow.md) — approve, reject, rerun, replay
-5. [deploy-safely](docs/deploy-safely.md) — production checklist
+2. [kazi command](docs/kazi-command.md) — start, stop, check and explain a checkout
+3. [add-a-connector](docs/add-a-connector.md) — one file + one test
+4. [add-a-workflow](docs/add-a-workflow.md) — author the JSON; the runtime does the rest
+5. [operate-a-workflow](docs/operate-a-workflow.md) — approve, reject, rerun, replay
+6. [deploy-safely](docs/deploy-safely.md) — production checklist
 
 Everything else — [architecture](docs/architecture.md), [contracts](docs/contracts/README.md),
 [eval](docs/eval.md), [trace](docs/trace.md), [CHANGELOG](CHANGELOG.md) — lives in [`docs/`](docs/).

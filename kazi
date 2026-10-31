@@ -1,0 +1,7 @@
+#!/bin/sh
+# Repo-local shim: prefers the checkout venv, otherwise uses python3.
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ -x "$ROOT/.venv/bin/python" ]; then
+  exec "$ROOT/.venv/bin/python" "$ROOT/scripts/kazi.py" "$@"
+fi
+exec python3 "$ROOT/scripts/kazi.py" "$@"

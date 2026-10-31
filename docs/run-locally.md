@@ -67,6 +67,33 @@ docker compose exec web python Backend/manage.py createsuperuser
 For a non-Docker setup (Postgres + Redis on host), see
 [`docs/quickstart.md`](quickstart.md).
 
+### One command from a checkout
+
+If the repository dependencies are installed in `.venv` and `db`/`redis` are
+already running on the host, the repo-local launcher does the manual steps
+above (doctor, migrations, beat schedule and the processes):
+
+```bash
+./kazi up
+./kazi status
+./kazi down
+```
+
+In PowerShell use `.\kazi up` (the `.\` is required); `cmd.exe` uses
+`kazi.cmd up`. The launcher does not create an account, so run
+`python Backend/manage.py createsuperuser` once on a fresh database before you
+can log in.
+
+For a host install, `.env.example` is Docker-oriented: it uses the hostnames
+`db` and `redis` and leaves `DJANGO_SECRET_KEY` empty. Set
+`DJANGO_SECRET_KEY` and use URLs reachable from the host, for example
+`DATABASE_URL=postgres://kazi_user:kazi_password@localhost:5432/kazi`,
+`REDIS_URL=redis://localhost:6379/0`, and the matching
+`CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND`.
+
+See [The kazi command](kazi-command.md) for the process plan, logs, autostart
+and the doctor checks.
+
 ## Troubleshooting
 
 | Symptom | Likely cause |

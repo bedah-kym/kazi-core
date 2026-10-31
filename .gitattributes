@@ -2,6 +2,9 @@
 *.sh text eol=lf
 *.bash text eol=lf
 
+# The repo-local POSIX shim has no extension, so pin it too.
+kazi text eol=lf
+
 # Normalize Python files
 *.py text eol=lf
 

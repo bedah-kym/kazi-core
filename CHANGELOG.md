@@ -7,6 +7,139 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — the `kazi` command
+
+- A repo-local launcher (`scripts/kazi.py`, with `kazi` / `kazi.cmd` shims)
+  starts, stops, checks and explains a checkout without importing Django. The
+  process plan comes from the effective settings (`manage.py kazi_status
+  --json`), so a lite profile runs web and the sidecar only, and beat is
+  skipped when the in-process scheduler is on. `kazi up` runs doctor, prints
+  the database host, applies migrations, syncs the beat schedule and collects
+  static files when `DEBUG=False`, then prints the URL. `kazi run` does the
+  same in the foreground for systemd.
+- One supervisor holds an exclusive OS lock, restarts a crashed child with
+  backoff (five crashes in ten minutes gives up and records why), and keys
+  restarts on a stop-requested flag rather than on exit codes. On Windows the
+  supervisor is hidden with `CREATE_NO_WINDOW`, children get
+  `CREATE_NEW_PROCESS_GROUP`, and a job object with `KILL_ON_JOB_CLOSE` takes
+  them with it; a requested Ctrl+Break exit (`0xC000013A`) is not a crash. On
+  POSIX children get their own session. Stop order is web, worker (Celery warm
+  shutdown through the broker), beat, then sidecar.
+- Pid **and** creation time identify a process before any signal, kill or
+  "already up" decision, so a reused pid is never touched. The control channel
+  binds to `127.0.0.1` only, compares a random token in constant time and
+  writes it to `.kazi/run/control.json` with owner-only permissions where the
+  OS allows. `.kazi/` is git- and docker-ignored.
+- `kazi doctor` explains Python version, the virtual environment, the lock
+  file, missing required settings, `.env` overrides, Temporal/Redis/database
+  reachability, pending migrations, beat drift, the shell token and profile,
+  free ports, collected static files, the worker-count guard and the pool-size
+  cap. It prints setting names, not values. On the open shell profile it says
+  that the profile is unsandboxed and that with great power comes great
+  responsibility.
+- `kazi autostart enable|disable|status` creates a Windows Startup-folder
+  `.cmd` or a systemd **user** unit that runs `kazi run`; `--autostart` waits
+  up to three minutes for services at logon. macOS is documented only. Logs
+  live under `.kazi/logs/` and rotate by size (10 MB, five files).
+- `manage.py kazi_status --json` reports the effective profile, pending
+  migrations, beat drift, open/paused Turns, the last reaper result and the
+  database host. `sync_beat_schedule --check` reports drift read-only and exits
+  non-zero when the schedule differs.
+
+### Changed — kazi launcher round 2
+
+- Web, the Celery worker and beat now run from `Backend/`, so `Backend.asgi`
+  and `Backend.celery` import on a real checkout; a test starts each planned
+  process's real import from its real working folder on every OS.
+- `kazi up` exits 0 and prints "Kazi is up" only when web answers and, when
+  planned, the worker answers a ping for this install's own worker node. It
+  otherwise names each failed process and log and exits non-zero, leaving the
+  supervisor running for inspection. Waits print progress every five seconds.
+- The Windows supervisor joins its job object before spawning, so children
+  inherit it; job setup failure is fatal and says why. The startup lock is
+  taken before doctor and migrations, so two `up` calls cannot both migrate.
+- The worker gets a bounded warm shutdown (`KAZI_WORKER_SHUTDOWN_SECONDS`,
+  default 300 s), and its node name is unique per install. `__supervise`
+  carries `TURN_SHUTDOWN_GRACE_SECONDS` through the plan file.
+- `up` collects static files before the static check can block it. State and
+  log writes and rotations can no longer take the stack down; live logs are
+  rotated by size, and a failed child restart counts as a crash for that child
+  only. POSIX survivors are cleaned before the port check.
+- Autostart retries settings and migrations as well as services at logon, and
+  creates `.kazi/logs` so the Startup redirect has somewhere to write. Lock
+  markers are evaluated, `host:port` Temporal settings parse, children and
+  manage.py calls use UTF-8, restarting children no longer print `pid None`,
+  and the control file is owner-only from creation on POSIX (Windows ACLs are
+  documented).
+
+### Changed — kazi launcher round 3
+
+- Web is started with `--timeout-graceful-shutdown` set to
+  `TURN_SHUTDOWN_GRACE_SECONDS`, and the supervisor's force-kill waits for two
+  graces plus ten seconds. Uvicorn now reaches the ASGI lifespan shutdown while
+  a turn is in flight, so the turn's terminal state is saved before web exits
+  instead of waiting for the reaper.
+- `sync_beat_schedule --check` compares cron fields by meaning, expanding
+  compact and set forms through Celery's parser, so beat's own row rewrite no
+  longer reports false drift.
+- A second `kazi up` that finds the startup lock held says another run is
+  starting and stops, without also claiming Kazi is not running.
+
+### Changed — kazi launcher round 4
+
+- Required settings now follow the effective profile. A full install still
+  needs `DJANGO_SECRET_KEY` plus `DATABASE_URL`, `REDIS_URL`,
+  `CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND`; the lite profile needs only
+  `DJANGO_SECRET_KEY`, so `kazi up` works with the keys in `docs/run-lite.md`
+  and no `.env`, PostgreSQL, Redis or Celery.
+- The lite profile no longer warns that beat drift could not be read; the
+  in-process scheduler owns the schedule and beat does not run.
+- `kazi up` treats any HTTP answer from web as ready (including the documented
+  `301` to HTTPS with `DJANGO_DEBUG=False`), instead of following the redirect
+  and waiting forever.
+
+### Changed — kazi launcher round 5
+
+- Child output now flows through a pipe into a rotating writer instead of the
+  child writing the log file directly. Rotation is bounded on Windows and
+  POSIX, keeps no NUL gaps, never blocks the child or supervisor loop, and the
+  pump joins at shutdown.
+- The port probe connects before binding and uses an exclusive bind on Windows,
+  so a listener that set `SO_REUSEADDR` still counts as taken. `up` also
+  verifies that its own web child is running and has not restarted before it
+  says Kazi is up.
+- A database URL with no port uses the engine default (for example 5432 for
+  PostgreSQL) instead of failing port 0.
+- A worker ping timeout is retried inside the overall readiness bound.
+- A control-file write is retried; if it still fails, the supervisor says so,
+  stops its children and leaves no control/state files.
+- Windows autostart writes `@echo off` first, creates `.kazi/logs` before the
+  redirect, escapes `%` in paths, and logs why Python, the checkout, `.env` or
+  `kazi up` failed.
+- macOS commands now say plainly that macOS is not supported yet instead of
+  writing a systemd unit or pretending process identity works.
+- A failed supervisor plan write stops `up` with a message and removes the
+  stale plan.
+
+### Changed — kazi launcher round 6
+
+- `wait_for_web` and the printed URL map wildcard bind hosts
+  (`0.0.0.0`, `::`) to loopback, so `KAZI_WEB_HOST=0.0.0.0` starts and shows a
+  usable URL.
+- Beat drift compares the stored crontab timezone with `settings.TIME_ZONE`
+  and skips the check when the stored object has no timezone attribute.
+- The systemd unit uses `KillMode=mixed` and a `TimeoutStopSec` above the
+  supervisor's worst-case stop time, so systemd no longer bypasses the stop
+  order.
+- Linux autostart now runs `systemctl --user daemon-reload` and `enable`,
+  reports real `is-enabled`/`is-active` state, and runs `disable --now` before
+  removing the unit; a missing `systemctl` is reported plainly.
+- The control-write test no longer replaces the test runner's signal handlers.
+- Docs show the checkout-relative `./kazi` command and PowerShell `.\kazi`
+  form, document the second-`up` exit exception, the Linux systemd lifecycle,
+  host-install `.env` values and the `createsuperuser` step. The repo-root
+  `PATH` note was verified from another folder using the shim.
+
 ### Fixed — length-limit endings
 
 - A turn stopped by the model's output limit (`max_tokens`) now ends as

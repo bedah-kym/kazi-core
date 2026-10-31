@@ -76,6 +76,9 @@ Jenkinsfile
 .env.*
 !.env.example
 
+# Local launcher runtime (state, lock, token, logs)
+.kazi/
+
 # Misc
 .editorconfig
 .pre-commit-config.yaml

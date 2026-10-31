@@ -57,7 +57,11 @@ window.KAZI_ARCH = {
          "mem": "163 MB idle", "cpu": "6.4 CPU-s to start",
          "role": "Runs reminders, sweeps, digests, telemetry roll-ups.",
          "refs": [{"file": "Backend/Backend/celery.py", "symbol": "KaziTask"}],
-         "facts": ["max_tasks/max_memory per child only apply to the prefork pool"]}
+         "facts": ["max_tasks/max_memory per child only apply to the prefork pool"]},
+        {"id": "kazi", "x": 150, "y": 360, "kind": "process", "label": "kazi command", "sub": "scripts/kazi.py",
+         "role": "Starts, stops, checks and explains a local checkout through one supervisor and a loopback control channel.",
+         "refs": [{"file": "scripts/kazi.py", "symbol": "main"}],
+         "facts": ["Process plan comes from effective settings via manage.py kazi_status --json", "Children are list-form argv, never shell=True", "Pid plus creation time guards every signal"]}
       ],
       "edges": [
         {"id": "h_browser_web", "from": "browser", "to": "web", "label": "WebSocket + HTTPS", "proto": "ws"},
@@ -72,7 +76,11 @@ window.KAZI_ARCH = {
         {"id": "h_worker_db", "from": "tworker", "to": "db", "label": "ORM", "proto": "db"},
         {"id": "h_beat_redis", "from": "beat", "to": "redis", "label": "due tasks", "proto": "cache"},
         {"id": "h_celery_redis", "from": "celery", "to": "redis", "label": "consume", "proto": "cache"},
-        {"id": "h_celery_db", "from": "celery", "to": "db", "label": "ORM", "proto": "db"}
+        {"id": "h_celery_db", "from": "celery", "to": "db", "label": "ORM", "proto": "db"},
+        {"id": "h_kazi_web", "from": "kazi", "to": "web", "label": "start + control", "proto": "call"},
+        {"id": "h_kazi_sidecar", "from": "kazi", "to": "sidecar", "label": "start", "proto": "call"},
+        {"id": "h_kazi_celery", "from": "kazi", "to": "celery", "label": "start", "proto": "call"},
+        {"id": "h_kazi_beat", "from": "kazi", "to": "beat", "label": "start", "proto": "call"}
       ]
     },
     "web": {

@@ -1,0 +1,226 @@
+# The `kazi` command
+
+`kazi` starts, stops, checks and explains a local checkout. It is a thin
+launcher: it never imports Django and never shells out. It asks Django for the
+effective settings (`manage.py kazi_status --json`) so the processes it runs
+match what the app will actually do.
+
+Run it from the repo root, either through the shim or directly:
+
+```bash
+./kazi up
+./kazi status
+./kazi down
+```
+
+In PowerShell use `.\kazi up` (the `.\` is required); in `cmd.exe` use
+`kazi.cmd up`. The shim uses `.venv/bin/python` (POSIX) or
+`.venv\Scripts\python.exe` (Windows) when present, otherwise `python3` /
+`python`.
+
+Adding the repo root to your user `PATH` lets `kazi` run from any folder; this
+was checked from `Backend/` with the repo root on `PATH` in both PowerShell and
+Git Bash.
+
+## What `up` does
+
+1. Takes the startup lock. If another `up` is starting (or Kazi is already
+   running), it says so and stops instead of racing migrations or a second
+   stack.
+2. Runs `doctor`. A **FAIL** stops the start; a **WARN** does not. The static
+   check is reported by `doctor` but does not block `up`, because `up` runs
+   `collectstatic` itself.
+3. Prints the database **host** (never a password), then applies migrations.
+   A failed migration stops the start.
+4. Runs `sync_beat_schedule` when beat will run, and `collectstatic` when
+   `DEBUG=False`.
+5. Starts the supervisor, prints what it is waiting for, and waits for web to
+   answer HTTP and (when present) for the worker to answer a broker ping for
+   its own node.
+6. Prints the URL and exits 0 **only when those readiness checks pass**.
+   Otherwise it names each failed process and its log, prints the "Kazi is up"
+   line nowhere, and exits non-zero. The supervisor is left running for
+   inspection; run `./kazi down` to stop it. A slow remote database can take
+   minutes, so progress is printed every five seconds.
+
+**Exception:** a second `up` that finds the startup lock held returns 0 after
+saying another run is starting; it has not observed the first run's readiness,
+so its exit status is not a readiness guarantee.
+
+`./kazi run` does the same work in the foreground. It is the entry point a
+systemd unit uses.
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `./kazi up` | Start the stack in the background and print the URL. |
+| `./kazi run` | Run the supervisor in the foreground (systemd, or watching it). |
+| `./kazi down` | Ask the supervisor to stop its children gracefully. |
+| `./kazi status` | Show the supervisor, its children, restarts, DB host and drift. |
+| `./kazi logs [name] [-f]` | Print or follow `web`, `worker`, `beat`, `sidecar`, `supervisor` or `autostart`. |
+| `./kazi doctor` | Explain startup problems before they bite. |
+| `./kazi autostart enable` | Create and enable the per-user logon entry. |
+| `./kazi autostart disable` | Disable the entry, then remove exactly what `enable` created. |
+| `./kazi autostart status` | Read the real entry state. |
+
+Logs live under `.kazi/logs/`, rotated by size (10 MB, five files per
+process). They are rotated while a child runs as well as at spawn, so a
+long-lived process cannot grow its log without limit. They can contain user
+content and task arguments; treat them as sensitive.
+
+## Which processes run
+
+The plan comes from the effective settings:
+
+- **web** (uvicorn, one worker) and the **shell sidecar** always run.
+- The **Celery worker** runs unless `KAZI_LITE_PROFILE` is on.
+- **Celery beat** runs only when `IN_PROCESS_SCHEDULER` is off.
+
+Every child is started with list-form arguments. There is no `shell=True` and
+no `cmd /c`, which is what made a quoting mistake report success while
+starting nothing during the 2026-10-25 start-up.
+
+On a remote database, beat can take about two minutes to send its first task:
+the `DatabaseScheduler` rewrites every `PeriodicTask` row at startup. A
+measured run here took 107 seconds. This is expected, not a stuck supervisor;
+the reaper's first run waits for it.
+
+## Restarts, stop order and identity
+
+The supervisor holds an exclusive OS lock, so a second `up` (manual or from
+autostart) prints status instead of starting a second stack. A crashed child
+restarts with backoff; five crashes in ten minutes makes the supervisor give
+up and record why. The stop-requested flag wins over exit codes, so `down`
+never restarts anything. On Windows a requested Ctrl+Break exit
+(`0xC000013A`) is not counted as a crash.
+
+Stop order is **web** (graceful, with `TURN_SHUTDOWN_GRACE_SECONDS`), then
+**worker** (Celery warm shutdown through the broker), then **beat**, then the
+**sidecar** last. Leases and the reaper make a hard kill safe for Turns only.
+The worker gets a bounded warm shutdown: the supervisor sends the shutdown and
+waits up to `KAZI_WORKER_SHUTDOWN_SECONDS` (default 300) for a running task,
+then terminates it. Raise or lower that value for tasks that run longer or
+shorter.
+
+Web gets uvicorn's `--timeout-graceful-shutdown` set to
+`TURN_SHUTDOWN_GRACE_SECONDS`. Uvicorn first waits that long for in-flight
+tasks, then runs the ASGI lifespan shutdown, which gives live turns the same
+grace before closing the scheduler and HTTP clients. The supervisor's
+force-kill is later than both: `2 x TURN_SHUTDOWN_GRACE_SECONDS + 10` seconds.
+A long turn therefore ends through uvicorn's cancellation path (saved as a
+terminal Turn) and the lifespan handler runs, instead of the old behaviour
+where uvicorn waited forever for the task and was force-killed before the
+lifespan could run.
+
+On Windows the supervisor is started with `CREATE_NO_WINDOW` and joins its
+own job object with `KILL_ON_JOB_CLOSE` **before** it spawns anything, so
+children inherit the job and killing the supervisor takes them with it. If
+that job setup fails, the supervisor refuses to start and says why. Each child
+gets `CREATE_NEW_PROCESS_GROUP`, so a graceful Ctrl+Break can reach it. On
+POSIX each child gets its own session, and a new supervisor stops survivors it
+can prove are its own before the port checks run.
+
+The state file records a pid **and** its creation time (Windows
+`GetProcessTimes`, Linux `/proc/<pid>/stat`). Before a signal, kill or an
+"already up" decision, both must match, so a reused pid is never touched.
+
+## The control channel
+
+The supervisor listens on `127.0.0.1` on a random port and writes the port and
+a random token to `.kazi/run/control.json` owner-only from creation on POSIX.
+`down` and `status` use that channel; `down` never signals the children itself.
+The token is compared in constant time. A wrong token is refused. The control
+file and logs hold no `.env` values.
+
+On Windows `chmod` does not set an ACL. The control file and logs inherit the
+ACL of `.kazi`, so keep the checkout (or at least `.kazi`) readable only by the
+account that runs Kazi.
+
+## Doctor
+
+Each check prints OK, WARN or FAIL with one plain sentence. It covers:
+
+- Python 3.11–3.12 inside a virtual environment, the lock file installed,
+  `.env` present and required settings set. Required settings come from the
+  effective profile: a full install needs `DJANGO_SECRET_KEY`, `DATABASE_URL`,
+  `REDIS_URL`, `CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND`; the lite
+  profile needs only `DJANGO_SECRET_KEY`, because it uses SQLite, an in-memory
+  cache/Channels layer and inline Celery. A lite install does not report beat
+  drift, because beat does not run;
+- process-environment variables that `.env` overrides (names only);
+- Temporal enabled but unreachable (WARN);
+- Redis (full profile) and database reachability;
+- pending migrations and beat drift (WARN; `up` applies/syncs them);
+- `SHELL_EXEC_TOKEN` set;
+- the shell profile;
+- web and sidecar ports free;
+- `DEBUG=False` without collected static files;
+- the worker-count variables the ASGI guard reads;
+- pool size × process count against a typical server client limit (WARN).
+
+The shell profile check is intentionally blunt. On the **open** profile:
+
+> The open shell profile is unsandboxed. With great power comes great
+> responsibility.
+
+## Autostart
+
+Autostart is per user. There are no admin rights and no Task Scheduler job
+object.
+
+### Windows
+
+`kazi autostart enable` creates `.kazi/logs` and writes `kazi.cmd` to the
+user's Startup folder (`shell:startup`). It runs `kazi up --autostart`, which
+waits and retries Django settings, service checks and migrations for up to
+three minutes because Redis and the database may not be ready at logon.
+The generated `.cmd` turns echo off first, creates the log folder before it
+redirects, escapes `%` in paths, and appends the reason to
+`.kazi/logs/autostart.log` when Python, the checkout, `.env` or `kazi up`
+itself fails. `./kazi autostart disable` removes exactly that file.
+
+### Linux
+
+`./kazi autostart enable` writes a systemd **user** unit at
+`~/.config/systemd/user/kazi.service`, runs `systemctl --user daemon-reload`,
+then `systemctl --user enable kazi.service`. It runs the supervisor in the
+foreground (`./kazi run`) with `Type=simple`, `Restart=on-failure`,
+`KillMode=mixed` and a `TimeoutStopSec` above the supervisor's worst-case stop
+time, so systemd lets the supervisor stop its children in order.
+
+`./kazi autostart status` asks `systemctl --user is-enabled` and `is-active`
+instead of treating the file's existence as enabled. `./kazi autostart disable`
+runs `systemctl --user disable --now kazi.service` before removing the file.
+If `systemctl` is missing, all three say so plainly and do not pretend the
+unit was enabled or removed.
+
+Without `loginctl enable-linger` the unit runs only while you are logged in.
+
+### macOS
+
+macOS is **not supported yet**. `kazi` has no reliable process-identity
+implementation there and does not write a launchd unit, so `up`, `down`,
+`status`, `doctor` and `autostart` print a plain unsupported message and exit
+non-zero. Use the manual commands in [Run Locally](run-locally.md) instead.
+
+## What it does not do
+
+- It is not a production process manager. Servers use systemd, containers or
+  the platform.
+- It does not manage Temporal, Postgres or Redis. Doctor reports them; it
+  never starts them.
+- It never edits `.env`. `doctor` names what to change.
+- It does not cover unattended boot before logon; Windows auto-logon is your
+  own choice.
+
+## Troubleshooting
+
+| Symptom | What to do |
+|---|---|
+| `up` stops at doctor | Fix the FAIL line; WARNs do not block. |
+| `A Kazi supervisor is already running` | Run `./kazi status`; use `./kazi down` before a second `up`. |
+| Port already in use | Stop the other process, or set `KAZI_WEB_PORT` / `SHELL_EXEC_PORT`. |
+| Worker never answers | Check `./kazi logs worker` and the broker settings. |
+| Autostart seems to do nothing | Check `./kazi autostart status` and `.kazi/logs/autostart.log`. |
+| Static files missing with `DEBUG=False` | Run `python Backend/manage.py collectstatic --noinput`, or let `up` do it. |

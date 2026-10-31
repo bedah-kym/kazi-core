@@ -10,6 +10,7 @@ from __future__ import annotations
 import http.client
 import importlib.util
 import json
+import os
 import shutil
 import signal
 import subprocess  # nosec B404 - real throwaway children in platform tests
@@ -77,6 +78,17 @@ def _stop(proc):
         proc.wait(timeout=10)
     except subprocess.TimeoutExpired:
         pass
+
+
+def _kill_leftovers(paths):
+    state = K.read_json(paths.state) or {}
+    for child in state.get("children") or []:
+        pid = child.get("pid")
+        if pid and K.pid_alive(pid, "nt" if WINDOWS else "posix"):
+            try:
+                os.kill(int(pid), signal.SIGTERM)
+            except OSError:
+                pass
 
 
 def _supervise(tmp: Path, children):
@@ -335,8 +347,9 @@ class WindowsProcessTests(unittest.TestCase):
             "time.sleep(300)"
         )
         proc = None
+        paths = None
         try:
-            proc, _paths = _supervise(tmp, [{
+            proc, paths = _supervise(tmp, [{
                 "name": "child", "argv": [sys.executable, "-c", code, str(pid_file)],
                 "cwd": str(tmp),
             }])
@@ -348,6 +361,8 @@ class WindowsProcessTests(unittest.TestCase):
             self.assertTrue(_wait_until(lambda: not K.pid_alive(child_pid, "nt"), timeout=10))
         finally:
             _stop(proc)
+            if proc is not None and paths is not None:
+                _kill_leftovers(paths)
             shutil.rmtree(tmp, ignore_errors=True)
 
     def test_a_real_ctrl_break_reaches_a_child_and_it_exits_gracefully(self):
@@ -365,6 +380,7 @@ class WindowsProcessTests(unittest.TestCase):
             "    time.sleep(0.02)\n"
         )
         proc = None
+        paths = None
         try:
             proc, paths = _supervise(tmp, [{
                 "name": "web", "argv": [sys.executable, "-c", code, str(ready), str(done)],
@@ -378,6 +394,8 @@ class WindowsProcessTests(unittest.TestCase):
             proc.wait(timeout=20)
         finally:
             _stop(proc)
+            if proc is not None and paths is not None:
+                _kill_leftovers(paths)
             shutil.rmtree(tmp, ignore_errors=True)
 
     def test_a_real_msvcrt_lock_is_exclusive_and_released_on_death(self):
@@ -452,8 +470,9 @@ class WindowsProcessTests(unittest.TestCase):
         code = "import json,sys; open(sys.argv[1],'w').write(json.dumps(sys.argv[2:]))"
         arguments = ["a b", 'he said "hi"', "trailing space ", ""]
         proc = None
+        paths = None
         try:
-            proc, _paths = _supervise(tmp, [{
+            proc, paths = _supervise(tmp, [{
                 "name": "child",
                 "argv": [sys.executable, "-c", code, str(out), *arguments],
                 "cwd": str(tmp),
@@ -462,6 +481,8 @@ class WindowsProcessTests(unittest.TestCase):
             self.assertEqual(json.loads(out.read_text(encoding="utf-8")), arguments)
         finally:
             _stop(proc)
+            if proc is not None and paths is not None:
+                _kill_leftovers(paths)
             shutil.rmtree(tmp, ignore_errors=True)
 
 
@@ -476,6 +497,7 @@ class PosixProcessTests(unittest.TestCase):
             "time.sleep(300)"
         )
         proc = None
+        paths = None
         try:
             proc, paths = _supervise(tmp, [{
                 "name": "child", "argv": [sys.executable, "-c", code, str(pid_file)],
@@ -490,4 +512,6 @@ class PosixProcessTests(unittest.TestCase):
             self.assertTrue(_wait_until(lambda: not K.pid_alive(child_pid, "posix"), timeout=10))
         finally:
             _stop(proc)
+            if proc is not None and paths is not None:
+                _kill_leftovers(paths)
             shutil.rmtree(tmp, ignore_errors=True)

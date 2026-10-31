@@ -637,18 +637,24 @@ class LocalBackend(ShellBackend):
                 workdir = target
         timeout = self.resolve_timeout(timeout_s)
         start = time.monotonic()
-        if sys.platform == "win32" and ("\n" in command.strip() or "\r" in command.strip()):
-            return ExecResult(
-                "",
-                "Not run: this command has line breaks, and cmd.exe would run only the first "
-                "line. Nothing was executed. Send one line: chain steps with & or &&, or write "
-                "a script in one line (python -c with \\n inside the string) and run it.",
-                2,
-                _elapsed_ms(start),
-            )
+        spawn_command = command
+        if sys.platform == "win32":
+            stripped = command.strip()
+            if "\n" in stripped or "\r" in stripped:
+                return ExecResult(
+                    "",
+                    "Not run: this command has line breaks, and cmd.exe would run only the first "
+                    "line. Nothing was executed. Send one line: chain steps with & or &&, or write "
+                    "a script in one line (python -c with \\n inside the string) and run it.",
+                    2,
+                    _elapsed_ms(start),
+                )
+            # cmd.exe runs nothing for leading whitespace or a leading line
+            # break, so give it the real text.
+            spawn_command = command.lstrip()
         try:
             proc = await asyncio.create_subprocess_shell(  # nosec B602 - open profile is full trust by design
-                command,
+                spawn_command,
                 cwd=str(workdir),
                 env=local_environment(),
                 stdout=asyncio.subprocess.PIPE,

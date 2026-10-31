@@ -12,11 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - On the **open** shell profile on Windows, a command containing a line break is
   now refused before anything starts: exit 2, with stderr saying that nothing
   ran, why `cmd.exe` cannot run it, and which one-line routes work. Previously
-  only the first line ran and the result reported success. A trailing line break
-  still runs, and characters `cmd.exe` does not treat as line breaks are
-  unchanged. The environment block now states, as a host fact, that a `cmd.exe`
-  command must be a single line. Linux `open`, `standard` and `locked` are
-  unchanged.
+  only the first line ran and the result reported success. Leading whitespace or
+  leading line breaks are removed before the spawn, so the command's real text
+  still runs. A trailing line break still runs, and characters `cmd.exe` does
+  not treat as line breaks are unchanged. The environment block now states, as a
+  host fact, that a `cmd.exe` command must be a single line. Linux `open`,
+  `standard` and `locked` are unchanged.
 
 ### Changed — consent semantics
 

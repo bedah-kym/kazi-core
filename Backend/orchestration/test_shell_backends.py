@@ -279,6 +279,24 @@ class WindowsCommandLineTests(unittest.TestCase):
                 self.assertEqual(result.stdout, "ok")
                 spawn.assert_awaited_once()
 
+    def test_leading_whitespace_or_a_line_break_is_removed_before_the_spawn(self):
+        for command in ("\necho a", "\r\necho a", "   \necho a"):
+            with self.subTest(command=repr(command)):
+                backend = LocalBackend(_config())
+                with patch("orchestration.shell_exec.backends.sys.platform", "win32"), \
+                        patch(_SHELL, new=AsyncMock(return_value=_FakeProc(out=b"ok"))) as spawn:
+                    result = _run(backend.execute(command, room_id="r"))
+                self.assertEqual(result.exit_code, 0, result.stderr)
+                spawn.assert_awaited_once()
+                self.assertEqual(spawn.await_args.args[0], "echo a")
+
+    @unittest.skipUnless(sys.platform == "win32", "cmd.exe only starts on Windows")
+    def test_a_leading_line_break_still_runs_the_real_command(self):
+        backend = LocalBackend(_config())
+        result = _run(backend.execute("\necho leading-works", room_id="r"))
+        self.assertEqual(result.exit_code, 0, result.stderr)
+        self.assertIn("leading-works", result.stdout)
+
     @unittest.skipUnless(sys.platform == "win32", "cmd.exe only starts on Windows")
     def test_no_part_of_a_multi_line_command_runs(self):
         config = _config()

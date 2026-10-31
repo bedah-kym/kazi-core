@@ -1589,6 +1589,42 @@ def _sanitize_tool_result(result_json: str) -> str:
     return result_json
 
 
+_DELEGATED_RESULT_LEADING_KEYS = ("status", "stopped_reason", "stop_note")
+
+
+def _serialize_delegated_result(result: Dict[str, Any]) -> str:
+    """Serialise a delegated result, keeping its stop fields within the cap.
+
+    The generic cap cuts JSON from the end. A long summary used to push
+    ``stopped_reason`` and the truncation note out of view, so keep those first
+    and shorten only the summary until the whole payload fits.
+    """
+    ordered: Dict[str, Any] = {
+        key: result[key] for key in _DELEGATED_RESULT_LEADING_KEYS if key in result
+    }
+    ordered.update({key: value for key, value in result.items() if key not in ordered})
+    summary = ordered.get("summary")
+    if not isinstance(summary, str):
+        return _sanitize_tool_result(json.dumps(ordered, default=str))
+
+    if len(json.dumps(ordered, default=str)) > _MAX_RESULT_CHARS:
+        trimmed = dict(ordered)
+        trimmed["summary"] = ""
+        overhead = len(json.dumps(trimmed, default=str))
+        room = max(0, _MAX_RESULT_CHARS - overhead)
+        # JSON escaping can make a prefix longer than its raw length, so shrink
+        # until the serialised form fits.
+        while room > 0:
+            trimmed["summary"] = summary[:room]
+            if len(json.dumps(trimmed, default=str)) <= _MAX_RESULT_CHARS:
+                break
+            room -= 1
+        trimmed["summary"] = summary[:room]
+        ordered = trimmed
+
+    return _sanitize_tool_result(json.dumps(ordered, default=str))
+
+
 # --------------------------------------------------------------------------- #
 #  Model routing                                                              #
 # --------------------------------------------------------------------------- #
@@ -2142,10 +2178,15 @@ async def _execute_scoped_tool_calls(
                 tc["name"], tc["input"], result, context,
                 basis=_shell_approval_basis(tc, preferences, run_tainted),
             )
+        content = (
+            _serialize_delegated_result(result)
+            if tc["name"] == "delegate_task"
+            else _sanitize_tool_result(json.dumps(result, default=str))
+        )
         result_blocks.append({
             "type": "tool_result",
             "tool_use_id": tc["id"],
-            "content": _sanitize_tool_result(json.dumps(result, default=str)),
+            "content": content,
         })
     return result_blocks, False
 
@@ -2351,15 +2392,20 @@ async def _run_sub_agent(
     if not summary and stopped_reason == "token_budget":
         summary = "Sub-task stopped early: token budget exhausted."
 
-    return {
+    result = {
         "status": "success",
+        "stopped_reason": stopped_reason,
+    }
+    if stopped_reason == "length_limit":
+        result["stop_note"] = LENGTH_LIMIT_NOTE
+    result.update({
         "summary": summary or "Sub-task completed.",
         "tools_used": [e["name"] for e in sub_tool_log],
         "iterations": iteration,
         "tokens_used": tokens_used,
         "tool_calls": len(sub_tool_log),
-        "stopped_reason": stopped_reason,
-    }
+    })
+    return result
 
 
 async def _create_workflow_handoff(
@@ -3330,11 +3376,16 @@ async def run_agent_loop(
                     if _untrusted_source(tc["name"]):
                         _taint_run(state, room_id)
                     yield AgentEvent("tool_start", {"name": tc["name"], "input": tc["input"]})
+                    shown = (
+                        _serialize_delegated_result(result)
+                        if tc["name"] == "delegate_task"
+                        else _sanitize_tool_result(json.dumps(result, default=str))
+                    )
                     yield AgentEvent("tool_result", {
                         "name": tc["name"],
                         "result": result,
                         "input": tc["input"],
-                        "shown": _sanitize_tool_result(json.dumps(result, default=str)),
+                        "shown": shown,
                     })
 
                     # Receipt (fire-and-forget)
@@ -3346,10 +3397,15 @@ async def run_agent_loop(
             # ---- Build tool_result blocks (auto + refused) ------------ #
             tool_result_blocks = []
             for tc, result in tool_results:
+                content = (
+                    _serialize_delegated_result(result)
+                    if tc["name"] == "delegate_task"
+                    else _sanitize_tool_result(json.dumps(result, default=str))
+                )
                 tool_result_blocks.append({
                     "type": "tool_result",
                     "tool_use_id": tc["id"],
-                    "content": _sanitize_tool_result(json.dumps(result, default=str)),
+                    "content": content,
                 })
 
             # Refused calls (shell envelope or persona scope) never run.

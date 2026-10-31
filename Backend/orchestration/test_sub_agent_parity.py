@@ -302,6 +302,45 @@ class DelegatedLengthLimitTests(SimpleTestCase):
         self.assertNotIn("declined to continue", result["summary"])
         h.executed.assert_not_called()
 
+    def test_a_converted_cut_off_tool_call_is_not_dispatched(self):
+        from orchestration.llm_client import LLMClient
+
+        converted = LLMClient()._openai_response_to_anthropic({
+            "id": "m-truncated",
+            "choices": [{
+                "message": {
+                    "content": "I will look it up",
+                    "tool_calls": [
+                        {
+                            "id": "t1",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": '{"city": "Nair',
+                            },
+                        },
+                        {
+                            "id": "t2",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": '{"city": "Mombasa"}',
+                            },
+                        },
+                    ],
+                },
+                "finish_reason": "length",
+            }],
+        })
+        result, h = self._run(converted)
+
+        self.assertEqual(result["stopped_reason"], "length_limit")
+        self.assertIn(
+            "My response was cut short by the length limit. "
+            "Anything I was still writing did not run.",
+            result["summary"],
+        )
+        h.executed.assert_not_called()
+        h.receipt.assert_not_called()
+
     def test_a_cut_off_run_with_no_text_uses_the_same_note_as_the_main_loop(self):
         result, h = self._run({
             "content": [],

@@ -1103,13 +1103,14 @@ class AgentLoopLengthLimitTests(SimpleTestCase):
         mock_cache = MagicMock()
         mock_cache.get.return_value = None
         execute_tool = AsyncMock(return_value={"status": "success"})
+        save_pending = AsyncMock()
         with (
             patch("orchestration.agent_loop.get_llm_client", return_value=mock_llm),
             patch("orchestration.agent_loop.cache", new=mock_cache),
             patch("orchestration.agent_loop._resolve_persona", new=AsyncMock(return_value=None)),
             patch("orchestration.agent_loop.execute_tool", new=execute_tool),
             patch("orchestration.agent_loop.preview_tool", new=AsyncMock(return_value=None)),
-            patch("orchestration.agent_loop.save_pending_confirmation", new=AsyncMock()),
+            patch("orchestration.agent_loop.save_pending_confirmation", new=save_pending),
             patch("orchestration.agent_loop._record_receipt", new=AsyncMock()),
             patch("orchestration.agent_loop.record_event"),
         ):
@@ -1118,10 +1119,10 @@ class AgentLoopLengthLimitTests(SimpleTestCase):
                 context={"user_id": None, "room_id": 1, "username": "test"},
                 preferences={},
             ))
-        return events, execute_tool
+        return events, execute_tool, save_pending
 
     def test_max_tokens_ends_length_limit_with_a_partial_note(self):
-        events, _ = self._run([
+        events, _, _ = self._run([
             _response([_text("Here is the first part")], "max_tokens"),
         ])
         done = next(e for e in events if e.kind == "done")
@@ -1135,7 +1136,7 @@ class AgentLoopLengthLimitTests(SimpleTestCase):
         self.assertNotIn("error", messages[0].lower())
 
     def test_a_tool_call_in_a_cut_off_response_is_not_dispatched(self):
-        events, execute_tool = self._run([
+        events, execute_tool, _ = self._run([
             _response([
                 _text("Writing the file now"),
                 _tool_use("run_command", {"command": "echo hi"}, "t1"),
@@ -1144,3 +1145,92 @@ class AgentLoopLengthLimitTests(SimpleTestCase):
         done = next(e for e in events if e.kind == "done")
         self.assertEqual(done.data["end_reason"], "length_limit")
         execute_tool.assert_not_called()
+
+    def test_a_converted_cut_off_tool_call_is_not_dispatched_or_approved(self):
+        from orchestration.llm_client import LLMClient
+
+        converted = LLMClient()._openai_response_to_anthropic({
+            "id": "m-truncated",
+            "choices": [{
+                "message": {
+                    "content": "I will run it",
+                    "tool_calls": [
+                        {
+                            "id": "t1",
+                            "function": {
+                                "name": "run_command",
+                                "arguments": '{"command": "echo a',
+                            },
+                        },
+                        {
+                            "id": "t2",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": '{"city": "Nairobi"}',
+                            },
+                        },
+                    ],
+                },
+                "finish_reason": "length",
+            }],
+        })
+        events, execute_tool, save_pending = self._run([converted])
+
+        done = next(e for e in events if e.kind == "done")
+        self.assertEqual(done.data["end_reason"], "length_limit")
+        self.assertNotIn("confirmation", [e.kind for e in events])
+        self.assertNotIn("paused", [e.kind for e in events])
+        execute_tool.assert_not_called()
+        save_pending.assert_not_called()
+
+    def test_a_long_delegated_summary_still_carries_the_stop_reason(self):
+        from orchestration.agent_loop import run_agent_loop
+
+        long_text = "x" * 12000
+        mock_llm = MagicMock()
+        mock_llm.default_provider.return_value = "anthropic"
+        mock_llm.create_message = AsyncMock(side_effect=[
+            _response([
+                _tool_use("delegate_task", {"task": "write a long file"}, "d1"),
+            ], "tool_use"),
+            _response([_text(long_text)], "max_tokens"),
+            _response([_text("Done")], "end_turn"),
+        ])
+        mock_cache = MagicMock()
+        mock_cache.get.return_value = None
+        with (
+            patch("orchestration.agent_loop.get_llm_client", return_value=mock_llm),
+            patch("orchestration.agent_loop.cache", new=mock_cache),
+            patch("orchestration.agent_loop._resolve_persona", new=AsyncMock(return_value=None)),
+            patch("orchestration.agent_loop.execute_tool", new=AsyncMock(
+                return_value={"status": "success"},
+            )),
+            patch("orchestration.agent_loop.preview_tool", new=AsyncMock(return_value=None)),
+            patch("orchestration.agent_loop.save_pending_confirmation", new=AsyncMock()),
+            patch("orchestration.agent_loop._record_receipt", new=AsyncMock()),
+            patch("orchestration.agent_loop.record_event"),
+        ):
+            _collect(run_agent_loop(
+                user_message="delegate it",
+                context={"user_id": None, "room_id": 1, "username": "test"},
+                preferences={},
+            ))
+
+        parent_messages = mock_llm.create_message.await_args_list[2].kwargs["messages"]
+        tool_result = next(
+            block
+            for message in parent_messages
+            if isinstance(message.get("content"), list)
+            for block in message["content"]
+            if block.get("type") == "tool_result"
+            and block.get("tool_use_id") == "d1"
+        )
+        content = tool_result["content"]
+        self.assertIn("length_limit", content)
+        self.assertIn(
+            "My response was cut short by the length limit. "
+            "Anything I was still writing did not run.",
+            content,
+        )
+        self.assertLessEqual(len(content), 8000)
+        self.assertNotIn(long_text, content)

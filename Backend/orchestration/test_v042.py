@@ -168,6 +168,56 @@ class OpenAIAdapterTests(SimpleTestCase):
         self.assertEqual(out["content"][0]["name"], "search")
         self.assertEqual(out["content"][0]["input"], {"q": "x"})
 
+    def test_openai_response_to_anthropic_length_wins_over_tool_calls(self):
+        data = {
+            "id": "m3",
+            "choices": [{
+                "message": {
+                    "content": "Part of a sentence",
+                    "tool_calls": [
+                        {
+                            "id": "c1",
+                            "function": {
+                                "name": "run_command",
+                                "arguments": '{"command": "echo a',
+                            },
+                        },
+                        {
+                            "id": "c2",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": '{"city": "Nairobi"}',
+                            },
+                        },
+                    ],
+                },
+                "finish_reason": "length",
+            }],
+        }
+        out = self.client._openai_response_to_anthropic(data)
+        self.assertEqual(out["stop_reason"], "max_tokens")
+        self.assertEqual(
+            [block["type"] for block in out["content"]],
+            ["text", "tool_use", "tool_use"],
+        )
+
+    def test_openai_response_to_anthropic_stop_with_tool_calls_stays_tool_use(self):
+        data = {
+            "id": "m4",
+            "choices": [{
+                "message": {
+                    "content": None,
+                    "tool_calls": [{
+                        "id": "c3",
+                        "function": {"name": "search", "arguments": '{"q":"x"}'},
+                    }],
+                },
+                "finish_reason": "stop",
+            }],
+        }
+        out = self.client._openai_response_to_anthropic(data)
+        self.assertEqual(out["stop_reason"], "tool_use")
+
 
 class _FakeItem:
     def __init__(self, **kwargs):

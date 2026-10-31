@@ -15,10 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   response was cut short instead of calling it an error. When there was visible
   text, that note starts on its own paragraph so it does not run into the
   cut-off words. The step-progress label for that ending no longer says "Error
-  encountered." while other errors keep it. A delegated run stopped the same
-  way reports `length_limit`, no longer says the model declined to continue,
-  and always carries the truncation note after any text it managed to write. A
-  tool call in a cut-off response is never dispatched.
+  encountered." while other errors keep it. An OpenAI-compatible response with
+  `finish_reason="length"` is a length stop even when it carries tool calls, so
+  a truncated call is never offered for approval. A delegated run stopped the
+  same way reports `length_limit`, no longer says the model declined to
+  continue, and always carries the truncation note after any text it managed to
+  write. A long delegated summary is shortened so the stop reason and note
+  still reach the parent. A tool call in a cut-off response is never
+  dispatched.
 
 ### Changed — consent semantics
 

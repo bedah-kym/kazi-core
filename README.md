@@ -140,8 +140,8 @@ Open `http://localhost:8000`, log in, and say hi to **Kazi** — your General
 room routes messages to the AI automatically.
 
 > **No keys handy?** `bash scripts/demo.sh` boots a demo instead → [run-locally](docs/run-locally.md).
-> **Running from a checkout without Docker?** `./kazi up` (Windows: `kazi up`) runs doctor,
-> migrations and the process supervisor → [the kazi command](docs/kazi-command.md).
+> **Running from a checkout without Docker?** `./kazi up` (PowerShell: `.\kazi up`) runs
+> doctor, migrations and the process supervisor → [the kazi command](docs/kazi-command.md).
 > **Stuck, or want the full walkthrough** (troubleshooting, non-Docker setup, Temporal)?
 > → [Quick Start guide](docs/quickstart.md).
 

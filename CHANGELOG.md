@@ -121,6 +121,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A failed supervisor plan write stops `up` with a message and removes the
   stale plan.
 
+### Changed — kazi launcher round 6
+
+- `wait_for_web` and the printed URL map wildcard bind hosts
+  (`0.0.0.0`, `::`) to loopback, so `KAZI_WEB_HOST=0.0.0.0` starts and shows a
+  usable URL.
+- Beat drift compares the stored crontab timezone with `settings.TIME_ZONE`
+  and skips the check when the stored object has no timezone attribute.
+- The systemd unit uses `KillMode=mixed` and a `TimeoutStopSec` above the
+  supervisor's worst-case stop time, so systemd no longer bypasses the stop
+  order.
+- Linux autostart now runs `systemctl --user daemon-reload` and `enable`,
+  reports real `is-enabled`/`is-active` state, and runs `disable --now` before
+  removing the unit; a missing `systemctl` is reported plainly.
+- The control-write test no longer replaces the test runner's signal handlers.
+- Docs show the checkout-relative `./kazi` command and PowerShell `.\kazi`
+  form, document the second-`up` exit exception, the Linux systemd lifecycle,
+  host-install `.env` values and the `createsuperuser` step. The repo-root
+  `PATH` note was verified from another folder using the shim.
+
 ### Fixed — length-limit endings
 
 - A turn stopped by the model's output limit (`max_tokens`) now ends as

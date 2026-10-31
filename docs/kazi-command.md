@@ -8,18 +8,25 @@ match what the app will actually do.
 Run it from the repo root, either through the shim or directly:
 
 ```bash
-./kazi up          # Windows: kazi up
+./kazi up
 ./kazi status
 ./kazi down
 ```
 
-The shim uses `.venv/bin/python` (POSIX) or `.venv\Scripts\python.exe`
-(Windows) when present, otherwise `python3` / `python`.
+In PowerShell use `.\kazi up` (the `.\` is required); in `cmd.exe` use
+`kazi.cmd up`. The shim uses `.venv/bin/python` (POSIX) or
+`.venv\Scripts\python.exe` (Windows) when present, otherwise `python3` /
+`python`.
+
+Adding the repo root to your user `PATH` lets `kazi` run from any folder; this
+was checked from `Backend/` with the repo root on `PATH` in both PowerShell and
+Git Bash.
 
 ## What `up` does
 
 1. Takes the startup lock. If another `up` is starting (or Kazi is already
-   running), it prints status instead of racing migrations or a second stack.
+   running), it says so and stops instead of racing migrations or a second
+   stack.
 2. Runs `doctor`. A **FAIL** stops the start; a **WARN** does not. The static
    check is reported by `doctor` but does not block `up`, because `up` runs
    `collectstatic` itself.
@@ -33,25 +40,29 @@ The shim uses `.venv/bin/python` (POSIX) or `.venv\Scripts\python.exe`
 6. Prints the URL and exits 0 **only when those readiness checks pass**.
    Otherwise it names each failed process and its log, prints the "Kazi is up"
    line nowhere, and exits non-zero. The supervisor is left running for
-   inspection; run `kazi down` to stop it. A slow remote database can take
+   inspection; run `./kazi down` to stop it. A slow remote database can take
    minutes, so progress is printed every five seconds.
 
-`kazi run` does the same work in the foreground. It is the entry point a
+**Exception:** a second `up` that finds the startup lock held returns 0 after
+saying another run is starting; it has not observed the first run's readiness,
+so its exit status is not a readiness guarantee.
+
+`./kazi run` does the same work in the foreground. It is the entry point a
 systemd unit uses.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `kazi up` | Start the stack in the background and print the URL. |
-| `kazi run` | Run the supervisor in the foreground (systemd, or watching it). |
-| `kazi down` | Ask the supervisor to stop its children gracefully. |
-| `kazi status` | Show the supervisor, its children, restarts, DB host and drift. |
-| `kazi logs [name] [-f]` | Print or follow `web`, `worker`, `beat`, `sidecar`, `supervisor` or `autostart`. |
-| `kazi doctor` | Explain startup problems before they bite. |
-| `kazi autostart enable` | Create the per-user logon entry. |
-| `kazi autostart disable` | Remove exactly what `enable` created. |
-| `kazi autostart status` | Say whether the entry is present. |
+| `./kazi up` | Start the stack in the background and print the URL. |
+| `./kazi run` | Run the supervisor in the foreground (systemd, or watching it). |
+| `./kazi down` | Ask the supervisor to stop its children gracefully. |
+| `./kazi status` | Show the supervisor, its children, restarts, DB host and drift. |
+| `./kazi logs [name] [-f]` | Print or follow `web`, `worker`, `beat`, `sidecar`, `supervisor` or `autostart`. |
+| `./kazi doctor` | Explain startup problems before they bite. |
+| `./kazi autostart enable` | Create and enable the per-user logon entry. |
+| `./kazi autostart disable` | Disable the entry, then remove exactly what `enable` created. |
+| `./kazi autostart status` | Read the real entry state. |
 
 Logs live under `.kazi/logs/`, rotated by size (10 MB, five files per
 process). They are rotated while a child runs as well as at spawn, so a
@@ -167,19 +178,22 @@ three minutes because Redis and the database may not be ready at logon.
 The generated `.cmd` turns echo off first, creates the log folder before it
 redirects, escapes `%` in paths, and appends the reason to
 `.kazi/logs/autostart.log` when Python, the checkout, `.env` or `kazi up`
-itself fails. `kazi autostart disable` removes exactly that file.
+itself fails. `./kazi autostart disable` removes exactly that file.
 
 ### Linux
 
-`kazi autostart enable` writes a systemd **user** unit at
-`~/.config/systemd/user/kazi.service`. It runs the supervisor in the
-foreground (`kazi run`) with `Type=simple` and `Restart=on-failure`, so systemd
-does the supervising and its cgroup is not killed. Enable it with:
+`./kazi autostart enable` writes a systemd **user** unit at
+`~/.config/systemd/user/kazi.service`, runs `systemctl --user daemon-reload`,
+then `systemctl --user enable kazi.service`. It runs the supervisor in the
+foreground (`./kazi run`) with `Type=simple`, `Restart=on-failure`,
+`KillMode=mixed` and a `TimeoutStopSec` above the supervisor's worst-case stop
+time, so systemd lets the supervisor stop its children in order.
 
-```bash
-systemctl --user daemon-reload
-systemctl --user enable --now kazi
-```
+`./kazi autostart status` asks `systemctl --user is-enabled` and `is-active`
+instead of treating the file's existence as enabled. `./kazi autostart disable`
+runs `systemctl --user disable --now kazi.service` before removing the file.
+If `systemctl` is missing, all three say so plainly and do not pretend the
+unit was enabled or removed.
 
 Without `loginctl enable-linger` the unit runs only while you are logged in.
 
@@ -205,8 +219,8 @@ non-zero. Use the manual commands in [Run Locally](run-locally.md) instead.
 | Symptom | What to do |
 |---|---|
 | `up` stops at doctor | Fix the FAIL line; WARNs do not block. |
-| `A Kazi supervisor is already running` | Run `kazi status`; use `kazi down` before a second `up`. |
+| `A Kazi supervisor is already running` | Run `./kazi status`; use `./kazi down` before a second `up`. |
 | Port already in use | Stop the other process, or set `KAZI_WEB_PORT` / `SHELL_EXEC_PORT`. |
-| Worker never answers | Check `kazi logs worker` and the broker settings. |
-| Autostart seems to do nothing | Check `kazi autostart status` and `.kazi/logs/autostart.log`. |
+| Worker never answers | Check `./kazi logs worker` and the broker settings. |
+| Autostart seems to do nothing | Check `./kazi autostart status` and `.kazi/logs/autostart.log`. |
 | Static files missing with `DEBUG=False` | Run `python Backend/manage.py collectstatic --noinput`, or let `up` do it. |

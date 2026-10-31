@@ -39,6 +39,18 @@ def _cron_fields_match(stored, declared) -> bool:
         return False
 
 
+def _cron_timezone_matches(stored) -> bool:
+    if not hasattr(stored, "timezone"):
+        return True
+    stored_timezone = getattr(stored, "timezone", None)
+    if stored_timezone is None:
+        return True
+    try:
+        return str(stored_timezone) == str(settings.TIME_ZONE)
+    except Exception:
+        return True
+
+
 def _schedule_matches(task, spec) -> bool:
     if isinstance(spec, (int, float)):
         interval = task.interval
@@ -49,7 +61,9 @@ def _schedule_matches(task, spec) -> bool:
         )
     if isinstance(spec, crontab_schedule):
         cron = task.crontab
-        return cron is not None and _cron_fields_match(cron, spec)
+        if cron is None:
+            return False
+        return _cron_timezone_matches(cron) and _cron_fields_match(cron, spec)
     return False
 
 

@@ -93,6 +93,19 @@ def is_windows(value: Optional[str] = None) -> bool:
     return system_name(value) == "nt"
 
 
+def connect_host(host: Optional[str]) -> str:
+    if host in (None, "", "0.0.0.0"):  # nosec B104 - map a wildcard for probing
+        return "127.0.0.1"
+    if host in ("::", "[::]"):
+        return "::1"
+    return str(host)
+
+
+def url_host(host: Optional[str]) -> str:
+    mapped = connect_host(host)
+    return f"[{mapped}]" if ":" in mapped and not mapped.startswith("[") else mapped
+
+
 class RuntimePaths:
     def __init__(self, root: Optional[Path] = None):
         self.root = Path(root) if root else REPO_ROOT / ".kazi"
@@ -1447,7 +1460,7 @@ def _default_binder(host: str, port: int) -> bool:
     runserver does). The bind then uses SO_EXCLUSIVEADDRUSE on Windows so the
     same option cannot make a held port look free.
     """
-    probe_host = "127.0.0.1" if host in ("", "0.0.0.0") else host  # nosec B104 - check only
+    probe_host = connect_host(host)
     try:
         with socket.create_connection((probe_host, port), timeout=0.5):
             return False
@@ -1635,7 +1648,7 @@ def _report_progress(label: str, started: float, next_report: float, progress) -
 
 def wait_for_web(settings: dict, timeout: float = WEB_READY_SECONDS, progress=None) -> bool:
     web = settings.get("web", {})
-    host = web.get("host", "127.0.0.1")
+    host = connect_host(web.get("host", "127.0.0.1"))
     port = _as_int(web.get("port"), 8000)
     started = time.monotonic()
     deadline = started + timeout
@@ -1859,6 +1872,8 @@ def systemd_unit_text(root: Path = REPO_ROOT) -> str:
         f'ExecStart="{python}" "{script}" run\n'
         "Restart=on-failure\n"
         "RestartSec=5\n"
+        "KillMode=mixed\n"
+        f"TimeoutStopSec={worker_shutdown_wait_seconds() + 120}\n"
         "\n"
         "[Install]\n"
         "WantedBy=default.target\n"
@@ -1871,8 +1886,34 @@ def autostart_text(system: Optional[str] = None, root: Path = REPO_ROOT) -> str:
     return systemd_unit_text(root)
 
 
+SYSTEMCTL_UNIT = "kazi.service"
+
+
+def _run_systemctl(args: Sequence[str]):
+    try:
+        result = subprocess.run(  # nosec B603 B607 - list argv; systemctl comes from PATH
+            ["systemctl", "--user", *args],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+            check=False,
+        )
+    except FileNotFoundError:
+        return None
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return 1, "", str(exc)
+    return result.returncode, result.stdout or "", result.stderr or ""
+
+
+def _systemctl(runner, args: Sequence[str]):
+    return (runner or _run_systemctl)(list(args))
+
+
 def autostart_enable(system: Optional[str] = None, env: Optional[dict] = None,
-                     root: Path = REPO_ROOT) -> int:
+                     root: Path = REPO_ROOT, runner=None) -> int:
     target = system_name(system)
     if target == "darwin":
         print(MACOS_UNSUPPORTED)
@@ -1881,11 +1922,29 @@ def autostart_enable(system: Optional[str] = None, env: Optional[dict] = None,
     path.parent.mkdir(parents=True, exist_ok=True)
     (root / ".kazi" / "logs").mkdir(parents=True, exist_ok=True)
     path.write_text(autostart_text(system, root), encoding="utf-8")
+    if target == "nt":
+        print(f"Autostart enabled: {path}")
+        return 0
+    for args in (["daemon-reload"], ["enable", SYSTEMCTL_UNIT]):
+        result = _systemctl(runner, args)
+        if result is None:
+            print(
+                f"FAIL autostart: systemctl not found; unit written at {path} but not enabled."
+            )
+            return 1
+        code, _stdout, stderr = result
+        if code != 0:
+            print(
+                f"FAIL autostart: systemctl {' '.join(args)} failed "
+                f"({stderr.strip() or 'exit ' + str(code)}); unit written at {path} but not enabled."
+            )
+            return 1
     print(f"Autostart enabled: {path}")
     return 0
 
 
-def autostart_disable(system: Optional[str] = None, env: Optional[dict] = None) -> int:
+def autostart_disable(system: Optional[str] = None, env: Optional[dict] = None,
+                      runner=None) -> int:
     if system_name(system) == "darwin":
         print(MACOS_UNSUPPORTED)
         return 1
@@ -1901,21 +1960,47 @@ def autostart_disable(system: Optional[str] = None, env: Optional[dict] = None) 
     if AUTOSTART_MARKER not in text:
         print("Autostart file was not created by kazi; leaving it alone.")
         return 1
+    if system_name(system) != "nt":
+        result = _systemctl(runner, ["disable", "--now", SYSTEMCTL_UNIT])
+        if result is None:
+            print(
+                f"FAIL autostart: systemctl not found; leaving {path} and the unit enabled."
+            )
+            return 1
+        code, _stdout, stderr = result
+        if code != 0:
+            print(
+                f"FAIL autostart: systemctl disable --now failed "
+                f"({stderr.strip() or 'exit ' + str(code)}); leaving {path}."
+            )
+            return 1
     path.unlink()
     print(f"Autostart disabled: {path}")
     return 0
 
 
-def autostart_status(system: Optional[str] = None, env: Optional[dict] = None) -> int:
-    if system_name(system) == "darwin":
+def autostart_status(system: Optional[str] = None, env: Optional[dict] = None,
+                     runner=None) -> int:
+    target = system_name(system)
+    if target == "darwin":
         print(MACOS_UNSUPPORTED)
         return 1
     path = autostart_file(system, env)
-    if path.exists():
-        print(f"Autostart is enabled: {path}")
-        return 0
-    print("Autostart is not enabled.")
-    return 0
+    if target == "nt":
+        if path.exists():
+            print(f"Autostart is enabled: {path}")
+            return 0
+        print("Autostart is not enabled.")
+        return 1
+    enabled = _systemctl(runner, ["is-enabled", SYSTEMCTL_UNIT])
+    active = _systemctl(runner, ["is-active", SYSTEMCTL_UNIT])
+    if enabled is None or active is None:
+        print("FAIL autostart: systemctl not found; cannot report the real state.")
+        return 1
+    enabled_state = (enabled[1] or "").strip() or "unknown"
+    active_state = (active[1] or "").strip() or "unknown"
+    print(f"Autostart is {enabled_state} (service {active_state}): {path}")
+    return 0 if enabled_state in ("enabled", "enabled-runtime") else 1
 
 
 # --- commands ---------------------------------------------------------------
@@ -2079,7 +2164,7 @@ def cmd_up(paths: RuntimePaths, system: Optional[str], autostart: bool, foregrou
                 print(f"FAIL {message}", flush=True)
             print("The supervisor is left running for inspection; run `kazi down` to stop it.", flush=True)
             return 1
-        host = settings.get("web", {}).get("host", "127.0.0.1")
+        host = url_host(settings.get("web", {}).get("host", "127.0.0.1"))
         port = _as_int(settings.get("web", {}).get("port"), 8000)
         print(f"Kazi is up: http://{host}:{port}/", flush=True)
         return 0

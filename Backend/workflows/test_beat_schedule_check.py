@@ -97,6 +97,26 @@ class SyncBeatScheduleCheckTests(TestCase):
         PeriodicTask.objects.filter(name=name).update(task="no.such.task")
         self.assertIn(name, beat_schedule_drift()["changed"])
 
+    def test_a_different_timezone_is_drift(self):
+        call_command("sync_beat_schedule", stdout=StringIO())
+        row = PeriodicTask.objects.select_related("crontab").get(
+            name="nightly_ledger_reconciliation"
+        )
+        row.crontab.timezone = "UTC"
+        row.crontab.save()
+        self.assertIn("nightly_ledger_reconciliation", beat_schedule_drift()["changed"])
+
+    def test_a_stored_crontab_without_timezone_is_skipped(self):
+        declared = crontab(hour=2, minute=0)
+        stored = SimpleNamespace(
+            interval=None,
+            crontab=SimpleNamespace(
+                minute="0", hour="2", day_of_week="*",
+                day_of_month="*", month_of_year="*",
+            ),
+        )
+        self.assertTrue(_schedule_matches(stored, declared))
+
     def test_a_beat_rewritten_compact_row_is_not_drift(self):
         call_command("sync_beat_schedule", stdout=StringIO())
         row = PeriodicTask.objects.select_related("crontab").get(

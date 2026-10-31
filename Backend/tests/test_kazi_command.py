@@ -356,6 +356,8 @@ class TextTests(unittest.TestCase):
         text = K.systemd_unit_text(root)
         self.assertIn("Type=simple", text)
         self.assertIn("Restart=on-failure", text)
+        self.assertIn("KillMode=mixed", text)
+        self.assertIn(f"TimeoutStopSec={K.worker_shutdown_wait_seconds() + 120}", text)
         self.assertIn(f"WorkingDirectory={root}", text)
         self.assertIn(f'"{root / "scripts" / "kazi.py"}"', text)
         self.assertIn(" run", text)
@@ -367,10 +369,15 @@ class TextTests(unittest.TestCase):
             target = K.autostart_file("posix", {"HOME": str(tmp)})
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text("someone else's unit\n", encoding="utf-8")
-            self.assertEqual(K.autostart_disable("posix", {"HOME": str(tmp)}), 1)
+            runner = lambda args: (0, "", "")  # noqa: E731 - tiny test runner
+            self.assertEqual(
+                K.autostart_disable("posix", {"HOME": str(tmp)}, runner=runner), 1
+            )
             self.assertTrue(target.exists())
             target.write_text(K.AUTOSTART_MARKER + "\n", encoding="utf-8")
-            self.assertEqual(K.autostart_disable("posix", {"HOME": str(tmp)}), 0)
+            self.assertEqual(
+                K.autostart_disable("posix", {"HOME": str(tmp)}, runner=runner), 0
+            )
             self.assertFalse(target.exists())
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -761,6 +768,14 @@ async def application(scope, receive, send):
 
 
 class PortReadinessTests(unittest.TestCase):
+    def test_wildcard_hosts_are_probed_and_printed_as_loopback(self):
+        self.assertEqual(K.connect_host("0.0.0.0"), "127.0.0.1")  # nosec B104 - probe mapping
+        self.assertEqual(K.connect_host("::"), "::1")
+        self.assertEqual(K.connect_host(""), "127.0.0.1")
+        self.assertEqual(K.url_host("0.0.0.0"), "127.0.0.1")  # nosec B104 - probe mapping
+        self.assertEqual(K.url_host("::"), "[::1]")
+        self.assertEqual(K.url_host("127.0.0.1"), "127.0.0.1")
+
     def test_a_real_listener_with_reuseaddr_is_not_free(self):
         listener = socket.socket()
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -831,12 +846,109 @@ class ControlWriteTests(unittest.TestCase):
                 [], paths, os.name, job_factory=self.NoJob,
             )
             out = StringIO()
-            with patch.object(K, "write_json", return_value=False), redirect_stderr(out):
+            with patch.object(K, "write_json", return_value=False), \
+                    patch.object(K.Supervisor, "_install_signals", return_value=None), \
+                    redirect_stderr(out):
                 code = supervisor.run()
             self.assertEqual(code, 1)
             self.assertIn("FAIL control file", out.getvalue())
             self.assertFalse(paths.control.exists())
             self.assertFalse(paths.state.exists())
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+class AutostartLinuxTests(unittest.TestCase):
+    class Runner:
+        def __init__(self, results):
+            self.results = list(results)
+            self.calls = []
+
+        def __call__(self, args):
+            self.calls.append(list(args))
+            if not self.results:
+                return 0, "", ""
+            return self.results.pop(0)
+
+    def _path(self, tmp):
+        return K.autostart_file("posix", {"HOME": str(tmp)})
+
+    def test_enable_runs_daemon_reload_then_enable(self):
+        tmp = _tmpdir()
+        try:
+            runner = self.Runner([(0, "", ""), (0, "", "")])
+            code = K.autostart_enable(
+                "posix", {"HOME": str(tmp)}, root=tmp, runner=runner,
+            )
+            self.assertEqual(code, 0)
+            self.assertEqual(runner.calls, [["daemon-reload"], ["enable", "kazi.service"]])
+            self.assertTrue(self._path(tmp).exists())
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_enable_says_when_systemctl_is_missing(self):
+        tmp = _tmpdir()
+        try:
+            out = StringIO()
+            with redirect_stdout(out):
+                code = K.autostart_enable(
+                    "posix", {"HOME": str(tmp)}, root=tmp,
+                    runner=self.Runner([None]),
+                )
+            self.assertEqual(code, 1)
+            self.assertIn("systemctl not found", out.getvalue())
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_status_reads_enabled_and_active_state(self):
+        tmp = _tmpdir()
+        try:
+            runner = self.Runner([(0, "enabled\n", ""), (0, "active\n", "")])
+            self.assertEqual(
+                K.autostart_status("posix", {"HOME": str(tmp)}, runner=runner), 0
+            )
+            self.assertEqual(
+                runner.calls, [["is-enabled", "kazi.service"], ["is-active", "kazi.service"]]
+            )
+            self.assertEqual(
+                K.autostart_status(
+                    "posix", {"HOME": str(tmp)},
+                    runner=self.Runner([(1, "disabled\n", ""), (0, "inactive\n", "")]),
+                ),
+                1,
+            )
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_disable_stops_the_unit_before_removing_the_file(self):
+        tmp = _tmpdir()
+        try:
+            path = self._path(tmp)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(K.AUTOSTART_MARKER, encoding="utf-8")
+            runner = self.Runner([(0, "", "")])
+            self.assertEqual(
+                K.autostart_disable("posix", {"HOME": str(tmp)}, runner=runner), 0
+            )
+            self.assertEqual(runner.calls, [["disable", "--now", "kazi.service"]])
+            self.assertFalse(path.exists())
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_disable_leaves_the_file_when_systemctl_is_missing(self):
+        tmp = _tmpdir()
+        try:
+            path = self._path(tmp)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(K.AUTOSTART_MARKER, encoding="utf-8")
+            out = StringIO()
+            with redirect_stdout(out):
+                code = K.autostart_disable(
+                    "posix", {"HOME": str(tmp)}, runner=self.Runner([None]),
+                )
+            self.assertEqual(code, 1)
+            self.assertTrue(path.exists())
+            self.assertIn("systemctl not found", out.getvalue())
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

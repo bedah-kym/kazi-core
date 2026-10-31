@@ -46,6 +46,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   database host. `sync_beat_schedule --check` reports drift read-only and exits
   non-zero when the schedule differs.
 
+### Changed — kazi launcher round 2
+
+- Web, the Celery worker and beat now run from `Backend/`, so `Backend.asgi`
+  and `Backend.celery` import on a real checkout; a test starts each planned
+  process's real import from its real working folder on every OS.
+- `kazi up` exits 0 and prints "Kazi is up" only when web answers and, when
+  planned, the worker answers a ping for this install's own worker node. It
+  otherwise names each failed process and log and exits non-zero, leaving the
+  supervisor running for inspection. Waits print progress every five seconds.
+- The Windows supervisor joins its job object before spawning, so children
+  inherit it; job setup failure is fatal and says why. The startup lock is
+  taken before doctor and migrations, so two `up` calls cannot both migrate.
+- The worker gets a bounded warm shutdown (`KAZI_WORKER_SHUTDOWN_SECONDS`,
+  default 300 s), and its node name is unique per install. `__supervise`
+  carries `TURN_SHUTDOWN_GRACE_SECONDS` through the plan file.
+- `up` collects static files before the static check can block it. State and
+  log writes and rotations can no longer take the stack down; live logs are
+  rotated by size, and a failed child restart counts as a crash for that child
+  only. POSIX survivors are cleaned before the port check.
+- Autostart retries settings and migrations as well as services at logon, and
+  creates `.kazi/logs` so the Startup redirect has somewhere to write. Lock
+  markers are evaluated, `host:port` Temporal settings parse, children and
+  manage.py calls use UTF-8, restarting children no longer print `pid None`,
+  and the control file is owner-only from creation on POSIX (Windows ACLs are
+  documented).
+
 ### Fixed — length-limit endings
 
 - A turn stopped by the model's output limit (`max_tokens`) now ends as

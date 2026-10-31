@@ -18,15 +18,23 @@ The shim uses `.venv/bin/python` (POSIX) or `.venv\Scripts\python.exe`
 
 ## What `up` does
 
-1. Takes the supervisor lock. If Kazi is already running, it prints status
-   instead of starting a second stack.
-2. Runs `doctor`. A **FAIL** stops the start; a **WARN** does not.
+1. Takes the startup lock. If another `up` is starting (or Kazi is already
+   running), it prints status instead of racing migrations or a second stack.
+2. Runs `doctor`. A **FAIL** stops the start; a **WARN** does not. The static
+   check is reported by `doctor` but does not block `up`, because `up` runs
+   `collectstatic` itself.
 3. Prints the database **host** (never a password), then applies migrations.
    A failed migration stops the start.
 4. Runs `sync_beat_schedule` when beat will run, and `collectstatic` when
    `DEBUG=False`.
-5. Starts the supervisor, waits for web to answer HTTP and (when present) for
-   the worker to answer a broker ping, then prints the URL.
+5. Starts the supervisor, prints what it is waiting for, and waits for web to
+   answer HTTP and (when present) for the worker to answer a broker ping for
+   its own node.
+6. Prints the URL and exits 0 **only when those readiness checks pass**.
+   Otherwise it names each failed process and its log, prints the "Kazi is up"
+   line nowhere, and exits non-zero. The supervisor is left running for
+   inspection; run `kazi down` to stop it. A slow remote database can take
+   minutes, so progress is printed every five seconds.
 
 `kazi run` does the same work in the foreground. It is the entry point a
 systemd unit uses.
@@ -46,8 +54,9 @@ systemd unit uses.
 | `kazi autostart status` | Say whether the entry is present. |
 
 Logs live under `.kazi/logs/`, rotated by size (10 MB, five files per
-process). They can contain user content and task arguments; treat them as
-sensitive.
+process). They are rotated while a child runs as well as at spawn, so a
+long-lived process cannot grow its log without limit. They can contain user
+content and task arguments; treat them as sensitive.
 
 ## Which processes run
 
@@ -73,11 +82,18 @@ never restarts anything. On Windows a requested Ctrl+Break exit
 Stop order is **web** (graceful, with `TURN_SHUTDOWN_GRACE_SECONDS`), then
 **worker** (Celery warm shutdown through the broker), then **beat**, then the
 **sidecar** last. Leases and the reaper make a hard kill safe for Turns only.
+The worker gets a bounded warm shutdown: the supervisor sends the shutdown and
+waits up to `KAZI_WORKER_SHUTDOWN_SECONDS` (default 300) for a running task,
+then terminates it. Raise or lower that value for tasks that run longer or
+shorter.
 
-On Windows the supervisor is started with `CREATE_NO_WINDOW` and puts its
-children in a job object with `KILL_ON_JOB_CLOSE`: killing the supervisor
-takes its children with it. Each child gets `CREATE_NEW_PROCESS_GROUP`, so a
-graceful Ctrl+Break can reach it. On POSIX each child gets its own session.
+On Windows the supervisor is started with `CREATE_NO_WINDOW` and joins its
+own job object with `KILL_ON_JOB_CLOSE` **before** it spawns anything, so
+children inherit the job and killing the supervisor takes them with it. If
+that job setup fails, the supervisor refuses to start and says why. Each child
+gets `CREATE_NEW_PROCESS_GROUP`, so a graceful Ctrl+Break can reach it. On
+POSIX each child gets its own session, and a new supervisor stops survivors it
+can prove are its own before the port checks run.
 
 The state file records a pid **and** its creation time (Windows
 `GetProcessTimes`, Linux `/proc/<pid>/stat`). Before a signal, kill or an
@@ -86,10 +102,14 @@ The state file records a pid **and** its creation time (Windows
 ## The control channel
 
 The supervisor listens on `127.0.0.1` on a random port and writes the port and
-a random token to `.kazi/run/control.json` with owner-only permissions where
-the OS allows. `down` and `status` use that channel; `down` never signals the
-children itself. The token is compared in constant time. A wrong token is
-refused. The control file and logs hold no `.env` values.
+a random token to `.kazi/run/control.json` owner-only from creation on POSIX.
+`down` and `status` use that channel; `down` never signals the children itself.
+The token is compared in constant time. A wrong token is refused. The control
+file and logs hold no `.env` values.
+
+On Windows `chmod` does not set an ACL. The control file and logs inherit the
+ACL of `.kazi`, so keep the checkout (or at least `.kazi`) readable only by the
+account that runs Kazi.
 
 ## Doctor
 
@@ -120,10 +140,11 @@ object.
 
 ### Windows
 
-`kazi autostart enable` writes `kazi.cmd` to the user's Startup folder
-(`shell:startup`). It runs `kazi up --autostart`, which waits and retries
-service checks for up to three minutes because Redis and the database may not
-be ready at logon. `kazi autostart disable` removes exactly that file.
+`kazi autostart enable` creates `.kazi/logs` and writes `kazi.cmd` to the
+user's Startup folder (`shell:startup`). It runs `kazi up --autostart`, which
+waits and retries Django settings, service checks and migrations for up to
+three minutes because Redis and the database may not be ready at logon.
+`kazi autostart disable` removes exactly that file.
 
 ### Linux
 

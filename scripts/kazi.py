@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import hashlib
 import hmac
 import http.client
 import http.server
@@ -23,6 +24,7 @@ import json
 import os
 import secrets
 import signal
+import shutil
 import socket
 import subprocess  # nosec B404 - list argv only, no shell
 import sys
@@ -41,7 +43,8 @@ except Exception:  # pragma: no cover - dotenv is locked, this is a safety net
     dotenv_values = None
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-MANAGE_PY = REPO_ROOT / "Backend" / "manage.py"
+BACKEND_DIR = REPO_ROOT / "Backend"
+MANAGE_PY = BACKEND_DIR / "manage.py"
 
 CREATE_NEW_PROCESS_GROUP = 0x00000200
 CREATE_NO_WINDOW = 0x08000000
@@ -54,7 +57,12 @@ RESTART_MAX_SECONDS = 30
 STOP_ORDER = ("web", "worker", "beat", "sidecar")
 LOG_MAX_BYTES = 10 * 1024 * 1024
 LOG_KEEP = 5
+LIVE_LOG_CHECK_SECONDS = 2
 AUTOSTART_WAIT_SECONDS = 180
+WEB_READY_SECONDS = 240
+WORKER_READY_SECONDS = 120
+WORKER_SHUTDOWN_WAIT_SECONDS = 300
+PROGRESS_SECONDS = 5
 SUPERVISOR_ID_ENV = "KAZI_SUPERVISOR_ID"
 
 REQUIRED_ENV_KEYS = (
@@ -89,6 +97,7 @@ class RuntimePaths:
         self.control = self.run / "control.json"
         self.state = self.run / "supervisor.json"
         self.lock = self.run / "supervisor.lock"
+        self.start_lock = self.run / "up.lock"
         self.plan = self.run / "plan.json"
 
     def ensure(self) -> None:
@@ -106,15 +115,31 @@ def read_json(path: Path) -> Optional[dict]:
         return None
 
 
-def write_json(path: Path, payload: dict, mode: int = 0o600) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+def _write_owner_only(path: Path, text: str, mode: int) -> None:
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+        handle.write(text)
+
+
+def write_json(path: Path, payload: dict, mode: int = 0o600) -> bool:
+    """Write state without ever taking the supervisor down.
+
+    A denied replace (antivirus, a reader holding the file) is reported and
+    returns False; callers keep running.
+    """
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
     try:
-        os.chmod(tmp, mode)
-    except OSError:
-        pass
-    os.replace(tmp, path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _write_owner_only(tmp, json.dumps(payload, sort_keys=True), mode)
+        os.replace(tmp, path)
+        return True
+    except OSError as exc:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        print(f"WARN state write {path.name}: {exc}", file=sys.stderr)
+        return False
 
 
 def remove_file(path: Path) -> None:
@@ -132,6 +157,12 @@ def load_dotenv_map(root: Path = REPO_ROOT) -> Dict[str, str]:
     except OSError:
         return {}
     return {key: value for key, value in raw.items() if value is not None}
+
+
+def utf8_env(env: Optional[dict] = None) -> dict:
+    out = dict(env or os.environ)
+    out["PYTHONIOENCODING"] = "utf-8"
+    return out
 
 
 # --- process identity -------------------------------------------------------
@@ -293,6 +324,8 @@ class WindowsJob:
         kernel32.AssignProcessToJobObject.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
         kernel32.TerminateJobObject.argtypes = [ctypes.c_void_p, ctypes.c_uint]
         kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+        kernel32.GetCurrentProcess.argtypes = []
 
         class BasicLimits(ctypes.Structure):
             _fields_ = [
@@ -339,8 +372,9 @@ class WindowsJob:
             raise OSError("SetInformationJobObject failed")
         return kernel32, handle
 
-    def assign(self, process_handle: int) -> None:
-        if not self._kernel32.AssignProcessToJobObject(self._handle, process_handle):
+    def assign_current_process(self) -> None:
+        process = self._kernel32.GetCurrentProcess()
+        if not self._kernel32.AssignProcessToJobObject(self._handle, process):
             raise OSError("AssignProcessToJobObject failed")
 
     def terminate(self) -> None:
@@ -496,10 +530,17 @@ class ChildSlot:
     last_exit: Optional[int] = None
 
     def as_state(self) -> dict:
+        if self.proc is not None:
+            state = "running"
+        elif self.given_up:
+            state = "given-up"
+        else:
+            state = "restarting"
         return {
             "name": self.spec.name,
             "pid": self.proc.pid if self.proc is not None else None,
             "creation": self.creation if self.proc is not None else None,
+            "state": state,
             "restarts": self.restarts,
             "given_up": self.given_up,
             "last_exit": self.last_exit,
@@ -563,30 +604,117 @@ def supervisor_popen_kwargs(system: Optional[str] = None) -> dict:
     return {"shell": False}
 
 
-def rotate_log(path: Path, max_bytes: int = LOG_MAX_BYTES, keep: int = LOG_KEEP) -> None:
+def _replace_log_file(source: Path, target: Path) -> None:
+    try:
+        os.replace(source, target)
+    except OSError:
+        pass
+
+
+def rotate_log(path: Path, max_bytes: int = LOG_MAX_BYTES, keep: int = LOG_KEEP) -> bool:
+    """Rotate a closed log. Never raise: a failed rotation is not fatal."""
     try:
         if path.stat().st_size < max_bytes:
-            return
+            return False
     except OSError:
-        return
+        return False
     for index in range(keep - 1, 0, -1):
         older = path.with_name(f"{path.name}.{index}")
         newer = path.with_name(f"{path.name}.{index + 1}")
         if older.exists():
-            os.replace(older, newer)
-    os.replace(path, path.with_name(f"{path.name}.1"))
+            _replace_log_file(older, newer)
+    _replace_log_file(path, path.with_name(f"{path.name}.1"))
+    return True
 
 
-def worker_shutdown_argv(system: Optional[str] = None) -> List[str]:
-    node = worker_node_name()
-    return [
-        sys.executable, "-m", "celery", "-A", "Backend",
-        "control", "shutdown", "-d", node,
-    ]
+def rotate_live_log(path: Path, max_bytes: int = LOG_MAX_BYTES, keep: int = LOG_KEEP) -> bool:
+    """Bound a running child's log without closing its handle.
+
+    The child's append handle keeps writing at the end of the truncated file.
+    A copy is kept as .1; failures are ignored because a busy reader or an
+    antivirus hold must never stop the stack.
+    """
+    try:
+        if path.stat().st_size < max_bytes:
+            return False
+    except OSError:
+        return False
+    for index in range(keep - 1, 0, -1):
+        older = path.with_name(f"{path.name}.{index}")
+        newer = path.with_name(f"{path.name}.{index + 1}")
+        if older.exists():
+            _replace_log_file(older, newer)
+    try:
+        shutil.copyfile(path, path.with_name(f"{path.name}.1"))
+        with open(path, "r+b") as handle:
+            handle.truncate(0)
+        return True
+    except OSError:
+        return False
+
+
+def cleanup_posix_survivors(paths: RuntimePaths, system: Optional[str] = None, wait_seconds: float = 5.0) -> int:
+    """Stop proven POSIX survivors from a previous supervisor before doctoring."""
+    if system_name(system) != "posix":
+        return 0
+    previous = read_json(paths.state)
+    if not previous or not previous.get("supervisor_id"):
+        return 0
+    marker = f"{SUPERVISOR_ID_ENV}={previous.get('supervisor_id')}".encode("utf-8")
+    targets = []
+    for child in previous.get("children") or []:
+        pid = child.get("pid")
+        creation = child.get("creation")
+        if not process_matches(pid, creation, "posix"):
+            continue
+        try:
+            raw = Path(f"/proc/{int(pid)}/environ").read_bytes()
+        except (OSError, TypeError, ValueError):
+            continue
+        if marker in raw.split(b"\0"):
+            targets.append((int(pid), creation))
+    for pid, _creation in targets:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+    deadline = time.monotonic() + max(0.0, wait_seconds)
+    pending = list(targets)
+    while pending and time.monotonic() < deadline:
+        pending = [
+            (pid, creation) for pid, creation in pending
+            if process_matches(pid, creation, "posix")
+        ]
+        if pending:
+            time.sleep(0.1)
+    for pid, _creation in pending:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+    remove_file(paths.state)
+    return len(targets)
 
 
 def worker_node_name() -> str:
-    return f"kazi@{socket.gethostname()}"
+    install = hashlib.sha256(str(REPO_ROOT).encode("utf-8")).hexdigest()[:10]
+    return f"kazi-{install}@{socket.gethostname()}"
+
+
+def worker_shutdown_wait_seconds() -> int:
+    raw = (os.environ.get("KAZI_WORKER_SHUTDOWN_SECONDS") or "").strip()
+    try:
+        return max(10, int(raw)) if raw else WORKER_SHUTDOWN_WAIT_SECONDS
+    except ValueError:
+        return WORKER_SHUTDOWN_WAIT_SECONDS
+
+
+def worker_shutdown_argv(system: Optional[str] = None, timeout: Optional[int] = None) -> List[str]:
+    return [
+        sys.executable, "-m", "celery", "-A", "Backend",
+        "control", "shutdown", "-d", worker_node_name(),
+        "--timeout", str(timeout or worker_shutdown_wait_seconds()),
+    ]
 
 
 class Supervisor:
@@ -597,19 +725,27 @@ class Supervisor:
         system: Optional[str] = None,
         child_env: Optional[dict] = None,
         grace_seconds: float = 20.0,
+        job_factory: Optional[Callable[[], "WindowsJob"]] = None,
     ):
         self.paths = paths
         self.system = system_name(system)
         self.slots = [ChildSlot(spec=spec) for spec in specs]
         self.child_env = dict(child_env or os.environ)
+        self.child_env["PYTHONIOENCODING"] = "utf-8"
         self.supervisor_id = secrets.token_hex(16)
         self.child_env[SUPERVISOR_ID_ENV] = self.supervisor_id
         self.grace_seconds = grace_seconds
+        self.job_factory = job_factory
         self.stop_requested = threading.Event()
         self.given_up: Dict[str, str] = {}
         self.creation: Optional[str] = None
         self.started_at = time.time()
         self.job: Optional[WindowsJob] = None
+        self.last_log_check = 0.0
+
+    def stop_names(self) -> List[str]:
+        present = {slot.spec.name for slot in self.slots}
+        return [name for name in STOP_ORDER if name in present]
 
     def state(self) -> dict:
         return {
@@ -636,13 +772,22 @@ class Supervisor:
                 except (OSError, ValueError):
                     pass
 
-    def _open_job(self) -> None:
+    def _setup_job(self) -> bool:
         if not is_windows(self.system):
-            return
+            return True
+        factory = self.job_factory or WindowsJob
         try:
-            self.job = WindowsJob()
-        except OSError:
+            self.job = factory()
+            self.job.assign_current_process()
+        except OSError as exc:
             self.job = None
+            print(
+                f"FAIL job object: {exc}; refusing to start without survivor cleanup.",
+                file=sys.stderr,
+                flush=True,
+            )
+            return False
+        return True
 
     def _spawn(self, slot: ChildSlot) -> None:
         path = self.paths.log_path(slot.spec.name)
@@ -662,13 +807,6 @@ class Supervisor:
             log.close()
         slot.proc = proc
         slot.creation = process_creation_time(proc.pid, self.system)
-        if self.job is not None:
-            try:
-                handle = getattr(proc, "_handle", None)
-                if handle:
-                    self.job.assign(int(handle))
-            except (OSError, TypeError):
-                pass
 
     def _posix_owns(self, slot: ChildSlot) -> bool:
         if slot.proc is None or not process_matches(slot.proc.pid, slot.creation, "posix"):
@@ -681,26 +819,7 @@ class Supervisor:
         return marker in raw.split(b"\0")
 
     def _clean_previous_posix(self) -> None:
-        if is_windows(self.system):
-            return
-        previous = read_json(self.paths.state)
-        if not previous:
-            return
-        for child in previous.get("children") or []:
-            pid = child.get("pid")
-            creation = child.get("creation")
-            if not process_matches(pid, creation, "posix"):
-                continue
-            try:
-                raw = Path(f"/proc/{int(pid)}/environ").read_bytes()
-            except (OSError, TypeError, ValueError):
-                continue
-            marker = f"{SUPERVISOR_ID_ENV}={previous.get('supervisor_id')}".encode("utf-8")
-            if marker in raw.split(b"\0"):
-                try:
-                    os.kill(int(pid), signal.SIGTERM)
-                except OSError:
-                    pass
+        cleanup_posix_survivors(self.paths, self.system)
 
     def _signal_break(self, slot: ChildSlot) -> None:
         if slot.proc is None or slot.proc.poll() is not None:
@@ -733,16 +852,16 @@ class Supervisor:
             except (OSError, subprocess.TimeoutExpired):
                 pass
 
-    def _warm_worker_shutdown(self) -> None:
+    def _warm_worker_shutdown(self, timeout: int = 5) -> None:
         try:
             subprocess.run(  # nosec B603 - list argv, no shell
-                worker_shutdown_argv(self.system),
-                cwd=str(REPO_ROOT),
+                worker_shutdown_argv(self.system, timeout),
+                cwd=str(REPO_ROOT / "Backend"),
                 env=self.child_env,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                timeout=10,
+                timeout=timeout + 10,
                 check=False,
                 **child_popen_kwargs(self.system),
             )
@@ -752,32 +871,47 @@ class Supervisor:
     def stop_all(self) -> None:
         self.stop_requested.set()
         slots = {slot.spec.name: slot for slot in self.slots}
-        web = slots.get("web")
-        if web is not None:
-            self._signal_break(web)
-            try:
-                if web.proc is not None:
-                    web.proc.wait(timeout=self.grace_seconds + 10)
-            except (OSError, subprocess.TimeoutExpired):
-                self._terminate(web)
-        worker = slots.get("worker")
-        if worker is not None:
-            self._warm_worker_shutdown()
-            try:
-                if worker.proc is not None:
-                    worker.proc.wait(timeout=10)
-            except (OSError, subprocess.TimeoutExpired):
-                self._terminate(worker)
-        for name in ("beat", "sidecar"):
-            slot = slots.get(name)
-            if slot is not None:
+        for name in self.stop_names():
+            slot = slots[name]
+            if name == "web":
+                self._signal_break(slot)
+                try:
+                    if slot.proc is not None:
+                        slot.proc.wait(timeout=self.grace_seconds + 10)
+                except (OSError, subprocess.TimeoutExpired):
+                    self._terminate(slot)
+            elif name == "worker":
+                self._warm_worker_shutdown()
+                try:
+                    if slot.proc is not None:
+                        slot.proc.wait(timeout=worker_shutdown_wait_seconds())
+                except (OSError, subprocess.TimeoutExpired):
+                    self._terminate(slot)
+            else:
                 self._terminate(slot)
         for slot in self.slots:
             self._terminate(slot, wait_seconds=1)
-        if self.job is not None:
-            self.job.terminate()
-            self.job.close()
-            self.job = None
+
+    def _record_spawn_failure(self, slot: ChildSlot, exc: OSError, now: float) -> None:
+        slot.last_exit = f"spawn failed: {exc}"
+        restart, crashes = should_restart(
+            self.stop_requested.is_set(), 1, slot.crashes, now, self.system
+        )
+        slot.crashes = crashes
+        if restart:
+            slot.restarts += 1
+            slot.next_start = now + restart_delay(slot.restarts)
+        elif not self.stop_requested.is_set():
+            slot.given_up = True
+            self.given_up[slot.spec.name] = (
+                f"could not start after {len(crashes)} attempts: {exc}"
+            )
+
+    def _try_spawn(self, slot: ChildSlot, now: float) -> None:
+        try:
+            self._spawn(slot)
+        except OSError as exc:
+            self._record_spawn_failure(slot, exc, now)
 
     def _reap_children(self, now: float) -> None:
         for slot in self.slots:
@@ -803,7 +937,15 @@ class Supervisor:
                     )
             elif not slot.given_up and not self.stop_requested.is_set():
                 if now >= slot.next_start:
-                    self._spawn(slot)
+                    self._try_spawn(slot, now)
+
+    def _rotate_running_logs(self, now: float) -> None:
+        if now - self.last_log_check < LIVE_LOG_CHECK_SECONDS:
+            return
+        self.last_log_check = now
+        for slot in self.slots:
+            if slot.proc is not None and slot.proc.poll() is None:
+                rotate_live_log(self.paths.log_path(slot.spec.name))
 
     def run(self) -> int:
         self.paths.ensure()
@@ -812,12 +954,14 @@ class Supervisor:
             print("A Kazi supervisor is already running.")
             return 0
         try:
-            self._clean_previous_posix()
+            cleanup_posix_survivors(self.paths, self.system)
             self.creation = process_creation_time(os.getpid(), self.system)
             self._install_signals()
-            self._open_job()
+            if not self._setup_job():
+                return 1
+            now = time.monotonic()
             for slot in self.slots:
-                self._spawn(slot)
+                self._try_spawn(slot, now)
             server = ControlServer(self.state, self._request_stop)
             port = server.start()
             write_json(self.paths.control, {
@@ -830,13 +974,15 @@ class Supervisor:
             last_state = time.monotonic()
             try:
                 while not self.stop_requested.is_set():
-                    self._reap_children(time.monotonic())
-                    if time.monotonic() - last_state >= 1.0:
+                    now = time.monotonic()
+                    self._reap_children(now)
+                    self._rotate_running_logs(now)
+                    if now - last_state >= 1.0:
                         write_json(
                             self.paths.state,
                             {**self.state(), "supervisor_id": self.supervisor_id},
                         )
-                        last_state = time.monotonic()
+                        last_state = now
                     time.sleep(0.2)
             finally:
                 self.stop_all()
@@ -850,6 +996,7 @@ class Supervisor:
 
 def build_child_specs(settings: dict, system: Optional[str] = None) -> List[ChildSpec]:
     plan = process_plan(settings, system)
+    backend = str(BACKEND_DIR)
     specs: List[ChildSpec] = []
     for name in plan:
         if name == "web":
@@ -858,23 +1005,23 @@ def build_child_specs(settings: dict, system: Optional[str] = None) -> List[Chil
             specs.append(ChildSpec("web", [
                 sys.executable, "-m", "uvicorn", "Backend.asgi:application",
                 "--host", host, "--port", str(port), "--workers", "1",
-            ]))
+            ], cwd=backend))
         elif name == "sidecar":
             specs.append(ChildSpec(
                 "sidecar", [sys.executable, "-m", "orchestration.shell_exec"],
-                cwd=str(REPO_ROOT / "Backend"),
+                cwd=backend,
             ))
         elif name == "worker":
             pool = "solo" if is_windows(system) else "prefork"
             specs.append(ChildSpec("worker", [
                 sys.executable, "-m", "celery", "-A", "Backend", "worker",
                 "--loglevel=info", f"--pool={pool}", f"--hostname={worker_node_name()}",
-            ]))
+            ], cwd=backend))
         elif name == "beat":
             specs.append(ChildSpec("beat", [
                 sys.executable, "-m", "celery", "-A", "Backend", "beat",
                 "--loglevel=info",
-            ]))
+            ], cwd=backend))
     return specs
 
 
@@ -908,9 +1055,12 @@ def load_settings(paths: RuntimePaths, timeout: float = 120.0) -> tuple[Optional
         result = subprocess.run(  # nosec B603 - list argv, no shell
             [sys.executable, str(MANAGE_PY), "kazi_status", "--json"],
             cwd=str(REPO_ROOT),
+            env=utf8_env(),
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             check=False,
         )
@@ -929,6 +1079,7 @@ def run_manage(args: Sequence[str], timeout: Optional[float] = None) -> int:
         result = subprocess.run(  # nosec B603 - list argv, no shell
             [sys.executable, str(MANAGE_PY), *args],
             cwd=str(REPO_ROOT),
+            env=utf8_env(),
             check=False,
             timeout=timeout,
         )
@@ -965,6 +1116,32 @@ def check_venv(prefix: str, base_prefix: str) -> Check:
     )
 
 
+def parse_lock_requirement(line: str):
+    """Return a packaging Requirement for one lock line, or None.
+
+    Environment markers stay attached to the requirement so the caller can
+    skip a package that does not apply on this OS or Python.
+    """
+    text = line.strip()
+    if not text or text.startswith("#"):
+        return None
+    try:
+        from packaging.requirements import Requirement
+
+        return Requirement(text)
+    except Exception:
+        return None
+
+
+def lock_line_applies(requirement) -> bool:
+    if requirement is None or requirement.marker is None:
+        return True
+    try:
+        return bool(requirement.marker.evaluate())
+    except Exception:
+        return True
+
+
 def check_lockfile(
     root: Path = REPO_ROOT,
     version_reader: Callable[[str], str] = importlib.metadata.version,
@@ -977,24 +1154,24 @@ def check_lockfile(
     missing = 0
     checked = 0
     for line in lines:
-        text = line.strip()
-        if not text or text.startswith("#") or "==" not in text:
+        requirement = parse_lock_requirement(line)
+        if requirement is None or not lock_line_applies(requirement):
             continue
-        name, _, version = text.partition("==")
         checked += 1
         try:
-            installed = version_reader(name)
+            installed = version_reader(requirement.name)
         except importlib.metadata.PackageNotFoundError:
             missing += 1
             continue
-        if installed != version:
+        if not requirement.specifier.contains(installed, prereleases=True):
             missing += 1
     if missing:
         return Check(
             "Lock file", "WARN",
-            f"{missing} of {checked} locked packages are missing or differ; run pip install -r requirements.lock.",
+            f"{missing} of {checked} applicable locked packages are missing or differ; "
+            "run pip install -r requirements.lock.",
         )
-    return Check("Lock file", "OK", f"All {checked} locked packages are installed.")
+    return Check("Lock file", "OK", f"All {checked} applicable locked packages are installed.")
 
 
 def check_required_keys(dotenv: dict, env: dict, required: Sequence[str] = REQUIRED_ENV_KEYS) -> Check:
@@ -1046,7 +1223,7 @@ def check_tcp(
         return Check(name, "OK", f"{name} uses a local file.")
     try:
         reachable = connector(host, port)
-    except OSError:
+    except (OSError, TypeError, ValueError):
         reachable = False
     if reachable:
         return Check(name, "OK", f"{name} is reachable at its configured host.")
@@ -1056,7 +1233,11 @@ def check_tcp(
 def check_temporal(disabled: bool, host: Optional[str], port: int, connector) -> Check:
     if disabled:
         return Check("Temporal", "OK", "Temporal is disabled.")
-    if host and connector(host, port):
+    try:
+        reachable = bool(host and connector(host, port))
+    except (OSError, TypeError, ValueError):
+        reachable = False
+    if reachable:
         return Check("Temporal", "OK", "Temporal is enabled and reachable.")
     return Check(
         "Temporal", "WARN",
@@ -1154,6 +1335,13 @@ def check_worker_counts(env: dict, lite: bool) -> Check:
     return Check("Web workers", "OK", f"{selected} is set to {count}.")
 
 
+def _as_int(value, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def check_pool(pool_size: int, processes: int, server_limit: int = 15) -> Check:
     if pool_size <= 0:
         return Check("Connection pool", "OK", "No per-process connection pool is configured.")
@@ -1215,24 +1403,24 @@ def settings_checks(settings: dict, env: dict, connector, binder) -> List[Check]
         check_temporal(
             bool(profile.get("temporal_disabled")),
             temporal.get("host"),
-            int(temporal.get("port", 7233)),
+            _as_int(temporal.get("port"), 7233),
             connector,
         ),
         check_tcp(
-            "Database", database.get("host"), int(database.get("port") or 5432),
+            "Database", database.get("host"), _as_int(database.get("port"), 5432),
             connector, level="FAIL",
         ),
     ]
     if not profile.get("lite"):
         checks.append(check_tcp(
-            "Redis", redis.get("host"), int(redis.get("port") or 6379),
+            "Redis", redis.get("host"), _as_int(redis.get("port"), 6379),
             connector, level="FAIL",
         ))
     addresses = [
         ("Web", settings.get("web", {}).get("host", "127.0.0.1"),
-         int(settings.get("web", {}).get("port", 8000))),
+         _as_int(settings.get("web", {}).get("port"), 8000)),
         ("Sidecar", settings.get("shell", {}).get("host", "127.0.0.1"),
-         int(settings.get("shell", {}).get("port", 8765))),
+         _as_int(settings.get("shell", {}).get("port"), 8765)),
     ]
     checks.extend(check_ports(addresses, binder))
     checks.append(check_static(
@@ -1240,8 +1428,8 @@ def settings_checks(settings: dict, env: dict, connector, binder) -> List[Check]
     ))
     checks.append(check_worker_counts(env, bool(profile.get("lite"))))
     checks.append(check_pool(
-        int(settings.get("pool", {}).get("size") or 0),
-        int(settings.get("pool", {}).get("processes") or len(process_plan(settings))),
+        _as_int(settings.get("pool", {}).get("size"), 0),
+        _as_int(settings.get("pool", {}).get("processes"), len(process_plan(settings))),
     ))
     return checks
 
@@ -1259,11 +1447,21 @@ def run_doctor(settings: Optional[dict], paths: RuntimePaths, env: dict, dotenv:
 
 # --- process helpers --------------------------------------------------------
 
-def wait_for_web(settings: dict, timeout: float = 60.0) -> bool:
+def _report_progress(label: str, started: float, next_report: float, progress) -> float:
+    now = time.monotonic()
+    if progress is not None and now >= next_report:
+        progress(now - started)
+        return now + PROGRESS_SECONDS
+    return next_report
+
+
+def wait_for_web(settings: dict, timeout: float = WEB_READY_SECONDS, progress=None) -> bool:
     web = settings.get("web", {})
     host = web.get("host", "127.0.0.1")
-    port = int(web.get("port", 8000))
-    deadline = time.monotonic() + timeout
+    port = _as_int(web.get("port"), 8000)
+    started = time.monotonic()
+    deadline = started + timeout
+    next_report = started + PROGRESS_SECONDS
     while time.monotonic() < deadline:
         try:
             urllib.request.urlopen(  # nosec B310 - fixed loopback HTTP URL
@@ -1273,55 +1471,91 @@ def wait_for_web(settings: dict, timeout: float = 60.0) -> bool:
         except urllib.error.HTTPError:
             return True
         except (OSError, ValueError):
+            next_report = _report_progress("web", started, next_report, progress)
             time.sleep(0.5)
     return False
 
 
-def wait_for_control(paths: RuntimePaths, timeout: float = 60.0) -> bool:
-    deadline = time.monotonic() + timeout
+def wait_for_control(paths: RuntimePaths, timeout: float = 60.0, progress=None,
+                     process=None) -> bool:
+    started = time.monotonic()
+    deadline = started + timeout
+    next_report = started + PROGRESS_SECONDS
     while time.monotonic() < deadline:
+        if process is not None and process.poll() is not None:
+            return False
         response = control_request(paths, "/ping", timeout=1)
         if response is not None and response.get("status") == 200:
             return True
+        next_report = _report_progress("supervisor", started, next_report, progress)
         time.sleep(0.25)
     return False
 
 
-def wait_for_worker(timeout: float = 30.0) -> bool:
-    deadline = time.monotonic() + timeout
-    command = [sys.executable, "-m", "celery", "-A", "Backend", "inspect", "ping", "--timeout", "2"]
+def wait_for_worker(node: Optional[str] = None, timeout: float = WORKER_READY_SECONDS,
+                    progress=None) -> bool:
+    node = node or worker_node_name()
+    started = time.monotonic()
+    deadline = started + timeout
+    next_report = started + PROGRESS_SECONDS
+    command = [
+        sys.executable, "-m", "celery", "-A", "Backend", "inspect", "ping",
+        "-d", node, "--timeout", "2",
+    ]
     while time.monotonic() < deadline:
         try:
             result = subprocess.run(  # nosec B603 - list argv, no shell
-                command, cwd=str(REPO_ROOT), stdin=subprocess.DEVNULL,
-                capture_output=True, timeout=10, check=False,
+                command, cwd=str(BACKEND_DIR), env=utf8_env(),
+                stdin=subprocess.DEVNULL, capture_output=True,
+                text=True, encoding="utf-8", errors="replace",
+                timeout=10, check=False,
             )
         except (OSError, subprocess.TimeoutExpired):
             return False
-        if result.returncode == 0 and b"pong" in result.stdout.lower():
+        if result.returncode == 0 and "pong" in (result.stdout or "").lower():
             return True
+        next_report = _report_progress("worker", started, next_report, progress)
         time.sleep(1)
     return False
 
 
+def preflight_failures(checks: Sequence[Check], ignore_static: bool = False) -> List[Check]:
+    return [
+        check for check in checks
+        if check.level == "FAIL" and not (ignore_static and check.name == "Static files")
+    ]
+
+
 def run_preflight(settings: Optional[dict], paths: RuntimePaths, env: dict, dotenv: dict,
-                  autostart: bool) -> int:
-    deadline = time.monotonic() + (AUTOSTART_WAIT_SECONDS if autostart else 0)
+                  deadline: Optional[float] = None, ignore_static: bool = False) -> int:
     while True:
         checks = collect_checks(settings, env, dotenv)
-        failures = [check for check in checks if check.level == "FAIL"]
-        if not autostart or not failures or time.monotonic() >= deadline:
+        failures = preflight_failures(checks, ignore_static)
+        if not failures or deadline is None or time.monotonic() >= deadline:
             break
-        print("Waiting for services to come up (autostart)...")
+        print(
+            f"Waiting for services to come up: {len(failures)} check(s) still failing...",
+            flush=True,
+        )
         time.sleep(5)
     for check in checks:
         print_check(check)
-    return 1 if any(check.level == "FAIL" for check in checks) else 0
+    return 1 if failures else 0
+
+
+def readiness_errors(web_ready: bool, worker_ready: bool, plan: Sequence[str],
+                     paths: RuntimePaths) -> List[str]:
+    errors = []
+    if not web_ready:
+        errors.append(f"web did not answer HTTP; see {paths.log_path('web')}")
+    if "worker" in plan and not worker_ready:
+        errors.append(f"worker did not answer a broker ping; see {paths.log_path('worker')}")
+    return errors
 
 
 def print_database_host(settings: dict) -> None:
     host = settings.get("database", {}).get("host") or "(local SQLite file)"
-    print(f"Database host: {host}")
+    print(f"Database host: {host}", flush=True)
 
 
 def print_status_text(paths: RuntimePaths, settings: Optional[dict], system: Optional[str]) -> None:
@@ -1332,9 +1566,11 @@ def print_status_text(paths: RuntimePaths, settings: Optional[dict], system: Opt
         body = response.get("body") or {}
         print(f"Kazi is running (supervisor pid {body.get('pid')}).")
         for child in body.get("children") or []:
-            state = "given up" if child.get("given_up") else "running"
+            state = child.get("state") or ("given-up" if child.get("given_up") else "running")
+            pid = child.get("pid")
+            where = f"pid {pid} " if pid is not None else ""
             print(
-                f"  {child.get('name')}: pid {child.get('pid')} {state}, "
+                f"  {child.get('name')}: {where}{state}, "
                 f"{child.get('restarts', 0)} restart(s)"
             )
         for name, reason in (body.get("given_up") or {}).items():
@@ -1417,6 +1653,7 @@ def autostart_enable(system: Optional[str] = None, env: Optional[dict] = None,
         return 1
     path = autostart_file(system, env)
     path.parent.mkdir(parents=True, exist_ok=True)
+    (root / ".kazi" / "logs").mkdir(parents=True, exist_ok=True)
     path.write_text(autostart_text(system, root), encoding="utf-8")
     print(f"Autostart enabled: {path}")
     return 0
@@ -1451,8 +1688,9 @@ def autostart_status(system: Optional[str] = None, env: Optional[dict] = None) -
 
 # --- commands ---------------------------------------------------------------
 
-def write_plan(specs: Sequence[ChildSpec], paths: RuntimePaths) -> None:
+def write_plan(specs: Sequence[ChildSpec], paths: RuntimePaths, grace_seconds: float = 20.0) -> None:
     write_json(paths.plan, {
+        "grace_seconds": float(grace_seconds),
         "children": [
             {"name": spec.name, "argv": list(spec.argv), "cwd": spec.cwd} for spec in specs
         ],
@@ -1473,70 +1711,132 @@ def start_supervisor_log(paths: RuntimePaths):
     return open(log_path, "ab", buffering=0)
 
 
+def _can_retry(deadline: Optional[float]) -> bool:
+    return deadline is not None and time.monotonic() < deadline
+
+
+def _bootstrap(settings: Optional[dict], error: Optional[str], paths: RuntimePaths,
+               env: dict, dotenv: dict, deadline: Optional[float]) -> Optional[dict]:
+    while True:
+        if settings is None:
+            if _can_retry(deadline):
+                print(f"Waiting for Django settings ({error})...", flush=True)
+                time.sleep(5)
+                settings, error = load_settings(paths)
+                continue
+            print(f"FAIL settings: {error}.", flush=True)
+            return None
+        cleanup_posix_survivors(paths)
+        debug = bool(settings.get("profile", {}).get("debug"))
+        if run_preflight(
+            settings, paths, env, dotenv, deadline=deadline, ignore_static=not debug,
+        ):
+            return None
+        print_database_host(settings)
+        if run_manage(["migrate", "--noinput"]) == 0:
+            return settings
+        if _can_retry(deadline):
+            print("Waiting for the database and migrations...", flush=True)
+            time.sleep(5)
+            settings, error = load_settings(paths)
+            continue
+        print("FAIL migrate: the database migration failed; nothing was started.", flush=True)
+        return None
+
+
 def cmd_up(paths: RuntimePaths, system: Optional[str], autostart: bool, foreground: bool) -> int:
+    deadline = time.monotonic() + AUTOSTART_WAIT_SECONDS if autostart else None
     settings, error = load_settings(paths)
-    if settings is None:
-        print(f"FAIL settings: {error}.")
-        return 1
-    env = os.environ
+    env = os.environ.copy()
     dotenv = load_dotenv_map()
-    if not foreground and live_control(paths, system) is not None:
+    if settings is not None and not foreground and live_control(paths, system) is not None:
         print_status_text(paths, settings, system)
         return 0
-    if run_preflight(settings, paths, env, dotenv, autostart):
-        return 1
-    print_database_host(settings)
-    if run_manage(["migrate", "--noinput"]) != 0:
-        print("FAIL migrate: the database migration failed; nothing was started.")
-        return 1
-    plan = process_plan(settings, system)
-    if "beat" in plan and run_manage(["sync_beat_schedule"]) != 0:
-        print("FAIL beat schedule: sync_beat_schedule failed; nothing was started.")
-        return 1
-    if not settings.get("profile", {}).get("debug") and run_manage(["collectstatic", "--noinput"]) != 0:
-        print("FAIL static files: collectstatic failed; nothing was started.")
-        return 1
-    specs = build_child_specs(settings, system)
-    if foreground:
-        return Supervisor(specs, paths, system, grace_seconds=_grace(settings)).run()
-    write_plan(specs, paths)
-    argv = [
-        sys.executable, str(Path(__file__).resolve()), "__supervise",
-        "--plan", str(paths.plan),
-    ]
-    log = start_supervisor_log(paths)
+    start_lock = SupervisorLock(paths.start_lock, system)
+    if not start_lock.acquire():
+        print("Another kazi up is already starting or running.", flush=True)
+        print_status_text(paths, settings, system)
+        return 0
     try:
-        subprocess.Popen(  # nosec B603 - list argv, no shell
-            argv,
-            cwd=str(REPO_ROOT),
-            stdin=subprocess.DEVNULL,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            **supervisor_popen_kwargs(system),
-        )
-    except OSError:
-        print("FAIL supervisor: could not start the supervisor.")
-        return 1
-    finally:
-        log.close()
-    wait = AUTOSTART_WAIT_SECONDS if autostart else 60
-    if not wait_for_control(paths, timeout=wait):
-        if live_control(paths, system) is None:
-            print("A second supervisor is already running, or the supervisor exited.")
+        probe = SupervisorLock(paths.lock, system)
+        if not probe.acquire():
+            print("A Kazi supervisor is already running.", flush=True)
             print_status_text(paths, settings, system)
             return 0
-        print("FAIL supervisor: the control channel did not come up.")
-        return 1
-    web_ready = wait_for_web(settings, timeout=wait)
-    worker_ready = wait_for_worker(timeout=30) if "worker" in plan else True
-    if not web_ready:
-        print("WARN web: no HTTP answer yet; see kazi logs web.")
-    if not worker_ready:
-        print("WARN worker: no broker ping yet; see kazi logs worker.")
-    host = settings.get("web", {}).get("host", "127.0.0.1")
-    port = settings.get("web", {}).get("port", 8000)
-    print(f"Kazi is up: http://{host}:{port}/")
-    return 0
+        probe.release()
+        settings = _bootstrap(settings, error, paths, env, dotenv, deadline)
+        if settings is None:
+            return 1
+        plan = process_plan(settings, system)
+        if "beat" in plan and run_manage(["sync_beat_schedule"]) != 0:
+            print("FAIL beat schedule: sync_beat_schedule failed; nothing was started.", flush=True)
+            return 1
+        if not settings.get("profile", {}).get("debug") and run_manage(["collectstatic", "--noinput"]) != 0:
+            print("FAIL static files: collectstatic failed; nothing was started.", flush=True)
+            return 1
+        specs = build_child_specs(settings, system)
+        grace = _grace(settings)
+        if foreground:
+            return Supervisor(specs, paths, system, grace_seconds=grace).run()
+        write_plan(specs, paths, grace)
+        argv = [
+            sys.executable, str(Path(__file__).resolve()), "__supervise",
+            "--plan", str(paths.plan),
+        ]
+        log = start_supervisor_log(paths)
+        try:
+            supervisor_process = subprocess.Popen(  # nosec B603 - list argv, no shell
+                argv,
+                cwd=str(REPO_ROOT),
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                **supervisor_popen_kwargs(system),
+            )
+        except OSError:
+            print("FAIL supervisor: could not start the supervisor.", flush=True)
+            return 1
+        finally:
+            log.close()
+        wait = AUTOSTART_WAIT_SECONDS if autostart else 60
+        print("Waiting for the supervisor...", flush=True)
+        if not wait_for_control(
+            paths, timeout=wait, process=supervisor_process,
+            progress=lambda seconds: print(f"  supervisor still starting ({seconds:.0f}s)", flush=True),
+        ):
+            if supervisor_process.poll() is not None:
+                print(
+                    f"FAIL supervisor: exited before the control channel came up; "
+                    f"see {paths.log_path('supervisor')}",
+                    flush=True,
+                )
+                return 1
+            print("FAIL supervisor: the control channel did not come up.", flush=True)
+            return 1
+        print("Waiting for web...", flush=True)
+        web_ready = wait_for_web(
+            settings, timeout=WEB_READY_SECONDS,
+            progress=lambda seconds: print(f"  web still starting ({seconds:.0f}s)", flush=True),
+        )
+        worker_ready = True
+        if "worker" in plan:
+            print("Waiting for the worker...", flush=True)
+            worker_ready = wait_for_worker(
+                timeout=WORKER_READY_SECONDS,
+                progress=lambda seconds: print(f"  worker still starting ({seconds:.0f}s)", flush=True),
+            )
+        errors = readiness_errors(web_ready, worker_ready, plan, paths)
+        if errors:
+            for message in errors:
+                print(f"FAIL {message}", flush=True)
+            print("The supervisor is left running for inspection; run `kazi down` to stop it.", flush=True)
+            return 1
+        host = settings.get("web", {}).get("host", "127.0.0.1")
+        port = _as_int(settings.get("web", {}).get("port"), 8000)
+        print(f"Kazi is up: http://{host}:{port}/", flush=True)
+        return 0
+    finally:
+        start_lock.release()
 
 
 def _grace(settings: dict) -> float:
@@ -1553,7 +1853,7 @@ def cmd_down(paths: RuntimePaths, system: Optional[str]) -> int:
     if response is None or response.get("status") != 202:
         print("The supervisor refused the stop request; nothing was signalled.")
         return 1
-    deadline = time.monotonic() + 90
+    deadline = time.monotonic() + max(120, worker_shutdown_wait_seconds() + 60)
     while time.monotonic() < deadline:
         if not process_matches(control.get("pid"), control.get("creation"), system):
             print("Kazi is down.")
@@ -1651,7 +1951,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         paths = RuntimePaths(args.state_dir)
         if args.log_dir:
             paths.logs = Path(args.log_dir)
-        return Supervisor(specs_from_plan(payload), paths, system).run()
+        grace = float(payload.get("grace_seconds") or 20.0)
+        return Supervisor(
+            specs_from_plan(payload), paths, system, grace_seconds=grace,
+        ).run()
     if args.command == "__lock-holder":
         lock = SupervisorLock(Path(args.path), system)
         if not lock.acquire():

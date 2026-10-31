@@ -18,7 +18,10 @@ import sys
 import tempfile
 import time
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = REPO_ROOT / "scripts"
@@ -139,8 +142,10 @@ class ProcessPlanTests(unittest.TestCase):
             for spec in specs:
                 self.assertIsInstance(spec.argv, list)
                 self.assertTrue(all(isinstance(part, str) for part in spec.argv))
+                self.assertEqual(spec.cwd, str(REPO_ROOT / "Backend"))
         self.assertIn("--pool=solo", windows["worker"].argv)
         self.assertIn("--pool=prefork", posix["worker"].argv)
+        self.assertTrue(any(part.startswith("--hostname=kazi-") for part in windows["worker"].argv))
 
 
 class CreationFlagTests(unittest.TestCase):
@@ -334,6 +339,212 @@ class TextTests(unittest.TestCase):
             self.assertNotIn("web.log.6", names)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+class PlanAndSupervisorTests(unittest.TestCase):
+    def test_stop_order_is_web_worker_beat_sidecar(self):
+        specs = [
+            K.ChildSpec("sidecar", ["x"]),
+            K.ChildSpec("beat", ["x"]),
+            K.ChildSpec("web", ["x"]),
+            K.ChildSpec("worker", ["x"]),
+        ]
+        supervisor = K.Supervisor(specs, K.RuntimePaths(_tmpdir()), "posix")
+        self.assertEqual(supervisor.stop_names(), ["web", "worker", "beat", "sidecar"])
+
+    def test_the_plan_carries_the_shutdown_grace_and_working_folders(self):
+        tmp = _tmpdir()
+        try:
+            paths = K.RuntimePaths(tmp)
+            specs = K.build_child_specs(_settings(), "posix")
+            K.write_plan(specs, paths, grace_seconds=42)
+            payload = K.read_json(paths.plan)
+            self.assertEqual(payload["grace_seconds"], 42)
+            self.assertTrue(all(child["cwd"] == str(REPO_ROOT / "Backend") for child in payload["children"]))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_a_failed_spawn_counts_as_a_crash_for_that_child(self):
+        tmp = _tmpdir()
+        try:
+            supervisor = K.Supervisor(
+                [K.ChildSpec("web", ["missing"])], K.RuntimePaths(tmp), "posix"
+            )
+            slot = supervisor.slots[0]
+            for index in range(5):
+                supervisor._record_spawn_failure(slot, OSError("boom"), 100.0 + index)
+            self.assertTrue(slot.given_up)
+            self.assertIn("web", supervisor.given_up)
+            self.assertIsNone(slot.proc)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_status_names_a_child_waiting_to_restart(self):
+        slot = K.ChildSlot(K.ChildSpec("web", ["missing"]))
+        state = slot.as_state()
+        self.assertEqual(state["state"], "restarting")
+        self.assertIsNone(state["pid"])
+        slot.given_up = True
+        self.assertEqual(slot.as_state()["state"], "given-up")
+
+    def test_a_failed_state_write_does_not_take_the_stack_down(self):
+        tmp = _tmpdir()
+        try:
+            target = tmp / "state.json"
+            target.mkdir()
+            self.assertFalse(K.write_json(target, {"ok": False}))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    @unittest.skipIf(WINDOWS, "POSIX file modes")
+    def test_state_file_is_owner_only_from_creation(self):
+        tmp = _tmpdir()
+        try:
+            path = tmp / "state.json"
+            self.assertTrue(K.write_json(path, {"ok": True}))
+            self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_readiness_errors_name_the_failed_process_and_log(self):
+        tmp = _tmpdir()
+        try:
+            paths = K.RuntimePaths(tmp)
+            errors = K.readiness_errors(False, False, ["web", "worker"], paths)
+            self.assertEqual(len(errors), 2)
+            self.assertIn(str(paths.log_path("web")), errors[0])
+            self.assertIn(str(paths.log_path("worker")), errors[1])
+            self.assertEqual(K.readiness_errors(True, True, ["web"], paths), [])
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+class UpExitTests(unittest.TestCase):
+    class FakeProcess:
+        def poll(self):
+            return None
+
+    def _run_up(self, web_ready):
+        tmp = _tmpdir()
+        try:
+            settings = _settings()
+            paths = K.RuntimePaths(tmp)
+            out = StringIO()
+            with patch.object(K, "load_settings", return_value=(settings, None)), \
+                    patch.object(K, "_bootstrap", return_value=settings), \
+                    patch.object(K, "run_manage", return_value=0), \
+                    patch.object(K, "wait_for_control", return_value=True), \
+                    patch.object(K, "wait_for_web", return_value=web_ready), \
+                    patch.object(K, "wait_for_worker", return_value=True), \
+                    patch.object(K.subprocess, "Popen", return_value=self.FakeProcess()), \
+                    redirect_stdout(out):
+                code = K.cmd_up(paths, os.name, autostart=False, foreground=False)
+            return code, out.getvalue()
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_up_exits_zero_and_says_up_only_when_web_and_worker_answer(self):
+        code, output = self._run_up(True)
+        self.assertEqual(code, 0)
+        self.assertIn("Kazi is up", output)
+
+    def test_up_exits_non_zero_and_names_the_failed_log(self):
+        code, output = self._run_up(False)
+        self.assertEqual(code, 1)
+        self.assertNotIn("Kazi is up", output)
+        self.assertIn("FAIL web did not answer HTTP", output)
+        self.assertIn("web.log", output)
+
+
+class JobFailureTests(unittest.TestCase):
+    class FailingJob:
+        def assign_current_process(self):
+            raise OSError("nested job refused")
+
+    def test_a_job_object_setup_failure_is_fatal_and_explains_why(self):
+        tmp = _tmpdir()
+        try:
+            supervisor = K.Supervisor(
+                [], K.RuntimePaths(tmp), "nt", job_factory=self.FailingJob,
+            )
+            self.assertFalse(supervisor._setup_job())
+            self.assertIsNone(supervisor.job)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+class LiveLogTests(unittest.TestCase):
+    def test_a_live_child_log_is_rotated_and_can_still_be_written(self):
+        tmp = _tmpdir()
+        try:
+            log = tmp / "web.log"
+            handle = open(log, "ab", buffering=0)
+            try:
+                handle.write(b"x" * 20)
+                handle.flush()
+                self.assertTrue(K.rotate_live_log(log, max_bytes=5, keep=3))
+                self.assertEqual(log.stat().st_size, 0)
+                self.assertEqual((tmp / "web.log.1").read_bytes(), b"x" * 20)
+                handle.write(b"still-writing")
+            finally:
+                handle.close()
+            self.assertIn(b"still-writing", log.read_bytes())
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+class LockfileMarkerTests(unittest.TestCase):
+    def test_environment_markers_that_do_not_apply_are_skipped(self):
+        tmp = _tmpdir()
+        try:
+            (tmp / "requirements.lock").write_text(
+                "colorama==0.4.6 ; sys_platform == 'never'\nDjango==5.2.17\n",
+                encoding="utf-8",
+            )
+            seen = []
+
+            def reader(name):
+                seen.append(name)
+                return "5.2.17"
+
+            check = K.check_lockfile(tmp, reader)
+            self.assertEqual(check.level, "OK")
+            self.assertEqual(seen, ["Django"])
+            self.assertFalse(K.lock_line_applies(K.parse_lock_requirement(
+                "colorama==0.4.6 ; sys_platform == 'never'"
+            )))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+class RealSpecImportTests(unittest.TestCase):
+    def test_every_real_spec_imports_from_its_real_working_folder(self):
+        specs = {spec.name: spec for spec in K.build_child_specs(_settings(), os.name)}
+        probes = {
+            "web": ("import Backend.asgi; print('ASGI_OK')", "ASGI_OK"),
+            "worker": ("import Backend.celery; print('CELERY_OK')", "CELERY_OK"),
+            "beat": ("import Backend.celery; print('CELERY_OK')", "CELERY_OK"),
+            "sidecar": ("import orchestration.shell_exec; print('SIDECAR_OK')", "SIDECAR_OK"),
+        }
+        for name, spec in specs.items():
+            code, marker = probes[name]
+            result = subprocess.run(  # nosec B603 - real import probe
+                [sys.executable, "-c", code],
+                cwd=spec.cwd,
+                env=K.utf8_env(os.environ),
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=120,
+                check=False,
+            )
+            self.assertEqual(
+                result.returncode, 0,
+                f"{name} import failed from {spec.cwd}: {result.stdout}{result.stderr}",
+            )
+            self.assertIn(marker, result.stdout)
 
 
 @unittest.skipUnless(WINDOWS, "real Windows process semantics")

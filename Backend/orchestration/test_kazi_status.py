@@ -9,8 +9,10 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.core.management import call_command
-from django.test import TestCase
+from django.db import OperationalError
+from django.test import TestCase, override_settings
 
+from orchestration.management.commands import kazi_status
 from orchestration.models import Turn
 from orchestration.tasks import LAST_REAPER_CACHE_KEY
 
@@ -70,6 +72,18 @@ class KaziStatusTests(TestCase):
             self.assertNotIn(password, text)
 
 
+class KaziStatusHostTests(TestCase):
+    @override_settings(TEMPORAL_HOST="localhost:7233")
+    def test_temporal_host_without_a_scheme_is_parsed(self):
+        temporal = kazi_status._temporal()
+        self.assertEqual(temporal, {"host": "localhost", "port": 7233})
+
+    @override_settings(TEMPORAL_HOST="localhost:notaport")
+    def test_a_bad_temporal_port_does_not_crash(self):
+        temporal = kazi_status._temporal()
+        self.assertEqual(temporal, {"host": "localhost", "port": 7233})
+
+
 class KaziStatusFailureTests(TestCase):
     def test_unreadable_migration_and_drift_do_not_break_the_command(self):
         with patch(
@@ -88,3 +102,23 @@ class KaziStatusFailureTests(TestCase):
         self.assertIsNone(payload["pending_migrations"]["items"])
         self.assertIsNone(payload["beat_drift"])
         self.assertEqual(payload["turns"], {})
+
+    def test_a_real_database_down_path_leaves_every_section_readable(self):
+        with patch(
+            "django.db.migrations.executor.MigrationExecutor",
+            side_effect=OperationalError("database down"),
+        ), patch(
+            "workflows.management.commands.sync_beat_schedule.beat_schedule_drift",
+            side_effect=OperationalError("database down"),
+        ), patch.object(
+            Turn.objects, "filter", side_effect=OperationalError("database down")
+        ), patch.object(
+            cache, "get", side_effect=OperationalError("database down")
+        ):
+            out = StringIO()
+            call_command("kazi_status", "--json", stdout=out)
+            payload = json.loads(out.getvalue())
+        self.assertIsNone(payload["pending_migrations"]["items"])
+        self.assertIsNone(payload["beat_drift"])
+        self.assertEqual(payload["turns"], {})
+        self.assertIsNone(payload["last_reaper"]["result"])

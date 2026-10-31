@@ -16,10 +16,24 @@ from django.core.management.base import BaseCommand
 
 
 def _host_port(value: str, default_port: int) -> tuple[str, int]:
+    text = str(value or "").strip()
+    if not text:
+        return "", default_port
     try:
-        parsed = urlparse(value)
-        return parsed.hostname or "", int(parsed.port or default_port)
-    except ValueError:
+        if "://" in text:
+            parsed = urlparse(text)
+            host = parsed.hostname or ""
+            port = parsed.port
+        else:
+            host, separator, port_text = text.rpartition(":")
+            if not separator:
+                return text.strip("[]"), default_port
+            try:
+                port = int(port_text)
+            except ValueError:
+                return host.strip("[]") or text, default_port
+        return host.strip("[]"), int(port or default_port)
+    except (ValueError, TypeError):
         return "", default_port
 
 
@@ -32,7 +46,7 @@ def _database() -> dict:
         return {
             "engine": engine.rsplit(".", 1)[-1],
             "host": str(config.get("HOST") or ""),
-            "port": int(config.get("PORT") or 0),
+            "port": _as_int(config.get("PORT"), 0),
         }
     except Exception:
         return {"engine": "", "host": "", "port": 0}
@@ -137,17 +151,24 @@ def _pool() -> dict:
     return {"size": size}
 
 
+def _as_int(value, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _web() -> dict:
     return {
         "host": os.environ.get("KAZI_WEB_HOST", "127.0.0.1"),
-        "port": int(os.environ.get("KAZI_WEB_PORT", "8000")),
+        "port": _as_int(os.environ.get("KAZI_WEB_PORT"), 8000),
     }
 
 
 def _shell() -> dict:
     return {
         "host": str(getattr(settings, "SHELL_EXEC_HOST", "127.0.0.1")),
-        "port": int(getattr(settings, "SHELL_EXEC_PORT", 8765)),
+        "port": _as_int(getattr(settings, "SHELL_EXEC_PORT", 8765), 8765),
         "token_set": bool(getattr(settings, "SHELL_EXEC_TOKEN", "")),
     }
 

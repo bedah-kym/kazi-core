@@ -1609,35 +1609,67 @@ def _serialize_delegated_result(result: Dict[str, Any]) -> str:
     ``stopped_reason`` and the truncation note out of view, so keep those first
     and shorten only the summary until the whole payload fits. When the summary
     is shortened, ``summary_truncated`` says how much was kept and dropped.
+
+    Sizing is done on the serialised length, not the raw length: quotes,
+    newlines and non-ASCII characters expand under ``json.dumps``. A binary
+    search finds the largest prefix that still fits, so escaping cannot make
+    the result overshoot or throw the whole summary away.
     """
     ordered = _order_delegated_result(result)
     summary = ordered.get("summary")
     if not isinstance(summary, str):
         return _sanitize_tool_result(json.dumps(ordered, default=str))
-    if len(json.dumps(ordered, default=str)) <= _MAX_RESULT_CHARS:
-        return _sanitize_tool_result(json.dumps(ordered, default=str))
+    full = json.dumps(ordered, default=str)
+    if len(full) <= _MAX_RESULT_CHARS:
+        return _sanitize_tool_result(full)
 
-    base = dict(ordered)
-    base["summary"] = ""
-    room = max(0, _MAX_RESULT_CHARS - len(json.dumps(base, default=str)))
-    while True:
-        kept = summary[:room]
-        if len(kept) >= len(summary):
-            # The overflow is not from the summary; the generic cap still
-            # keeps the leading stop fields.
-            return _sanitize_tool_result(json.dumps(ordered, default=str))
-        candidate = dict(base)
+    leading = {
+        key: ordered[key] for key in _DELEGATED_RESULT_LEADING_KEYS if key in ordered
+    }
+    extras = {
+        key: value for key, value in ordered.items()
+        if key not in leading and key != "summary"
+    }
+
+    def build(kept_len: int, with_extras: bool) -> Dict[str, Any]:
+        candidate = dict(leading)
+        if with_extras:
+            candidate.update(extras)
         candidate["summary_truncated"] = {
             "original_chars": len(summary),
-            "kept_chars": len(kept),
-            "dropped_chars": len(summary) - len(kept),
+            "kept_chars": kept_len,
+            "dropped_chars": len(summary) - kept_len,
         }
-        candidate = _order_delegated_result(candidate)
-        candidate["summary"] = kept
-        dumped = json.dumps(candidate, default=str)
-        if len(dumped) <= _MAX_RESULT_CHARS or room == 0:
-            return _sanitize_tool_result(dumped)
-        room = max(0, room - (len(dumped) - _MAX_RESULT_CHARS) - 1)
+        candidate["summary"] = summary[:kept_len]
+        return _order_delegated_result(candidate)
+
+    def fits(candidate: Dict[str, Any]) -> bool:
+        return len(json.dumps(candidate, default=str)) <= _MAX_RESULT_CHARS
+
+    with_extras = fits(build(0, True))
+    if not with_extras and not fits(build(0, False)):
+        # Even the leading fields do not fit. Nothing can be kept safely.
+        return _sanitize_tool_result(full)
+
+    hi = len(summary)
+    if fits(build(hi, with_extras)):
+        # The summary was not shortened; only extras needed dropping.
+        without_meta = dict(leading)
+        if with_extras:
+            without_meta.update(extras)
+        without_meta["summary"] = summary
+        return _sanitize_tool_result(
+            json.dumps(_order_delegated_result(without_meta), default=str),
+        )
+
+    lo = 0
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if fits(build(mid, with_extras)):
+            lo = mid
+        else:
+            hi = mid - 1
+    return _sanitize_tool_result(json.dumps(build(lo, with_extras), default=str))
 
 
 def _serialize_tool_result(tool_name: str, result: Dict[str, Any]) -> str:

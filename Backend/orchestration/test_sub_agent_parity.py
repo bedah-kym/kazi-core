@@ -1,6 +1,7 @@
 """A delegated run follows the main loop's rules: receipts, persona scope, caps."""
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from asgiref.sync import async_to_sync
@@ -9,7 +10,13 @@ from django.core.cache import cache
 from django.test import SimpleTestCase, TestCase
 
 from orchestration import agent_loop
-from orchestration.agent_loop import _execute_scoped_tool_calls, _run_sub_agent
+from orchestration.agent_loop import (
+    LENGTH_LIMIT_NOTE,
+    _MAX_RESULT_CHARS,
+    _execute_scoped_tool_calls,
+    _run_sub_agent,
+    _serialize_delegated_result,
+)
 from orchestration.models import ActionReceipt
 
 OPEN_PROFILE = {"shell_profile": "open"}
@@ -355,6 +362,88 @@ class DelegatedLengthLimitTests(SimpleTestCase):
             "Anything I was still writing did not run.",
         )
         h.executed.assert_not_called()
+
+
+class DelegatedResultSerializationTests(SimpleTestCase):
+    """The summary is sized on its serialised length, not its raw length."""
+
+    def _result(self, summary, stopped_reason=None):
+        result = {
+            "status": "success",
+            "stopped_reason": stopped_reason,
+            "summary": summary,
+            "tools_used": [],
+            "iterations": 1,
+            "tokens_used": 5,
+            "tool_calls": 0,
+        }
+        if stopped_reason == "length_limit":
+            result["stop_note"] = LENGTH_LIMIT_NOTE
+        return result
+
+    def _assert_serialised(self, summary, stopped_reason=None):
+        serialised = _serialize_delegated_result(self._result(summary, stopped_reason))
+        self.assertLessEqual(len(serialised), _MAX_RESULT_CHARS)
+        parsed = json.loads(serialised)
+        self.assertEqual(parsed["status"], "success")
+        self.assertEqual(parsed["stopped_reason"], stopped_reason)
+        self.assertIn("summary_truncated", parsed)
+        cut = parsed["summary_truncated"]
+        kept = parsed["summary"]
+        self.assertEqual(cut["original_chars"], len(summary))
+        self.assertEqual(cut["kept_chars"], len(kept))
+        self.assertEqual(cut["dropped_chars"], len(summary) - len(kept))
+        self.assertGreater(cut["kept_chars"], 0)
+        self.assertTrue(summary.startswith(kept))
+        return parsed
+
+    def test_ascii_summary_is_shortened_with_correct_counts(self):
+        self._assert_serialised("a" * 12000)
+
+    def test_cjk_summaries_are_shortened_by_serialised_length(self):
+        for count in (3000, 12000):
+            with self.subTest(count=count):
+                self._assert_serialised("漢" * count)
+
+    def test_newline_summary_is_shortened_by_serialised_length(self):
+        self._assert_serialised("\n" * 12000)
+
+    def test_quote_heavy_code_is_shortened_by_serialised_length(self):
+        self._assert_serialised('if x == "y": print("z")\n' * 300)
+
+    def test_emoji_and_lone_surrogate_summaries_are_shortened_cleanly(self):
+        for label, char in (("emoji", "😀"), ("lone-surrogate", "\ud800")):
+            with self.subTest(kind=label):
+                parsed = self._assert_serialised(char * 4000, "length_limit")
+                self.assertEqual(parsed["stop_note"], LENGTH_LIMIT_NOTE)
+
+
+class DelegatedScopedSerializationTests(SimpleTestCase):
+    def test_scoped_delegate_result_keeps_stop_data(self):
+        result = self._result()
+        with patch(
+            "orchestration.agent_loop._execute_with_timeout",
+            new=AsyncMock(return_value=result),
+        ), patch("orchestration.agent_loop._record_receipt", new=AsyncMock()), \
+                patch("orchestration.agent_loop.record_event"):
+            blocks, _ = async_to_sync(_execute_scoped_tool_calls)(
+                [_call("delegate_task", {"task": "write"})], dict(WHO), None, [],
+            )
+
+        content = blocks[0]["content"]
+        parsed = json.loads(content)
+        self.assertEqual(parsed["stopped_reason"], "length_limit")
+        self.assertIn("summary_truncated", parsed)
+        self.assertLessEqual(len(content), _MAX_RESULT_CHARS)
+
+    @staticmethod
+    def _result():
+        return {
+            "status": "success",
+            "stopped_reason": "length_limit",
+            "stop_note": LENGTH_LIMIT_NOTE,
+            "summary": "漢" * 12000,
+        }
 
 
 class AliasReceiptTests(SimpleTestCase):

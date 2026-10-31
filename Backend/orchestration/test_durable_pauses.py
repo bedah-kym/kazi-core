@@ -278,7 +278,7 @@ class RestartApprovalTests(_PauseHarness):
 class DelegatedApprovalResumeTests(_PauseHarness):
     def test_an_approved_delegated_run_keeps_a_length_limit_stop(self):
         turn = self._turn()
-        long_text = "x" * 12000
+        long_text = "漢" * 12000
         call = {
             "id": "d1",
             "name": "delegate_task",
@@ -325,6 +325,17 @@ class DelegatedApprovalResumeTests(_PauseHarness):
         self.assertEqual(parsed["stop_note"], LENGTH_LIMIT_NOTE)
         self.assertIn("summary_truncated", parsed)
         self.assertLessEqual(len(content), 8000)
+
+        shown = next(
+            event.data["shown"]
+            for event in resumed
+            if event.kind == "tool_result"
+            and event.data.get("name") == "delegate_task"
+        )
+        parsed_shown = json.loads(shown)
+        self.assertEqual(parsed_shown["stopped_reason"], "length_limit")
+        self.assertIn("summary_truncated", parsed_shown)
+        self.assertLessEqual(len(shown), 8000)
 
 
 class HeldBatchTests(_PauseHarness):

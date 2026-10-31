@@ -1236,7 +1236,7 @@ class AgentLoopLengthLimitTests(SimpleTestCase):
         self.assertLessEqual(len(content), 8000)
         self.assertNotIn(long_text, content)
 
-    def _delegated_tool_result(self, sub_response):
+    def _delegated_run(self, sub_response):
         from orchestration.agent_loop import run_agent_loop
 
         mock_llm = MagicMock()
@@ -1262,14 +1262,14 @@ class AgentLoopLengthLimitTests(SimpleTestCase):
             patch("orchestration.agent_loop._record_receipt", new=AsyncMock()),
             patch("orchestration.agent_loop.record_event"),
         ):
-            _collect(run_agent_loop(
+            events = _collect(run_agent_loop(
                 user_message="delegate it",
                 context={"user_id": None, "room_id": 1, "username": "test"},
                 preferences={},
             ))
 
         parent_messages = mock_llm.create_message.await_args_list[2].kwargs["messages"]
-        return next(
+        content = next(
             block["content"]
             for message in parent_messages
             if isinstance(message.get("content"), list)
@@ -1277,6 +1277,11 @@ class AgentLoopLengthLimitTests(SimpleTestCase):
             if block.get("type") == "tool_result"
             and block.get("tool_use_id") == "d1"
         )
+        return content, events
+
+    def _delegated_tool_result(self, sub_response):
+        content, _ = self._delegated_run(sub_response)
+        return content
 
     def test_a_long_completed_delegated_summary_reports_the_cut(self):
         long_text = "y" * 12000
@@ -1296,3 +1301,19 @@ class AgentLoopLengthLimitTests(SimpleTestCase):
         parsed = json.loads(content)
         self.assertEqual(parsed["summary"], "short summary")
         self.assertNotIn("summary_truncated", parsed)
+
+    def test_the_main_path_shown_value_keeps_the_delegated_stop_data(self):
+        long_text = "漢" * 12000
+        _content, events = self._delegated_run(
+            _response([_text(long_text)], "max_tokens"),
+        )
+        shown = next(
+            event.data["shown"]
+            for event in events
+            if event.kind == "tool_result"
+            and event.data.get("name") == "delegate_task"
+        )
+        parsed = json.loads(shown)
+        self.assertEqual(parsed["stopped_reason"], "length_limit")
+        self.assertIn("summary_truncated", parsed)
+        self.assertLessEqual(len(shown), 8000)

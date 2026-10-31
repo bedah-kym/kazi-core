@@ -1589,7 +1589,17 @@ def _sanitize_tool_result(result_json: str) -> str:
     return result_json
 
 
-_DELEGATED_RESULT_LEADING_KEYS = ("status", "stopped_reason", "stop_note")
+_DELEGATED_RESULT_LEADING_KEYS = (
+    "status", "stopped_reason", "stop_note", "summary_truncated",
+)
+
+
+def _order_delegated_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    ordered: Dict[str, Any] = {
+        key: result[key] for key in _DELEGATED_RESULT_LEADING_KEYS if key in result
+    }
+    ordered.update({key: value for key, value in result.items() if key not in ordered})
+    return ordered
 
 
 def _serialize_delegated_result(result: Dict[str, Any]) -> str:
@@ -1597,32 +1607,44 @@ def _serialize_delegated_result(result: Dict[str, Any]) -> str:
 
     The generic cap cuts JSON from the end. A long summary used to push
     ``stopped_reason`` and the truncation note out of view, so keep those first
-    and shorten only the summary until the whole payload fits.
+    and shorten only the summary until the whole payload fits. When the summary
+    is shortened, ``summary_truncated`` says how much was kept and dropped.
     """
-    ordered: Dict[str, Any] = {
-        key: result[key] for key in _DELEGATED_RESULT_LEADING_KEYS if key in result
-    }
-    ordered.update({key: value for key, value in result.items() if key not in ordered})
+    ordered = _order_delegated_result(result)
     summary = ordered.get("summary")
     if not isinstance(summary, str):
         return _sanitize_tool_result(json.dumps(ordered, default=str))
+    if len(json.dumps(ordered, default=str)) <= _MAX_RESULT_CHARS:
+        return _sanitize_tool_result(json.dumps(ordered, default=str))
 
-    if len(json.dumps(ordered, default=str)) > _MAX_RESULT_CHARS:
-        trimmed = dict(ordered)
-        trimmed["summary"] = ""
-        overhead = len(json.dumps(trimmed, default=str))
-        room = max(0, _MAX_RESULT_CHARS - overhead)
-        # JSON escaping can make a prefix longer than its raw length, so shrink
-        # until the serialised form fits.
-        while room > 0:
-            trimmed["summary"] = summary[:room]
-            if len(json.dumps(trimmed, default=str)) <= _MAX_RESULT_CHARS:
-                break
-            room -= 1
-        trimmed["summary"] = summary[:room]
-        ordered = trimmed
+    base = dict(ordered)
+    base["summary"] = ""
+    room = max(0, _MAX_RESULT_CHARS - len(json.dumps(base, default=str)))
+    while True:
+        kept = summary[:room]
+        if len(kept) >= len(summary):
+            # The overflow is not from the summary; the generic cap still
+            # keeps the leading stop fields.
+            return _sanitize_tool_result(json.dumps(ordered, default=str))
+        candidate = dict(base)
+        candidate["summary_truncated"] = {
+            "original_chars": len(summary),
+            "kept_chars": len(kept),
+            "dropped_chars": len(summary) - len(kept),
+        }
+        candidate = _order_delegated_result(candidate)
+        candidate["summary"] = kept
+        dumped = json.dumps(candidate, default=str)
+        if len(dumped) <= _MAX_RESULT_CHARS or room == 0:
+            return _sanitize_tool_result(dumped)
+        room = max(0, room - (len(dumped) - _MAX_RESULT_CHARS) - 1)
 
-    return _sanitize_tool_result(json.dumps(ordered, default=str))
+
+def _serialize_tool_result(tool_name: str, result: Dict[str, Any]) -> str:
+    """Serialise a tool result, with the delegated stop fields preserved."""
+    if tool_name == "delegate_task":
+        return _serialize_delegated_result(result)
+    return _sanitize_tool_result(json.dumps(result, default=str))
 
 
 # --------------------------------------------------------------------------- #
@@ -2178,15 +2200,10 @@ async def _execute_scoped_tool_calls(
                 tc["name"], tc["input"], result, context,
                 basis=_shell_approval_basis(tc, preferences, run_tainted),
             )
-        content = (
-            _serialize_delegated_result(result)
-            if tc["name"] == "delegate_task"
-            else _sanitize_tool_result(json.dumps(result, default=str))
-        )
         result_blocks.append({
             "type": "tool_result",
             "tool_use_id": tc["id"],
-            "content": content,
+            "content": _serialize_tool_result(tc["name"], result),
         })
     return result_blocks, False
 
@@ -2761,12 +2778,12 @@ async def run_agent_loop(
                 "name": pending["name"],
                 "result": result,
                 "input": pending["input"],
-                "shown": _sanitize_tool_result(json.dumps(result, default=str)),
+                "shown": _serialize_tool_result(pending["name"], result),
             })
             gated_blocks[call_id] = {
                 "type": "tool_result",
                 "tool_use_id": pending["id"],
-                "content": _sanitize_tool_result(json.dumps(result, default=str)),
+                "content": _serialize_tool_result(pending["name"], result),
             }
 
         state.pending_tools = []
@@ -3376,16 +3393,11 @@ async def run_agent_loop(
                     if _untrusted_source(tc["name"]):
                         _taint_run(state, room_id)
                     yield AgentEvent("tool_start", {"name": tc["name"], "input": tc["input"]})
-                    shown = (
-                        _serialize_delegated_result(result)
-                        if tc["name"] == "delegate_task"
-                        else _sanitize_tool_result(json.dumps(result, default=str))
-                    )
                     yield AgentEvent("tool_result", {
                         "name": tc["name"],
                         "result": result,
                         "input": tc["input"],
-                        "shown": shown,
+                        "shown": _serialize_tool_result(tc["name"], result),
                     })
 
                     # Receipt (fire-and-forget)
@@ -3397,15 +3409,10 @@ async def run_agent_loop(
             # ---- Build tool_result blocks (auto + refused) ------------ #
             tool_result_blocks = []
             for tc, result in tool_results:
-                content = (
-                    _serialize_delegated_result(result)
-                    if tc["name"] == "delegate_task"
-                    else _sanitize_tool_result(json.dumps(result, default=str))
-                )
                 tool_result_blocks.append({
                     "type": "tool_result",
                     "tool_use_id": tc["id"],
-                    "content": content,
+                    "content": _serialize_tool_result(tc["name"], result),
                 })
 
             # Refused calls (shell envelope or persona scope) never run.

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import ExitStack
 from datetime import timedelta
 from types import SimpleNamespace
@@ -1234,3 +1235,64 @@ class AgentLoopLengthLimitTests(SimpleTestCase):
         )
         self.assertLessEqual(len(content), 8000)
         self.assertNotIn(long_text, content)
+
+    def _delegated_tool_result(self, sub_response):
+        from orchestration.agent_loop import run_agent_loop
+
+        mock_llm = MagicMock()
+        mock_llm.default_provider.return_value = "anthropic"
+        mock_llm.create_message = AsyncMock(side_effect=[
+            _response([
+                _tool_use("delegate_task", {"task": "write a long file"}, "d1"),
+            ], "tool_use"),
+            sub_response,
+            _response([_text("Done")], "end_turn"),
+        ])
+        mock_cache = MagicMock()
+        mock_cache.get.return_value = None
+        with (
+            patch("orchestration.agent_loop.get_llm_client", return_value=mock_llm),
+            patch("orchestration.agent_loop.cache", new=mock_cache),
+            patch("orchestration.agent_loop._resolve_persona", new=AsyncMock(return_value=None)),
+            patch("orchestration.agent_loop.execute_tool", new=AsyncMock(
+                return_value={"status": "success"},
+            )),
+            patch("orchestration.agent_loop.preview_tool", new=AsyncMock(return_value=None)),
+            patch("orchestration.agent_loop.save_pending_confirmation", new=AsyncMock()),
+            patch("orchestration.agent_loop._record_receipt", new=AsyncMock()),
+            patch("orchestration.agent_loop.record_event"),
+        ):
+            _collect(run_agent_loop(
+                user_message="delegate it",
+                context={"user_id": None, "room_id": 1, "username": "test"},
+                preferences={},
+            ))
+
+        parent_messages = mock_llm.create_message.await_args_list[2].kwargs["messages"]
+        return next(
+            block["content"]
+            for message in parent_messages
+            if isinstance(message.get("content"), list)
+            for block in message["content"]
+            if block.get("type") == "tool_result"
+            and block.get("tool_use_id") == "d1"
+        )
+
+    def test_a_long_completed_delegated_summary_reports_the_cut(self):
+        long_text = "y" * 12000
+        content = self._delegated_tool_result(_response([_text(long_text)], "end_turn"))
+        parsed = json.loads(content)
+        self.assertIsNone(parsed["stopped_reason"])
+        self.assertIn("summary_truncated", parsed)
+        cut = parsed["summary_truncated"]
+        self.assertEqual(cut["original_chars"], len(long_text))
+        self.assertEqual(cut["kept_chars"], len(parsed["summary"]))
+        self.assertEqual(cut["dropped_chars"], len(long_text) - len(parsed["summary"]))
+        self.assertGreater(cut["dropped_chars"], 0)
+        self.assertLessEqual(len(content), 8000)
+
+    def test_a_short_completed_delegated_summary_has_no_truncation_field(self):
+        content = self._delegated_tool_result(_response([_text("short summary")], "end_turn"))
+        parsed = json.loads(content)
+        self.assertEqual(parsed["summary"], "short summary")
+        self.assertNotIn("summary_truncated", parsed)

@@ -21,8 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same way reports `length_limit`, no longer says the model declined to
   continue, and always carries the truncation note after any text it managed to
   write. A long delegated summary is shortened so the stop reason and note
-  still reach the parent. A tool call in a cut-off response is never
-  dispatched.
+  still reach the parent, and a leading `summary_truncated` field records how
+  many characters were kept and dropped. This applies to every path that hands
+  a delegated result on, including an approved call that resumes after a pause.
+  A tool call in a cut-off response is never dispatched.
 
 ### Changed — consent semantics
 

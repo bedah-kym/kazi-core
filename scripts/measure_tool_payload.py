@@ -49,7 +49,7 @@ PLAIN_CTX = "ROOM CONTEXT:\n- nothing yet"
 
 def _build_room(*, shell_enabled: bool):
     if shell_enabled:
-        os.environ["SHELL_EXEC_TOKEN"] = "local-measure-only"
+        os.environ["SHELL_EXEC_TOKEN"] = "local-measure-only"  # nosec B105 - placeholder for an offline measurement, not a credential
     else:
         os.environ.pop("SHELL_EXEC_TOKEN", None)
     os.environ.pop("TELEGRAM_BOT_TOKEN", None)

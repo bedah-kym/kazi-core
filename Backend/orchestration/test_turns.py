@@ -583,19 +583,22 @@ class CoordinatorTurnTests(_CoordinatorTurnBase):
     def test_a_length_limit_note_has_no_leading_blank_lines_without_visible_text(self):
         send_chunk = AsyncMock()
         run_loop, patches = self._real_loop([_response([], "max_tokens")])
-        self._handle(
+        result = self._handle(
             "write a long file",
             send_chunk=send_chunk,
             run_loop=run_loop,
             extra_patches=patches,
         )
 
-        visible = "".join(call.args[1] for call in send_chunk.await_args_list)
-        self.assertEqual(
-            visible,
+        note = (
             "My response was cut short by the length limit. "
-            "Anything I was still writing did not run.",
+            "Anything I was still writing did not run."
         )
+        visible = "".join(call.args[1] for call in send_chunk.await_args_list)
+        self.assertEqual(visible, note)
+        # ``send_chunk`` strips leading whitespace, but the raw text is what
+        # gets saved as the reply, so check that too.
+        self.assertEqual(result.full_response, note)
 
     def test_a_real_error_still_emits_the_error_progress_label(self):
         step_events = AsyncMock()

@@ -833,12 +833,17 @@ class OrchestrationCoordinator:
                     )
                     await emit_progress("validating", "completed", "Waiting for more budget.")
                 elif event.kind == "error":
-                    await broadcast_chunk(event.data.get("message", "Something went wrong."), harness=True)
-                    label = (
-                        "Response cut short by the length limit."
-                        if event.data.get("end_reason") == "length_limit"
-                        else "Error encountered."
-                    )
+                    message = event.data.get("message", "Something went wrong.")
+                    if event.data.get("end_reason") == "length_limit":
+                        # A cut-off response can stop mid-word, so start the
+                        # note on its own paragraph. With no visible text the
+                        # reply must not begin with blank lines.
+                        if "".join(stream_state["model"]).strip():
+                            message = "\n\n" + message
+                        label = "Response cut short by the length limit."
+                    else:
+                        label = "Error encountered."
+                    await broadcast_chunk(message, harness=True)
                     await emit_progress("executing", "completed", label)
                 elif event.kind == "done":
                     stream_state["elapsed"] = event.data.get("elapsed")

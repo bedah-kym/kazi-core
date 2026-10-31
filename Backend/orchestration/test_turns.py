@@ -561,6 +561,42 @@ class CoordinatorTurnTests(_CoordinatorTurnBase):
         self.assertIn("Response cut short by the length limit.", messages)
         self.assertNotIn("Error encountered.", messages)
 
+    def test_a_length_limit_note_starts_a_new_paragraph_after_visible_text(self):
+        send_chunk = AsyncMock()
+        run_loop, patches = self._real_loop([
+            _response([_text("The story reached the 1890s. Part")], "max_tokens"),
+        ])
+        self._handle(
+            "write a long file",
+            send_chunk=send_chunk,
+            run_loop=run_loop,
+            extra_patches=patches,
+        )
+
+        visible = "".join(call.args[1] for call in send_chunk.await_args_list)
+        self.assertIn(
+            "The story reached the 1890s. Part\n\n"
+            "My response was cut short by the length limit.",
+            visible,
+        )
+
+    def test_a_length_limit_note_has_no_leading_blank_lines_without_visible_text(self):
+        send_chunk = AsyncMock()
+        run_loop, patches = self._real_loop([_response([], "max_tokens")])
+        self._handle(
+            "write a long file",
+            send_chunk=send_chunk,
+            run_loop=run_loop,
+            extra_patches=patches,
+        )
+
+        visible = "".join(call.args[1] for call in send_chunk.await_args_list)
+        self.assertEqual(
+            visible,
+            "My response was cut short by the length limit. "
+            "Anything I was still writing did not run.",
+        )
+
     def test_a_real_error_still_emits_the_error_progress_label(self):
         step_events = AsyncMock()
         self._handle(

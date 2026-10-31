@@ -45,6 +45,7 @@ nav:
       - Quick Start: quickstart.md
       - Run Locally: run-locally.md
       - Run the Lite Profile: run-lite.md
+      - The kazi command: kazi-command.md
       - Demo Mode: demo-mode.md
   - How-to:
       - Add a Connector: add-a-connector.md

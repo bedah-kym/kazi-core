@@ -67,6 +67,21 @@ docker compose exec web python Backend/manage.py createsuperuser
 For a non-Docker setup (Postgres + Redis on host), see
 [`docs/quickstart.md`](quickstart.md).
 
+### One command from a checkout
+
+If the repository dependencies are installed in `.venv` and `db`/`redis` are
+already running on the host, the repo-local launcher does the manual steps
+above (doctor, migrations, beat schedule and the processes):
+
+```bash
+./kazi up        # Windows: kazi up
+./kazi status
+./kazi down
+```
+
+See [The kazi command](kazi-command.md) for the process plan, logs, autostart
+and the doctor checks.
+
 ## Troubleshooting
 
 | Symptom | Likely cause |

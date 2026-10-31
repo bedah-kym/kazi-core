@@ -56,6 +56,10 @@ With `DJANGO_DEBUG=False`, static files are served only from the collected
 folder. Skip `collectstatic` and the chat page loads without its styles and
 scripts, so messages cannot be sent. Run it again after each update.
 
+If you have the repository dependencies in `.venv`, `kazi up` runs migrate,
+collectstatic and the two processes for you (web plus sidecar; no worker or
+beat in lite). See [The kazi command](kazi-command.md).
+
 ## Start the sidecar
 
 The sidecar does not import Django. Run it from `Backend/`:

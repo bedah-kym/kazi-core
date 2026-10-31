@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — the `kazi` command
+
+- A repo-local launcher (`scripts/kazi.py`, with `kazi` / `kazi.cmd` shims)
+  starts, stops, checks and explains a checkout without importing Django. The
+  process plan comes from the effective settings (`manage.py kazi_status
+  --json`), so a lite profile runs web and the sidecar only, and beat is
+  skipped when the in-process scheduler is on. `kazi up` runs doctor, prints
+  the database host, applies migrations, syncs the beat schedule and collects
+  static files when `DEBUG=False`, then prints the URL. `kazi run` does the
+  same in the foreground for systemd.
+- One supervisor holds an exclusive OS lock, restarts a crashed child with
+  backoff (five crashes in ten minutes gives up and records why), and keys
+  restarts on a stop-requested flag rather than on exit codes. On Windows the
+  supervisor is hidden with `CREATE_NO_WINDOW`, children get
+  `CREATE_NEW_PROCESS_GROUP`, and a job object with `KILL_ON_JOB_CLOSE` takes
+  them with it; a requested Ctrl+Break exit (`0xC000013A`) is not a crash. On
+  POSIX children get their own session. Stop order is web, worker (Celery warm
+  shutdown through the broker), beat, then sidecar.
+- Pid **and** creation time identify a process before any signal, kill or
+  "already up" decision, so a reused pid is never touched. The control channel
+  binds to `127.0.0.1` only, compares a random token in constant time and
+  writes it to `.kazi/run/control.json` with owner-only permissions where the
+  OS allows. `.kazi/` is git- and docker-ignored.
+- `kazi doctor` explains Python version, the lock file, missing required
+  settings, `.env` overrides, Temporal/Redis/database reachability, pending
+  migrations, beat drift, the shell token and profile, free ports, collected
+  static files, the worker-count guard and the pool-size cap. It prints
+  setting names, not values. On the open shell profile it says that the
+  profile is unsandboxed and that with great power comes great responsibility.
+- `kazi autostart enable|disable|status` creates a Windows Startup-folder
+  `.cmd` or a systemd **user** unit that runs `kazi run`; `--autostart` waits
+  up to three minutes for services at logon. macOS is documented only. Logs
+  live under `.kazi/logs/` and rotate by size (10 MB, five files).
+- `manage.py kazi_status --json` reports the effective profile, pending
+  migrations, beat drift, open/paused Turns, the last reaper result and the
+  database host. `sync_beat_schedule --check` reports drift read-only and exits
+  non-zero when the schedule differs.
+
 ### Fixed — length-limit endings
 
 - A turn stopped by the model's output limit (`max_tokens`) now ends as

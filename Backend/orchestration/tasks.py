@@ -8,6 +8,8 @@ from celery import shared_task
 
 logger = logging.getLogger(__name__)
 
+LAST_REAPER_CACHE_KEY = "orchestration:last_reaper"
+
 
 @shared_task(ignore_result=True)
 def reap_lapsed_turns() -> Dict[str, Any]:
@@ -15,10 +17,22 @@ def reap_lapsed_turns() -> Dict[str, Any]:
     from orchestration.turns import reap_lapsed_turns as _reap
 
     try:
-        return _reap()
+        result = _reap()
     except Exception:
         logger.exception("Lapsed turn reap failed")
         return {"error": "reap_failed"}
+    try:
+        from django.core.cache import cache
+        from django.utils import timezone
+
+        cache.set(
+            LAST_REAPER_CACHE_KEY,
+            {"at": timezone.now().isoformat(), **result},
+            timeout=86400,
+        )
+    except Exception:
+        logger.warning("Could not record the last reaper result", exc_info=True)
+    return result
 
 
 @shared_task(ignore_result=True)

@@ -26,6 +26,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a delegated result on, including an approved call that resumes after a pause.
   A tool call in a cut-off response is never dispatched.
 
+### Fixed — telemetry rollup test clock
+
+- The nightly telemetry rollup now prunes entity facts against the same `now`
+  that `run_rollup` was given, instead of the wall clock. A caller that passes
+  `now` (the test suite, or a historical replay) gets the facts that were valid
+  at that time; a normal scheduled run still uses the current time. This fixes
+  the test module from failing once its fixed September 2026 dates aged past
+  `FACT_MAX_AGE_DAYS`.
+
+### Fixed — Windows multi-line commands
+
+- On the **open** shell profile on Windows, a command containing a line break is
+  now refused before anything starts: exit 2, with stderr saying that nothing
+  ran, why `cmd.exe` cannot run it, and which one-line routes work. Previously
+  only the first line ran and the result reported success. Leading whitespace or
+  leading line breaks are removed before the spawn, so the command's real text
+  still runs. A trailing line break still runs, and characters `cmd.exe` does
+  not treat as line breaks are unchanged. The environment block now states, as a
+  host fact, that a `cmd.exe` command must be a single line. Linux `open`,
+  `standard` and `locked` are unchanged.
+
 ### Changed — consent semantics
 
 - **A reply only approves a prompt it could have seen** (#216b-0). A **yes** or

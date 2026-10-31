@@ -190,7 +190,10 @@ def build_environment_block(env: Optional[Dict[str, Any]]) -> str:
     lines = ["## Where you are running"]
     env = env or {}
     if env.get("platform") and env.get("shell"):
-        lines.append(f"- Shell commands run on {env['platform']} through {env['shell']}.")
+        where = f"- Shell commands run on {env['platform']} through {env['shell']}."
+        if env.get("shell") == "cmd.exe":
+            where += " A command must be a single line; line breaks are refused."
+        lines.append(where)
     else:
         lines.append(
             "- The operating system and shell that commands run on could not be determined. "

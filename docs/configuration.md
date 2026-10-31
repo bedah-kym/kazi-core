@@ -472,6 +472,12 @@ keys, `DATABASE_URL`, `REDIS_URL`, `CELERY_*`, `DJANGO_SECRET_KEY`,
 denylist, a variable an operator adds to the sidecar's environment is dropped
 too. There is no setting to widen it.
 
+On Windows, `open` runs through `cmd.exe`, which splits a command at a line
+break and would run only the first line. A command that contains a line break is
+therefore refused before it starts (exit 2, with the reason on stderr) instead of
+half-running. Keep the command on one line — chain steps with `&` or `&&`, or
+write a script with a one-line `python -c` and run it.
+
 This closes the environment, not the filesystem: an `open` command runs as the
 sidecar's operating-system user and can read any file that user can read,
 including `.env`. Run an `open` sidecar as a separate user that cannot read the

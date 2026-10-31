@@ -12,9 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A turn stopped by the model's output limit (`max_tokens`) now ends as
   `failed(end_reason="length_limit")`, with `partial` set from what the user had
   already seen, and a message that says the response was cut short instead of
-  calling it an error. A delegated run stopped the same way reports
-  `length_limit` and no longer says the model declined to continue. A tool call
-  in a cut-off response is never dispatched.
+  calling it an error. The step-progress label for that ending no longer says
+  "Error encountered." while other errors keep it. A delegated run stopped the
+  same way reports `length_limit`, no longer says the model declined to
+  continue, and always carries the truncation note after any text it managed to
+  write. A tool call in a cut-off response is never dispatched.
 
 ### Changed — consent semantics
 

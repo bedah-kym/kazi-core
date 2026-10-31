@@ -535,6 +535,45 @@ class CoordinatorTurnTests(_CoordinatorTurnBase):
         self.assertEqual(turn.end_reason, "length_limit")
         self.assertFalse(turn.partial)
 
+    @staticmethod
+    def _progress_messages(step_events):
+        return [
+            call.args[1].get("message")
+            for call in step_events.await_args_list
+            if len(call.args) > 1 and isinstance(call.args[1], dict)
+        ]
+
+    def test_a_length_limit_ending_does_not_emit_an_error_progress_label(self):
+        step_events = AsyncMock()
+        self._handle(
+            "write a long file",
+            send_step_event=step_events,
+            run_loop=self._loop(
+                AgentEvent("error", {
+                    "message": "cut short",
+                    "end_reason": "length_limit",
+                }),
+                AgentEvent("done", {"end_reason": "length_limit"}),
+            ),
+        )
+
+        messages = self._progress_messages(step_events)
+        self.assertIn("Response cut short by the length limit.", messages)
+        self.assertNotIn("Error encountered.", messages)
+
+    def test_a_real_error_still_emits_the_error_progress_label(self):
+        step_events = AsyncMock()
+        self._handle(
+            "hello",
+            send_step_event=step_events,
+            run_loop=self._loop(
+                AgentEvent("error", {"message": "boom"}),
+                AgentEvent("done", {"end_reason": "error"}),
+            ),
+        )
+
+        self.assertIn("Error encountered.", self._progress_messages(step_events))
+
     def test_confirmation_pause_emits_turn_paused(self):
         self._handle(
             "run the command",

@@ -2291,8 +2291,9 @@ async def _run_sub_agent(
 
         if stop_reason == "max_tokens":
             stopped_reason = "length_limit"
-            if not collected_text:
-                collected_text.append(LENGTH_LIMIT_NOTE)
+            # Always say the run was cut short; text collected before the cut
+            # must not read as a complete summary.
+            collected_text.append(LENGTH_LIMIT_NOTE)
             break
 
         if stop_reason == "tool_use":
@@ -3087,7 +3088,10 @@ async def run_agent_loop(
 
         if stop_reason == "max_tokens":
             state.end_reason = "length_limit"
-            yield AgentEvent("error", {"message": LENGTH_LIMIT_NOTE})
+            yield AgentEvent("error", {
+                "message": LENGTH_LIMIT_NOTE,
+                "end_reason": "length_limit",
+            })
             break
 
         # ---- Handle tool calls --------------------------------------- #

@@ -271,7 +271,7 @@ class DelegatedLengthLimitTests(SimpleTestCase):
             )
         return result, h
 
-    def test_a_cut_off_run_reports_length_limit_and_does_not_claim_a_refusal(self):
+    def test_a_cut_off_run_keeps_the_note_after_text_and_does_not_claim_a_refusal(self):
         result, h = self._run({
             "content": [{"type": "text", "text": "Here is the first part"}],
             "stop_reason": "max_tokens",
@@ -279,6 +279,12 @@ class DelegatedLengthLimitTests(SimpleTestCase):
         })
 
         self.assertEqual(result["stopped_reason"], "length_limit")
+        self.assertEqual(
+            result["summary"],
+            "Here is the first part\n"
+            "My response was cut short by the length limit. "
+            "Anything I was still writing did not run.",
+        )
         self.assertNotIn("declined to continue", result["summary"])
         h.executed.assert_not_called()
 

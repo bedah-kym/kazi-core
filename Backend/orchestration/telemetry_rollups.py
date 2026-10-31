@@ -530,9 +530,15 @@ def _store_watches(watches: List[Dict[str, Any]]) -> bool:
         return False
 
 
-def _merge_facts(current: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
+def _merge_facts(
+    current: Dict[str, Any],
+    new: Dict[str, Any],
+    *,
+    now: Optional[datetime] = None,
+) -> Dict[str, Any]:
     merged = dict((current.get("facts") or {}))
-    cutoff = (_utc_now() - timedelta(days=FACT_MAX_AGE_DAYS)).isoformat()
+    now = now or _utc_now()
+    cutoff = (now - timedelta(days=FACT_MAX_AGE_DAYS)).isoformat()
     for key, record in (new or {}).items():
         if record.get("last_seen", "") < cutoff:
             continue
@@ -557,7 +563,7 @@ def _merge_facts(current: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]
     )[:MAX_FACTS]
     return {
         "facts": dict(ranked),
-        "updated_at": _utc_now().isoformat(),
+        "updated_at": now.isoformat(),
     }
 
 
@@ -615,7 +621,7 @@ def run_rollup(
         }
 
     new_facts = extract_entity_facts(events)
-    stored_facts = _merge_facts(load_facts(), new_facts)
+    stored_facts = _merge_facts(load_facts(), new_facts, now=now)
     facts_ok = _store_facts(stored_facts)
 
     previous_watches = load_watches()

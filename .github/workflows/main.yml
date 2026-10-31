@@ -115,6 +115,12 @@ jobs:
         run: |
           flake8 Backend --count --statistics
 
+      # scripts/ gets the same blocking PEP 8 subset as Backend so helper
+      # commands cannot drift into unreadable or broken Python.
+      - name: Lint - scripts PEP 8 blocking subset (must pass)
+        run: |
+          flake8 scripts --count --statistics --select=E,W,F --ignore=E501,E402,W503 --max-line-length=127 --max-complexity=10
+
       - name: Security scan - high severity (must pass)
         run: bandit -r Backend --skip B101 -lll
 
@@ -126,6 +132,10 @@ jobs:
       # Accepted findings carry an inline `# nosec <id>` with the reason.
       - name: Security scan - medium+low (must pass)
         run: bandit -r Backend --skip B101,B110
+
+      # Same blocking scan as Backend: scripts/ is developer-reachable code.
+      - name: Security scan - scripts (must pass)
+        run: bandit -r scripts --skip B101,B110
 
       - name: Django system checks
         run: python Backend/manage.py check

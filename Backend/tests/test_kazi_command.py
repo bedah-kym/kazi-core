@@ -225,6 +225,33 @@ class IdentityTests(unittest.TestCase):
         self.assertFalse(K.process_matches(None, "111", "posix", reader=lambda p, s: "111"))
 
 
+class ProfileRequiredSettingsTests(unittest.TestCase):
+    def test_lite_requires_only_the_secret_key_and_skips_the_beat_warning(self):
+        settings = _settings(lite=True, in_process_scheduler=True)
+        self.assertEqual(list(K.required_env_keys(settings)), ["DJANGO_SECRET_KEY"])
+        check = K.check_required_keys(
+            {}, {"DJANGO_SECRET_KEY": "x"}, K.required_env_keys(settings)  # nosec B105 - fake value
+        )
+        self.assertEqual(check.level, "OK")
+        checks = K.collect_checks(
+            settings, {"DJANGO_SECRET_KEY": "x"}, {},  # nosec B105 - fake value
+            connector=lambda host, port: True,
+            binder=lambda host, port: True,
+        )
+        required = [item for item in checks if item.name == "Required settings"][0]
+        beat = [item for item in checks if item.name == "Beat schedule"][0]
+        self.assertEqual(required.level, "OK")
+        self.assertEqual(beat.level, "OK")
+
+    def test_full_stack_still_needs_the_service_keys(self):
+        settings = _settings()
+        required = K.required_env_keys(settings)
+        check = K.check_required_keys({}, {"DJANGO_SECRET_KEY": "x"}, required)  # nosec B105 - fake value
+        self.assertEqual(check.level, "FAIL")
+        for name in ("DATABASE_URL", "REDIS_URL", "CELERY_BROKER_URL", "CELERY_RESULT_BACKEND"):
+            self.assertIn(name, check.message)
+
+
 class DoctorTests(unittest.TestCase):
     def test_python_version(self):
         self.assertEqual(K.check_python((3, 12)).level, "OK")

@@ -131,7 +131,12 @@ account that runs Kazi.
 Each check prints OK, WARN or FAIL with one plain sentence. It covers:
 
 - Python 3.11–3.12 inside a virtual environment, the lock file installed,
-  `.env` present and required settings set;
+  `.env` present and required settings set. Required settings come from the
+  effective profile: a full install needs `DJANGO_SECRET_KEY`, `DATABASE_URL`,
+  `REDIS_URL`, `CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND`; the lite
+  profile needs only `DJANGO_SECRET_KEY`, because it uses SQLite, an in-memory
+  cache/Channels layer and inline Celery. A lite install does not report beat
+  drift, because beat does not run;
 - process-environment variables that `.env` overrides (names only);
 - Temporal enabled but unreachable (WARN);
 - Redis (full profile) and database reachability;

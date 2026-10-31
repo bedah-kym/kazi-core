@@ -85,6 +85,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A second `kazi up` that finds the startup lock held says another run is
   starting and stops, without also claiming Kazi is not running.
 
+### Changed — kazi launcher round 4
+
+- Required settings now follow the effective profile. A full install still
+  needs `DJANGO_SECRET_KEY` plus `DATABASE_URL`, `REDIS_URL`,
+  `CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND`; the lite profile needs only
+  `DJANGO_SECRET_KEY`, so `kazi up` works with the keys in `docs/run-lite.md`
+  and no `.env`, PostgreSQL, Redis or Celery.
+- The lite profile no longer warns that beat drift could not be read; the
+  in-process scheduler owns the schedule and beat does not run.
+- `kazi up` treats any HTTP answer from web as ready (including the documented
+  `301` to HTTPS with `DJANGO_DEBUG=False`), instead of following the redirect
+  and waiting forever.
+
 ### Fixed — length-limit endings
 
 - A turn stopped by the model's output limit (`max_tokens`) now ends as

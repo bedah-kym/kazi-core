@@ -30,8 +30,6 @@ import subprocess  # nosec B404 - list argv only, no shell
 import sys
 import threading
 import time
-import urllib.error
-import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence
@@ -72,6 +70,7 @@ REQUIRED_ENV_KEYS = (
     "CELERY_BROKER_URL",
     "CELERY_RESULT_BACKEND",
 )
+LITE_REQUIRED_ENV_KEYS = ("DJANGO_SECRET_KEY",)
 WORKER_COUNT_KEYS = (
     "KAZI_WEB_WORKERS",
     "WEB_CONCURRENCY",
@@ -1183,6 +1182,13 @@ def check_lockfile(
     return Check("Lock file", "OK", f"All {checked} applicable locked packages are installed.")
 
 
+def required_env_keys(settings: Optional[dict]) -> Sequence[str]:
+    """What this install actually needs, from the effective profile."""
+    if settings and settings.get("profile", {}).get("lite"):
+        return LITE_REQUIRED_ENV_KEYS
+    return REQUIRED_ENV_KEYS
+
+
 def check_required_keys(dotenv: dict, env: dict, required: Sequence[str] = REQUIRED_ENV_KEYS) -> Check:
     missing = [name for name in required if not (dotenv.get(name) or env.get(name))]
     if missing:
@@ -1262,7 +1268,12 @@ def check_migrations(pending: Optional[list]) -> Check:
     return Check("Migrations", "OK", "No migrations are pending.")
 
 
-def check_beat_drift(drift: Optional[dict]) -> Check:
+def check_beat_drift(drift: Optional[dict], in_process: bool = False) -> Check:
+    if in_process:
+        return Check(
+            "Beat schedule", "OK",
+            "The in-process scheduler owns the schedule; beat does not run.",
+        )
     if drift is None:
         return Check("Beat schedule", "WARN", "Beat drift could not be read; run sync_beat_schedule.")
     total = sum(len(drift.get(key) or []) for key in ("missing", "extra", "changed"))
@@ -1387,7 +1398,7 @@ def collect_checks(
         check_lockfile(root),
     ]
     checks.append(check_env_file(root / ".env", dotenv))
-    checks.append(check_required_keys(dotenv, env))
+    checks.append(check_required_keys(dotenv, env, required_env_keys(settings)))
     checks.append(check_process_overrides(env, dotenv))
     if settings is None:
         checks.append(Check(
@@ -1406,7 +1417,9 @@ def settings_checks(settings: dict, env: dict, connector, binder) -> List[Check]
     temporal = settings.get("temporal", {})
     checks = [
         check_migrations((settings.get("pending_migrations") or {}).get("items")),
-        check_beat_drift(settings.get("beat_drift")),
+        check_beat_drift(
+            settings.get("beat_drift"), bool(profile.get("in_process_scheduler"))
+        ),
         check_shell_token(bool(settings.get("shell", {}).get("token_set"))),
         check_shell_profile(str(profile.get("shell_profile") or "standard")),
         check_temporal(
@@ -1472,16 +1485,17 @@ def wait_for_web(settings: dict, timeout: float = WEB_READY_SECONDS, progress=No
     deadline = started + timeout
     next_report = started + PROGRESS_SECONDS
     while time.monotonic() < deadline:
+        connection = http.client.HTTPConnection(host, port, timeout=2)
         try:
-            urllib.request.urlopen(  # nosec B310 - fixed loopback HTTP URL
-                f"http://{host}:{port}/", timeout=2
-            )
+            connection.request("GET", "/")
+            response = connection.getresponse()
+            response.read(1)
             return True
-        except urllib.error.HTTPError:
-            return True
-        except (OSError, ValueError):
+        except (OSError, http.client.HTTPException):
             next_report = _report_progress("web", started, next_report, progress)
             time.sleep(0.5)
+        finally:
+            connection.close()
     return False
 
 

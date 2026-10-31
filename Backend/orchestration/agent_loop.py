@@ -69,6 +69,12 @@ LEASE_LOST_NOTE = (
     "[Harness: this turn was marked interrupted because its worker lost the "
     "lease. Nothing further was run; the steps above already happened.]\n\n"
 )
+# A response cut off at the model's output limit is an honest length ending,
+# not an error: anything after the cut never ran.
+LENGTH_LIMIT_NOTE = (
+    "My response was cut short by the length limit. Anything I was still "
+    "writing did not run."
+)
 # A delegated run gets a share of what its parent has left, never a fixed table.
 DELEGATED_BUDGET_SHARE = 0.5
 MIN_DELEGATED_BUDGET = 5000
@@ -2283,6 +2289,12 @@ async def _run_sub_agent(
             completed = True
             break
 
+        if stop_reason == "max_tokens":
+            stopped_reason = "length_limit"
+            if not collected_text:
+                collected_text.append(LENGTH_LIMIT_NOTE)
+            break
+
         if stop_reason == "tool_use":
             consecutive_pauses = 0
             tool_calls = _extract_tool_calls(content_blocks)
@@ -3074,10 +3086,8 @@ async def run_agent_loop(
             break
 
         if stop_reason == "max_tokens":
-            state.end_reason = "error"
-            yield AgentEvent("error", {
-                "message": "My response was cut short due to length limits.",
-            })
+            state.end_reason = "length_limit"
+            yield AgentEvent("error", {"message": LENGTH_LIMIT_NOTE})
             break
 
         # ---- Handle tool calls --------------------------------------- #

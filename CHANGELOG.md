@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — length-limit endings
+
+- A turn stopped by the model's output limit (`max_tokens`) now ends as
+  `failed(end_reason="length_limit")`, with `partial` set from what the user had
+  already seen, and a message that says the response was cut short instead of
+  calling it an error. A delegated run stopped the same way reports
+  `length_limit` and no longer says the model declined to continue. A tool call
+  in a cut-off response is never dispatched.
+
 ### Changed — consent semantics
 
 - **A reply only approves a prompt it could have seen** (#216b-0). A **yes** or

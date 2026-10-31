@@ -187,7 +187,7 @@ window.KAZI_ARCH = {
         {"id": "parse", "x": 620, "y": 380, "kind": "gate", "label": "stop_reason", "sub": "end_turn / tool_use / max_tokens",
          "role": "Counts work tokens, records them against the hourly quota, taints the run if a server-side search ran, then branches on stop_reason.",
          "refs": [{"file": "Backend/orchestration/agent_loop.py", "symbol": "_work_tokens"}, {"file": "Backend/orchestration/llm_client.py", "symbol": "record_work_tokens"}],
-         "facts": ["end_turn: reply and finish", "tool_use: bucket the calls", "pause_turn / refusal handled explicitly"]},
+         "facts": ["end_turn: reply and finish", "tool_use: bucket the calls", "max_tokens: length_limit ending, no tool dispatch", "pause_turn / refusal handled explicitly"]},
         {"id": "bucket", "x": 800, "y": 380, "kind": "gate", "label": "Bucket calls", "sub": "auto / pause / denied",
          "role": "Risk per call from the catalog, the shell tier and persona bounds. Tainted runs pause gated tools.",
          "refs": [{"file": "Backend/orchestration/agent_loop.py", "symbol": "_bucket_tool_calls"}, {"file": "Backend/orchestration/tool_executor.py", "symbol": "_run_command_risk_info"}],
@@ -208,7 +208,7 @@ window.KAZI_ARCH = {
         {"id": "events", "x": 440, "y": 590, "kind": "module", "label": "AgentEvents", "sub": "yielded to the coordinator",
          "role": "The loop is an async generator: each event is relayed to the room as it happens.",
          "refs": [{"file": "Backend/orchestration/agent_loop.py", "symbol": "AgentEvent"}],
-         "facts": ["done carries end_reason: finished, budget, quota, error"]}
+         "facts": ["done carries end_reason: finished, budget, quota, length_limit, error"]}
       ],
       "edges": [
         {"id": "l_c_setup", "from": "l_coord", "to": "setup", "proto": "call"},

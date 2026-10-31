@@ -257,6 +257,61 @@ class DelegatedSearchTaintTests(SimpleTestCase):
         h.executed.assert_not_called()
 
 
+class DelegatedLengthLimitTests(SimpleTestCase):
+    """A delegated run cut off at the output limit says so, and dispatches nothing."""
+
+    def _run(self, response):
+        llm = MagicMock()
+        llm.create_message = AsyncMock(return_value=response)
+        with _Harness() as h, \
+                patch("orchestration.agent_loop.get_llm_client", return_value=llm), \
+                patch("orchestration.agent_loop._resolve_persona", new=AsyncMock(return_value=None)):
+            result = async_to_sync(_run_sub_agent)(
+                {"task": "write a long file"}, dict(WHO), None, "system", [],
+            )
+        return result, h
+
+    def test_a_cut_off_run_reports_length_limit_and_does_not_claim_a_refusal(self):
+        result, h = self._run({
+            "content": [{"type": "text", "text": "Here is the first part"}],
+            "stop_reason": "max_tokens",
+            "usage": {},
+        })
+
+        self.assertEqual(result["stopped_reason"], "length_limit")
+        self.assertNotIn("declined to continue", result["summary"])
+        h.executed.assert_not_called()
+
+    def test_a_tool_call_in_a_cut_off_run_is_not_dispatched(self):
+        result, h = self._run({
+            "content": [
+                {"type": "text", "text": "Writing it now"},
+                {"type": "tool_use", "id": "t1", "name": "get_weather", "input": {"city": "Nairobi"}},
+            ],
+            "stop_reason": "max_tokens",
+            "usage": {},
+        })
+
+        self.assertEqual(result["stopped_reason"], "length_limit")
+        self.assertNotIn("declined to continue", result["summary"])
+        h.executed.assert_not_called()
+
+    def test_a_cut_off_run_with_no_text_uses_the_same_note_as_the_main_loop(self):
+        result, h = self._run({
+            "content": [],
+            "stop_reason": "max_tokens",
+            "usage": {},
+        })
+
+        self.assertEqual(result["stopped_reason"], "length_limit")
+        self.assertEqual(
+            result["summary"],
+            "My response was cut short by the length limit. "
+            "Anything I was still writing did not run.",
+        )
+        h.executed.assert_not_called()
+
+
 class AliasReceiptTests(SimpleTestCase):
     def test_a_call_made_under_an_alias_is_receipted_as_the_action_it_ran(self):
         for alias in ("run_shell", "shell_command"):

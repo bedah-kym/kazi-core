@@ -1527,9 +1527,12 @@ def cmd_up(paths: RuntimePaths, system: Optional[str], autostart: bool, foregrou
             return 0
         print("FAIL supervisor: the control channel did not come up.")
         return 1
-    wait_for_web(settings, timeout=wait)
-    if "worker" in plan:
-        wait_for_worker(timeout=30)
+    web_ready = wait_for_web(settings, timeout=wait)
+    worker_ready = wait_for_worker(timeout=30) if "worker" in plan else True
+    if not web_ready:
+        print("WARN web: no HTTP answer yet; see kazi logs web.")
+    if not worker_ready:
+        print("WARN worker: no broker ping yet; see kazi logs worker.")
     host = settings.get("web", {}).get("host", "127.0.0.1")
     port = settings.get("web", {}).get("port", 8000)
     print(f"Kazi is up: http://{host}:{port}/")

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — telemetry rollup test clock
+
+- The nightly telemetry rollup now prunes entity facts against the same `now`
+  that `run_rollup` was given, instead of the wall clock. A caller that passes
+  `now` (the test suite, or a historical replay) gets the facts that were valid
+  at that time; a normal scheduled run still uses the current time. This fixes
+  the test module from failing once its fixed September 2026 dates aged past
+  `FACT_MAX_AGE_DAYS`.
+
 ### Changed — consent semantics
 
 - **A reply only approves a prompt it could have seen** (#216b-0). A **yes** or

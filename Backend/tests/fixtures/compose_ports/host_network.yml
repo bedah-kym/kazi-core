@@ -1,0 +1,4 @@
+services:
+  host-network:
+    image: redis:7-alpine
+    network_mode: host

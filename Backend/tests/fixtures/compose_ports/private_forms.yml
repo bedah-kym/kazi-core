@@ -15,12 +15,7 @@ services:
         host_ip: 127.0.0.1
   unpublished:
     image: redis:7-alpine
-  web-short:
+  web:
     image: kazi-web:latest
     ports:
       - "8000:8000"
-  web-long:
-    image: kazi-web:latest
-    ports:
-      - target: 8000
-        published: 8000

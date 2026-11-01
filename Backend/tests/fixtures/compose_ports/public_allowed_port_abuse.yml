@@ -1,0 +1,14 @@
+services:
+  web-container-other:
+    image: redis:7-alpine
+    ports:
+      - "8000:6379"
+  wildcard-container-other:
+    image: postgres:13
+    ports:
+      - "0.0.0.0:8000:5432"
+  long-container-other:
+    image: postgres:13
+    ports:
+      - target: 5432
+        published: 8000

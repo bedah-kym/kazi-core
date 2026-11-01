@@ -63,21 +63,48 @@ web port is the only one reachable from outside the host:
 
 Containers still reach each other over the compose network by service
 name. To use these services from your workstation, open an SSH tunnel
-instead of publishing the port:
+instead of publishing the port.
+
+The Redis tunnel applies to `docker-compose.yml`:
 
 ```bash
 ssh -L 6379:127.0.0.1:6379 user@your-host
+```
+
+The Temporal and Temporal UI tunnel applies to
+`docker-compose.temporal.yml`:
+
+```bash
 ssh -L 7233:127.0.0.1:7233 -L 8080:127.0.0.1:8080 user@your-host
 ```
 
-After upgrading, recreate the containers so the new bindings take effect:
+`docker-compose.oci.yml` publishes no Redis port, so there is nothing to
+tunnel there.
+
+After upgrading, recreate only the containers you already run so the new
+bindings take effect. `docker compose up -d` also starts services that were
+not running: on a Redis-only install it starts `temporal_worker` with no
+Temporal to reach, and on a host where `./kazi up` serves the app the
+container `web` takes port 8000. For a Redis-only install:
+
+```bash
+docker compose up -d redis
+```
+
+For a full Docker install, recreate the whole stack:
 
 ```bash
 docker compose up -d
 ```
 
-Use `-f docker-compose.oci.yml` or `-f docker-compose.temporal.yml` when
-that is the file you deploy.
+For another file, put `-f` before `up`:
+
+```bash
+docker compose -f docker-compose.oci.yml up -d
+docker compose -f docker-compose.temporal.yml up -d
+```
+
+The OCI file also needs `WEB_IMAGE` set.
 
 ## What to lock down
 

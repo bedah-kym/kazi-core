@@ -10,8 +10,15 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "compose_ports"
 
-ALLOWED_PUBLIC_PORTS = frozenset({"8000"})
+ALLOWED_PUBLIC_SERVICE = "web"
+ALLOWED_PUBLIC_PORT = "8000"
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+COMPOSE_PATTERNS = (
+    "docker-compose*.yml",
+    "docker-compose*.yaml",
+    "compose.yml",
+    "compose.yaml",
+)
 
 
 def _short_form(entry):
@@ -46,6 +53,12 @@ def public_port_violations(compose, source="<compose>"):
     for service_name, service in services.items():
         if not isinstance(service, dict):
             continue
+        if str(service.get("network_mode") or "") == "host":
+            violations.append(
+                f"{source}: service {service_name!r} uses network_mode: host, "
+                "which publishes every port"
+            )
+            continue
         for entry in service.get("ports") or []:
             try:
                 if isinstance(entry, dict):
@@ -57,7 +70,11 @@ def public_port_violations(compose, source="<compose>"):
                 continue
             if host_ip in LOOPBACK_HOSTS:
                 continue
-            if host_port in ALLOWED_PUBLIC_PORTS:
+            if (
+                service_name == ALLOWED_PUBLIC_SERVICE
+                and host_port == ALLOWED_PUBLIC_PORT
+                and container_port == ALLOWED_PUBLIC_PORT
+            ):
                 continue
             where = host_ip or "all interfaces"
             violations.append(
@@ -70,6 +87,10 @@ def public_port_violations(compose, source="<compose>"):
 def _load(name):
     path = FIXTURES / name
     return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+def compose_files(root=REPO_ROOT):
+    return sorted({path for pattern in COMPOSE_PATTERNS for path in root.glob(pattern)})
 
 
 class PublicPortCheckerTest(unittest.TestCase):
@@ -94,6 +115,28 @@ class PublicPortCheckerTest(unittest.TestCase):
     def test_loopback_unpublished_and_web_ports_pass(self):
         self.assertEqual(public_port_violations(_load("private_forms.yml"), "private"), [])
 
+    def test_long_form_web_port_passes(self):
+        self.assertEqual(public_port_violations(_load("allowed_web_long_form.yml"), "web-long"), [])
+
+    def test_web_port_mapped_to_other_ports_is_a_violation(self):
+        violations = public_port_violations(_load("public_allowed_port_abuse.yml"), "abuse")
+        self.assertEqual(len(violations), 3, violations)
+        for name in ("web-container-other", "wildcard-container-other", "long-container-other"):
+            self.assertTrue(
+                any(f"service {name!r}" in violation for violation in violations),
+                f"{name} not reported: {violations}",
+            )
+
+    def test_web_port_on_another_service_is_a_violation(self):
+        compose = {"services": {"redis": {"ports": ["8000:8000"]}}}
+        violations = public_port_violations(compose, "non-web")
+        self.assertEqual(len(violations), 1, violations)
+
+    def test_host_network_mode_is_a_violation(self):
+        violations = public_port_violations(_load("host_network.yml"), "host-network")
+        self.assertEqual(len(violations), 1, violations)
+        self.assertIn("network_mode: host", violations[0])
+
     def test_checker_fails_on_pre_change_main_ports(self):
         violations = public_port_violations(_load("main_before.yml"), "main-before")
         self.assertEqual(len(violations), 5, violations)
@@ -112,7 +155,7 @@ class PublicPortCheckerTest(unittest.TestCase):
 
 class RepoComposeFilesTest(unittest.TestCase):
     def test_every_root_compose_file_publishes_only_the_web_port(self):
-        files = sorted(REPO_ROOT.glob("docker-compose*.yml"))
+        files = compose_files()
         self.assertGreaterEqual(len(files), 3, files)
         for path in files:
             with self.subTest(compose=path.name):

@@ -1,0 +1,26 @@
+services:
+  loopback-ipv4:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:6379:6379"
+  loopback-ipv6:
+    image: redis:7-alpine
+    ports:
+      - "[::1]:6379:6379"
+  loopback-long:
+    image: postgres:13
+    ports:
+      - target: 5433
+        published: 5433
+        host_ip: 127.0.0.1
+  unpublished:
+    image: redis:7-alpine
+  web-short:
+    image: kazi-web:latest
+    ports:
+      - "8000:8000"
+  web-long:
+    image: kazi-web:latest
+    ports:
+      - target: 8000
+        published: 8000

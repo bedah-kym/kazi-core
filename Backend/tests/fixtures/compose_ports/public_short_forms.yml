@@ -1,0 +1,17 @@
+services:
+  plain:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+  wildcard-ipv4:
+    image: redis:7-alpine
+    ports:
+      - "0.0.0.0:6379:6379"
+  wildcard-ipv6:
+    image: redis:7-alpine
+    ports:
+      - "[::]:6379:6379"
+  bare:
+    image: redis:7-alpine
+    ports:
+      - "6379"

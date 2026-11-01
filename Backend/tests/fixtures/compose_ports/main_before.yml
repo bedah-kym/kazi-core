@@ -1,0 +1,21 @@
+services:
+  docker-compose-redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+  docker-compose-oci-redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+  temporal:
+    image: temporalio/auto-setup:latest
+    ports:
+      - "7233:7233"
+  temporal-postgresql:
+    image: postgres:13
+    ports:
+      - "5433:5432"
+  temporal-ui:
+    image: temporalio/ui:latest
+    ports:
+      - "8080:8080"

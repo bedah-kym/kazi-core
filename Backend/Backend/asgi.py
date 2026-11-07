@@ -7,6 +7,8 @@ For more information on this file, see
 https://docs.djangoproject.com/en/4.1/howto/deployment/asgi/
 """
 
+import asyncio
+import logging
 import os
 from channels.routing import ProtocolTypeRouter, URLRouter
 from django.conf import settings
@@ -18,6 +20,16 @@ from channels.security.websocket import AllowedHostsOriginValidator
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'Backend.settings')
 
 django_asgi_app = get_asgi_application()
+
+logger = logging.getLogger(__name__)
+
+# Hard outer bound around the runner's shutdown step. The runner uses one
+# deadline of TURN_SHUTDOWN_GRACE_SECONDS; this margin guarantees the
+# heartbeat, scheduler and LLM-client cleanup still run if a DB call stalls.
+SHUTDOWN_OUTER_MARGIN_SECONDS = 5
+# The runner's own budget is grace + min(5, max(1, grace)); this outer cap
+# leaves room for that and guarantees the heartbeat/scheduler cleanup runs.
+SHUTDOWN_OUTER_EXTRA_SECONDS = 2
 
 
 def _web_worker_count() -> int:
@@ -85,11 +97,24 @@ async def lifespan(scope, receive, send):
             from orchestration.turn_leases import (
                 shutdown_grace_seconds,
                 stop_heartbeat,
-                wait_for_idle,
             )
+            from chatbot.turn_runner import get_turn_runner
 
+            grace = shutdown_grace_seconds()
             try:
-                await wait_for_idle(shutdown_grace_seconds())
+                # Stop claiming first, let live turns finish within the grace,
+                # then cancel and write their endings before this returns. The
+                # outer bound keeps a stalled DB from skipping the heartbeat,
+                # scheduler and LLM-client cleanup (#303 r5, item 2).
+                await asyncio.wait_for(
+                    get_turn_runner().shutdown(grace),
+                    timeout=(
+                        grace + SHUTDOWN_OUTER_MARGIN_SECONDS
+                        + SHUTDOWN_OUTER_EXTRA_SECONDS
+                    ),
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Turn runner shutdown exceeded its bound")
             finally:
                 await stop_heartbeat()
             if _in_process_scheduler is not None:

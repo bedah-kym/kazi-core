@@ -680,7 +680,7 @@ class LiteRunDocsTests(SimpleTestCase):
         },
     },
 )
-class LiteChatTests(TestCase):
+class LiteChatTests(TransactionTestCase):
     def setUp(self):
         self.user = User.objects.create_user(
             username="lite-chat", email="lite@example.com", password="secret",  # nosec B106 — test fixture
@@ -711,26 +711,78 @@ class LiteChatTests(TestCase):
 
     @patch("orchestration.coordinator.OrchestrationCoordinator")
     def test_new_message_completes_in_the_lite_profile_with_debug_off(self, mock_coord):
-        mock_coord.return_value.handle_message = AsyncMock(
-            return_value=OrchestrationResult(full_response="hello back", persist=True)
-        )
-        mock_coord.return_value.finalize_turn = AsyncMock(return_value=True)
+        from chatbot.tasks import _get_room_cipher
+        from chatbot.turn_runner import drain
+        from orchestration.models import Turn
+        from orchestration.turns import afinalize_turn, atransition
+
+        class _FinalizingCoordinator:
+            def __init__(self):
+                self.claims = 0
+
+            async def handle_message(self, *, claimed_turn, query, **_kwargs):
+                self.claims += 1
+                moved = await atransition(
+                    str(claimed_turn.pk), claimed_turn.version, "committing",
+                    from_state="running", end_reason="finished",
+                )
+                return OrchestrationResult(
+                    full_response="hello back",
+                    persist=True,
+                    turn_id=str(claimed_turn.pk),
+                    turn_version=claimed_turn.version + 1,
+                    turn_state="committing" if moved else "running",
+                )
+
+            async def finalize_turn(self, result, *, reply_saved):
+                return await afinalize_turn(
+                    result.turn_id, result.turn_version,
+                    reply_saved=reply_saved,
+                )
+
+        coordinator = _FinalizingCoordinator()
+        mock_coord.return_value = coordinator
         consumer = self._consumer()
+        consumer.aes_gcm = _get_room_cipher(self.chatroom)
+        consumer.encrypt_message = ChatConsumer.encrypt_message.__get__(consumer)
 
-        async_to_sync(consumer.new_message)(
-            {"from": self.user.username, "message": "@kazi hi", "chatid": str(self.chatroom.id)}
-        )
+        async def scenario():
+            with patch(
+                "chatbot.turn_runner.get_channel_layer",
+                return_value=consumer.channel_layer,
+            ), patch(
+                "chatbot.kazi_messages.get_channel_layer",
+                return_value=consumer.channel_layer,
+            ):
+                await consumer.new_message(
+                    {"from": self.user.username, "message": "@kazi hi",
+                     "chatid": str(self.chatroom.id)},
+                )
+                await drain()
 
-        mock_coord.return_value.handle_message.assert_awaited_once()
+        async_to_sync(scenario)()
+
+        self.assertEqual(coordinator.claims, 1)
+        self.assertEqual(Turn.objects.get().state, "completed")
         self.assertTrue(Message.objects.filter(member=self.member).exists())
         self.assertTrue(Message.objects.filter(member__User__username="kazi").exists())
-        consumer.channel_layer.group_send.assert_awaited_once()
-        group, event = consumer.channel_layer.group_send.await_args.args
-        self.assertEqual(group, consumer.room_group_name)
-        self.assertEqual(event["type"], "ai_message_saved")
-        self.assertEqual(event["message"]["member"], "kazi")
-        self.assertEqual(event["message"]["content"], "hello back")
-        self.assertIsNotNone(event["message"]["id"])
+        from chatbot.history import decrypt_stored
+
+        reply = Message.objects.filter(
+            member__User__username="kazi",
+        ).order_by("-id").first()
+        self.assertIsNotNone(reply)
+        content, payload = decrypt_stored(self.chatroom, reply)
+        self.assertEqual(content, "hello back")
+        self.assertEqual(payload.get("origin"), "turn")
+        saved = [
+            call.args[1] for call in consumer.channel_layer.group_send.await_args_list
+            if call.args and call.args[1].get("type") == "ai_message_saved"
+        ]
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0]["message"]["member"], "kazi")
+        self.assertEqual(saved[0]["message"]["content"], "hello back")
+        self.assertIsNotNone(saved[0]["message"]["id"])
         sent = [
             call.args[0] if call.args else call.kwargs
             for call in consumer.send_chat_message.await_args_list

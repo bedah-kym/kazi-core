@@ -16,9 +16,9 @@ from django.utils import timezone
 from chatbot.consumers import ChatConsumer
 from chatbot.models import Chatroom, Member, Message
 
-# Measured on the branch for this fixture: eight history messages plus the
-# message being sent, up to the coordinator entry. On main the same turn costs 30.
-MAX_PRE_LOOP_QUERIES = 9
+# Measured for this fixture after removing the duplicate reads: 20 on SQLite.
+# Postgres adds one room-row lock for the queue cap, so the bound allows 21.
+MAX_PRE_LOOP_QUERIES = 21
 
 
 class TurnQueryCountTests(TransactionTestCase):
@@ -37,6 +37,9 @@ class TurnQueryCountTests(TransactionTestCase):
         return user, member, room
 
     def test_one_turn_reads_each_thing_once(self):
+        from chatbot.tasks import _get_room_cipher
+        from chatbot.turn_runner import drain
+
         user, member, room = self._room_with_history(8)
         seen = {"queries": 0}
         real_execute = CursorWrapper.execute
@@ -53,19 +56,27 @@ class TurnQueryCountTests(TransactionTestCase):
         consumer.scope = {"user": user}
         consumer.room_name = str(room.id)
         consumer.room_group_name = f"chat_{room.id}"
+        consumer.aes_gcm = _get_room_cipher(room)
         consumer.channel_layer = MagicMock()
         consumer.channel_layer.group_send = AsyncMock()
         consumer.send_chat_message = AsyncMock()
         consumer.send_message = AsyncMock()
-        consumer.encrypt_message = AsyncMock(return_value={"data": "enc", "nonce": "nonce"})
+        consumer.encrypt_message = ChatConsumer.encrypt_message.__get__(consumer)
         consumer.check_key_rotation = AsyncMock()
 
-        with patch("orchestration.coordinator.OrchestrationCoordinator") as coordinator:
-            coordinator.return_value.handle_message = AsyncMock(side_effect=fake_handle_message)
-            with patch.object(CursorWrapper, "execute", new=counting_execute):
-                async_to_sync(consumer.new_message)(
-                    {"from": user.username, "message": "@kazi hello", "chatid": str(room.id)}
+        async def scenario():
+            with patch("orchestration.coordinator.OrchestrationCoordinator") as coordinator:
+                coordinator.return_value.handle_message = AsyncMock(
+                    side_effect=fake_handle_message,
                 )
+                with patch.object(CursorWrapper, "execute", new=counting_execute):
+                    await consumer.new_message(
+                        {"from": user.username, "message": "@kazi hello",
+                         "chatid": str(room.id)},
+                    )
+                    await drain()
+
+        async_to_sync(scenario)()
 
         self.assertIn("pre_loop", seen)
         self.assertLessEqual(seen["pre_loop"], MAX_PRE_LOOP_QUERIES)

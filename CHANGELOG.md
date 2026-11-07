@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — infrastructure ports stay private
+
+- `docker-compose.yml` and `docker-compose.temporal.yml` bind Redis,
+  Temporal, the Temporal UI and Temporal's Postgres to `127.0.0.1`; only the
+  web port is published on all interfaces. `docker-compose.oci.yml` no longer
+  publishes a Redis port. Existing installs must recreate the containers they
+  already run — `docker compose up -d redis` for a Redis-only install, or
+  `docker compose up -d` for a full Docker install — for the new bindings to
+  apply.
+
 ### Added — the `kazi` command
 
 - A repo-local launcher (`scripts/kazi.py`, with `kazi` / `kazi.cmd` shims)

@@ -1,0 +1,22 @@
+services:
+  long-no-host:
+    image: redis:7-alpine
+    ports:
+      - target: 6379
+        published: 6379
+  long-wildcard-ipv4:
+    image: redis:7-alpine
+    ports:
+      - target: 6379
+        published: 6379
+        host_ip: 0.0.0.0
+  long-wildcard-ipv6:
+    image: redis:7-alpine
+    ports:
+      - target: 6379
+        published: 6379
+        host_ip: "::"
+  long-target-only:
+    image: redis:7-alpine
+    ports:
+      - target: 6379

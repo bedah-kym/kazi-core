@@ -1,0 +1,6 @@
+services:
+  web:
+    image: kazi-web:latest
+    ports:
+      - target: 8000
+        published: 8000

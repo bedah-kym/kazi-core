@@ -3,7 +3,7 @@ services:
     image: temporalio/auto-setup:latest
     restart: unless-stopped
     ports:
-      - "7233:7233"
+      - "127.0.0.1:7233:7233"
     environment:
       - DB=postgres12
       - DB_PORT=5432
@@ -20,13 +20,13 @@ services:
       POSTGRES_PASSWORD: temporal
       POSTGRES_USER: temporal
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
 
   temporal-ui:
     image: temporalio/ui:latest
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     environment:
       - TEMPORAL_ADDRESS=temporal:7233
     depends_on:

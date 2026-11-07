@@ -713,11 +713,35 @@ class LiteChatTests(TestCase):
     def test_new_message_completes_in_the_lite_profile_with_debug_off(self, mock_coord):
         from chatbot.tasks import _get_room_cipher
         from chatbot.turn_runner import drain
+        from orchestration.models import Turn
+        from orchestration.turns import afinalize_turn, atransition
 
-        mock_coord.return_value.handle_message = AsyncMock(
-            return_value=OrchestrationResult(full_response="hello back", persist=True)
-        )
-        mock_coord.return_value.finalize_turn = AsyncMock(return_value=True)
+        class _FinalizingCoordinator:
+            def __init__(self):
+                self.claims = 0
+
+            async def handle_message(self, *, claimed_turn, query, **_kwargs):
+                self.claims += 1
+                moved = await atransition(
+                    str(claimed_turn.pk), claimed_turn.version, "committing",
+                    from_state="running", end_reason="finished",
+                )
+                return OrchestrationResult(
+                    full_response="hello back",
+                    persist=True,
+                    turn_id=str(claimed_turn.pk),
+                    turn_version=claimed_turn.version + 1,
+                    turn_state="committing" if moved else "running",
+                )
+
+            async def finalize_turn(self, result, *, reply_saved):
+                return await afinalize_turn(
+                    result.turn_id, result.turn_version,
+                    reply_saved=reply_saved,
+                )
+
+        coordinator = _FinalizingCoordinator()
+        mock_coord.return_value = coordinator
         consumer = self._consumer()
         consumer.aes_gcm = _get_room_cipher(self.chatroom)
         consumer.encrypt_message = ChatConsumer.encrypt_message.__get__(consumer)
@@ -738,7 +762,8 @@ class LiteChatTests(TestCase):
 
         async_to_sync(scenario)()
 
-        mock_coord.return_value.handle_message.assert_awaited_once()
+        self.assertEqual(coordinator.claims, 1)
+        self.assertEqual(Turn.objects.get().state, "completed")
         self.assertTrue(Message.objects.filter(member=self.member).exists())
         self.assertTrue(Message.objects.filter(member__User__username="kazi").exists())
         from chatbot.history import decrypt_stored

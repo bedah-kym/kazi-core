@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+import weakref
 from typing import Any, Dict, Optional, Set
 
 from asgiref.sync import sync_to_async
@@ -53,11 +54,20 @@ QUEUE_FULL_NOTICE = (
     "You already have {cap} messages waiting; this one won't be answered. "
     "Send it again after the current reply."
 )
+DISARM_FAILED_NOTICE = (
+    "I couldn't confirm autopilot was disarmed. Disarm it from the operations "
+    "inbox to be sure."
+)
+RECORD_FAILED_NOTICE = (
+    "I couldn't record this message, so nothing was run. Please try again."
+)
 
 # One process-wide lock per key so two tabs in one worker cannot both pass the
 # cap check together. Cross-worker serialisation is the room row's
 # SELECT ... FOR UPDATE inside enqueue_turn (#216b-2 r2, item 4).
-_CAP_LOCKS: Dict[str, threading.Lock] = {}
+_CAP_LOCKS: "weakref.WeakValueDictionary[str, threading.Lock]" = (
+    weakref.WeakValueDictionary()
+)
 _CAP_LOCKS_GUARD = threading.Lock()
 
 
@@ -155,8 +165,22 @@ async def run_immediate_directives(
             logger.warning("Pending-confirmation read failed; disarming: %s", exc)
             cancel = True
     if cancel:
-        await _disarm()
+        disarmed = await _disarm()
+        if disarmed is None:
+            # The message continues to its normal handling, but the user must
+            # know the window may still be armed (#303 r4, item 2).
+            await sync_to_async(_persist_immediate_notice)(
+                room_id, DISARM_FAILED_NOTICE,
+            )
     return None
+
+
+def _persist_immediate_notice(room_id: Any, text: str) -> None:
+    from .models import Chatroom
+
+    room = Chatroom.objects.filter(pk=room_id).first()
+    if room is not None:
+        persist_turn_notice(room, text)
 
 
 class TurnRunner:
@@ -167,11 +191,14 @@ class TurnRunner:
         self._active: Dict[asyncio.Task, Dict[str, Any]] = {}
         self._ending_tasks: Set[asyncio.Task] = set()
         self._keys: Dict[str, tuple] = {}
+        self._key_refs: Dict[str, int] = {}
         self._shutdown_turns: Dict[str, tuple] = {}
         self._stopping = False
 
     async def submit(self, room_id: Any, user_id: Any) -> asyncio.Task:
-        self._keys[f"{room_id}:{user_id}"] = (room_id, user_id)
+        key = f"{room_id}:{user_id}"
+        self._keys[key] = (room_id, user_id)
+        self._key_refs[key] = self._key_refs.get(key, 0) + 1
         task = asyncio.create_task(
             self._drain_key(room_id, user_id), name="kazi-turn-drain",
         )
@@ -215,26 +242,82 @@ class TurnRunner:
             await asyncio.wait(pending, timeout=max(0.0, deadline - loop.time()))
 
     async def _drain_key(self, room_id: Any, user_id: Any) -> None:
-        while not self._stopping:
-            turn = None
-            for attempt in range(3):
-                try:
-                    turn = await sync_to_async(claim_next_queued)(room_id, user_id)
-                    break
-                except Exception:
-                    logger.exception(
-                        "Turn claim failed for %s/%s (attempt %s)",
-                        room_id, user_id, attempt + 1,
+        failures = 0
+        try:
+            while not self._stopping:
+                turn = None
+                claim_failed = False
+                for attempt in range(3):
+                    claim = asyncio.ensure_future(
+                        sync_to_async(claim_next_queued)(room_id, user_id)
                     )
-                    await asyncio.sleep(0.05)
-            if turn is None:
-                return
-            if self._stopping:
-                # The claim won the race with shutdown; end it without
-                # dispatching anything (item 2).
-                await self._run_claimed(turn, stop_before_execute=True)
-                return
-            await self._run_claimed(turn)
+                    try:
+                        turn = await asyncio.shield(claim)
+                        break
+                    except asyncio.CancelledError:
+                        # The claim may have committed before the cancel: keep
+                        # its result so the row is ended, not abandoned
+                        # (#303 r4, item 6).
+                        try:
+                            turn = await claim
+                        except Exception:
+                            turn = None
+                        if turn is not None:
+                            await self._run_claimed(
+                                turn, stop_before_execute=True,
+                            )
+                        raise
+                    except Exception:
+                        claim_failed = True
+                        logger.exception(
+                            "Turn claim failed for %s/%s (attempt %s)",
+                            room_id, user_id, attempt + 1,
+                        )
+                        await asyncio.sleep(0.05)
+                if turn is None:
+                    if claim_failed and not self._stopping:
+                        failures += 1
+                        delay = min(60, 2 ** min(failures, 6))
+                        logger.warning(
+                            "Turn claim keeps failing for %s/%s; retrying in %ss",
+                            room_id, user_id, delay,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+                    return
+                failures = 0
+                if self._stopping:
+                    # The claim won the race with shutdown; end it without
+                    # dispatching anything (item 2).
+                    await self._run_claimed(turn, stop_before_execute=True)
+                    return
+                await self._run_claimed(turn)
+        finally:
+            if not self._stopping:
+                try:
+                    await asyncio.shield(self._release_key(room_id, user_id))
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+    async def _release_key(self, room_id: Any, user_id: Any) -> None:
+        """Drop the key once no submitter references it and no work remains."""
+        key = f"{room_id}:{user_id}"
+        refs = self._key_refs.get(key, 0) - 1
+        if refs > 0:
+            self._key_refs[key] = refs
+            return
+        self._key_refs.pop(key, None)
+        try:
+            busy = await sync_to_async(
+                lambda: Turn.objects.filter(
+                    room_id=room_id, user_id=user_id,
+                    state__in=("queued", "running", "committing"),
+                ).exists()
+            )()
+        except Exception:
+            return
+        if not busy:
+            self._keys.pop(key, None)
 
     async def shutdown(self, grace_seconds: Optional[int] = None) -> None:
         """Stop claiming, drain within the grace, then cancel and write endings.
@@ -378,10 +461,30 @@ class TurnRunner:
 
         timeout = float(getattr(settings, "TURN_SHUTDOWN_GRACE_SECONDS", 20))
         if ref.state == "committing":
-            reply_saved = await sync_to_async(_saved_reply_exists)(ref.id)
-            write = asyncio.ensure_future(
-                afinalize_turn(ref.id, ref.version, reply_saved=reply_saved)
-            )
+            try:
+                reply_saved = bool(await asyncio.wait_for(
+                    asyncio.shield(
+                        sync_to_async(_saved_reply_exists)(ref.id),
+                    ),
+                    timeout=timeout,
+                ))
+            except (asyncio.TimeoutError, Exception):
+                reply_saved = False
+            if reply_saved:
+                write = asyncio.ensure_future(
+                    afinalize_turn(ref.id, ref.version, reply_saved=True)
+                )
+            else:
+                # Shutdown cut the committing turn off before its reply was
+                # saved: it is a shutdown ending, not reply_not_saved, and it
+                # still earns one notice (#303 r4, item 4).
+                write = asyncio.ensure_future(
+                    atransition(
+                        ref.id, ref.version, "failed",
+                        from_state="committing",
+                        end_reason=end_reason, partial=True,
+                    )
+                )
         else:
             updates: Dict[str, Any] = {
                 "from_state": "running",
@@ -507,9 +610,24 @@ class TurnRunner:
                 update_proactive_signals(room.id, turn.user_id, action)
 
         async def continue_pause_cb(paused_turn, message_id):
-            ref = await sync_to_async(continue_pause_turn)(
+            swap = asyncio.ensure_future(sync_to_async(continue_pause_turn)(
                 turn, paused_turn, message_id=message_id,
-            )
+            ))
+            try:
+                ref = await asyncio.shield(swap)
+            except asyncio.CancelledError:
+                # The swap may already have committed; keep its result so
+                # cleanup ends the resumed Turn, not the superseded placeholder
+                # (#303 r4, item 6).
+                try:
+                    ref = await swap
+                except Exception:
+                    ref = None
+                if ref is not None:
+                    unregister_live_turn(box["ref"].id)
+                    register_live_turn(ref.id)
+                    box["ref"] = ref
+                raise
             if ref is None:
                 raise PauseContinuationLost("paused")
             unregister_live_turn(box["ref"].id)
@@ -623,6 +741,7 @@ def _cap_lock(room_id: Any, user_id: Any) -> threading.Lock:
 
 def enqueue_turn(
     *, room_id: Any, user_id: Any, request_message_id: int, cap: int,
+    lock: Optional[threading.Lock] = None,
 ) -> Optional[tuple]:
     """Create the queued Turn and enforce the cap as one serialised check.
 
@@ -634,7 +753,8 @@ def enqueue_turn(
     from django.db import connection
     from django.db.models import Count
 
-    lock = _cap_lock(room_id, user_id)
+    if lock is None:
+        lock = _cap_lock(room_id, user_id)
     with lock:
         with transaction.atomic():
             if connection.vendor != "sqlite":

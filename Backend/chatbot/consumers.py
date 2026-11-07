@@ -27,6 +27,7 @@ from .kazi_messages import (
 from .turn_runner import (
     QUEUE_FULL_NOTICE,
     QUEUED_NOTICE,
+    RECORD_FAILED_NOTICE,
     enqueue_turn,
     get_turn_runner,
     persist_turn_notice,
@@ -1028,12 +1029,23 @@ class ChatConsumer(AsyncWebsocketConsumer):
                         return
 
                     cap = queue_cap()
-                    queued = await sync_to_async(enqueue_turn)(
-                        room_id=room_id,
-                        user_id=member_user.id,
-                        request_message_id=message.id,
-                        cap=cap,
-                    )
+                    try:
+                        queued = await sync_to_async(enqueue_turn)(
+                            room_id=room_id,
+                            user_id=member_user.id,
+                            request_message_id=message.id,
+                            cap=cap,
+                        )
+                    except Exception as exc:
+                        # The request link failed and the Turn rolled back.
+                        logger.warning(
+                            "Turn could not be recorded: %s",
+                            type(exc).__name__,
+                        )
+                        await self._persist_turn_notice(
+                            room_id, RECORD_FAILED_NOTICE,
+                        )
+                        return
                     if queued is None:
                         await self._persist_turn_notice(
                             room_id, QUEUE_FULL_NOTICE.format(cap=cap),

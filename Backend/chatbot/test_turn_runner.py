@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import timedelta
+from unittest import skipIf
 from unittest.mock import AsyncMock, patch
 
 from asgiref.sync import async_to_sync, sync_to_async
@@ -16,6 +17,7 @@ from channels.testing import WebsocketCommunicator
 from channels.routing import URLRouter
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
+from django.db import connection
 from django.test import TransactionTestCase, override_settings
 from django.utils import timezone
 
@@ -24,6 +26,9 @@ from chatbot.kazi_messages import encrypt_for_room
 from chatbot.models import Chatroom, Member, Message
 from chatbot.turn_runner import TurnRunner
 from orchestration import turn_leases
+from orchestration import turns as turns_mod
+from orchestration.llm_client import TokenQuotaExceeded
+from orchestration.shell.profiles import PROFILES
 from orchestration.models import Turn
 from orchestration.turns import REAP_NOTICE, create_turn
 
@@ -547,6 +552,62 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
         self.assertEqual(Turn.objects.filter(state="completed").count(), 2)
         self.assertEqual(len(self.llm.calls), 2)
 
+    @skipIf(
+        connection.vendor == "sqlite",
+        "The room-row SELECT ... FOR UPDATE is the Postgres guarantee; "
+        "SQLite serialises writers and the lite profile is one worker.",
+    )
+    def test_two_process_locks_compete_for_the_last_slot(self):
+        import threading
+
+        from django.db import close_old_connections
+
+        from chatbot.turn_runner import enqueue_turn
+
+        for text in ("one", "two"):
+            self._queued_request(f"@kazi {text}")
+        extra = []
+        for text in ("three", "four"):
+            content = encrypt_for_room(self.room, {"content": f"@kazi {text}"})
+            message = Message.objects.create(
+                member=self.member,
+                content=json.dumps(content),
+                timestamp=timezone.now(),
+            )
+            self.room.chats.add(message)
+            extra.append(message)
+
+        barrier = threading.Barrier(2)
+        locks = [threading.Lock(), threading.Lock()]
+        results = []
+
+        def worker(message, lock):
+            close_old_connections()
+            try:
+                barrier.wait(timeout=5)
+                results.append(enqueue_turn(
+                    room_id=self.room.id,
+                    user_id=self.user.id,
+                    request_message_id=message.id,
+                    cap=3,
+                    lock=lock,
+                ))
+            finally:
+                close_old_connections()
+
+        threads = [
+            threading.Thread(target=worker, args=(message, locks[index]))
+            for index, message in enumerate(extra)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+
+        self.assertEqual(sum(1 for result in results if result is not None), 1)
+        self.assertEqual(sum(1 for result in results if result is None), 1)
+        self.assertEqual(Turn.objects.filter(state="queued").count(), 3)
+
     def test_two_runners_drain_three_queued_rows_fifo_exactly_once(self):
         for text in ("one", "two", "three"):
             self._queued_request(f"@kazi {text}")
@@ -734,6 +795,147 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
                 state__in=("completed", "failed", "cancelled", "superseded", "expired"),
             ).count())()
             self.assertEqual(remaining, 0)
+
+        self._run(scenario())
+
+    async def _pause_for_blocks(self, blocks, *, text="@kazi do it"):
+        """Drive one turn to a real approval pause and return the paused Turn."""
+        self.llm.queue(_response(blocks, stop_reason="tool_use"))
+        comm = await self._connect()
+        await self._send(comm, text)
+        self.assertTrue(await self._wait_for(
+            lambda: Turn.objects.filter(state="paused").exists(),
+        ))
+        return comm, await sync_to_async(
+            lambda: Turn.objects.get(state="paused")
+        )()
+
+    async def _assert_still_paused(self, paused):
+        await sync_to_async(paused.refresh_from_db)()
+        self.assertEqual(paused.state, "paused")
+        self.assertIsNotNone(paused.paused_state_enc)
+        state = await sync_to_async(turns_mod.get_turn_paused_state)(paused)
+        self.assertIsNotNone(state)
+
+    def _open_profile(self):
+        return patch(
+            "orchestration.shell.profiles.resolve_profile",
+            return_value=PROFILES["open"],
+        )
+
+    @override_settings(CONSENT_SKEW_SECONDS=0)
+    def test_autopilot_arm_failure_keeps_the_pause(self):
+        tool = _tool("c1", "run_command", {"command": "rm scratch.txt"})
+
+        async def scenario():
+            with self._open_profile(), patch(
+                "orchestration.shell.autopilot.arm", return_value=False,
+            ):
+                comm, paused = await self._pause_for_blocks([tool])
+                await self._send(comm, "@kazi autopilot")
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(state="completed").count() >= 1,
+                ))
+                await self.runner.drain(timeout=15)
+                await self._assert_still_paused(paused)
+
+                # A real yes still resumes the held action once.
+                self.llm.queue(_response([_text("Done.")]))
+                await self._send(comm, "@kazi yes")
+                self.assertTrue(await self._wait_for(
+                    lambda: not Turn.objects.filter(
+                        pk=paused.pk, state="paused",
+                    ).exists(),
+                ))
+                await self.runner.drain(timeout=15)
+                await sync_to_async(paused.refresh_from_db)()
+                self.assertEqual(paused.state, "completed")
+                self.assertEqual(self.execute_tool.await_count, 1)
+
+        self._run(scenario())
+
+    @override_settings(CONSENT_SKEW_SECONDS=0)
+    def test_autopilot_on_a_mixed_batch_keeps_the_pause(self):
+        shell = _tool(
+            "c1", "run_command", {"command": "rm scratch.txt"},
+        )
+        email = _tool("c2", "send_email", {"to": "a@b.c", "body": "hi"})
+
+        async def scenario():
+            with self._open_profile(), patch(
+                "orchestration.shell.autopilot.arm", return_value=True,
+            ):
+                comm, paused = await self._pause_for_blocks([shell, email])
+                await self._send(comm, "@kazi autopilot")
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(state="completed").count() >= 1,
+                ))
+                await self.runner.drain(timeout=15)
+                await self._assert_still_paused(paused)
+
+                self.llm.queue(_response([_text("Done.")]))
+                await self._send(comm, "@kazi yes")
+                self.assertTrue(await self._wait_for(
+                    lambda: not Turn.objects.filter(
+                        pk=paused.pk, state="paused",
+                    ).exists(),
+                ))
+                await self.runner.drain(timeout=15)
+                await sync_to_async(paused.refresh_from_db)()
+                self.assertEqual(paused.state, "completed")
+                self.assertEqual(self.execute_tool.await_count, 2)
+
+        self._run(scenario())
+
+    @override_settings(CONSENT_SKEW_SECONDS=0)
+    def test_quota_still_blocked_keeps_the_pause(self):
+        pause_payload = {
+            "messages": [],
+            "awaiting_budget": True,
+            "awaiting_quota": True,
+            "end_reason": "quota",
+            "token_budget": 100000,
+            "active_seconds": 0.0,
+            "wall_started_at": timezone.now().timestamp(),
+        }
+        paused = Turn.objects.create(
+            room=self.room, user=self.user, state="running",
+            started_at=timezone.now(), attempt=1,
+        )
+        self.assertTrue(turns_mod.pause_turn(
+            str(paused.pk), paused.version,
+            state_payload=pause_payload, pause_kind="quota",
+        ))
+        paused.refresh_from_db()
+        self.llm.queue(_response([_text("Continued.")]))
+
+        async def scenario():
+            comm = await self._connect()
+            with patch(
+                "orchestration.coordinator._quota_resume_still_blocked",
+                new=AsyncMock(return_value=TokenQuotaExceeded(3600)),
+            ):
+                await self._send(comm, "@kazi continue")
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(state="completed").count() >= 1,
+                ))
+                await self.runner.drain(timeout=15)
+                await self._assert_still_paused(paused)
+
+            with patch(
+                "orchestration.coordinator._quota_resume_still_blocked",
+                new=AsyncMock(return_value=None),
+            ):
+                await self._send(comm, "@kazi continue")
+                self.assertTrue(await self._wait_for(
+                    lambda: not Turn.objects.filter(
+                        pk=paused.pk, state="paused",
+                    ).exists(),
+                ))
+                await self.runner.drain(timeout=15)
+
+            await sync_to_async(paused.refresh_from_db)()
+            self.assertEqual(paused.state, "completed")
 
         self._run(scenario())
 

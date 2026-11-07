@@ -163,7 +163,6 @@ window.KAZI_ARCH = {
         {"id": "w_runner_leases", "from": "runner", "to": "leases", "proto": "call"},
         {"id": "w_runner_chan", "from": "runner", "to": "channels", "proto": "call"},
         {"id": "w_runner_db", "from": "runner", "to": "x_db", "proto": "db"},
-        {"id": "w_cons_coord", "from": "consumer", "to": "coordinator", "proto": "call"},
         {"id": "w_coord_ctx", "from": "coordinator", "to": "context", "proto": "call"},
         {"id": "w_ctx_db", "from": "context", "to": "x_db", "proto": "db"},
         {"id": "w_coord_turn", "from": "coordinator", "to": "turns", "proto": "call"},

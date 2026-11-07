@@ -255,6 +255,42 @@ class ClaimTurnTests(_TurnTelemetryMixin, TransactionTestCase):
         self.assertEqual(paused.state, "paused")
         self.assertEqual(paused.end_reason, "awaiting_approval")
 
+    def test_two_threads_that_selected_the_same_queued_row_claim_it_once(self):
+        import threading
+
+        from django.db import close_old_connections
+        from django.db.models import F
+
+        turn = create_turn(room_id=self.room.id, user_id=self.user.id)
+        barrier = threading.Barrier(2)
+        results = []
+
+        def worker():
+            close_old_connections()
+            try:
+                row = Turn.objects.get(pk=turn.pk)
+                # Both threads have now selected the same queued row.
+                barrier.wait(timeout=5)
+                results.append(Turn.objects.filter(
+                    pk=row.pk, state="queued", version=row.version,
+                ).update(
+                    state="running",
+                    version=F("version") + 1,
+                    owner_id="race-thread",
+                    lease_expires_at=timezone.now() + timedelta(seconds=90),
+                ))
+            finally:
+                close_old_connections()
+
+        threads = [threading.Thread(target=worker) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+
+        self.assertEqual(sorted(results), [0, 1])
+        self.assertEqual(Turn.objects.get(pk=turn.pk).state, "running")
+
     @override_settings(KAZI_LITE_PROFILE=False)
     def test_full_profile_refuses_a_fresh_blocking_row(self):
         old = self._running()

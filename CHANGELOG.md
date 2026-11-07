@@ -33,8 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A resumed turn cancelled at shutdown now gets its honest ending: the runner
   tracks the active turn across the pause continuation and ends it within
   `TURN_SHUTDOWN_GRACE_SECONDS`.
-- Decrypt and history reads live in `chatbot/history.py`, shared by the
-  consumer and the runner.
+- The runner reads decrypt and history through `chatbot/history.py`, including
+  the query-level exclusion for a queued turn. The consumer keeps its own
+  display path for `fetch_messages`.
+- Upgrade note: restart every web worker together. An older worker does not
+  drain the new queue.
 
 ### Changed — infrastructure ports stay private
 

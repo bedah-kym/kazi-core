@@ -108,6 +108,8 @@ class _DurableTurnCoordinator:
     def __init__(self):
         self.claims = 0
         self.queries = []
+        self.gate = None
+        self.entered = None
 
     async def handle_message(
         self, *, query, user_id, room_id, message_id, claimed_turn=None, **_kwargs,
@@ -123,6 +125,10 @@ class _DurableTurnCoordinator:
             return OrchestrationResult(full_response="", persist=False)
         self.claims += 1
         self.queries.append(query)
+        if self.entered is not None:
+            self.entered.set()
+        if self.gate is not None:
+            await self.gate.wait()
         moved = await atransition(
             str(turn.pk), turn.version, "committing",
             from_state="running", end_reason="finished",
@@ -299,15 +305,18 @@ class ChatConsumerRoutingTests(TransactionTestCase):
         coordinator = _DurableTurnCoordinator()
 
         async def scenario():
+            coordinator.gate = asyncio.Event()
+            coordinator.entered = asyncio.Event()
             with patch(
                 "orchestration.coordinator.OrchestrationCoordinator",
                 return_value=coordinator,
             ):
-                await first_consumer.new_message({
+                first = asyncio.create_task(first_consumer.new_message({
                     "from": alice.username,
                     "message": "@kazi first",
                     "chatid": str(chatroom.id),
-                })
+                }))
+                await coordinator.entered.wait()
                 await second_consumer.new_message({
                     "from": alice.username,
                     "message": "@kazi second",
@@ -319,6 +328,8 @@ class ChatConsumerRoutingTests(TransactionTestCase):
                     lambda: Turn.objects.filter(state="queued").count()
                 )()
                 self.assertEqual(queued, 1)
+                coordinator.gate.set()
+                await first
                 await drain()
 
         async_to_sync(scenario)()
@@ -370,8 +381,11 @@ class ChatConsumerRoutingTests(TransactionTestCase):
                     self.assertEqual(coordinator.claims, 1)
                     from asgiref.sync import sync_to_async
 
+                    # The persist holds the shared ORM thread; read the count
+                    # on a separate thread so this cannot deadlock behind it.
                     queued = await sync_to_async(
-                        lambda: Turn.objects.filter(state="queued").count()
+                        lambda: Turn.objects.filter(state="queued").count(),
+                        thread_sensitive=False,
                     )()
                     self.assertEqual(queued, 1)
                 finally:

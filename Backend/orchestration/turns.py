@@ -80,6 +80,10 @@ class PauseContinuationLost(Exception):
     """A pause continuation swap lost a compare-and-set; both rows roll back."""
 
 
+class RequestLinkFailed(Exception):
+    """The request message could not be linked, so the Turn was rolled back."""
+
+
 @dataclass(frozen=True)
 class TurnRef:
     """A caller's in-memory view of a Turn; ``version`` is the expected fence."""
@@ -115,7 +119,10 @@ def create_turn(
             budget=budget or {},
         )
         if request_message_id is not None:
-            link_message(str(turn.pk), request_message_id)
+            if not link_message(str(turn.pk), request_message_id):
+                # No request message means no turn: roll the insert back so a
+                # claim can never pick a requestless row (#303 r4, item 5).
+                raise RequestLinkFailed(request_message_id)
     record_event("turn_created", {
         "turn_id": str(turn.pk),
         "room_id": room_id,
@@ -1062,6 +1069,7 @@ def reap_lapsed_turns() -> Dict[str, int]:
             created_at__lt=cutoff,
         )
     )
+    orphan_counts: Dict[tuple, int] = {}
     for turn in orphans:
         live = Turn.objects.filter(
             Q(lease_expires_at__isnull=True) | Q(lease_expires_at__gt=Now()),
@@ -1071,7 +1079,7 @@ def reap_lapsed_turns() -> Dict[str, int]:
         ).exists()
         if live:
             continue
-        orphaned += Turn.objects.filter(
+        updated = Turn.objects.filter(
             pk=turn.pk, state="queued",
         ).update(
             state="expired",
@@ -1081,6 +1089,14 @@ def reap_lapsed_turns() -> Dict[str, int]:
             owner_id=None,
             lease_expires_at=None,
         )
+        if updated:
+            orphaned += updated
+            key = (turn.room_id, turn.user_id)
+            orphan_counts[key] = orphan_counts.get(key, 0) + updated
+    for (room_id, user_id), count in orphan_counts.items():
+        # Same notice text/helper as the reaper's lapsed-owner path, so an
+        # orphaned queue is not silently dropped (#303 r4, item 3).
+        save_shutdown_notice(room_id, user_id, count)
 
     room_gone = Turn.objects.filter(
         state="queued", room__isnull=True,

@@ -44,11 +44,14 @@ Use local-only scripts for:
 The full rules, and the bugs that taught them, are in
 [`docs/golden-principles/tests-and-evals.md`](../../docs/golden-principles/tests-and-evals.md). In short:
 
-- Show the test failing without your change, and paste that failure in the PR
+- Show the test failing without your change, for the right reason, and paste that failure in the PR
 - Call the production code, and mock below the boundary you test, never above it
 - Assert the one correct outcome, including what the user would see
-- Never delete or loosen an assertion, or raise a pinned number, without a reason and a measurement
+- Never delete or loosen an assertion without a reason; never raise a pinned number without the measured list
 - Reset module-level state in `setUp` with `addCleanup`; run the module alone and in the full suite
+
+Hygiene:
+
 - Remove secrets and machine-specific values
 - Replace live HTTP calls with mocks unless the file is explicitly an example
 - Make sure the file name starts with `test_` only if it is meant to run in CI

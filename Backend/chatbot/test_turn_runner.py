@@ -30,7 +30,13 @@ from orchestration.turns import create_turn
 
 def _run(coro):
     async def _await():
-        return await coro
+        try:
+            return await coro
+        finally:
+            await turn_leases.stop_heartbeat()
+            turn_leases._LIVE_TURNS.clear()
+            turn_leases._FENCED_TURNS.clear()
+            turn_leases._LAST_RENEWAL.clear()
 
     return async_to_sync(_await)()
 

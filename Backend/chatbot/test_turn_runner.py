@@ -894,7 +894,7 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
             "awaiting_budget": True,
             "awaiting_quota": True,
             "end_reason": "quota",
-            "token_budget": 100000,
+            "token_budget": 100000,  # nosec B105 — a token count, not a credential
             "active_seconds": 0.0,
             "wall_started_at": timezone.now().timestamp(),
         }

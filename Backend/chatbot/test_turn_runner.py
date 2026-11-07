@@ -1203,7 +1203,7 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
 
         self._run(scenario())
 
-    @override_settings(TURN_SHUTDOWN_GRACE_SECONDS=1)
+    @override_settings(CONSENT_SKEW_SECONDS=0, TURN_SHUTDOWN_GRACE_SECONDS=1)
     def test_a_stalled_swap_does_not_hold_shutdown(self):
         tool = _tool("c1", "send_email", {"to": "a@b.c", "body": "hi"})
         real_continue = turns_mod.continue_pause
@@ -1224,12 +1224,13 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
                     side_effect=blocking_swap,
                 ):
                     await self._send(comm, "@kazi yes")
-                    await asyncio.wait_for(
+                    entered_ok = await asyncio.wait_for(
                         asyncio.get_running_loop().run_in_executor(
                             None, entered.wait, 5,
                         ),
                         timeout=6,
                     )
+                    self.assertTrue(entered_ok, "the pause swap never ran")
                     start = asyncio.get_running_loop().time()
                     await self._lifespan_shutdown(None, at_complete={})
                     elapsed = asyncio.get_running_loop().time() - start
@@ -1266,7 +1267,10 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
                     await self._send(comm, "@kazi hello")
                     await asyncio.wait_for(entered.wait(), timeout=5)
                     start = asyncio.get_running_loop().time()
-                    await self._lifespan_shutdown(None, at_complete={})
+                    await asyncio.wait_for(
+                        self._lifespan_shutdown(None, at_complete={}),
+                        timeout=8,
+                    )
                     elapsed = asyncio.get_running_loop().time() - start
                     self.assertLess(elapsed, 4.0)
             finally:
@@ -1277,34 +1281,113 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
     @override_settings(CONSENT_SKEW_SECONDS=0, TURN_SHUTDOWN_GRACE_SECONDS=1)
     def test_cancellation_during_the_pause_swap_ends_the_resumed_turn(self):
         tool = _tool("c1", "send_email", {"to": "a@b.c", "body": "hi"})
-        resume_entered = asyncio.Event()
+        real_continue = turns_mod.continue_pause
+        entered = threading.Event()
+        release = threading.Event()
 
-        async def before(n):
-            if n == 2:
-                resume_entered.set()
-                await asyncio.Event().wait()
-
-        self.llm.queue(
-            _response([tool], stop_reason="tool_use"),
-            _response([_text("Sent.")]),
-        )
+        def blocking_swap(placeholder, paused, message_id):
+            ref = real_continue(placeholder, paused, message_id=message_id)
+            entered.set()
+            release.wait(10)
+            return ref
 
         async def scenario():
-            comm = await self._connect()
-            await self._send(comm, "@kazi send it")
-            self.assertTrue(await self._wait_for(
-                lambda: Turn.objects.filter(state="paused").exists(),
-            ))
-            paused = await sync_to_async(lambda: Turn.objects.get(state="paused"))()
-            self.llm.before_call = before
-            await self._send(comm, "@kazi yes")
-            await asyncio.wait_for(resume_entered.wait(), timeout=5)
-            await self._lifespan_shutdown(paused.pk, at_complete={})
-            await sync_to_async(paused.refresh_from_db)()
-            self.assertIn(paused.state, {"failed", "cancelled"})
-            self.assertTrue(await sync_to_async(
-                lambda: Turn.objects.filter(state="superseded").exists()
-            )())
+            try:
+                comm, paused = await self._pause_for_blocks([tool])
+                with patch(
+                    "chatbot.turn_runner._continue_in_thread",
+                    side_effect=blocking_swap,
+                ):
+                    await self._send(comm, "@kazi yes")
+                    entered_ok = await asyncio.get_running_loop().run_in_executor(
+                        None, entered.wait, 5,
+                    )
+                    self.assertTrue(entered_ok, "the pause swap never ran")
+                    shutdown = asyncio.create_task(
+                        self.runner.shutdown(grace_seconds=1),
+                    )
+                    # Wait until shutdown has cancelled the drain and the
+                    # cancellation handler is waiting on the in-flight swap.
+                    deadline = asyncio.get_running_loop().time() + 3
+                    while asyncio.get_running_loop().time() < deadline:
+                        if any(
+                            task.cancelling() for task in self.runner._tasks
+                        ):
+                            break
+                        await asyncio.sleep(0.02)
+                    release.set()
+                    await asyncio.wait_for(shutdown, timeout=8)
+                await sync_to_async(paused.refresh_from_db)()
+                self.assertIn(paused.state, {"failed", "cancelled"})
+                self.assertTrue(await sync_to_async(
+                    lambda: Turn.objects.filter(state="superseded").exists()
+                )())
+            finally:
+                release.set()
+
+        self._run(scenario())
+
+    @override_settings(TURN_SHUTDOWN_GRACE_SECONDS=1)
+    def test_the_lifespan_outer_bound_still_stops_the_heartbeat(self):
+        from Backend.asgi import lifespan
+
+        stopped = []
+
+        async def stalled_shutdown(self, grace_seconds=None):
+            await asyncio.sleep(30)
+
+        async def fake_stop():
+            stopped.append(True)
+
+        async def scenario():
+            sent = []
+
+            async def receive():
+                return {"type": "lifespan.shutdown"}
+
+            async def send(message):
+                sent.append(message)
+
+            start = asyncio.get_running_loop().time()
+            with patch.object(
+                TurnRunner, "shutdown", new=stalled_shutdown,
+            ), patch(
+                "orchestration.turn_leases.stop_heartbeat", new=fake_stop,
+            ):
+                await asyncio.wait_for(
+                    lifespan({"type": "lifespan"}, receive, send),
+                    timeout=12,
+                )
+            elapsed = asyncio.get_running_loop().time() - start
+            self.assertLess(elapsed, 10.0)
+            self.assertEqual(sent[-1]["type"], "lifespan.shutdown.complete")
+            self.assertEqual(stopped, [True])
+
+        self._run(scenario())
+
+    @override_settings(TURN_SHUTDOWN_GRACE_SECONDS=1)
+    def test_a_stalled_active_read_does_not_expire_another_workers_queue(self):
+        queued = self._queued_request("@kazi queued")
+        release = threading.Event()
+
+        def blocking_active(*args, **kwargs):
+            release.wait(10)
+            return False  # would mean "not active" if it ever returned
+
+        async def scenario():
+            self.runner._keys[f"{self.room.id}:{self.user.id}"] = (
+                self.room.id, self.user.id,
+            )
+            try:
+                with patch(
+                    "chatbot.turn_runner._active_turn_exists",
+                    side_effect=blocking_active,
+                ):
+                    await self.runner.shutdown(grace_seconds=1)
+            finally:
+                release.set()
+            await sync_to_async(queued.refresh_from_db)()
+            self.assertEqual(queued.state, "queued")
 
         self._run(scenario())
 
@@ -1329,13 +1412,17 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
         async def send(message):
             sent.append(message)
             if message.get("type") == "lifespan.shutdown.complete":
+                # A worker-thread read: a test may have the shared ORM thread
+                # deliberately blocked to prove the shutdown bound.
                 at_complete["turns"] = await sync_to_async(lambda: {
                     str(pk): (state, reason, partial)
                     for pk, state, reason, partial in Turn.objects.values_list(
                         "id", "state", "end_reason", "partial",
                     )
-                })()
-                at_complete["notices"] = await sync_to_async(self._turn_notices)()
+                }, thread_sensitive=False)()
+                at_complete["notices"] = await sync_to_async(
+                    self._turn_notices, thread_sensitive=False,
+                )()
 
         await lifespan({"type": "lifespan"}, receive, send)
         self.assertEqual(sent[-1]["type"], "lifespan.shutdown.complete")

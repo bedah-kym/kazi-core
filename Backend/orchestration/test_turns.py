@@ -360,12 +360,21 @@ class OrphanQueueNoticeTests(TransactionTestCase):
 
         self._orphan(room=self.room)
         Turn.objects.create(room=None, user=self.user, state="queued")
-        with patch(
-            "orchestration.turns.save_orphan_notice",
-            side_effect=RuntimeError("notice down"),
-        ):
-            result = reap_lapsed_turns()
-        self.assertGreaterEqual(result["room_gone"], 1)
+        try:
+            with patch(
+                "orchestration.turns.save_orphan_notice",
+                side_effect=RuntimeError("notice down"),
+            ):
+                result = reap_lapsed_turns()
+        except Exception as exc:
+            self.fail(f"orphan notice failure escaped the sweep: {exc!r}")
+        self.assertEqual(result["room_gone"], 1)
+        self.assertEqual(
+            Turn.objects.filter(
+                state="expired", end_reason="room_gone",
+            ).count(),
+            1,
+        )
 
 
 class _CoordinatorTurnBase(TransactionTestCase):

@@ -184,6 +184,42 @@ async def run_immediate_directives(
     return None
 
 
+def _active_turn_exists(room_id: Any, user_id: Any) -> bool:
+    return Turn.objects.filter(
+        room_id=room_id, user_id=user_id,
+        state__in=("running", "committing"),
+    ).exists()
+
+
+def _writes_are_thread_sensitive() -> bool:
+    """SQLite writes must run on the one shared ORM thread.
+
+    A non-thread-sensitive claim/swap runs on a worker connection while the
+    consumer is writing on the shared one, and SQLite fails with "database
+    table is locked". Postgres keeps the worker thread so a stalled DB call
+    cannot block the shared thread and the shutdown bound holds.
+    """
+    try:
+        from django.db import connection
+
+        return connection.vendor == "sqlite"
+    except Exception:
+        return True
+
+
+def _active_read_in_thread(room_id: Any, user_id: Any) -> bool:
+    """Read the active-turn flag on a worker thread; a read may overlap writes."""
+    try:
+        return _active_turn_exists(room_id, user_id)
+    finally:
+        try:
+            from django.db import connection
+
+            connection.close()
+        except Exception:
+            pass
+
+
 def _claim_in_thread(room_id: Any, user_id: Any):
     """Run one claim on a worker thread and close its DB connection."""
     try:
@@ -313,7 +349,8 @@ class TurnRunner:
                 for attempt in range(3):
                     claim = asyncio.ensure_future(
                         sync_to_async(
-                            _claim_in_thread, thread_sensitive=False,
+                            _claim_in_thread,
+                            thread_sensitive=_writes_are_thread_sensitive(),
                         )(room_id, user_id)
                     )
                     try:
@@ -441,7 +478,7 @@ class TurnRunner:
         for turn_id, (room_id, user_id) in list(self._shutdown_turns.items()):
             try:
                 row = await self._bounded_read(
-                    lambda: Turn.objects.filter(pk=turn_id)
+                    lambda turn_id=turn_id: Turn.objects.filter(pk=turn_id)
                     .values_list("state", "end_reason").first()
                 )
                 if not row or row[0] != "failed" or row[1] != "shutdown":
@@ -449,7 +486,8 @@ class TurnRunner:
                     # the backstop and must be the only one.
                     continue
                 count = await self._bounded_read(
-                    lambda: expire_all_queued_for_key(
+                    lambda room_id=room_id, user_id=user_id:
+                    expire_all_queued_for_key(
                         room_id, user_id, reason="restart", notify=False,
                     )
                 )
@@ -463,17 +501,14 @@ class TurnRunner:
             if key in processed:
                 continue
             try:
-                active = await self._bounded_read(
-                    lambda: Turn.objects.filter(
-                        room_id=room_id, user_id=user_id,
-                        state__in=("running", "committing"),
-                    ).exists()
-                )
-                if active:
+                # A timed-out or failed read means "active": never expire a
+                # queue another worker might still own (#303 r6, item 2).
+                if await self._key_has_active(room_id, user_id):
                     # Another worker still owns this key; leave its queue.
                     continue
                 count = await self._bounded_read(
-                    lambda: expire_all_queued_for_key(
+                    lambda room_id=room_id, user_id=user_id:
+                    expire_all_queued_for_key(
                         room_id, user_id, reason="restart", notify=False,
                     )
                 )
@@ -486,12 +521,35 @@ class TurnRunner:
                     "Could not expire the queue left by this shutdown",
                 )
 
+    async def _key_has_active(self, room_id: Any, user_id: Any) -> bool:
+        """Whether a turn is still active for the key; fail closed on any doubt."""
+        remaining = max(0.01, self._remaining_timeout())
+        read = asyncio.ensure_future(sync_to_async(
+            _active_read_in_thread, thread_sensitive=False,
+        )(room_id, user_id))
+        try:
+            return bool(await asyncio.wait_for(read, timeout=remaining))
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Active-turn read timed out; treating the key as active",
+            )
+            return True
+        except Exception:
+            logger.warning(
+                "Active-turn read failed; treating the key as active",
+            )
+            return True
+
     async def _bounded_read(self, fn, default=None):
-        """Run one sync read with the remaining shutdown time."""
+        """Run one sync read with the remaining shutdown time.
+
+        A timeout cancels the await; the worker call may still finish, but its
+        result is ignored. Callers bind their loop variables as defaults.
+        """
         remaining = max(0.01, self._remaining_timeout())
         read = asyncio.ensure_future(sync_to_async(fn)())
         try:
-            return await asyncio.wait_for(asyncio.shield(read), timeout=remaining)
+            return await asyncio.wait_for(read, timeout=remaining)
         except asyncio.TimeoutError:
             logger.warning("Shutdown read timed out; continuing")
             return default
@@ -724,7 +782,8 @@ class TurnRunner:
 
         async def continue_pause_cb(paused_turn, message_id):
             swap = asyncio.ensure_future(sync_to_async(
-                _continue_in_thread, thread_sensitive=False,
+                _continue_in_thread,
+                thread_sensitive=_writes_are_thread_sensitive(),
             )(turn, paused_turn, message_id))
             try:
                 ref = await asyncio.shield(swap)
@@ -738,6 +797,9 @@ class TurnRunner:
                         timeout=max(0.01, self._remaining_timeout()),
                     )
                 except Exception:
+                    # If the swap timed out, cleanup ends the placeholder;
+                    # a swap that commits after that timeout is left to the
+                    # reaper (the resumed row still has a lease).
                     ref = None
                 if ref is not None:
                     unregister_live_turn(box["ref"].id)

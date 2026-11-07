@@ -22,6 +22,7 @@ from django.core.cache import cache
 from orchestration.telemetry import record_event
 from orchestration.turns import (
     BUSY_LIVE,
+    PauseContinuationLost,
     TERMINAL_STATES,
     TurnRef,
     aclaim_turn,
@@ -483,7 +484,11 @@ class OrchestrationCoordinator:
             paused = turn_box.get("paused_turn")
             if paused is None:
                 return True
-            new_ref = await continue_pause(paused, message_id)
+            try:
+                new_ref = await continue_pause(paused, message_id)
+            except PauseContinuationLost:
+                # The other writer won; the caller shows the honest line.
+                return False
             if new_ref is None:
                 return False
             turn_box["ref"] = new_ref
@@ -495,7 +500,11 @@ class OrchestrationCoordinator:
             if paused is not None and continue_pause is not None:
                 # Deferred handoff: the swap happens only now, when the pause
                 # really resumes, not when the message is first read.
-                new_ref = await continue_pause(paused, message_id)
+                try:
+                    new_ref = await continue_pause(paused, message_id)
+                except PauseContinuationLost:
+                    # The other writer won; the caller shows the honest line.
+                    return False
                 if new_ref is None:
                     return False
                 turn_box["ref"] = new_ref

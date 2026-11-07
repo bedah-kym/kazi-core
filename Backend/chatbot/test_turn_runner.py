@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from datetime import timedelta
 from unittest import skipIf
 from unittest.mock import AsyncMock, patch
@@ -22,9 +23,17 @@ from django.test import TransactionTestCase, override_settings
 from django.utils import timezone
 
 import chatbot.routing
-from chatbot.kazi_messages import encrypt_for_room
+from chatbot.kazi_messages import (
+    ORIGIN_TURN,
+    encrypt_for_room,
+    persist_kazi_message,
+)
 from chatbot.models import Chatroom, Member, Message
-from chatbot.turn_runner import TurnRunner
+from chatbot.turn_runner import (
+    DISARM_FAILED_NOTICE,
+    RECORD_FAILED_NOTICE,
+    TurnRunner,
+)
 from orchestration import turn_leases
 from orchestration import turns as turns_mod
 from orchestration.llm_client import TokenQuotaExceeded
@@ -936,6 +945,366 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
 
             await sync_to_async(paused.refresh_from_db)()
             self.assertEqual(paused.state, "completed")
+
+        self._run(scenario())
+
+    def _committing_turn(self):
+        turn = Turn.objects.create(
+            room=self.room, user=self.user, state="running",
+            started_at=timezone.now(), attempt=1,
+        )
+        moved = turns_mod.transition(
+            str(turn.pk), turn.version, "committing",
+            from_state="running", end_reason="finished",
+        )
+        self.assertTrue(moved)
+        turn.refresh_from_db()
+        return turn
+
+    def _notice_texts(self):
+        return self._turn_notices()
+
+    def test_a_failed_disarm_on_a_bare_stop_saves_a_notice(self):
+        self.llm.queue(_response([_text("ok")]))
+
+        async def scenario():
+            comm = await self._connect()
+            with patch(
+                "orchestration.shell.autopilot.disarm",
+                side_effect=RuntimeError("write down"),
+            ):
+                await self._send(comm, "@kazi stop")
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(state="completed").exists(),
+                ))
+                await self.runner.drain(timeout=10)
+
+        self._run(scenario())
+        self.assertIn(DISARM_FAILED_NOTICE, self._notice_texts())
+
+    def test_a_failed_disarm_on_a_bare_stop_at_the_cap_saves_a_notice(self):
+        for text in ("one", "two", "three"):
+            self._queued_request(f"@kazi {text}")
+
+        async def scenario():
+            comm = await self._connect()
+            with patch(
+                "orchestration.shell.autopilot.disarm",
+                side_effect=RuntimeError("write down"),
+            ):
+                await self._send(comm, "@kazi stop")
+                self.assertTrue(await self._wait_for(
+                    lambda: any("3 messages waiting" in text
+                                for text in self._notice_texts()),
+                ))
+
+        self._run(scenario())
+        texts = self._notice_texts()
+        self.assertIn(DISARM_FAILED_NOTICE, texts)
+        self.assertEqual(Turn.objects.count(), 3)
+
+    def test_a_disarm_notice_failure_does_not_derail_the_message(self):
+        self.llm.queue(_response([_text("ok")]))
+
+        async def scenario():
+            comm = await self._connect()
+            with patch(
+                "orchestration.shell.autopilot.disarm",
+                side_effect=RuntimeError("write down"),
+            ), patch(
+                "chatbot.turn_runner._persist_immediate_notice",
+                side_effect=RuntimeError("notice down"),
+            ):
+                await self._send(comm, "@kazi stop")
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(state="completed").exists(),
+                ))
+                await self.runner.drain(timeout=10)
+
+        self._run(scenario())
+
+    def test_a_claim_error_recovers_and_answers(self):
+        self.llm.queue(_response([_text("answered")]))
+        self._queued_request("@kazi hello")
+        real_claim = turns_mod.claim_next_queued
+        calls = {"n": 0}
+
+        def flaky(room_id, user_id):
+            calls["n"] += 1
+            if calls["n"] <= 3:
+                raise RuntimeError("db down")
+            return real_claim(room_id, user_id)
+
+        async def scenario():
+            with patch(
+                "chatbot.turn_runner.claim_next_queued", side_effect=flaky,
+            ), patch("chatbot.turn_runner.CLAIM_RETRY_BASE_SECONDS", 0.01):
+                await self.runner.submit(self.room.id, self.user.id)
+                await self.runner.drain(timeout=15)
+
+        self._run(scenario())
+        self.assertGreaterEqual(calls["n"], 4)
+        self.assertEqual(Turn.objects.filter(state="completed").count(), 1)
+
+    def test_one_retrying_drainer_per_key(self):
+        async def scenario():
+            with patch(
+                "chatbot.turn_runner.claim_next_queued",
+                side_effect=RuntimeError("db down"),
+            ), patch("chatbot.turn_runner.CLAIM_RETRY_BASE_SECONDS", 0.05):
+                await self.runner.submit(self.room.id, self.user.id)
+                for _ in range(100):
+                    if self.runner._retry_tasks:
+                        break
+                    await asyncio.sleep(0.01)
+                self.assertEqual(len(self.runner._retry_tasks), 1)
+                for _ in range(4):
+                    returned = await self.runner.submit(
+                        self.room.id, self.user.id,
+                    )
+                    self.assertIn(returned, self.runner._tasks)
+                self.assertEqual(len(self.runner._tasks), 1)
+
+        self._run(scenario())
+
+    def test_a_non_shutdown_committing_error_is_reply_not_saved(self):
+        turn = self._committing_turn()
+
+        async def scenario():
+            ref = turns_mod.TurnRef(
+                str(turn.pk), turn.version, "committing",
+            )
+            await self.runner._end_still_running(ref)
+
+        self._run(scenario())
+        turn.refresh_from_db()
+        self.assertEqual(turn.state, "failed")
+        self.assertEqual(turn.end_reason, "reply_not_saved")
+        self.assertIs(turn.partial, True)
+
+    def test_shutdown_committing_without_a_reply_gets_one_notice(self):
+        turn = self._committing_turn()
+
+        async def scenario():
+            ref = turns_mod.TurnRef(
+                str(turn.pk), turn.version, "committing",
+            )
+            self.assertTrue(await self.runner._end_still_running(
+                ref, end_reason="shutdown", partial=True,
+            ))
+            self.runner._shutdown_turns[str(turn.pk)] = (
+                self.room.id, self.user.id,
+            )
+            await self.runner.shutdown(grace_seconds=1)
+
+        self._run(scenario())
+        turn.refresh_from_db()
+        self.assertEqual(turn.state, "failed")
+        self.assertEqual(turn.end_reason, "shutdown")
+        self.assertIs(turn.partial, True)
+        self.assertEqual(self._notice_texts().count(REAP_NOTICE), 1)
+
+    def test_shutdown_committing_with_a_saved_reply_completes(self):
+        turn = self._committing_turn()
+        persist_kazi_message(
+            self.room, content="done", origin=ORIGIN_TURN, turn=turn.pk,
+        )
+
+        async def scenario():
+            ref = turns_mod.TurnRef(
+                str(turn.pk), turn.version, "committing",
+            )
+            self.assertTrue(await self.runner._end_still_running(
+                ref, end_reason="shutdown", partial=True,
+            ))
+            self.runner._shutdown_turns[str(turn.pk)] = (
+                self.room.id, self.user.id,
+            )
+            await self.runner.shutdown(grace_seconds=1)
+
+        self._run(scenario())
+        turn.refresh_from_db()
+        self.assertEqual(turn.state, "completed")
+        self.assertFalse(any(
+            text == REAP_NOTICE for text in self._notice_texts()
+        ))
+
+    def test_link_failure_rolls_back_and_saves_a_notice(self):
+        async def scenario():
+            comm = await self._connect()
+            with patch("orchestration.turns.link_message", return_value=False):
+                await self._send(comm, "@kazi hello")
+                self.assertTrue(await self._wait_for(
+                    lambda: any(RECORD_FAILED_NOTICE in text
+                                for text in self._notice_texts()),
+                ))
+            self.assertEqual(
+                await sync_to_async(lambda: Turn.objects.count())(), 0,
+            )
+
+        self._run(scenario())
+
+    @override_settings(CONSENT_SKEW_SECONDS=0)
+    def test_a_lost_pause_swap_shows_the_already_resumed_line(self):
+        tool = _tool("c1", "send_email", {"to": "a@b.c", "body": "hi"})
+
+        async def scenario():
+            comm, paused = await self._pause_for_blocks([tool])
+            with patch(
+                "chatbot.turn_runner.continue_pause_turn",
+                side_effect=turns_mod.PauseContinuationLost("lost"),
+            ):
+                await self._send(comm, "@kazi yes")
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(state="completed").exists(),
+                ))
+                await self.runner.drain(timeout=10)
+            await self._assert_still_paused(paused)
+            placeholder = await sync_to_async(
+                lambda: Turn.objects.filter(state="completed").get()
+            )()
+            reply = await sync_to_async(
+                lambda: Message.objects.filter(
+                    turn_id=placeholder.pk, member__User__username="kazi",
+                ).first()
+            )()
+            self.assertIsNotNone(reply)
+            from chatbot.history import decrypt_stored
+
+            content, _payload = decrypt_stored(self.room, reply)
+            self.assertIn("already resumed elsewhere", content)
+
+        self._run(scenario())
+
+    @override_settings(TURN_SHUTDOWN_GRACE_SECONDS=1)
+    def test_a_stalled_claim_does_not_hold_shutdown(self):
+        self.llm.queue(_response([_text("never")]))
+        release = threading.Event()
+
+        def blocking_claim(*args, **kwargs):
+            release.wait(10)
+            return None
+
+        async def scenario():
+            try:
+                with patch(
+                    "chatbot.turn_runner.claim_next_queued",
+                    side_effect=blocking_claim,
+                ):
+                    comm = await self._connect()
+                    await self._send(comm, "@kazi hello")
+                    await asyncio.sleep(0.1)
+                    start = asyncio.get_running_loop().time()
+                    await self._lifespan_shutdown(None, at_complete={})
+                    elapsed = asyncio.get_running_loop().time() - start
+                    self.assertLess(elapsed, 4.0)
+            finally:
+                release.set()
+
+        self._run(scenario())
+
+    @override_settings(TURN_SHUTDOWN_GRACE_SECONDS=1)
+    def test_a_stalled_swap_does_not_hold_shutdown(self):
+        tool = _tool("c1", "send_email", {"to": "a@b.c", "body": "hi"})
+        real_continue = turns_mod.continue_pause
+        entered = threading.Event()
+        release = threading.Event()
+
+        def blocking_swap(placeholder, paused, *, message_id=None):
+            ref = real_continue(placeholder, paused, message_id=message_id)
+            entered.set()
+            release.wait(10)
+            return ref
+
+        async def scenario():
+            try:
+                comm, _paused = await self._pause_for_blocks([tool])
+                with patch(
+                    "chatbot.turn_runner.continue_pause_turn",
+                    side_effect=blocking_swap,
+                ):
+                    await self._send(comm, "@kazi yes")
+                    await asyncio.wait_for(
+                        asyncio.get_running_loop().run_in_executor(
+                            None, entered.wait, 5,
+                        ),
+                        timeout=6,
+                    )
+                    start = asyncio.get_running_loop().time()
+                    await self._lifespan_shutdown(None, at_complete={})
+                    elapsed = asyncio.get_running_loop().time() - start
+                    self.assertLess(elapsed, 4.0)
+            finally:
+                release.set()
+
+        self._run(scenario())
+
+    @override_settings(TURN_SHUTDOWN_GRACE_SECONDS=1)
+    def test_a_stalled_ending_does_not_hold_shutdown(self):
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def before(n):
+            if n == 1:
+                entered.set()
+                await asyncio.Event().wait()
+
+        async def blocking_transition(*args, **kwargs):
+            await release.wait()
+            return True
+
+        self.llm.before_call = before
+        self.llm.queue(_response([_text("never")]))
+
+        async def scenario():
+            try:
+                with patch(
+                    "orchestration.turns.atransition",
+                    new=blocking_transition,
+                ):
+                    comm = await self._connect()
+                    await self._send(comm, "@kazi hello")
+                    await asyncio.wait_for(entered.wait(), timeout=5)
+                    start = asyncio.get_running_loop().time()
+                    await self._lifespan_shutdown(None, at_complete={})
+                    elapsed = asyncio.get_running_loop().time() - start
+                    self.assertLess(elapsed, 4.0)
+            finally:
+                release.set()
+
+        self._run(scenario())
+
+    @override_settings(CONSENT_SKEW_SECONDS=0, TURN_SHUTDOWN_GRACE_SECONDS=1)
+    def test_cancellation_during_the_pause_swap_ends_the_resumed_turn(self):
+        tool = _tool("c1", "send_email", {"to": "a@b.c", "body": "hi"})
+        resume_entered = asyncio.Event()
+
+        async def before(n):
+            if n == 2:
+                resume_entered.set()
+                await asyncio.Event().wait()
+
+        self.llm.queue(
+            _response([tool], stop_reason="tool_use"),
+            _response([_text("Sent.")]),
+        )
+
+        async def scenario():
+            comm = await self._connect()
+            await self._send(comm, "@kazi send it")
+            self.assertTrue(await self._wait_for(
+                lambda: Turn.objects.filter(state="paused").exists(),
+            ))
+            paused = await sync_to_async(lambda: Turn.objects.get(state="paused"))()
+            self.llm.before_call = before
+            await self._send(comm, "@kazi yes")
+            await asyncio.wait_for(resume_entered.wait(), timeout=5)
+            await self._lifespan_shutdown(paused.pk, at_complete={})
+            await sync_to_async(paused.refresh_from_db)()
+            self.assertIn(paused.state, {"failed", "cancelled"})
+            self.assertTrue(await sync_to_async(
+                lambda: Turn.objects.filter(state="superseded").exists()
+            )())
 
         self._run(scenario())
 

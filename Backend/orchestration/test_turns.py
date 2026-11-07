@@ -27,8 +27,11 @@ from orchestration.turns import (
     TERMINAL_STATES,
     TOOK_OVER,
     atransition as real_atransition,
+    _notice_text,
+    claim_next_queued,
     claim_turn,
     create_turn,
+    reap_lapsed_turns,
     transition,
 )
 
@@ -259,36 +262,41 @@ class ClaimTurnTests(_TurnTelemetryMixin, TransactionTestCase):
         import threading
 
         from django.db import close_old_connections
-        from django.db.models import F
 
-        turn = create_turn(room_id=self.room.id, user_id=self.user.id)
+        member = Member.objects.create(User=self.user)
+        message = Message.objects.create(
+            member=member, content="{}", timestamp=timezone.now(),
+        )
+        self.room.chats.add(message)
+        turn = create_turn(
+            room_id=self.room.id,
+            user_id=self.user.id,
+            request_message_id=message.id,
+        )
         barrier = threading.Barrier(2)
         results = []
+        from orchestration import turns as turns_mod
+
+        turns_mod._CLAIM_RACE_HOOK = barrier.wait
 
         def worker():
             close_old_connections()
             try:
-                row = Turn.objects.get(pk=turn.pk)
-                # Both threads have now selected the same queued row.
-                barrier.wait(timeout=5)
-                results.append(Turn.objects.filter(
-                    pk=row.pk, state="queued", version=row.version,
-                ).update(
-                    state="running",
-                    version=F("version") + 1,
-                    owner_id="race-thread",
-                    lease_expires_at=timezone.now() + timedelta(seconds=90),
-                ))
+                results.append(claim_next_queued(self.room.id, self.user.id))
             finally:
                 close_old_connections()
 
         threads = [threading.Thread(target=worker) for _ in range(2)]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join(timeout=10)
+        try:
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=10)
+        finally:
+            turns_mod._CLAIM_RACE_HOOK = None
 
-        self.assertEqual(sorted(results), [0, 1])
+        self.assertEqual(sum(1 for result in results if result is not None), 1)
+        self.assertEqual(sum(1 for result in results if result is None), 1)
         self.assertEqual(Turn.objects.get(pk=turn.pk).state, "running")
 
     @override_settings(KAZI_LITE_PROFILE=False)
@@ -313,6 +321,51 @@ class ClaimTurnTests(_TurnTelemetryMixin, TransactionTestCase):
         self.assertEqual(old.state, "failed")
         self.assertEqual(old.end_reason, "abandoned")
         self.assertEqual(Turn.objects.filter(state="running").count(), 1)
+
+
+class OrphanQueueNoticeTests(TransactionTestCase):
+    """An orphaned queued message never ran, so its notice must say only that."""
+
+    def setUp(self):
+        super().setUp()
+        self.user = User.objects.create_user(
+            username="turn-orphan", password="fake-token",  # nosec B106
+        )
+        self.room = Chatroom.objects.create()
+
+    def _orphan(self, *, room=None):
+        turn = create_turn(room_id=(room.id if room else None), user_id=self.user.id)
+        Turn.objects.filter(pk=turn.pk).update(
+            created_at=timezone.now() - timedelta(seconds=400),
+        )
+        return turn
+
+    def test_an_orphaned_queue_saves_the_waiting_text(self):
+        from chatbot.history import decrypt_stored
+
+        self._orphan(room=self.room)
+        self._orphan(room=self.room)
+        result = reap_lapsed_turns()
+        self.assertEqual(result["orphaned"], 2)
+        texts = []
+        for message in Message.objects.filter(member__User__username="kazi"):
+            content, _payload = decrypt_stored(self.room, message)
+            texts.append(content)
+        expected = _notice_text(2, completed=True)
+        self.assertIn(expected, texts)
+        self.assertFalse(any("stopped partway" in text for text in texts))
+
+    def test_one_bad_notice_does_not_skip_room_gone(self):
+        from unittest.mock import patch
+
+        self._orphan(room=self.room)
+        Turn.objects.create(room=None, user=self.user, state="queued")
+        with patch(
+            "orchestration.turns.save_orphan_notice",
+            side_effect=RuntimeError("notice down"),
+        ):
+            result = reap_lapsed_turns()
+        self.assertGreaterEqual(result["room_gone"], 1)
 
 
 class _CoordinatorTurnBase(TransactionTestCase):

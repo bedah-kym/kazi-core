@@ -316,7 +316,7 @@ class ChatConsumerRoutingTests(TransactionTestCase):
                     "message": "@kazi first",
                     "chatid": str(chatroom.id),
                 }))
-                await coordinator.entered.wait()
+                await asyncio.wait_for(coordinator.entered.wait(), timeout=5)
                 await second_consumer.new_message({
                     "from": alice.username,
                     "message": "@kazi second",

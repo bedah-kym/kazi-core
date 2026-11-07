@@ -61,6 +61,9 @@ DISARM_FAILED_NOTICE = (
 RECORD_FAILED_NOTICE = (
     "I couldn't record this message, so nothing was run. Please try again."
 )
+# A claim that keeps failing retries the same drainer with this backoff.
+CLAIM_RETRY_BASE_SECONDS = 2
+CLAIM_RETRY_MAX_SECONDS = 60
 
 # One process-wide lock per key so two tabs in one worker cannot both pass the
 # cap check together. Cross-worker serialisation is the room row's
@@ -168,19 +171,56 @@ async def run_immediate_directives(
         disarmed = await _disarm()
         if disarmed is None:
             # The message continues to its normal handling, but the user must
-            # know the window may still be armed (#303 r4, item 2).
-            await sync_to_async(_persist_immediate_notice)(
-                room_id, DISARM_FAILED_NOTICE,
-            )
+            # know the window may still be armed (#303 r4, item 2). A notice
+            # failure must never derail the message (#303 r5, item 5).
+            try:
+                await sync_to_async(_persist_immediate_notice)(
+                    room_id, DISARM_FAILED_NOTICE,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Disarm-failure notice not saved: %s", type(exc).__name__,
+                )
     return None
+
+
+def _claim_in_thread(room_id: Any, user_id: Any):
+    """Run one claim on a worker thread and close its DB connection."""
+    try:
+        return claim_next_queued(room_id, user_id)
+    finally:
+        try:
+            from django.db import connection
+
+            connection.close()
+        except Exception:
+            pass
+
+
+def _continue_in_thread(placeholder, paused, message_id):
+    """Run one pause swap on a worker thread and close its DB connection."""
+    try:
+        return continue_pause_turn(
+            placeholder, paused, message_id=message_id,
+        )
+    finally:
+        try:
+            from django.db import connection
+
+            connection.close()
+        except Exception:
+            pass
 
 
 def _persist_immediate_notice(room_id: Any, text: str) -> None:
     from .models import Chatroom
 
-    room = Chatroom.objects.filter(pk=room_id).first()
-    if room is not None:
-        persist_turn_notice(room, text)
+    try:
+        room = Chatroom.objects.filter(pk=room_id).first()
+        if room is not None:
+            persist_turn_notice(room, text)
+    except Exception as exc:
+        logger.warning("Immediate notice not saved: %s", type(exc).__name__)
 
 
 class TurnRunner:
@@ -192,12 +232,33 @@ class TurnRunner:
         self._ending_tasks: Set[asyncio.Task] = set()
         self._keys: Dict[str, tuple] = {}
         self._key_refs: Dict[str, int] = {}
+        self._retry_tasks: Dict[str, asyncio.Task] = {}
         self._shutdown_turns: Dict[str, tuple] = {}
+        self._shutdown_deadline: Optional[float] = None
         self._stopping = False
+
+    def _remaining_timeout(self, fallback: Optional[float] = None) -> float:
+        """Seconds left in the one shutdown deadline, or the setting outside it."""
+        deadline = self._shutdown_deadline
+        if deadline is None:
+            return float(
+                fallback
+                if fallback is not None
+                else getattr(settings, "TURN_SHUTDOWN_GRACE_SECONDS", 20)
+            )
+        try:
+            return max(0.0, deadline - asyncio.get_running_loop().time())
+        except RuntimeError:
+            return 0.0
 
     async def submit(self, room_id: Any, user_id: Any) -> asyncio.Task:
         key = f"{room_id}:{user_id}"
         self._keys[key] = (room_id, user_id)
+        retrying = self._retry_tasks.get(key)
+        if retrying is not None and not retrying.done():
+            # The retrying drainer will see the new queued row; do not pile up
+            # another one (#303 r5, item 6).
+            return retrying
         self._key_refs[key] = self._key_refs.get(key, 0) + 1
         task = asyncio.create_task(
             self._drain_key(room_id, user_id), name="kazi-turn-drain",
@@ -242,24 +303,32 @@ class TurnRunner:
             await asyncio.wait(pending, timeout=max(0.0, deadline - loop.time()))
 
     async def _drain_key(self, room_id: Any, user_id: Any) -> None:
+        key = f"{room_id}:{user_id}"
         failures = 0
+        task = asyncio.current_task()
         try:
             while not self._stopping:
                 turn = None
                 claim_failed = False
                 for attempt in range(3):
                     claim = asyncio.ensure_future(
-                        sync_to_async(claim_next_queued)(room_id, user_id)
+                        sync_to_async(
+                            _claim_in_thread, thread_sensitive=False,
+                        )(room_id, user_id)
                     )
                     try:
                         turn = await asyncio.shield(claim)
                         break
                     except asyncio.CancelledError:
                         # The claim may have committed before the cancel: keep
-                        # its result so the row is ended, not abandoned
-                        # (#303 r4, item 6).
+                        # its result so the row is ended, not abandoned. Bound
+                        # the wait so a stalled DB cannot hold shutdown
+                        # (#303 r4 item 6, #303 r5 item 2).
                         try:
-                            turn = await claim
+                            turn = await asyncio.wait_for(
+                                asyncio.shield(claim),
+                                timeout=max(0.01, self._remaining_timeout()),
+                            )
                         except Exception:
                             turn = None
                         if turn is not None:
@@ -277,12 +346,21 @@ class TurnRunner:
                 if turn is None:
                     if claim_failed and not self._stopping:
                         failures += 1
-                        delay = min(60, 2 ** min(failures, 6))
+                        delay = min(
+                            CLAIM_RETRY_MAX_SECONDS,
+                            CLAIM_RETRY_BASE_SECONDS ** min(failures, 6),
+                        )
                         logger.warning(
                             "Turn claim keeps failing for %s/%s; retrying in %ss",
                             room_id, user_id, delay,
                         )
-                        await asyncio.sleep(delay)
+                        if task is not None:
+                            self._retry_tasks[key] = task
+                        try:
+                            await asyncio.sleep(delay)
+                        finally:
+                            if self._retry_tasks.get(key) is task:
+                                self._retry_tasks.pop(key, None)
                         continue
                     return
                 failures = 0
@@ -293,9 +371,14 @@ class TurnRunner:
                     return
                 await self._run_claimed(turn)
         finally:
+            if self._retry_tasks.get(key) is task:
+                self._retry_tasks.pop(key, None)
             if not self._stopping:
                 try:
-                    await asyncio.shield(self._release_key(room_id, user_id))
+                    await asyncio.wait_for(
+                        asyncio.shield(self._release_key(room_id, user_id)),
+                        timeout=max(0.01, self._remaining_timeout()),
+                    )
                 except (asyncio.CancelledError, Exception):
                     pass
 
@@ -329,32 +412,46 @@ class TurnRunner:
         self._stopping = True
         grace = shutdown_grace_seconds() if grace_seconds is None else grace_seconds
         loop = asyncio.get_running_loop()
-        deadline = loop.time() + max(0, int(grace))
-        while self._tasks and loop.time() < deadline:
+        grace = max(0, int(grace))
+        # The live-turn drain gets the grace; the ending/notice writes then
+        # share one extra bounded budget (capped at 5 s). Every later step uses
+        # the one deadline, never a fresh full grace (#303 r5, item 2).
+        ending_budget = min(5, max(1, grace))
+        self._shutdown_deadline = loop.time() + grace + ending_budget
+        live_deadline = loop.time() + grace
+        while self._tasks and loop.time() < live_deadline:
             await asyncio.sleep(0.05)
         remaining = [task for task in list(self._tasks) if not task.done()]
         for task in remaining:
             task.cancel()
         if remaining:
-            await asyncio.gather(*remaining, return_exceptions=True)
-        if self._ending_tasks:
-            await asyncio.gather(
-                *[task for task in list(self._ending_tasks) if not task.done()],
-                return_exceptions=True,
+            await asyncio.wait(
+                remaining,
+                timeout=max(0.0, self._shutdown_deadline - loop.time()),
+            )
+        ending = [
+            task for task in list(self._ending_tasks) if not task.done()
+        ]
+        if ending:
+            await asyncio.wait(
+                ending,
+                timeout=max(0.0, self._shutdown_deadline - loop.time()),
             )
         processed = set()
         for turn_id, (room_id, user_id) in list(self._shutdown_turns.items()):
             try:
-                row = await sync_to_async(
+                row = await self._bounded_read(
                     lambda: Turn.objects.filter(pk=turn_id)
                     .values_list("state", "end_reason").first()
-                )()
+                )
                 if not row or row[0] != "failed" or row[1] != "shutdown":
                     # The bounded ending did not land; the reaper's notice is
                     # the backstop and must be the only one.
                     continue
-                count = await sync_to_async(expire_all_queued_for_key)(
-                    room_id, user_id, reason="restart", notify=False,
+                count = await self._bounded_read(
+                    lambda: expire_all_queued_for_key(
+                        room_id, user_id, reason="restart", notify=False,
+                    )
                 )
                 await self._save_shutdown_notice(
                     room_id, user_id, turn_id, count,
@@ -366,17 +463,19 @@ class TurnRunner:
             if key in processed:
                 continue
             try:
-                active = await sync_to_async(
+                active = await self._bounded_read(
                     lambda: Turn.objects.filter(
                         room_id=room_id, user_id=user_id,
                         state__in=("running", "committing"),
                     ).exists()
-                )()
+                )
                 if active:
                     # Another worker still owns this key; leave its queue.
                     continue
-                count = await sync_to_async(expire_all_queued_for_key)(
-                    room_id, user_id, reason="restart", notify=False,
+                count = await self._bounded_read(
+                    lambda: expire_all_queued_for_key(
+                        room_id, user_id, reason="restart", notify=False,
+                    )
                 )
                 if count:
                     await self._save_shutdown_notice(
@@ -387,13 +486,23 @@ class TurnRunner:
                     "Could not expire the queue left by this shutdown",
                 )
 
+    async def _bounded_read(self, fn, default=None):
+        """Run one sync read with the remaining shutdown time."""
+        remaining = max(0.01, self._remaining_timeout())
+        read = asyncio.ensure_future(sync_to_async(fn)())
+        try:
+            return await asyncio.wait_for(asyncio.shield(read), timeout=remaining)
+        except asyncio.TimeoutError:
+            logger.warning("Shutdown read timed out; continuing")
+            return default
+
     async def _save_shutdown_notice(
         self, room_id: Any, user_id: Any, turn_id: Optional[str], count: int,
     ) -> None:
         """Save one notice, bounded by the same grace as the ending write."""
         from orchestration.turns import save_shutdown_notice
 
-        timeout = float(getattr(settings, "TURN_SHUTDOWN_GRACE_SECONDS", 20))
+        timeout = max(0.01, self._remaining_timeout())
         write = asyncio.ensure_future(
             sync_to_async(save_shutdown_notice)(
                 room_id, user_id, count, turn_id=turn_id,
@@ -459,7 +568,7 @@ class TurnRunner:
     ) -> bool:
         from orchestration.turns import _saved_reply_exists, afinalize_turn, atransition
 
-        timeout = float(getattr(settings, "TURN_SHUTDOWN_GRACE_SECONDS", 20))
+        timeout = max(0.01, self._remaining_timeout())
         if ref.state == "committing":
             try:
                 reply_saved = bool(await asyncio.wait_for(
@@ -478,11 +587,15 @@ class TurnRunner:
                 # Shutdown cut the committing turn off before its reply was
                 # saved: it is a shutdown ending, not reply_not_saved, and it
                 # still earns one notice (#303 r4, item 4).
+                reason = (
+                    "shutdown" if end_reason == "shutdown"
+                    else "reply_not_saved"
+                )
                 write = asyncio.ensure_future(
                     atransition(
                         ref.id, ref.version, "failed",
                         from_state="committing",
-                        end_reason=end_reason, partial=True,
+                        end_reason=reason, partial=True,
                     )
                 )
         else:
@@ -610,9 +723,9 @@ class TurnRunner:
                 update_proactive_signals(room.id, turn.user_id, action)
 
         async def continue_pause_cb(paused_turn, message_id):
-            swap = asyncio.ensure_future(sync_to_async(continue_pause_turn)(
-                turn, paused_turn, message_id=message_id,
-            ))
+            swap = asyncio.ensure_future(sync_to_async(
+                _continue_in_thread, thread_sensitive=False,
+            )(turn, paused_turn, message_id))
             try:
                 ref = await asyncio.shield(swap)
             except asyncio.CancelledError:
@@ -620,7 +733,10 @@ class TurnRunner:
                 # cleanup ends the resumed Turn, not the superseded placeholder
                 # (#303 r4, item 6).
                 try:
-                    ref = await swap
+                    ref = await asyncio.wait_for(
+                        asyncio.shield(swap),
+                        timeout=max(0.01, self._remaining_timeout()),
+                    )
                 except Exception:
                     ref = None
                 if ref is not None:

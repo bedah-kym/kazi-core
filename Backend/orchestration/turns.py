@@ -67,6 +67,10 @@ BUSY_LIVE = "busy_live"
 TOOK_OVER = "took_over"
 LOST = "lost"
 
+# Test seam for the deterministic claim race: called after the oldest queued
+# row is selected and before the conditional update. Production leaves it None.
+_CLAIM_RACE_HOOK = None
+
 
 @dataclass(frozen=True)
 class ClaimResult:
@@ -323,6 +327,8 @@ def claim_next_queued(room_id: Any, user_id: Any) -> Optional[Turn]:
         oldest = _queued().first()
         if oldest is None:
             return None
+        if _CLAIM_RACE_HOOK is not None:
+            _CLAIM_RACE_HOOK()
         if oldest.active_exists:
             active = (
                 Turn.objects.filter(
@@ -957,6 +963,19 @@ def _save_reap_notice(
     return True
 
 
+def _representative_turn(
+    room_id: Any, user_id: Any, turn_id: Any = None,
+):
+    turn = get_turn(turn_id) if turn_id else None
+    if turn is None:
+        turn = (
+            Turn.objects.filter(room_id=room_id, user_id=user_id)
+            .order_by("-created_at")
+            .first()
+        )
+    return turn
+
+
 def save_shutdown_notice(
     room_id: Any, user_id: Any, expired_queued: int, *, turn_id: Any = None,
 ) -> bool:
@@ -965,16 +984,25 @@ def save_shutdown_notice(
     The text and the save path are the reaper's (``_save_reap_notice``), so a
     shutdown ending and a later reap can never produce two different stories.
     """
-    turn = get_turn(turn_id) if turn_id else None
-    if turn is None:
-        turn = (
-            Turn.objects.filter(room_id=room_id, user_id=user_id)
-            .order_by("-created_at")
-            .first()
-        )
+    turn = _representative_turn(room_id, user_id, turn_id)
     if turn is None:
         return False
     return _save_reap_notice(turn, expired_queued)
+
+
+def save_orphan_notice(
+    room_id: Any, user_id: Any, expired_queued: int, *, turn_id: Any = None,
+) -> bool:
+    """Plain waiting-messages notice for queued rows that never ran.
+
+    An orphaned queued message was never dispatched, so the reaper's "some
+    steps may already have run" line would be false. ``completed=True`` is the
+    waiting-only form of the same helper/text.
+    """
+    turn = _representative_turn(room_id, user_id, turn_id)
+    if turn is None:
+        return False
+    return _save_reap_notice(turn, expired_queued, completed=True)
 
 
 def reap_turn(
@@ -1094,9 +1122,15 @@ def reap_lapsed_turns() -> Dict[str, int]:
             key = (turn.room_id, turn.user_id)
             orphan_counts[key] = orphan_counts.get(key, 0) + updated
     for (room_id, user_id), count in orphan_counts.items():
-        # Same notice text/helper as the reaper's lapsed-owner path, so an
-        # orphaned queue is not silently dropped (#303 r4, item 3).
-        save_shutdown_notice(room_id, user_id, count)
+        # A queued orphan never ran, so it gets the waiting-only text; one bad
+        # notice must not abort the room_gone step below (#303 r5, item 1).
+        try:
+            save_orphan_notice(room_id, user_id, count)
+        except Exception:
+            logger.exception(
+                "Orphan notice not saved for room %s user %s",
+                room_id, user_id,
+            )
 
     room_gone = Turn.objects.filter(
         state="queued", room__isnull=True,

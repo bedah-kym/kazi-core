@@ -680,7 +680,7 @@ class LiteRunDocsTests(SimpleTestCase):
         },
     },
 )
-class LiteChatTests(TestCase):
+class LiteChatTests(TransactionTestCase):
     def setUp(self):
         self.user = User.objects.create_user(
             username="lite-chat", email="lite@example.com", password="secret",  # nosec B106 — test fixture

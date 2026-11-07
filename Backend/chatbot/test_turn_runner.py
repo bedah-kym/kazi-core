@@ -1235,10 +1235,29 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
                     await self._lifespan_shutdown(None, at_complete={})
                     elapsed = asyncio.get_running_loop().time() - start
                     self.assertLess(elapsed, 4.0)
+                    # Shutdown's own deadline returns on time even if the
+                    # drainer hangs, so also prove the drainer's swap wait is
+                    # bounded: no runner task may still be stuck.
+                    self.assertEqual(await self._stuck_runner_tasks(), [])
             finally:
                 release.set()
 
         self._run(scenario())
+
+    async def _stuck_runner_tasks(self, within=3.0):
+        """Runner tasks still pending ``within`` seconds after shutdown.
+
+        Shutdown's outer deadline can return while a drainer is still in its
+        own bounded cleanup. A bounded wait finishes within its budget; an
+        unbounded one stays stuck until the test releases the stalled call.
+        """
+        pending = [
+            task for task in (self.runner._tasks | self.runner._ending_tasks)
+            if not task.done()
+        ]
+        if pending:
+            await asyncio.wait(pending, timeout=within)
+        return [task for task in pending if not task.done()]
 
     @override_settings(TURN_SHUTDOWN_GRACE_SECONDS=1)
     def test_a_stalled_ending_does_not_hold_shutdown(self):
@@ -1273,6 +1292,9 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
                     )
                     elapsed = asyncio.get_running_loop().time() - start
                     self.assertLess(elapsed, 4.0)
+                    # The ending write itself must be bounded, not only
+                    # shutdown's outer wait: no runner task may still be stuck.
+                    self.assertEqual(await self._stuck_runner_tasks(), [])
             finally:
                 release.set()
 

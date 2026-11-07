@@ -243,14 +243,20 @@ async def _end_unexpected_turn(turn_box: Dict, stream_state: Dict, outcome: str)
         except Exception:
             logger.warning("Could not record the turn's unexpected ending.")
         return
+    # A shutdown ending is bounded like every other shutdown write: if the
+    # database is stalled, the reaper (or the lite boot sweep) ends the row.
+    grace = float(getattr(settings, "TURN_SHUTDOWN_GRACE_SECONDS", 20))
     try:
-        await asyncio.shield(task)
+        await asyncio.wait_for(asyncio.shield(task), timeout=grace)
+    except asyncio.TimeoutError:
+        logger.warning("Shutdown ending write timed out; the reaper will end the turn.")
     except asyncio.CancelledError:
         # The inner task keeps running after the shield is cancelled; wait for
-        # it so the row is terminal before this cancellation finishes.
+        # it, within the grace, so the row is terminal before this
+        # cancellation finishes.
         try:
-            await task
-        except Exception:
+            await asyncio.wait_for(asyncio.shield(task), timeout=grace)
+        except (Exception, asyncio.TimeoutError):
             pass
         raise
 

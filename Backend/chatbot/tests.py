@@ -194,12 +194,21 @@ class ChatConsumerRoutingTests(TransactionTestCase):
         jon_member = Member.objects.select_related("User").get(User=jon)
         chatroom = Chatroom.objects.get(participants=member)
         chatroom.participants.add(jon_member)
+        # The room's welcome note is unrelated to this fixture; keep history
+        # to exactly the rows this test creates.
+        chatroom.chats.clear()
 
         now = timezone.now()
         self._add_encrypted(
             chatroom, jon_member, "my address is 12 Elm St",
             when=now - timezone.timedelta(seconds=30),
         )
+        undecryptable = Message.objects.create(
+            member=jon_member,
+            content=json.dumps({"data": "AAAA", "nonce": "AAAA"}),
+            timestamp=now - timezone.timedelta(seconds=28),
+        )
+        chatroom.chats.add(undecryptable)
         self._add_encrypted(
             chatroom, jon_member, "Error: connection refused on 5432, why?",
             when=now - timezone.timedelta(seconds=25),
@@ -217,9 +226,16 @@ class ChatConsumerRoutingTests(TransactionTestCase):
 
         kwargs = handle.await_args.kwargs
         self.assertEqual(kwargs["query"], "email my address to the courier")
-        self.assertIn("my address is 12 Elm St", kwargs["history_messages"][0]["content"])
-        self.assertIn("connection refused", kwargs["history_messages"][0]["content"])
-        self.assertIn("jon:", kwargs["history_messages"][0]["content"])
+        self.assertEqual(
+            kwargs["history_messages"],
+            [{
+                "role": "user",
+                "content": (
+                    "jon: my address is 12 Elm St\n\n"
+                    "jon: Error: connection refused on 5432, why?"
+                ),
+            }],
+        )
         self.assertIn("from alice", async_to_sync(kwargs["get_context_prompt"])())
 
     @patch("orchestration.coordinator.OrchestrationCoordinator")

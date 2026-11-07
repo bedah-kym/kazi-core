@@ -726,6 +726,9 @@ class LiteChatTests(TestCase):
             with patch(
                 "chatbot.turn_runner.get_channel_layer",
                 return_value=consumer.channel_layer,
+            ), patch(
+                "chatbot.kazi_messages.get_channel_layer",
+                return_value=consumer.channel_layer,
             ):
                 await consumer.new_message(
                     {"from": self.user.username, "message": "@kazi hi",
@@ -747,6 +750,14 @@ class LiteChatTests(TestCase):
         content, payload = decrypt_stored(self.chatroom, reply)
         self.assertEqual(content, "hello back")
         self.assertEqual(payload.get("origin"), "turn")
+        saved = [
+            call.args[1] for call in consumer.channel_layer.group_send.await_args_list
+            if call.args and call.args[1].get("type") == "ai_message_saved"
+        ]
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0]["message"]["member"], "kazi")
+        self.assertEqual(saved[0]["message"]["content"], "hello back")
+        self.assertIsNotNone(saved[0]["message"]["id"])
         sent = [
             call.args[0] if call.args else call.kwargs
             for call in consumer.send_chat_message.await_args_list

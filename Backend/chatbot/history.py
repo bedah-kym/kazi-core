@@ -98,9 +98,15 @@ def get_history_rows(
         return []
     query = room.chats.select_related("member__User")
     if request_message_id is not None:
+        # Humans only up to the request. Kazi's turn replies stay (the earlier
+        # turn's answer has a higher id), but a newer harness notice about a
+        # message queued behind this one does not (#216b-2 r2, item 12).
         query = query.filter(
-            Q(member__User__username=KAZI_USERNAME)
-            | Q(id__lte=request_message_id)
+            Q(id__lte=request_message_id)
+            | Q(
+                member__User__username=KAZI_USERNAME,
+                turn_id__isnull=False,
+            )
         )
     if exclude_message_id is not None:
         query = query.exclude(id=exclude_message_id)

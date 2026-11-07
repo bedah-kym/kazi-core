@@ -23,8 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - History for a queued turn excludes human messages newer than its request
   before the slice, so it includes the previous turn's reply and not the
   messages queued behind it.
-- `TURN_QUEUE_MAX` (default 3) caps the queue. The next message is saved with
-  a saved `turn_notice`; queued messages get a transient harness frame.
+- `TURN_QUEUE_MAX` (default 3) caps the queue in one serialised check, so two
+  tabs or two workers cannot both pass it. The next message is saved with a
+  saved `turn_notice`; queued messages get a transient harness frame.
+- `lifespan.shutdown` stops the runner claiming new rows, waits for live turns
+  within `TURN_SHUTDOWN_GRACE_SECONDS`, then cancels and writes their endings
+  before the heartbeat stops. Queued rows it leaves behind end with the saved
+  "N waiting messages" notice.
 - A resumed turn cancelled at shutdown now gets its honest ending: the runner
   tracks the active turn across the pause continuation and ends it within
   `TURN_SHUTDOWN_GRACE_SECONDS`.

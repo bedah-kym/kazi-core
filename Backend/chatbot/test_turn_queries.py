@@ -16,10 +16,9 @@ from django.utils import timezone
 from chatbot.consumers import ChatConsumer
 from chatbot.models import Chatroom, Member, Message
 
-# The turn runner now claims a queued row and rebuilds the turn before the
-# coordinator is entered (claim + room + request + participants + history),
-# on top of the consumer's message save. Measured for this fixture.
-MAX_PRE_LOOP_QUERIES = 20
+# Measured for this fixture after removing the duplicate reads: 20 on SQLite.
+# Postgres adds one room-row lock for the queue cap, so the bound allows 21.
+MAX_PRE_LOOP_QUERIES = 21
 
 
 class TurnQueryCountTests(TransactionTestCase):

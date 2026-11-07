@@ -85,11 +85,13 @@ async def lifespan(scope, receive, send):
             from orchestration.turn_leases import (
                 shutdown_grace_seconds,
                 stop_heartbeat,
-                wait_for_idle,
             )
+            from chatbot.turn_runner import get_turn_runner
 
             try:
-                await wait_for_idle(shutdown_grace_seconds())
+                # Stop claiming first, let live turns finish within the grace,
+                # then cancel and write their endings before this returns.
+                await get_turn_runner().shutdown(shutdown_grace_seconds())
             finally:
                 await stop_heartbeat()
             if _in_process_scheduler is not None:

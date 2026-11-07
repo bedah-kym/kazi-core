@@ -101,16 +101,21 @@ def create_turn(
     model: str = "",
     budget: Optional[Dict[str, Any]] = None,
 ) -> Turn:
-    """Create the one row for a routed message and link the request to it."""
-    turn = Turn.objects.create(
-        room_id=room_id,
-        user_id=user_id,
-        state="queued",
-        model=(model or "")[:100],
-        budget=budget or {},
-    )
-    if request_message_id is not None:
-        link_message(str(turn.pk), request_message_id)
+    """Create the one row for a routed message and link the request atomically.
+
+    The insert and the message link are one write, so another worker can never
+    claim a queued row that has no request message yet (#216b-2 r2, item 3).
+    """
+    with transaction.atomic():
+        turn = Turn.objects.create(
+            room_id=room_id,
+            user_id=user_id,
+            state="queued",
+            model=(model or "")[:100],
+            budget=budget or {},
+        )
+        if request_message_id is not None:
+            link_message(str(turn.pk), request_message_id)
     record_event("turn_created", {
         "turn_id": str(turn.pk),
         "room_id": room_id,
@@ -283,7 +288,10 @@ def claim_next_queued(room_id: Any, user_id: Any) -> Optional[Turn]:
 
     def _queued():
         # FIFO is keyed on the request message's autoincrement id: it is
-        # monotonic even when two rows share a microsecond of created_at.
+        # monotonic even when two rows share a microsecond of created_at. The
+        # live-owner check rides in the same SELECT so a claim costs one read
+        # for the row and one for the check, not two reads plus a second
+        # existence query.
         return (
             Turn.objects.filter(room_id=room_id, user_id=user_id, state="queued")
             .annotate(
@@ -291,46 +299,48 @@ def claim_next_queued(room_id: Any, user_id: Any) -> Optional[Turn]:
                     Message.objects.filter(turn_id=OuterRef("pk"))
                     .order_by("id")
                     .values("id")[:1]
-                )
+                ),
+                active_exists=Exists(
+                    Turn.objects.filter(
+                        room_id=room_id,
+                        user_id=user_id,
+                        state__in=("running", "committing"),
+                    )
+                ),
             )
             .order_by("request_id", "created_at", "pk")
+            .filter(request_id__isnull=False)
         )
 
     for _attempt in range(10):
         oldest = _queued().first()
         if oldest is None:
             return None
-        active = (
-            Turn.objects.filter(
-                room_id=room_id,
-                user_id=user_id,
-                state__in=("running", "committing"),
-            )
-            .order_by("started_at")
-            .first()
-        )
-        if active is not None:
-            if active.lease_expires_at is not None:
-                # A lapsed owner is taken over by the same reap routine the
-                # periodic sweep uses; a live owner drains the queue itself.
-                if not reap_turn(active, require_lapsed=True):
-                    return None
-                continue
-            if _is_stale(active):
-                transition(
-                    str(active.pk), active.version, "failed",
-                    from_state=active.state, end_reason="abandoned",
+        if oldest.active_exists:
+            active = (
+                Turn.objects.filter(
+                    room_id=room_id,
+                    user_id=user_id,
+                    state__in=("running", "committing"),
                 )
-                continue
-            return None
-        if oldest.request_id is None:
-            older = (
-                _queued()
-                .filter(request_id__isnull=True, created_at__lt=oldest.created_at)
-                .exclude(pk=oldest.pk)
+                .order_by("started_at")
+                .first()
             )
-        else:
-            older = _queued().filter(request_id__lt=oldest.request_id)
+            if active is not None:
+                if active.lease_expires_at is not None:
+                    # A lapsed owner is taken over by the same reap routine
+                    # the periodic sweep uses; a live owner drains it itself.
+                    if not reap_turn(active, require_lapsed=True):
+                        return None
+                    continue
+                if _is_stale(active):
+                    transition(
+                        str(active.pk), active.version, "failed",
+                        from_state=active.state, end_reason="abandoned",
+                    )
+                    continue
+            return None
+        older = _queued().filter(request_id__lt=oldest.request_id)
         updated = (
             Turn.objects.filter(
                 pk=oldest.pk, state="queued", version=oldest.version,
@@ -346,7 +356,9 @@ def claim_next_queued(room_id: Any, user_id: Any) -> Optional[Turn]:
             )
         )
         if updated == 1:
-            oldest.refresh_from_db()
+            # We know the CAS result: no extra refresh read.
+            oldest.state = "running"
+            oldest.version += 1
             return oldest
     return None
 
@@ -873,6 +885,36 @@ def expire_queued_for_key(
             lease_expires_at=None,
         )
     )
+
+
+def expire_all_queued_for_key(
+    room_id: Any, user_id: Any, *, reason: str = "restart",
+) -> int:
+    """Expire every queued row for one key and save the waiting notice.
+
+    Used when this process stops draining: the rows it leaves behind must end
+    with the same honest "N waiting messages" line as a reaped key, not
+    silently (#216b-2 r2, item 2).
+    """
+    if room_id is None:
+        return 0
+    queued = Turn.objects.filter(
+        room_id=room_id, user_id=user_id, state="queued",
+    )
+    count = queued.count()
+    if count == 0:
+        return 0
+    representative = queued.first()
+    queued.update(
+        state="expired",
+        end_reason=reason,
+        version=F("version") + 1,
+        ended_at=Now(),
+        owner_id=None,
+        lease_expires_at=None,
+    )
+    _save_reap_notice(representative, count)
+    return count
 
 
 def _save_reap_notice(

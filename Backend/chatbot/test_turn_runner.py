@@ -11,7 +11,7 @@ import json
 from datetime import timedelta
 from unittest.mock import AsyncMock, patch
 
-from asgiref.sync import async_to_sync
+from asgiref.sync import async_to_sync, sync_to_async
 from channels.testing import WebsocketCommunicator
 from channels.routing import URLRouter
 from django.contrib.auth import get_user_model
@@ -28,17 +28,6 @@ from orchestration.models import Turn
 from orchestration.turns import create_turn
 
 
-def _run(coro):
-    async def _await():
-        try:
-            return await coro
-        finally:
-            await turn_leases.stop_heartbeat()
-            turn_leases._LIVE_TURNS.clear()
-            turn_leases._FENCED_TURNS.clear()
-            turn_leases._LAST_RENEWAL.clear()
-
-    return async_to_sync(_await)()
 
 
 def _text(text):
@@ -146,6 +135,24 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
     def tearDown(self):
         super().tearDown()
 
+    def _run(self, coro):
+        async def _await():
+            try:
+                return await coro
+            finally:
+                for comm in self.communicators:
+                    try:
+                        await comm.disconnect()
+                    except Exception:
+                        pass
+                self.communicators.clear()
+                await turn_leases.stop_heartbeat()
+                turn_leases._LIVE_TURNS.clear()
+                turn_leases._FENCED_TURNS.clear()
+                turn_leases._LAST_RENEWAL.clear()
+
+        return async_to_sync(_await)()
+
     async def _connect(self, user=None):
         user = user or self.user
         app = _ForceUser(
@@ -243,7 +250,7 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
             )
             self.assertIsNotNone(saved)
 
-        _run(scenario())
+        self._run(scenario())
 
     def test_a_second_message_during_a_turn_gets_a_queued_frame(self):
         entered = asyncio.Event()
@@ -278,7 +285,124 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
             )()
             self.assertEqual(completed, 2)
 
-        _run(scenario())
+        self._run(scenario())
+
+    def _arm_autopilot(self):
+        from orchestration.shell import autopilot
+        from users.models import UserProfile
+
+        UserProfile.objects.get_or_create(user=self.user)
+        with patch("orchestration.shell.autopilot.can_arm", return_value=True):
+            self.assertTrue(
+                autopilot.arm(self.user.id, self.room.id, armed_by=self.user.id),
+            )
+
+    def _is_autopilot_armed(self):
+        from orchestration.shell import autopilot
+
+        return autopilot.is_armed(self.user.id, self.room.id)
+
+    def test_a_stop_during_a_running_autopilot_turn_disarms_before_it_ends(self):
+        self._arm_autopilot()
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def before(n):
+            if n == 1:
+                entered.set()
+                await release.wait()
+
+        self.llm.before_call = before
+        self.llm.queue(_response([_text("working")]), _response([_text("ok")]))
+
+        async def scenario():
+            comm = await self._connect()
+            await self._send(comm, "@kazi do the long thing")
+            await asyncio.wait_for(entered.wait(), timeout=5)
+            self.assertTrue(await self._maybe_true(self._is_autopilot_armed))
+            await self._send(comm, "@kazi stop")
+            # The running turn is still gated; the stop's side effect must have
+            # landed already, not when the queued turn eventually runs.
+            self.assertTrue(await self._wait_for(
+                lambda: not self._is_autopilot_armed(),
+            ))
+            release.set()
+            await self.runner.drain(timeout=15)
+
+        self._run(scenario())
+
+    def test_a_stop_at_the_cap_still_disarms(self):
+        self._arm_autopilot()
+        for text in ("one", "two", "three"):
+            self._queued_request(f"@kazi {text}")
+        self.assertTrue(self._is_autopilot_armed())
+
+        async def scenario():
+            comm = await self._connect()
+            self.assertTrue(await self._maybe_true(self._is_autopilot_armed))
+            await self._send(comm, "@kazi stop")
+            self.assertTrue(await self._wait_for(
+                lambda: not self._is_autopilot_armed(),
+            ))
+            from asgiref.sync import sync_to_async
+
+            counts = await sync_to_async(lambda: {
+                "turns": Turn.objects.count(),
+                "queued": Turn.objects.filter(state="queued").count(),
+            })()
+            self.assertEqual(counts["turns"], 3)
+            self.assertEqual(counts["queued"], 3)
+
+        self._run(scenario())
+
+    def test_two_submissions_at_the_cap_create_only_one_turn(self):
+        import threading
+
+        from django.db import close_old_connections
+
+        from chatbot.turn_runner import enqueue_turn
+
+        for text in ("one", "two"):
+            self._queued_request(f"@kazi {text}")
+        extra = []
+        for text in ("three", "four"):
+            content = encrypt_for_room(self.room, {"content": f"@kazi {text}"})
+            message = Message.objects.create(
+                member=self.member,
+                content=json.dumps(content),
+                timestamp=timezone.now(),
+            )
+            self.room.chats.add(message)
+            extra.append(message)
+
+        barrier = threading.Barrier(2)
+        results = []
+
+        def worker(message):
+            close_old_connections()
+            try:
+                barrier.wait(timeout=5)
+                results.append(enqueue_turn(
+                    room_id=self.room.id,
+                    user_id=self.user.id,
+                    request_message_id=message.id,
+                    cap=3,
+                ))
+            finally:
+                close_old_connections()
+
+        threads = [
+            threading.Thread(target=worker, args=(message,))
+            for message in extra
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+
+        self.assertEqual(sum(1 for result in results if result is not None), 1)
+        self.assertEqual(sum(1 for result in results if result is None), 1)
+        self.assertEqual(Turn.objects.filter(state="queued").count(), 3)
 
     def test_a_queued_turns_history_has_the_previous_reply_and_not_the_queued_message(self):
         now = timezone.now()
@@ -305,6 +429,7 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
         self.llm.queue(
             _response([_text("reply to first")]),
             _response([_text("reply to second")]),
+            _response([_text("reply to third")]),
         )
 
         async def scenario():
@@ -315,12 +440,26 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
             self.assertTrue(await self._wait_for(
                 lambda: Turn.objects.filter(state="queued").count() == 1,
             ))
+            await self._send(comm, "@kazi third message behind")
+            self.assertTrue(await self._wait_for(
+                lambda: Turn.objects.filter(state="queued").count() == 2,
+            ))
+            # A newer harness notice about a later message must not leak in.
+            from chatbot.kazi_messages import ORIGIN_TURN_NOTICE, persist_kazi_message
+
+            await sync_to_async(persist_kazi_message)(
+                self.room,
+                content="3 messages waiting; this one won't be answered.",
+                origin=ORIGIN_TURN_NOTICE,
+            )
             release.set()
-            await self.runner.drain(timeout=15)
+            await self.runner.drain(timeout=20)
 
-        _run(scenario())
+        from asgiref.sync import sync_to_async
 
-        self.assertEqual(Turn.objects.filter(state="completed").count(), 2)
+        self._run(scenario())
+
+        self.assertEqual(Turn.objects.filter(state="completed").count(), 3)
         self.assertGreater(
             self.room.chats.filter(member__User=self.user).count(), 8,
         )
@@ -330,6 +469,8 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
         # The current query is the last user message the loop adds itself; it
         # must not also appear from the queued-message history.
         self.assertEqual(history.count("second question three"), 1)
+        self.assertNotIn("third message behind", history)
+        self.assertNotIn("3 messages waiting", history)
 
     @override_settings(
         CHANNEL_LAYERS={
@@ -356,7 +497,7 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
             self.assertIsNotNone(saved, f"saved reply not delivered: {frames}")
             self.assertIn("slow answer", saved["message"]["content"])
 
-        _run(scenario())
+        self._run(scenario())
 
     def test_a_submit_that_sees_the_owner_finishing_does_not_lose_a_wakeup(self):
         """The queued row is the handoff: either the submitter or the owner claims it."""
@@ -386,7 +527,7 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
             await owner.drain(timeout=15)
             await late.drain(timeout=15)
 
-        _run(scenario())
+        self._run(scenario())
 
         self.assertEqual(Turn.objects.filter(state="completed").count(), 2)
         self.assertEqual(len(self.llm.calls), 2)
@@ -410,7 +551,7 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
             await first.drain(timeout=15)
             await second.drain(timeout=15)
 
-        _run(scenario())
+        self._run(scenario())
 
         from chatbot.history import decrypt_stored
         from chatbot.transcript import strip_wake_word
@@ -456,6 +597,9 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
             await asyncio.wait_for(entered.wait(), timeout=5)
             # The "yes" is saved before the approval prompt exists.
             await self._send(comm, "@kazi yes")
+            self.assertTrue(await self._wait_for(
+                lambda: Turn.objects.filter(state="queued").count() == 1,
+            ))
             release.set()
             self.assertTrue(await self._wait_for(
                 lambda: Turn.objects.filter(state="paused").exists(),
@@ -465,12 +609,14 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
             from asgiref.sync import sync_to_async
 
             paused = await sync_to_async(lambda: Turn.objects.get(state="paused"))()
+            paused_id = paused.pk
             self.assertEqual(self.execute_tool.await_count, 0)
 
-            # A yes sent after the prompt continues the pause.
+            # A yes sent after the prompt continues the pause. Wait for the
+            # paused row itself to leave paused, not for any completed turn.
             await self._send(comm, "@kazi yes")
             self.assertTrue(await self._wait_for(
-                lambda: Turn.objects.filter(state="completed").exists(),
+                lambda: not Turn.objects.filter(pk=paused_id, state="paused").exists(),
             ))
             await self.runner.drain(timeout=15)
 
@@ -482,7 +628,7 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
             )()
             self.assertEqual(superseded, 1)
 
-        _run(scenario())
+        self._run(scenario())
 
     def test_a_disconnect_mid_turn_still_saves_the_reply(self):
         entered = asyncio.Event()
@@ -519,7 +665,7 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
             contents = [m.get("content") for m in frame["messages"]]
             self.assertIn("saved after disconnect", contents)
 
-        _run(scenario())
+        self._run(scenario())
 
     def test_five_rapid_messages_cap_at_three_queued_and_refuse_the_fifth(self):
         entered = asyncio.Event()
@@ -574,21 +720,22 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
             ).count())()
             self.assertEqual(remaining, 0)
 
-        _run(scenario())
+        self._run(scenario())
 
-    @override_settings(CONSENT_SKEW_SECONDS=0)
+    @override_settings(CONSENT_SKEW_SECONDS=0, TURN_SHUTDOWN_GRACE_SECONDS=1)
     def test_a_resumed_turn_cancelled_at_shutdown_gets_an_ending(self):
-        """Addition A: a paused -> running turn is ended when its task is cancelled."""
+        """Addition A, driven through the real ASGI lifespan shutdown."""
+        from Backend.asgi import lifespan
+
         tool_call = {"id": "c1", "name": "send_email", "input": {"to": "a@b.c", "body": "hi"}}
         resume_entered = asyncio.Event()
-        resume_release = asyncio.Event()
 
         async def before(n):
             if n == 1:
                 return
             if n == 2:
                 resume_entered.set()
-                await resume_release.wait()
+                await asyncio.Event().wait()
 
         self.llm.before_call = before
         self.llm.queue(
@@ -602,24 +749,35 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
             self.assertTrue(await self._wait_for(
                 lambda: Turn.objects.filter(state="paused").exists(),
             ))
-            paused = await sync_to_async_lambda(lambda: Turn.objects.get(state="paused"))
+            paused = await sync_to_async(lambda: Turn.objects.get(state="paused"))()
             await self._send(comm, "@kazi yes")
             await asyncio.wait_for(resume_entered.wait(), timeout=5)
-            # The resumed turn is running inside its model call. Shutdown.
-            for task in list(self.runner._tasks):
-                task.cancel()
-            resume_release.set()
-            await asyncio.sleep(0.2)
-            await self.runner.drain(timeout=10)
-            await sync_to_async_lambda(lambda: paused.refresh_from_db())
-            self.assertIn(
-                paused.state,
-                {"completed", "failed", "cancelled", "superseded", "expired"},
-            )
+            tools_before = self.execute_tool.await_count
 
-        from asgiref.sync import sync_to_async
+            sent = []
+            at_complete = {}
 
-        async def sync_to_async_lambda(fn):
-            return await sync_to_async(fn)()
+            async def receive():
+                return {"type": "lifespan.shutdown"}
 
-        _run(scenario())
+            async def send(message):
+                sent.append(message)
+                if message.get("type") == "lifespan.shutdown.complete":
+                    at_complete["turns"] = await sync_to_async(lambda: {
+                        str(pk): (state, reason)
+                        for pk, state, reason in Turn.objects.values_list(
+                            "id", "state", "end_reason",
+                        )
+                    })()
+
+            await lifespan({"type": "lifespan"}, receive, send)
+
+            self.assertEqual(sent[-1]["type"], "lifespan.shutdown.complete")
+            state, reason = at_complete["turns"][str(paused.pk)]
+            self.assertIn(state, {"failed", "cancelled"})
+            self.assertTrue(reason)
+            self.assertEqual(self.execute_tool.await_count, tools_before)
+            await sync_to_async(paused.refresh_from_db)()
+            self.assertIn(paused.state, {"failed", "cancelled"})
+
+        self._run(scenario())

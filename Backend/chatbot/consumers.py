@@ -31,7 +31,6 @@ from .turn_runner import (
     get_turn_runner,
     persist_turn_notice,
     queue_cap,
-    queued_count,
     run_immediate_directives,
 )
 from .tasks import moderate_message_batch
@@ -292,35 +291,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 task.cancel()
 
     async def schedule_context_summary(self, room_id, message_id):
-        min_messages = getattr(settings, "CONTEXT_SUMMARY_MIN_MESSAGES", 6)
-        min_minutes = getattr(settings, "CONTEXT_SUMMARY_MIN_MINUTES", 10)
-        counter_key = f"context_summary:count:{room_id}"
-        last_key = f"context_summary:last:{room_id}"
-        now = timezone.now()
+        from .context_summary import schedule_context_summary as _schedule
 
-        count = (cache.get(counter_key) or 0) + 1
-        cache.set(counter_key, count, timeout=60 * 60)
-
-        should_schedule = count >= min_messages
-        if not should_schedule:
-            last_iso = cache.get(last_key)
-            if last_iso:
-                try:
-                    last_seen = timezone.datetime.fromisoformat(last_iso)
-                    if (now - last_seen).total_seconds() >= min_minutes * 60:
-                        should_schedule = True
-                except Exception:
-                    pass
-
-        if not should_schedule:
-            return
-
-        from .tasks import refresh_room_context_summary
-        if not dispatch_task(refresh_room_context_summary, room_id, message_id, count):
-            return
-
-        cache.set(last_key, now.isoformat(), timeout=60 * 60 * 6)
-        cache.delete(counter_key)
+        await sync_to_async(_schedule)(room_id, message_id)
 
     async def schedule_idle_nudge_if_needed(self, room_id, user_id, user=None):
         """
@@ -827,14 +800,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
         except Exception as exc:
             logger.warning("Turn notice not saved: %s", type(exc).__name__)
 
-    def _has_active_turn(self, room_id, user_id) -> bool:
-        from orchestration.models import Turn
-
-        return Turn.objects.filter(
-            room_id=room_id, user_id=user_id,
-            state__in=("running", "committing"),
-        ).exists()
-
     async def _send_queued_frame(self, position: int) -> None:
         """A transient harness frame: the message is waiting, not lost."""
         try:
@@ -1063,24 +1028,18 @@ class ChatConsumer(AsyncWebsocketConsumer):
                         return
 
                     cap = queue_cap()
-                    pending = await sync_to_async(queued_count)(
-                        room_id, member_user.id,
+                    queued = await sync_to_async(enqueue_turn)(
+                        room_id=room_id,
+                        user_id=member_user.id,
+                        request_message_id=message.id,
+                        cap=cap,
                     )
-                    if pending >= cap:
+                    if queued is None:
                         await self._persist_turn_notice(
                             room_id, QUEUE_FULL_NOTICE.format(cap=cap),
                         )
                         return
-
-                    await sync_to_async(enqueue_turn)(
-                        room_id=room_id,
-                        user_id=member_user.id,
-                        request_message_id=message.id,
-                    )
-                    active = await sync_to_async(self._has_active_turn)(
-                        room_id, member_user.id,
-                    )
-                    position = pending + 1
+                    _turn, position, active = queued
                     if active or position > 1:
                         await self._send_queued_frame(position)
                     await get_turn_runner().submit(room_id, member_user.id)

@@ -25,7 +25,7 @@ from chatbot.models import Chatroom, Member, Message
 from chatbot.turn_runner import TurnRunner
 from orchestration import turn_leases
 from orchestration.models import Turn
-from orchestration.turns import create_turn
+from orchestration.turns import REAP_NOTICE, create_turn
 
 
 def _text(text):
@@ -733,22 +733,50 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
 
         self._run(scenario())
 
-    @override_settings(CONSENT_SKEW_SECONDS=0, TURN_SHUTDOWN_GRACE_SECONDS=1)
-    def test_a_resumed_turn_cancelled_at_shutdown_gets_an_ending(self):
-        """Addition A, driven through the real ASGI lifespan shutdown."""
+    def _turn_notices(self):
+        from chatbot.history import decrypt_stored
+
+        texts = []
+        for message in Message.objects.filter(member__User__username="kazi"):
+            content, payload = decrypt_stored(self.room, message)
+            if (payload or {}).get("origin") == "turn_notice":
+                texts.append(content)
+        return texts
+
+    async def _lifespan_shutdown(self, turn_id, *, at_complete):
         from Backend.asgi import lifespan
 
+        sent = []
+
+        async def receive():
+            return {"type": "lifespan.shutdown"}
+
+        async def send(message):
+            sent.append(message)
+            if message.get("type") == "lifespan.shutdown.complete":
+                at_complete["turns"] = await sync_to_async(lambda: {
+                    str(pk): (state, reason, partial)
+                    for pk, state, reason, partial in Turn.objects.values_list(
+                        "id", "state", "end_reason", "partial",
+                    )
+                })()
+                at_complete["notices"] = await sync_to_async(self._turn_notices)()
+
+        await lifespan({"type": "lifespan"}, receive, send)
+        self.assertEqual(sent[-1]["type"], "lifespan.shutdown.complete")
+        self.assertEqual(len(sent), 1)
+
+    @override_settings(CONSENT_SKEW_SECONDS=0, TURN_SHUTDOWN_GRACE_SECONDS=1)
+    def test_a_resumed_turn_cancelled_at_shutdown_gets_an_ending(self):
+        """A resumed turn cancelled mid-tool ends failed(shutdown), one notice."""
         tool_call = {"id": "c1", "name": "send_email", "input": {"to": "a@b.c", "body": "hi"}}
-        resume_entered = asyncio.Event()
+        tool_entered = asyncio.Event()
 
-        async def before(n):
-            if n == 1:
-                return
-            if n == 2:
-                resume_entered.set()
-                await asyncio.Event().wait()
+        async def blocking_tool(*args, **kwargs):
+            tool_entered.set()
+            await asyncio.Event().wait()
 
-        self.llm.before_call = before
+        self.execute_tool.side_effect = blocking_tool
         self.llm.queue(
             _response([_tool("c1", "send_email", tool_call["input"])], stop_reason="tool_use"),
             _response([_text("Sent.")]),
@@ -762,33 +790,63 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
             ))
             paused = await sync_to_async(lambda: Turn.objects.get(state="paused"))()
             await self._send(comm, "@kazi yes")
-            await asyncio.wait_for(resume_entered.wait(), timeout=5)
-            tools_before = self.execute_tool.await_count
+            await asyncio.wait_for(tool_entered.wait(), timeout=5)
+            # The tool is dispatched and running; no receipt exists yet (E10).
+            self.assertEqual(self.execute_tool.await_count, 1)
 
-            sent = []
             at_complete = {}
+            await self._lifespan_shutdown(paused.pk, at_complete=at_complete)
 
-            async def receive():
-                return {"type": "lifespan.shutdown"}
+            state, reason, partial = at_complete["turns"][str(paused.pk)]
+            self.assertEqual(state, "failed")
+            self.assertEqual(reason, "shutdown")
+            self.assertIs(partial, True)
+            self.assertEqual(at_complete["notices"].count(REAP_NOTICE), 1)
+            self.assertEqual(self.execute_tool.await_count, 1)
 
-            async def send(message):
-                sent.append(message)
-                if message.get("type") == "lifespan.shutdown.complete":
-                    at_complete["turns"] = await sync_to_async(lambda: {
-                        str(pk): (state, reason)
-                        for pk, state, reason in Turn.objects.values_list(
-                            "id", "state", "end_reason",
-                        )
-                    })()
-
-            await lifespan({"type": "lifespan"}, receive, send)
-
-            self.assertEqual(sent[-1]["type"], "lifespan.shutdown.complete")
-            state, reason = at_complete["turns"][str(paused.pk)]
-            self.assertIn(state, {"failed", "cancelled"})
-            self.assertTrue(reason)
-            self.assertEqual(self.execute_tool.await_count, tools_before)
             await sync_to_async(paused.refresh_from_db)()
-            self.assertIn(paused.state, {"failed", "cancelled"})
+            self.assertEqual(paused.state, "failed")
+            self.assertEqual(paused.end_reason, "shutdown")
+            self.assertIs(paused.partial, True)
+            self.assertEqual(
+                [n for n in await sync_to_async(self._turn_notices)() if n == REAP_NOTICE],
+                [REAP_NOTICE],
+            )
+
+        self._run(scenario())
+
+    @override_settings(TURN_SHUTDOWN_GRACE_SECONDS=1)
+    def test_a_fresh_turn_cancelled_at_shutdown_gets_an_ending(self):
+        """A fresh turn cancelled mid-tool gets the same honest ending."""
+        tool_entered = asyncio.Event()
+
+        async def blocking_tool(*args, **kwargs):
+            tool_entered.set()
+            await asyncio.Event().wait()
+
+        self.execute_tool.side_effect = blocking_tool
+        self.llm.queue(_response(
+            [_tool("c1", "get_weather", {"city": "Paris"})],
+            stop_reason="tool_use",
+        ))
+
+        async def scenario():
+            comm = await self._connect()
+            await self._send(comm, "@kazi weather")
+            await asyncio.wait_for(tool_entered.wait(), timeout=5)
+            turn = await sync_to_async(
+                lambda: Turn.objects.get(state="running")
+            )()
+            self.assertEqual(self.execute_tool.await_count, 1)
+
+            at_complete = {}
+            await self._lifespan_shutdown(turn.pk, at_complete=at_complete)
+
+            state, reason, partial = at_complete["turns"][str(turn.pk)]
+            self.assertEqual(state, "failed")
+            self.assertEqual(reason, "shutdown")
+            self.assertIs(partial, True)
+            self.assertEqual(at_complete["notices"].count(REAP_NOTICE), 1)
+            self.assertEqual(self.execute_tool.await_count, 1)
 
         self._run(scenario())

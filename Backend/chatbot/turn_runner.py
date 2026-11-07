@@ -167,6 +167,7 @@ class TurnRunner:
         self._active: Dict[asyncio.Task, Dict[str, Any]] = {}
         self._ending_tasks: Set[asyncio.Task] = set()
         self._keys: Dict[str, tuple] = {}
+        self._shutdown_turns: Dict[str, tuple] = {}
         self._stopping = False
 
     async def submit(self, room_id: Any, user_id: Any) -> asyncio.Task:
@@ -258,7 +259,29 @@ class TurnRunner:
                 *[task for task in list(self._ending_tasks) if not task.done()],
                 return_exceptions=True,
             )
-        for room_id, user_id in list(self._keys.values()):
+        processed = set()
+        for turn_id, (room_id, user_id) in list(self._shutdown_turns.items()):
+            try:
+                row = await sync_to_async(
+                    lambda: Turn.objects.filter(pk=turn_id)
+                    .values_list("state", "end_reason").first()
+                )()
+                if not row or row[0] != "failed" or row[1] != "shutdown":
+                    # The bounded ending did not land; the reaper's notice is
+                    # the backstop and must be the only one.
+                    continue
+                count = await sync_to_async(expire_all_queued_for_key)(
+                    room_id, user_id, reason="restart", notify=False,
+                )
+                await self._save_shutdown_notice(
+                    room_id, user_id, turn_id, count,
+                )
+                processed.add(f"{room_id}:{user_id}")
+            except Exception:
+                logger.exception("Could not end the shutdown turn's queue")
+        for key, (room_id, user_id) in list(self._keys.items()):
+            if key in processed:
+                continue
             try:
                 active = await sync_to_async(
                     lambda: Turn.objects.filter(
@@ -269,13 +292,44 @@ class TurnRunner:
                 if active:
                     # Another worker still owns this key; leave its queue.
                     continue
-                await sync_to_async(expire_all_queued_for_key)(
-                    room_id, user_id, reason="restart",
+                count = await sync_to_async(expire_all_queued_for_key)(
+                    room_id, user_id, reason="restart", notify=False,
                 )
+                if count:
+                    await self._save_shutdown_notice(
+                        room_id, user_id, None, count,
+                    )
             except Exception:
                 logger.exception(
                     "Could not expire the queue left by this shutdown",
                 )
+
+    async def _save_shutdown_notice(
+        self, room_id: Any, user_id: Any, turn_id: Optional[str], count: int,
+    ) -> None:
+        """Save one notice, bounded by the same grace as the ending write."""
+        from orchestration.turns import save_shutdown_notice
+
+        timeout = float(getattr(settings, "TURN_SHUTDOWN_GRACE_SECONDS", 20))
+        write = asyncio.ensure_future(
+            sync_to_async(save_shutdown_notice)(
+                room_id, user_id, count, turn_id=turn_id,
+            )
+        )
+        try:
+            await asyncio.wait_for(asyncio.shield(write), timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Shutdown notice write timed out; the reaper is the backstop",
+            )
+        except asyncio.CancelledError:
+            try:
+                await asyncio.wait_for(write, timeout=timeout)
+            except (Exception, asyncio.TimeoutError):
+                logger.warning("Shutdown notice write after cancellation failed")
+            raise
+        except Exception:
+            logger.warning("Shutdown notice write failed; the reaper is the backstop")
 
     async def _run_claimed(
         self, turn: Turn, *, stop_before_execute: bool = False,
@@ -287,7 +341,10 @@ class TurnRunner:
             self._active[task] = box
         register_live_turn(ref.id)
         if stop_before_execute:
-            await self._end_still_running(ref, end_reason="shutdown")
+            self._shutdown_turns[ref.id] = (turn.room_id, turn.user_id)
+            await self._end_still_running(
+                ref, end_reason="shutdown", partial=False,
+            )
             unregister_live_turn(ref.id)
             if task is not None:
                 self._active.pop(task, None)
@@ -295,7 +352,10 @@ class TurnRunner:
         try:
             box["result"] = await self._execute(turn, box)
         except asyncio.CancelledError:
-            await self._end_still_running(box["ref"])
+            self._shutdown_turns[box["ref"].id] = (turn.room_id, turn.user_id)
+            await self._end_still_running(
+                box["ref"], end_reason="shutdown", partial=True,
+            )
             raise
         except PauseContinuationLost:
             # The other writer won; both of our writes rolled back. The
@@ -312,7 +372,8 @@ class TurnRunner:
 
     async def _end_still_running(
         self, ref: TurnRef, *, end_reason: str = "error",
-    ) -> None:
+        partial: Optional[bool] = None,
+    ) -> bool:
         from orchestration.turns import _saved_reply_exists, afinalize_turn, atransition
 
         timeout = float(getattr(settings, "TURN_SHUTDOWN_GRACE_SECONDS", 20))
@@ -322,16 +383,21 @@ class TurnRunner:
                 afinalize_turn(ref.id, ref.version, reply_saved=reply_saved)
             )
         else:
+            updates: Dict[str, Any] = {
+                "from_state": "running",
+                "end_reason": end_reason,
+            }
+            if partial is not None:
+                updates["partial"] = partial
             write = asyncio.ensure_future(
-                atransition(
-                    ref.id, ref.version, "failed",
-                    from_state="running", end_reason=end_reason,
-                )
+                atransition(ref.id, ref.version, "failed", **updates)
             )
         try:
-            await asyncio.wait_for(asyncio.shield(write), timeout=timeout)
+            result = await asyncio.wait_for(asyncio.shield(write), timeout=timeout)
+            return bool(result)
         except asyncio.TimeoutError:
             logger.warning("Turn ending write timed out; the reaper will end it")
+            return False
         except asyncio.CancelledError:
             try:
                 await asyncio.wait_for(write, timeout=timeout)
@@ -340,6 +406,7 @@ class TurnRunner:
             raise
         except Exception:
             logger.warning("Turn ending write failed; the reaper will end it")
+            return False
 
     async def _execute(self, turn: Turn, box: Dict[str, Any]) -> Any:
         from orchestration import coordinator as coordinator_mod

@@ -845,8 +845,9 @@ class CoordinatorTurnTests(_CoordinatorTurnBase):
                 extra_patches={"orchestration.coordinator.clear_task_state": cancel},
             )
         turn = Turn.objects.get()
-        self.assertEqual(turn.state, "cancelled")
-        self.assertEqual(turn.end_reason, "cancelled")
+        self.assertEqual(turn.state, "failed")
+        self.assertEqual(turn.end_reason, "shutdown")
+        self.assertIs(turn.partial, True)
 
     def test_cancellation_after_committing_ends_the_turn_terminal(self):
         async def cancel_on_done(_correlation_id, event):
@@ -865,7 +866,8 @@ class CoordinatorTurnTests(_CoordinatorTurnBase):
         turn = Turn.objects.get()
         self.assertIn(turn.state, TERMINAL_STATES)
         self.assertEqual(turn.state, "failed")
-        self.assertEqual(turn.end_reason, "cancelled")
+        self.assertEqual(turn.end_reason, "shutdown")
+        self.assertIs(turn.partial, True)
 
     def test_finalize_telemetry_names_the_committing_from_state(self):
         result = self._handle(

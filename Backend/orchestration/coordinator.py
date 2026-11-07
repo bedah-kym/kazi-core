@@ -177,26 +177,27 @@ async def _consent_postdates_prompt(
 async def _end_unexpected_turn(turn_box: Dict, stream_state: Dict, outcome: str) -> None:
     """Write the honest terminal state for an exception after the claim.
 
-    A cancelled app instance (a closed tab) raises ``CancelledError``, which is
-    a ``BaseException``. The write is shielded so it still lands; the caller
-    re-raises the original exception either way.
+    ``CancelledError`` now means only the runner's shutdown cut this turn off:
+    a closed tab does not cancel a turn, and a person's cancel arrives as
+    ``cancel_requested_at`` (216b-3), not as task cancellation. A shutdown
+    ending is ``failed("shutdown")`` with ``partial=True``: a tool may already
+    have been dispatched without a visible ``tool_start`` event (E10), so
+    "nothing ran" is never a safe guess. The write is shielded so it still
+    lands; the caller re-raises the original exception either way.
     """
     ref = turn_box.get("ref")
     if ref is None or turn_box.get("settled"):
         return
     unregister_live_turn(ref.id)
     if outcome == "cancelled":
-        if ref.state == "committing":
-            # committing has no cancelled edge; the reply was never saved.
-            to_state = "failed"
-            updates: Dict = {
-                "from_state": ref.state,
-                "end_reason": "cancelled",
-                "partial": bool(stream_state.get("tools") or stream_state.get("model")),
-            }
-        else:
-            to_state = "cancelled"
-            updates = {"from_state": ref.state, "end_reason": "cancelled"}
+        # The server cut the turn off. It is not the user's cancel, and the
+        # dispatch state is unknown until P3-5's per-call rows exist.
+        to_state = "failed"
+        updates: Dict = {
+            "from_state": ref.state,
+            "end_reason": "shutdown",
+            "partial": True,
+        }
     else:
         to_state = "failed"
         updates = {

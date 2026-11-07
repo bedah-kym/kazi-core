@@ -888,13 +888,14 @@ def expire_queued_for_key(
 
 
 def expire_all_queued_for_key(
-    room_id: Any, user_id: Any, *, reason: str = "restart",
+    room_id: Any, user_id: Any, *, reason: str = "restart", notify: bool = True,
 ) -> int:
-    """Expire every queued row for one key and save the waiting notice.
+    """Expire every queued row for one key and optionally save the notice.
 
     Used when this process stops draining: the rows it leaves behind must end
     with the same honest "N waiting messages" line as a reaped key, not
-    silently (#216b-2 r2, item 2).
+    silently (#216b-2 r2, item 2). ``notify=False`` lets the shutdown path save
+    one notice for the ended turn and its waiting rows together.
     """
     if room_id is None:
         return 0
@@ -913,7 +914,8 @@ def expire_all_queued_for_key(
         owner_id=None,
         lease_expires_at=None,
     )
-    _save_reap_notice(representative, count)
+    if notify:
+        _save_reap_notice(representative, count)
     return count
 
 
@@ -946,6 +948,26 @@ def _save_reap_notice(
         logger.warning("Reap notice not saved: %s", type(exc).__name__)
         return False
     return True
+
+
+def save_shutdown_notice(
+    room_id: Any, user_id: Any, expired_queued: int, *, turn_id: Any = None,
+) -> bool:
+    """Save one notice for a turn the shutdown cut off (and its waiting rows).
+
+    The text and the save path are the reaper's (``_save_reap_notice``), so a
+    shutdown ending and a later reap can never produce two different stories.
+    """
+    turn = get_turn(turn_id) if turn_id else None
+    if turn is None:
+        turn = (
+            Turn.objects.filter(room_id=room_id, user_id=user_id)
+            .order_by("-created_at")
+            .first()
+        )
+    if turn is None:
+        return False
+    return _save_reap_notice(turn, expired_queued)
 
 
 def reap_turn(

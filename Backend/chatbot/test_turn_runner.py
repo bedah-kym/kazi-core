@@ -28,8 +28,6 @@ from orchestration.models import Turn
 from orchestration.turns import create_turn
 
 
-
-
 def _text(text):
     return {"type": "text", "text": text}
 
@@ -354,6 +352,19 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
             self.assertEqual(counts["queued"], 3)
 
         self._run(scenario())
+
+    def test_a_failed_disarm_never_claims_autopilot_was_off(self):
+        from chatbot.turn_runner import run_immediate_directives
+
+        with patch(
+            "orchestration.shell.autopilot.disarm",
+            side_effect=RuntimeError("store down"),
+        ):
+            reply = async_to_sync(run_immediate_directives)(
+                query="autopilot off", user_id=self.user.id, room_id=self.room.id,
+            )
+        self.assertIn("couldn't confirm", reply)
+        self.assertNotIn("not armed", reply)
 
     def test_two_submissions_at_the_cap_create_only_one_turn(self):
         import threading

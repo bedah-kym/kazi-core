@@ -105,17 +105,24 @@ async def run_immediate_directives(
         is_cancel_command,
     )
 
-    async def _disarm() -> bool:
+    async def _disarm() -> Optional[bool]:
+        """True if it was armed, False if it was not, None if the write failed."""
         try:
             return bool(await sync_to_async(autopilot_mod.disarm)(
                 user_id, room_id, reason="chat",
             ))
         except Exception as exc:
-            logger.warning("Autopilot disarm failed: %s", exc)
-            return False
+            logger.warning("Autopilot disarm failed: %s", type(exc).__name__)
+            return None
 
     if is_autopilot_disarm_request(query):
-        if await _disarm():
+        disarmed = await _disarm()
+        if disarmed is None:
+            return (
+                "I couldn't confirm autopilot was disarmed. Disarm it from the "
+                "operations inbox to be sure."
+            )
+        if disarmed:
             return "Autopilot disarmed for this room."
         return "Autopilot was not armed for this room."
 

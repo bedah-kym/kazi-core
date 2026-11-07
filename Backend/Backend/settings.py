@@ -535,6 +535,10 @@ TURN_HEARTBEAT_SECONDS = int(os.environ.get('TURN_HEARTBEAT_SECONDS', 30))
 TURN_LEASE_FENCE_MARGIN_SECONDS = int(os.environ.get('TURN_LEASE_FENCE_MARGIN_SECONDS', 30))
 TURN_REAPER_SECONDS = int(os.environ.get('TURN_REAPER_SECONDS', 30))
 TURN_SHUTDOWN_GRACE_SECONDS = int(os.environ.get('TURN_SHUTDOWN_GRACE_SECONDS', 20))
+# How many messages a room/user may have waiting behind a running turn. The
+# next one is saved but gets no Turn, plus a saved turn_notice. The queue is
+# drained oldest-first, one turn at a time, by the turn runner (#216b-2).
+TURN_QUEUE_MAX = int(os.environ.get('TURN_QUEUE_MAX', 3))
 # A reply counts as consent only when it was sent this many seconds after the
 # prompt was created. The margin absorbs small clock differences between hosts
 # (all hosts must run NTP); it also makes a skewed clock fail closed.

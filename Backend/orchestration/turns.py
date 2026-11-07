@@ -22,7 +22,7 @@ from typing import Any, Dict, Iterable, Optional
 from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.db import IntegrityError, transaction
-from django.db.models import F, Q
+from django.db.models import Exists, F, Q
 from django.db.models.functions import Now
 from django.utils import timezone
 
@@ -54,6 +54,8 @@ ALLOWED: Dict[str, frozenset] = {
     "completed": frozenset({"committing"}),
     "failed": frozenset({"running", "committing"}),
     "cancelled": frozenset({"queued", "running", "paused"}),
+    # ``running -> superseded`` is written only by ``continue_pause`` (with
+    # ``end_reason="continued_pause"``), never through the generic transition.
     "superseded": frozenset({"paused"}),
     "expired": frozenset({"queued", "paused"}),
 }
@@ -65,6 +67,10 @@ BUSY_LIVE = "busy_live"
 TOOK_OVER = "took_over"
 LOST = "lost"
 
+# Test seam for the deterministic claim race: called after the oldest queued
+# row is selected and before the conditional update. Production leaves it None.
+_CLAIM_RACE_HOOK = None
+
 
 @dataclass(frozen=True)
 class ClaimResult:
@@ -72,6 +78,14 @@ class ClaimResult:
 
     status: str
     turn: Optional[Turn] = None
+
+
+class PauseContinuationLost(Exception):
+    """A pause continuation swap lost a compare-and-set; both rows roll back."""
+
+
+class RequestLinkFailed(Exception):
+    """The request message could not be linked, so the Turn was rolled back."""
 
 
 @dataclass(frozen=True)
@@ -95,16 +109,24 @@ def create_turn(
     model: str = "",
     budget: Optional[Dict[str, Any]] = None,
 ) -> Turn:
-    """Create the one row for a routed message and link the request to it."""
-    turn = Turn.objects.create(
-        room_id=room_id,
-        user_id=user_id,
-        state="queued",
-        model=(model or "")[:100],
-        budget=budget or {},
-    )
-    if request_message_id is not None:
-        link_message(str(turn.pk), request_message_id)
+    """Create the one row for a routed message and link the request atomically.
+
+    The insert and the message link are one write, so another worker can never
+    claim a queued row that has no request message yet (#216b-2 r2, item 3).
+    """
+    with transaction.atomic():
+        turn = Turn.objects.create(
+            room_id=room_id,
+            user_id=user_id,
+            state="queued",
+            model=(model or "")[:100],
+            budget=budget or {},
+        )
+        if request_message_id is not None:
+            if not link_message(str(turn.pk), request_message_id):
+                # No request message means no turn: roll the insert back so a
+                # claim can never pick a requestless row (#303 r4, item 5).
+                raise RequestLinkFailed(request_message_id)
     record_event("turn_created", {
         "turn_id": str(turn.pk),
         "room_id": room_id,
@@ -254,6 +276,179 @@ def link_message(turn_id: str, message_id: Optional[int]) -> bool:
     from chatbot.models import Message
 
     return bool(Message.objects.filter(pk=message_id).update(turn_id=turn_id))
+
+
+def count_queued(room_id: Any, user_id: Any) -> int:
+    """How many messages are waiting for this room/user right now."""
+    return Turn.objects.filter(
+        room_id=room_id, user_id=user_id, state="queued",
+    ).count()
+
+
+def claim_next_queued(room_id: Any, user_id: Any) -> Optional[Turn]:
+    """Claim the oldest queued Turn for one key, FIFO enforced in the UPDATE.
+
+    The conditional update requires that no older queued row exists for the
+    key, so two drainers can race on the same row but only one wins; the loser
+    re-reads and either claims the next row or finds the key busy. A key with
+    a live running/committing row is left alone: that owner drains it.
+    """
+    from django.db.models import OuterRef, Subquery
+
+    from chatbot.models import Message
+
+    def _queued():
+        # FIFO is keyed on the request message's autoincrement id: it is
+        # monotonic even when two rows share a microsecond of created_at. The
+        # live-owner check rides in the same SELECT so a claim costs one read
+        # for the row and one for the check, not two reads plus a second
+        # existence query.
+        return (
+            Turn.objects.filter(room_id=room_id, user_id=user_id, state="queued")
+            .annotate(
+                request_id=Subquery(
+                    Message.objects.filter(turn_id=OuterRef("pk"))
+                    .order_by("id")
+                    .values("id")[:1]
+                ),
+                active_exists=Exists(
+                    Turn.objects.filter(
+                        room_id=room_id,
+                        user_id=user_id,
+                        state__in=("running", "committing"),
+                    )
+                ),
+            )
+            .order_by("request_id", "created_at", "pk")
+            .filter(request_id__isnull=False)
+        )
+
+    for _attempt in range(10):
+        oldest = _queued().first()
+        if oldest is None:
+            return None
+        if _CLAIM_RACE_HOOK is not None:
+            _CLAIM_RACE_HOOK()
+        if oldest.active_exists:
+            active = (
+                Turn.objects.filter(
+                    room_id=room_id,
+                    user_id=user_id,
+                    state__in=("running", "committing"),
+                )
+                .order_by("started_at")
+                .first()
+            )
+            if active is not None:
+                if active.lease_expires_at is not None:
+                    # A lapsed owner is taken over by the same reap routine
+                    # the periodic sweep uses; a live owner drains it itself.
+                    if not reap_turn(active, require_lapsed=True):
+                        return None
+                    continue
+                if _is_stale(active):
+                    transition(
+                        str(active.pk), active.version, "failed",
+                        from_state=active.state, end_reason="abandoned",
+                    )
+                    continue
+            return None
+        older = _queued().filter(request_id__lt=oldest.request_id)
+        updated = (
+            Turn.objects.filter(
+                pk=oldest.pk, state="queued", version=oldest.version,
+            )
+            .filter(~Exists(older))
+            .update(
+                state="running",
+                version=F("version") + 1,
+                started_at=Now(),
+                attempt=F("attempt") + 1,
+                owner_id=PROCESS_OWNER_ID,
+                lease_expires_at=lease_expiry(),
+            )
+        )
+        if updated == 1:
+            # We know the CAS result: no extra refresh read.
+            oldest.state = "running"
+            oldest.version += 1
+            return oldest
+    return None
+
+
+def continue_pause(
+    placeholder: Turn,
+    paused_turn: Turn,
+    *,
+    message_id: Optional[int] = None,
+) -> Optional[TurnRef]:
+    """Swap a running placeholder for the paused Turn in one transaction.
+
+    Both compare-and-sets must win or the whole block raises and rolls back, so
+    a concurrently continued pause never half-swaps. The claimed placeholder is
+    left running for the runner to end honestly (#216b-2, item 4).
+    """
+    with transaction.atomic():
+        superseded = (
+            Turn.objects.filter(
+                pk=placeholder.pk,
+                version=placeholder.version,
+                state="running",
+            ).update(
+                state="superseded",
+                version=F("version") + 1,
+                ended_at=Now(),
+                end_reason="continued_pause",
+                superseded_by_id=paused_turn.pk,
+                owner_id=None,
+                lease_expires_at=None,
+            )
+        )
+        if superseded != 1:
+            raise PauseContinuationLost("placeholder")
+        resumed = (
+            Turn.objects.filter(
+                pk=paused_turn.pk,
+                version=paused_turn.version,
+                state="paused",
+            ).update(
+                state="running",
+                version=F("version") + 1,
+                attempt=F("attempt") + 1,
+                owner_id=PROCESS_OWNER_ID,
+                lease_expires_at=lease_expiry(),
+                pause_kind=None,
+                pause_expires_at=None,
+                end_reason=None,
+            )
+        )
+        if resumed != 1:
+            raise PauseContinuationLost("paused")
+        if message_id is not None:
+            from chatbot.models import Message
+
+            Message.objects.filter(pk=message_id).update(
+                turn_id=str(paused_turn.pk),
+            )
+    record_event("turn_transition", {
+        "turn_id": str(placeholder.pk),
+        "from": "running",
+        "to": "superseded",
+        "end_reason": "continued_pause",
+        "version": placeholder.version + 1,
+    })
+    record_event("turn_transition", {
+        "turn_id": str(paused_turn.pk),
+        "from": "paused",
+        "to": "running",
+        "end_reason": "continued_pause",
+        "version": paused_turn.version + 1,
+    })
+    return TurnRef(
+        id=str(paused_turn.pk),
+        version=paused_turn.version + 1,
+        state="running",
+    )
 
 
 def get_paused_turn(
@@ -705,6 +900,38 @@ def expire_queued_for_key(
     )
 
 
+def expire_all_queued_for_key(
+    room_id: Any, user_id: Any, *, reason: str = "restart", notify: bool = True,
+) -> int:
+    """Expire every queued row for one key and optionally save the notice.
+
+    Used when this process stops draining: the rows it leaves behind must end
+    with the same honest "N waiting messages" line as a reaped key, not
+    silently (#216b-2 r2, item 2). ``notify=False`` lets the shutdown path save
+    one notice for the ended turn and its waiting rows together.
+    """
+    if room_id is None:
+        return 0
+    queued = Turn.objects.filter(
+        room_id=room_id, user_id=user_id, state="queued",
+    )
+    count = queued.count()
+    if count == 0:
+        return 0
+    representative = queued.first()
+    queued.update(
+        state="expired",
+        end_reason=reason,
+        version=F("version") + 1,
+        ended_at=Now(),
+        owner_id=None,
+        lease_expires_at=None,
+    )
+    if notify:
+        _save_reap_notice(representative, count)
+    return count
+
+
 def _save_reap_notice(
     turn: Turn, expired_queued: int, *, completed: bool = False,
 ) -> bool:
@@ -734,6 +961,48 @@ def _save_reap_notice(
         logger.warning("Reap notice not saved: %s", type(exc).__name__)
         return False
     return True
+
+
+def _representative_turn(
+    room_id: Any, user_id: Any, turn_id: Any = None,
+):
+    turn = get_turn(turn_id) if turn_id else None
+    if turn is None:
+        turn = (
+            Turn.objects.filter(room_id=room_id, user_id=user_id)
+            .order_by("-created_at")
+            .first()
+        )
+    return turn
+
+
+def save_shutdown_notice(
+    room_id: Any, user_id: Any, expired_queued: int, *, turn_id: Any = None,
+) -> bool:
+    """Save one notice for a turn the shutdown cut off (and its waiting rows).
+
+    The text and the save path are the reaper's (``_save_reap_notice``), so a
+    shutdown ending and a later reap can never produce two different stories.
+    """
+    turn = _representative_turn(room_id, user_id, turn_id)
+    if turn is None:
+        return False
+    return _save_reap_notice(turn, expired_queued)
+
+
+def save_orphan_notice(
+    room_id: Any, user_id: Any, expired_queued: int, *, turn_id: Any = None,
+) -> bool:
+    """Plain waiting-messages notice for queued rows that never ran.
+
+    An orphaned queued message was never dispatched, so the reaper's "some
+    steps may already have run" line would be false. ``completed=True`` is the
+    waiting-only form of the same helper/text.
+    """
+    turn = _representative_turn(room_id, user_id, turn_id)
+    if turn is None:
+        return False
+    return _save_reap_notice(turn, expired_queued, completed=True)
 
 
 def reap_turn(
@@ -828,6 +1097,7 @@ def reap_lapsed_turns() -> Dict[str, int]:
             created_at__lt=cutoff,
         )
     )
+    orphan_counts: Dict[tuple, int] = {}
     for turn in orphans:
         live = Turn.objects.filter(
             Q(lease_expires_at__isnull=True) | Q(lease_expires_at__gt=Now()),
@@ -837,7 +1107,7 @@ def reap_lapsed_turns() -> Dict[str, int]:
         ).exists()
         if live:
             continue
-        orphaned += Turn.objects.filter(
+        updated = Turn.objects.filter(
             pk=turn.pk, state="queued",
         ).update(
             state="expired",
@@ -847,6 +1117,20 @@ def reap_lapsed_turns() -> Dict[str, int]:
             owner_id=None,
             lease_expires_at=None,
         )
+        if updated:
+            orphaned += updated
+            key = (turn.room_id, turn.user_id)
+            orphan_counts[key] = orphan_counts.get(key, 0) + updated
+    for (room_id, user_id), count in orphan_counts.items():
+        # A queued orphan never ran, so it gets the waiting-only text; one bad
+        # notice must not abort the room_gone step below (#303 r5, item 1).
+        try:
+            save_orphan_notice(room_id, user_id, count)
+        except Exception:
+            logger.exception(
+                "Orphan notice not saved for room %s user %s",
+                room_id, user_id,
+            )
 
     room_gone = Turn.objects.filter(
         state="queued", room__isnull=True,

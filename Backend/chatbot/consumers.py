@@ -18,25 +18,27 @@ from cryptography.exceptions import InvalidKey
 from users.encryption import TokenEncryption
 import logging
 import asyncio
-from typing import Dict, Tuple
 from .models import Message, Member, Chatroom, UserModerationStatus, ModerationBatch, RoomReadState
 from .kazi_messages import (
     ORIGIN_ADMIN_ACK,
-    ORIGIN_TURN,
     KaziMessageError,
     persist_kazi_message,
 )
-from .tasks import moderate_message_batch, generate_voice_response
+from .turn_runner import (
+    QUEUE_FULL_NOTICE,
+    QUEUED_NOTICE,
+    RECORD_FAILED_NOTICE,
+    enqueue_turn,
+    get_turn_runner,
+    persist_turn_notice,
+    queue_cap,
+    run_immediate_directives,
+)
+from .tasks import moderate_message_batch
 from .dispatch import dispatch_task
 from . import presence
 from .presence import agent_status
-from .transcript import (
-    BOT_USERNAME,
-    build_history_messages,
-    has_several_speakers,
-    strip_wake_word,
-)
-from orchestration.user_preferences import get_user_preferences
+from .transcript import BOT_USERNAME, strip_wake_word
 from django.conf import settings
 from django.utils.text import get_valid_filename
 logger = logging.getLogger(__name__)
@@ -64,33 +66,9 @@ ADMIN_PERSONA_REQUEST_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Per-(room, user) locks so concurrent messages from the same user in the
-# same room cannot race on paused agent-loop confirmations (the pause state is
-# a single Redis key + a single pending durable approval row).
-_agent_loop_locks: Dict[Tuple[int, str], asyncio.Lock] = {}
-_agent_loop_lock_refs: Dict[Tuple[int, str], int] = {}
-
-
-def _get_agent_loop_lock(user_id: int, room_id) -> asyncio.Lock:
-    key = (int(user_id), str(room_id))
-    lock = _agent_loop_locks.get(key)
-    if lock is None:
-        lock = asyncio.Lock()
-        _agent_loop_locks[key] = lock
-        _agent_loop_lock_refs[key] = 1
-    else:
-        _agent_loop_lock_refs[key] += 1
-    return lock
-
-
-def _release_agent_loop_lock(user_id: int, room_id) -> None:
-    key = (int(user_id), str(room_id))
-    refs = _agent_loop_lock_refs.get(key, 0) - 1
-    if refs <= 0:
-        _agent_loop_locks.pop(key, None)
-        _agent_loop_lock_refs.pop(key, None)
-    else:
-        _agent_loop_lock_refs[key] = refs
+# Per-(room, user) turns are serialised by the database queue in
+# ``turn_runner``: a second message is saved as a queued Turn and the running
+# owner drains it. No in-process lock is involved (#216b-2).
 
 
 DECRYPT_FAILED = "Error: Could not decrypt message."
@@ -314,35 +292,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 task.cancel()
 
     async def schedule_context_summary(self, room_id, message_id):
-        min_messages = getattr(settings, "CONTEXT_SUMMARY_MIN_MESSAGES", 6)
-        min_minutes = getattr(settings, "CONTEXT_SUMMARY_MIN_MINUTES", 10)
-        counter_key = f"context_summary:count:{room_id}"
-        last_key = f"context_summary:last:{room_id}"
-        now = timezone.now()
+        from .context_summary import schedule_context_summary as _schedule
 
-        count = (cache.get(counter_key) or 0) + 1
-        cache.set(counter_key, count, timeout=60 * 60)
-
-        should_schedule = count >= min_messages
-        if not should_schedule:
-            last_iso = cache.get(last_key)
-            if last_iso:
-                try:
-                    last_seen = timezone.datetime.fromisoformat(last_iso)
-                    if (now - last_seen).total_seconds() >= min_minutes * 60:
-                        should_schedule = True
-                except Exception:
-                    pass
-
-        if not should_schedule:
-            return
-
-        from .tasks import refresh_room_context_summary
-        if not dispatch_task(refresh_room_context_summary, room_id, message_id, count):
-            return
-
-        cache.set(last_key, now.isoformat(), timeout=60 * 60 * 6)
-        cache.delete(counter_key)
+        await sync_to_async(_schedule)(room_id, message_id)
 
     async def schedule_idle_nudge_if_needed(self, room_id, user_id, user=None):
         """
@@ -837,11 +789,34 @@ class ChatConsumer(AsyncWebsocketConsumer):
             # and must stop renewing it (#216b-1, item 6).
             unregister_live_turn(result.turn_id)
 
+    async def _persist_turn_notice(self, room_id, text: str) -> None:
+        def _persist():
+            room = Chatroom.objects.filter(id=room_id).first()
+            if room is None:
+                return None
+            return persist_turn_notice(room, text)
+
+        try:
+            await sync_to_async(_persist)()
+        except Exception as exc:
+            logger.warning("Turn notice not saved: %s", type(exc).__name__)
+
+    async def _send_queued_frame(self, position: int) -> None:
+        """A transient harness frame: the message is waiting, not lost."""
+        try:
+            await self.channel_layer.group_send(
+                self.room_group_name,
+                {
+                    "type": "ai_stream_chunk",
+                    "chunk": QUEUED_NOTICE.format(position=position) + "\n\n",
+                    "is_final": False,
+                    "correlation_id": "",
+                },
+            )
+        except Exception as exc:
+            logger.debug("Queued frame skipped: %s", exc)
+
     async def new_message(self, data):
-        result = None
-        coordinator = None
-        reply_saved = False
-        finalized = False
         try:
             logger.info(
                 "=== NEW MESSAGE START === room=%r chars=%s",
@@ -1030,7 +1005,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     await self._handle_admin_escalation(room_id, message_content, member_user)
                     return
 
-                # === ORCHESTRATION: Full pipeline ===
+                # === ORCHESTRATION: queue the turn, do not run it here ===
                 should_route_ai = False
                 ai_query = None
                 addressed = strip_wake_word(message_content)
@@ -1041,150 +1016,46 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     ai_query = message_content.strip()
                     should_route_ai = True
 
-                if should_route_ai:
-                    logger.info("Step 16: @kazi detected! Starting orchestration...")
+                if should_route_ai and ai_query:
+                    # A kill switch reduces permission and must never wait
+                    # behind a running turn (#216b-2, item 1).
+                    immediate = await run_immediate_directives(
+                        query=ai_query,
+                        user_id=member_user.id,
+                        room_id=room_id,
+                    )
+                    if immediate is not None:
+                        await self._persist_turn_notice(room_id, immediate)
+                        return
 
-                    if ai_query:
-                        from .context_manager import ContextManager
-                        from orchestration.coordinator import OrchestrationCoordinator
-
-                        async def send_chunk(correlation_id, chunk_text, is_final):
-                            await self.channel_layer.group_send(
-                                self.room_group_name,
-                                {
-                                    "type": "ai_stream_chunk",
-                                    "chunk": chunk_text,
-                                    "is_final": is_final,
-                                    "correlation_id": correlation_id,
-                                },
-                            )
-
-                        async def send_step_event(correlation_id, event_payload):
-                            await self.channel_layer.group_send(
-                                self.room_group_name,
-                                {
-                                    "type": "ai_step_event",
-                                    "event": event_payload,
-                                    "correlation_id": correlation_id,
-                                },
-                            )
-
-                        speaker_note = ""
-
-                        async def get_context_prompt():
-                            base = await sync_to_async(ContextManager.get_context_prompt)(
-                                room_id, room=current_chat, participants=room_members,
-                            ) or ""
-                            return "\n\n".join(part for part in (speaker_note, base) if part)
-
-                        def bump_signals(actions):
-                            from .tasks import update_proactive_signals
-                            for action in actions:
-                                update_proactive_signals(room_id, member_user.id, action)
-
-                        agent_lock = _get_agent_loop_lock(member_user.id, room_id)
-                        await agent_lock.acquire()
-                        try:
-                            try:
-                                # Read history under the lock, so a message queued behind a
-                                # running turn sees that turn's reply.
-                                history_rows = await self.get_history_rows(room_id, limit=8, room=current_chat)
-                                multi_user = len(human_members) > 1 or has_several_speakers(history_rows)
-                                history_messages = build_history_messages(
-                                    history_rows,
-                                    exclude_message_id=message.id,
-                                    multi_user=multi_user,
-                                    max_chars=int(getattr(settings, "HISTORY_MAX_CHARS", 60000)),
-                                    viewer_user_id=member_user.id,
-                                )
-                                if multi_user:
-                                    speaker_note = (
-                                        "Several people share this room. Earlier user turns are prefixed with "
-                                        f"the speaker's name. The message you are answering is from {member_username}."
-                                    )
-                                coordinator = OrchestrationCoordinator()
-                                result = await coordinator.handle_message(
-                                    query=ai_query,
-                                    user_id=member_user.id,
-                                    room_id=room_id,
-                                    username=member_username,
-                                    message_id=message.id,
-                                    history_messages=history_messages,
-                                    send_chunk=send_chunk,
-                                    send_step_event=send_step_event,
-                                    get_context_prompt=get_context_prompt,
-                                    bump_signals=bump_signals,
-                                )
-
-                                full_response_text = result.full_response
-                                # A turn with nothing to save still has a true ending:
-                                # only a reply that should persist can be "not saved".
-                                reply_saved = not (result.persist and full_response_text.strip())
-
-                                if result.persist and full_response_text.strip():
-                                    logger.info("Saving AI message to database (%s chars)", len(full_response_text))
-
-                                    try:
-                                        ai_message = await sync_to_async(persist_kazi_message)(
-                                            current_chat,
-                                            content=full_response_text,
-                                            origin=ORIGIN_TURN,
-                                            turn=result.turn_id or None,
-                                            model_text=result.model_text,
-                                            harness_text=result.harness,
-                                            tools=result.tools,
-                                            by=member_user.id,
-                                            channel_layer=self.channel_layer,
-                                        )
-                                    except KaziMessageError:
-                                        ai_message = None
-                                        logger.warning("AI reply not saved: room key unavailable")
-
-                                    if ai_message is not None:
-                                        reply_saved = True
-                                        await self.upgrade_legacy_room_key(current_chat)
-                                        logger.info(f"AI message saved with ID: {ai_message.id}")
-
-                                        # Trigger Kazi Voice Response (TTS) only in voice mode
-                                        voice_enabled = False
-                                        try:
-                                            prefs = await sync_to_async(get_user_preferences)(member_user.id)
-                                            voice_enabled = bool(prefs.get("ai_voice_enabled", False))
-                                        except Exception as e:
-                                            logger.warning(f"Voice preference check failed: {e}")
-                                        if voice_enabled:
-                                            dispatch_task(generate_voice_response, ai_message.id)
-
-                                        try:
-                                            await self.schedule_context_summary(room_id, ai_message.id)
-                                        except Exception as e:
-                                            logger.warning(f"Context summary refresh skipped: {e}")
-                            finally:
-                                if (
-                                    not finalized
-                                    and coordinator is not None
-                                    and result is not None
-                                    and result.turn_id
-                                    and result.turn_state == "committing"
-                                ):
-                                    finalized = True
-                                    await self._finalize_turn(
-                                        coordinator, result, reply_saved,
-                                    )
-                                elif (
-                                    not finalized
-                                    and result is not None
-                                    and result.turn_id
-                                    and result.turn_state == "running"
-                                ):
-                                    # A coordinator exception normally ends the
-                                    # row itself; this is the consumer's safety
-                                    # net if it ever does not (#216b-1, item 10).
-                                    finalized = True
-                                    await self._fail_running_turn(result)
-                        finally:
-                            agent_lock.release()
-                            _release_agent_loop_lock(member_user.id, room_id)
+                    cap = queue_cap()
+                    try:
+                        queued = await sync_to_async(enqueue_turn)(
+                            room_id=room_id,
+                            user_id=member_user.id,
+                            request_message_id=message.id,
+                            cap=cap,
+                        )
+                    except Exception as exc:
+                        # The request link failed and the Turn rolled back.
+                        logger.warning(
+                            "Turn could not be recorded: %s",
+                            type(exc).__name__,
+                        )
+                        await self._persist_turn_notice(
+                            room_id, RECORD_FAILED_NOTICE,
+                        )
+                        return
+                    if queued is None:
+                        await self._persist_turn_notice(
+                            room_id, QUEUE_FULL_NOTICE.format(cap=cap),
+                        )
+                        return
+                    _turn, position, active = queued
+                    if active or position > 1:
+                        await self._send_queued_frame(position)
+                    await get_turn_runner().submit(room_id, member_user.id)
+                    return
 
             else:
                 await self.send_chat_message({

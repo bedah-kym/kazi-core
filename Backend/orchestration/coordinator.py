@@ -22,6 +22,7 @@ from django.core.cache import cache
 from orchestration.telemetry import record_event
 from orchestration.turns import (
     BUSY_LIVE,
+    PauseContinuationLost,
     TERMINAL_STATES,
     TurnRef,
     aclaim_turn,
@@ -177,26 +178,54 @@ async def _consent_postdates_prompt(
 async def _end_unexpected_turn(turn_box: Dict, stream_state: Dict, outcome: str) -> None:
     """Write the honest terminal state for an exception after the claim.
 
-    A cancelled app instance (a closed tab) raises ``CancelledError``, which is
-    a ``BaseException``. The write is shielded so it still lands; the caller
-    re-raises the original exception either way.
+    ``CancelledError`` now means only the runner's shutdown cut this turn off:
+    a closed tab does not cancel a turn, and a person's cancel arrives as
+    ``cancel_requested_at`` (216b-3), not as task cancellation. A shutdown
+    ending is ``failed("shutdown")`` with ``partial=True``: a tool may already
+    have been dispatched without a visible ``tool_start`` event (E10), so
+    "nothing ran" is never a safe guess. The write is shielded so it still
+    lands; the caller re-raises the original exception either way.
     """
     ref = turn_box.get("ref")
     if ref is None or turn_box.get("settled"):
         return
     unregister_live_turn(ref.id)
     if outcome == "cancelled":
+        # The server cut the turn off. It is not the user's cancel, and the
+        # dispatch state is unknown until P3-5's per-call rows exist.
         if ref.state == "committing":
-            # committing has no cancelled edge; the reply was never saved.
-            to_state = "failed"
-            updates: Dict = {
-                "from_state": ref.state,
-                "end_reason": "cancelled",
-                "partial": bool(stream_state.get("tools") or stream_state.get("model")),
-            }
+            # A reply already saved still completes; otherwise this is a
+            # shutdown ending, not reply_not_saved (#303 r4, item 4).
+            from orchestration.turns import _saved_reply_exists
+
+            try:
+                reply_saved = bool(await asyncio.wait_for(
+                    asyncio.shield(
+                        sync_to_async(_saved_reply_exists)(ref.id),
+                    ),
+                    timeout=float(getattr(
+                        settings, "TURN_SHUTDOWN_GRACE_SECONDS", 20,
+                    )),
+                ))
+            except (asyncio.TimeoutError, Exception):
+                reply_saved = False
+            if reply_saved:
+                to_state = "completed"
+                updates: Dict = {"from_state": ref.state}
+            else:
+                to_state = "failed"
+                updates = {
+                    "from_state": ref.state,
+                    "end_reason": "shutdown",
+                    "partial": True,
+                }
         else:
-            to_state = "cancelled"
-            updates = {"from_state": ref.state, "end_reason": "cancelled"}
+            to_state = "failed"
+            updates = {
+                "from_state": ref.state,
+                "end_reason": "shutdown",
+                "partial": True,
+            }
     else:
         to_state = "failed"
         updates = {
@@ -356,6 +385,8 @@ class OrchestrationCoordinator:
         get_context_prompt: Callable[[], Awaitable[str]],
         bump_signals: Callable[[List[Optional[str]]], None],
         history_messages: Optional[List[dict]] = None,
+        claimed_turn: Optional[Any] = None,
+        continue_pause: Optional[Callable[..., Awaitable[Any]]] = None,
     ) -> OrchestrationResult:
         """Route a chat turn, stream its response, and update room/user task state.
 
@@ -393,6 +424,8 @@ class OrchestrationCoordinator:
                 get_context_prompt=get_context_prompt,
                 bump_signals=bump_signals,
                 history_messages=history_messages,
+                claimed_turn=claimed_turn,
+                continue_pause=continue_pause,
             )
         except asyncio.CancelledError:
             await _end_unexpected_turn(turn_box, stream_state, "cancelled")
@@ -416,6 +449,8 @@ class OrchestrationCoordinator:
         get_context_prompt: Callable[[], Awaitable[str]],
         bump_signals: Callable[[List[Optional[str]]], None],
         history_messages: Optional[List[dict]] = None,
+        claimed_turn: Optional[Any] = None,
+        continue_pause: Optional[Callable[..., Awaitable[Any]]] = None,
     ) -> OrchestrationResult:
         turn_step_id = f"turn_{message_id}"
         correlation_id = uuid.uuid4().hex
@@ -439,7 +474,42 @@ class OrchestrationCoordinator:
             register_live_turn(ref.id)
             return ref
 
+        async def _adopt_paused_turn() -> bool:
+            """Swap the runner's placeholder for the paused Turn (an ending path).
+
+            The runner keeps the placeholder as its claimed Turn until the pause
+            really resumes or really ends. On a hold the paused Turn is left
+            untouched with its state and approval row.
+            """
+            paused = turn_box.get("paused_turn")
+            if paused is None:
+                return True
+            try:
+                new_ref = await continue_pause(paused, message_id)
+            except PauseContinuationLost:
+                # The other writer won; the caller shows the honest line.
+                return False
+            if new_ref is None:
+                return False
+            turn_box["ref"] = new_ref
+            turn_box["paused_turn"] = None
+            return True
+
         async def _resume_turn(ref: TurnRef) -> bool:
+            paused = turn_box.get("paused_turn")
+            if paused is not None and continue_pause is not None:
+                # Deferred handoff: the swap happens only now, when the pause
+                # really resumes, not when the message is first read.
+                try:
+                    new_ref = await continue_pause(paused, message_id)
+                except PauseContinuationLost:
+                    # The other writer won; the caller shows the honest line.
+                    return False
+                if new_ref is None:
+                    return False
+                turn_box["ref"] = new_ref
+                turn_box["paused_turn"] = None
+                return True
             if ref.state == "running":
                 # A paused Turn was missing (an older turn or a test double);
                 # the new record is already running, so only link the reply.
@@ -499,7 +569,11 @@ class OrchestrationCoordinator:
 
         async def _finish_turn(reason: str) -> None:
             """Record the loop's ending honestly (mapping table in #216a)."""
-            if turn_box["settled"] or turn_box["hold"]:
+            if turn_box["settled"]:
+                return
+            # On the runner path the ref is the placeholder while the paused
+            # Turn is separate; a hold keeps the pause, not the placeholder.
+            if turn_box["hold"] and turn_box.get("paused_turn") is None:
                 return
             ref = turn_box.get("ref")
             if ref is None:
@@ -1162,8 +1236,19 @@ class OrchestrationCoordinator:
         )
         continues_paused = approval_continues or budget_continues
         if continues_paused and paused_turn is not None:
-            turn_box["ref"] = ref_from_turn(paused_turn)
+            if claimed_turn is not None and continue_pause is not None:
+                # Keep the placeholder. The swap happens only in _resume_turn
+                # (really resumes) or _adopt_paused_turn (really ends), so a
+                # hold path leaves the paused Turn paused (#303 r4, item 1).
+                turn_box["ref"] = ref_from_turn(claimed_turn)
+                turn_box["paused_turn"] = paused_turn
+            else:
+                turn_box["ref"] = ref_from_turn(paused_turn)
             await alink_message(turn_box["ref"].id, message_id)
+        elif claimed_turn is not None:
+            # The drainer claimed this Turn before handing it over, so the
+            # coordinator must not claim a second one (#216b-2, item 3).
+            turn_box["ref"] = ref_from_turn(claimed_turn)
         else:
             await _start_turn()
         if turn_box["ref"] is None and (
@@ -1208,6 +1293,15 @@ class OrchestrationCoordinator:
                         turn_box["ref"].state if turn_box.get("ref") else ""
                     ),
                 )
+
+        def _paused_still_held() -> bool:
+            return (
+                turn_box.get("paused_turn") is not None
+                or (
+                    turn_box.get("ref") is not None
+                    and turn_box["ref"].state == "paused"
+                )
+            )
 
         pending_left = False
 
@@ -1258,9 +1352,18 @@ class OrchestrationCoordinator:
 
                 # Cancel is checked first: a refusal must never be read as consent.
                 if is_cancel_request(query) or is_decline_reply(query):
-                    cancel_msg = await cancel_pending_action(room_id, user_id)
-                    await _advance_turn("cancelled", end_reason="cancelled")
-                    await broadcast_chunk(cancel_msg or "Okay, cancelled.", harness=True)
+                    if not await _adopt_paused_turn():
+                        await broadcast_chunk(
+                            "This turn was already resumed elsewhere. "
+                            "Nothing further was run.",
+                            harness=True,
+                        )
+                    else:
+                        cancel_msg = await cancel_pending_action(room_id, user_id)
+                        await _advance_turn("cancelled", end_reason="cancelled")
+                        await broadcast_chunk(
+                            cancel_msg or "Okay, cancelled.", harness=True,
+                        )
                     pending_handled = True
                 elif autopilot_request:
                     if armable_shell:
@@ -1277,7 +1380,7 @@ class OrchestrationCoordinator:
                                 )
                             pending_handled = True
                         else:
-                            if turn_box["ref"] is not None and turn_box["ref"].state == "paused":
+                            if _paused_still_held():
                                 turn_box["hold"] = True
                             pending_left = True
                             pending_handled = True
@@ -1285,7 +1388,7 @@ class OrchestrationCoordinator:
                         # A mixed batch is never confirmed by "autopilot". Arm
                         # the window if eligible and keep the batch pending.
                         await _arm_autopilot_from_chat()
-                        if turn_box["ref"] is not None and turn_box["ref"].state == "paused":
+                        if _paused_still_held():
                             turn_box["hold"] = True
                         pending_left = True
                         pending_handled = True
@@ -1335,7 +1438,7 @@ class OrchestrationCoordinator:
                 if pending_pause == "quota":
                     still_blocked = await _quota_resume_still_blocked(user_id)
                     if still_blocked is not None:
-                        if turn_box["ref"] is not None and turn_box["ref"].state == "paused":
+                        if _paused_still_held():
                             turn_box["hold"] = True
                         await broadcast_chunk(
                             _quota_resume_blocked_note(still_blocked),
@@ -1363,12 +1466,19 @@ class OrchestrationCoordinator:
                 pending_handled = True
             elif is_decline_reply(query) or is_cancel_command(query):
                 # A whole-message no/stop ends the paused turn for good.
-                clear_loop_state(room_id, user_id)
-                await _advance_turn("cancelled", end_reason="cancelled")
-                await broadcast_chunk(
-                    "Okay, I've stopped there and dropped the paused work.\n\n",
-                    harness=True,
-                )
+                if not await _adopt_paused_turn():
+                    await broadcast_chunk(
+                        "This turn was already resumed elsewhere. "
+                        "Nothing further was run.",
+                        harness=True,
+                    )
+                else:
+                    clear_loop_state(room_id, user_id)
+                    await _advance_turn("cancelled", end_reason="cancelled")
+                    await broadcast_chunk(
+                        "Okay, I've stopped there and dropped the paused work.\n\n",
+                        harness=True,
+                    )
                 pending_handled = True
             else:
                 # D8 also applies to a budget/quota pause: the work stays paused

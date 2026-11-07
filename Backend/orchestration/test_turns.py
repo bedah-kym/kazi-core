@@ -27,8 +27,11 @@ from orchestration.turns import (
     TERMINAL_STATES,
     TOOK_OVER,
     atransition as real_atransition,
+    _notice_text,
+    claim_next_queued,
     claim_turn,
     create_turn,
+    reap_lapsed_turns,
     transition,
 )
 
@@ -255,6 +258,47 @@ class ClaimTurnTests(_TurnTelemetryMixin, TransactionTestCase):
         self.assertEqual(paused.state, "paused")
         self.assertEqual(paused.end_reason, "awaiting_approval")
 
+    def test_two_threads_that_selected_the_same_queued_row_claim_it_once(self):
+        import threading
+
+        from django.db import close_old_connections
+
+        member = Member.objects.create(User=self.user)
+        message = Message.objects.create(
+            member=member, content="{}", timestamp=timezone.now(),
+        )
+        self.room.chats.add(message)
+        turn = create_turn(
+            room_id=self.room.id,
+            user_id=self.user.id,
+            request_message_id=message.id,
+        )
+        barrier = threading.Barrier(2)
+        results = []
+        from orchestration import turns as turns_mod
+
+        turns_mod._CLAIM_RACE_HOOK = barrier.wait
+
+        def worker():
+            close_old_connections()
+            try:
+                results.append(claim_next_queued(self.room.id, self.user.id))
+            finally:
+                close_old_connections()
+
+        threads = [threading.Thread(target=worker) for _ in range(2)]
+        try:
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=10)
+        finally:
+            turns_mod._CLAIM_RACE_HOOK = None
+
+        self.assertEqual(sum(1 for result in results if result is not None), 1)
+        self.assertEqual(sum(1 for result in results if result is None), 1)
+        self.assertEqual(Turn.objects.get(pk=turn.pk).state, "running")
+
     @override_settings(KAZI_LITE_PROFILE=False)
     def test_full_profile_refuses_a_fresh_blocking_row(self):
         old = self._running()
@@ -277,6 +321,51 @@ class ClaimTurnTests(_TurnTelemetryMixin, TransactionTestCase):
         self.assertEqual(old.state, "failed")
         self.assertEqual(old.end_reason, "abandoned")
         self.assertEqual(Turn.objects.filter(state="running").count(), 1)
+
+
+class OrphanQueueNoticeTests(TransactionTestCase):
+    """An orphaned queued message never ran, so its notice must say only that."""
+
+    def setUp(self):
+        super().setUp()
+        self.user = User.objects.create_user(
+            username="turn-orphan", password="fake-token",  # nosec B106
+        )
+        self.room = Chatroom.objects.create()
+
+    def _orphan(self, *, room=None):
+        turn = create_turn(room_id=(room.id if room else None), user_id=self.user.id)
+        Turn.objects.filter(pk=turn.pk).update(
+            created_at=timezone.now() - timedelta(seconds=400),
+        )
+        return turn
+
+    def test_an_orphaned_queue_saves_the_waiting_text(self):
+        from chatbot.history import decrypt_stored
+
+        self._orphan(room=self.room)
+        self._orphan(room=self.room)
+        result = reap_lapsed_turns()
+        self.assertEqual(result["orphaned"], 2)
+        texts = []
+        for message in Message.objects.filter(member__User__username="kazi"):
+            content, _payload = decrypt_stored(self.room, message)
+            texts.append(content)
+        expected = _notice_text(2, completed=True)
+        self.assertIn(expected, texts)
+        self.assertFalse(any("stopped partway" in text for text in texts))
+
+    def test_one_bad_notice_does_not_skip_room_gone(self):
+        from unittest.mock import patch
+
+        self._orphan(room=self.room)
+        Turn.objects.create(room=None, user=self.user, state="queued")
+        with patch(
+            "orchestration.turns.save_orphan_notice",
+            side_effect=RuntimeError("notice down"),
+        ):
+            result = reap_lapsed_turns()
+        self.assertGreaterEqual(result["room_gone"], 1)
 
 
 class _CoordinatorTurnBase(TransactionTestCase):
@@ -845,8 +934,9 @@ class CoordinatorTurnTests(_CoordinatorTurnBase):
                 extra_patches={"orchestration.coordinator.clear_task_state": cancel},
             )
         turn = Turn.objects.get()
-        self.assertEqual(turn.state, "cancelled")
-        self.assertEqual(turn.end_reason, "cancelled")
+        self.assertEqual(turn.state, "failed")
+        self.assertEqual(turn.end_reason, "shutdown")
+        self.assertIs(turn.partial, True)
 
     def test_cancellation_after_committing_ends_the_turn_terminal(self):
         async def cancel_on_done(_correlation_id, event):
@@ -865,7 +955,8 @@ class CoordinatorTurnTests(_CoordinatorTurnBase):
         turn = Turn.objects.get()
         self.assertIn(turn.state, TERMINAL_STATES)
         self.assertEqual(turn.state, "failed")
-        self.assertEqual(turn.end_reason, "cancelled")
+        self.assertEqual(turn.end_reason, "shutdown")
+        self.assertIs(turn.partial, True)
 
     def test_finalize_telemetry_names_the_committing_from_state(self):
         result = self._handle(
@@ -1024,6 +1115,15 @@ class TurnWriteCeilingTests(_CoordinatorTurnBase):
 
 class AgentLoopEndReasonTests(SimpleTestCase):
     """The three break paths no longer fall through to `finished`."""
+
+    def setUp(self):
+        super().setUp()
+        from orchestration import agent_loop
+
+        # Failing tools here trip the module-level circuit breaker; leaving it
+        # open blocks the same tool in whichever test module runs next.
+        agent_loop._circuit_state.clear()
+        self.addCleanup(agent_loop._circuit_state.clear)
 
     def _loop(self, responses, preferences=None, tools=None):
         from orchestration.agent_loop import run_agent_loop

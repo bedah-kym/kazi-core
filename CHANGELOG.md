@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — the turn runner (#216b-2)
+
+- A turn no longer runs inside the WebSocket handler. The consumer saves the
+  message, queues a `queued` Turn linked to it, submits the room/user key to
+  `chatbot/turn_runner.py` and returns, so the socket keeps reading while the
+  reply streams.
+- The runner claims the oldest queued Turn per key with FIFO enforced in the
+  UPDATE, rebuilds the query, members, history and send functions from the
+  database, and runs the coordinator only after the claim. Two workers can no
+  longer run the same message, and the in-process `_agent_loop_locks` are gone.
+- Continuing a pause swaps the queue placeholder and the paused Turn in one
+  transaction: `running -> superseded(continued_pause)` and
+  `paused -> running`. A lost compare-and-set rolls both back.
+- History for a queued turn excludes human messages newer than its request
+  before the slice, so it includes the previous turn's reply and not the
+  messages queued behind it.
+- `TURN_QUEUE_MAX` (default 3) caps the queue. The next message is saved with
+  a saved `turn_notice`; queued messages get a transient harness frame.
+- A resumed turn cancelled at shutdown now gets its honest ending: the runner
+  tracks the active turn across the pause continuation and ends it within
+  `TURN_SHUTDOWN_GRACE_SECONDS`.
+- Decrypt and history reads live in `chatbot/history.py`, shared by the
+  consumer and the runner.
+
 ### Changed — infrastructure ports stay private
 
 - `docker-compose.yml` and `docker-compose.temporal.yml` bind Redis,

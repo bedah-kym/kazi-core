@@ -356,6 +356,8 @@ class OrchestrationCoordinator:
         get_context_prompt: Callable[[], Awaitable[str]],
         bump_signals: Callable[[List[Optional[str]]], None],
         history_messages: Optional[List[dict]] = None,
+        claimed_turn: Optional[Any] = None,
+        continue_pause: Optional[Callable[..., Awaitable[Any]]] = None,
     ) -> OrchestrationResult:
         """Route a chat turn, stream its response, and update room/user task state.
 
@@ -393,6 +395,8 @@ class OrchestrationCoordinator:
                 get_context_prompt=get_context_prompt,
                 bump_signals=bump_signals,
                 history_messages=history_messages,
+                claimed_turn=claimed_turn,
+                continue_pause=continue_pause,
             )
         except asyncio.CancelledError:
             await _end_unexpected_turn(turn_box, stream_state, "cancelled")
@@ -416,6 +420,8 @@ class OrchestrationCoordinator:
         get_context_prompt: Callable[[], Awaitable[str]],
         bump_signals: Callable[[List[Optional[str]]], None],
         history_messages: Optional[List[dict]] = None,
+        claimed_turn: Optional[Any] = None,
+        continue_pause: Optional[Callable[..., Awaitable[Any]]] = None,
     ) -> OrchestrationResult:
         turn_step_id = f"turn_{message_id}"
         correlation_id = uuid.uuid4().hex
@@ -1162,8 +1168,17 @@ class OrchestrationCoordinator:
         )
         continues_paused = approval_continues or budget_continues
         if continues_paused and paused_turn is not None:
-            turn_box["ref"] = ref_from_turn(paused_turn)
+            if claimed_turn is not None and continue_pause is not None:
+                # The runner already owns the queued placeholder. Swap it for
+                # the paused Turn in one atomic write (#216b-2, item 4).
+                turn_box["ref"] = await continue_pause(paused_turn, message_id)
+            else:
+                turn_box["ref"] = ref_from_turn(paused_turn)
             await alink_message(turn_box["ref"].id, message_id)
+        elif claimed_turn is not None:
+            # The drainer claimed this Turn before handing it over, so the
+            # coordinator must not claim a second one (#216b-2, item 3).
+            turn_box["ref"] = ref_from_turn(claimed_turn)
         else:
             await _start_turn()
         if turn_box["ref"] is None and (

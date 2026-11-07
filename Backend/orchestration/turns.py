@@ -22,7 +22,7 @@ from typing import Any, Dict, Iterable, Optional
 from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.db import IntegrityError, transaction
-from django.db.models import F, Q
+from django.db.models import Exists, F, Q
 from django.db.models.functions import Now
 from django.utils import timezone
 
@@ -54,6 +54,8 @@ ALLOWED: Dict[str, frozenset] = {
     "completed": frozenset({"committing"}),
     "failed": frozenset({"running", "committing"}),
     "cancelled": frozenset({"queued", "running", "paused"}),
+    # ``running -> superseded`` is written only by ``continue_pause`` (with
+    # ``end_reason="continued_pause"``), never through the generic transition.
     "superseded": frozenset({"paused"}),
     "expired": frozenset({"queued", "paused"}),
 }
@@ -72,6 +74,10 @@ class ClaimResult:
 
     status: str
     turn: Optional[Turn] = None
+
+
+class PauseContinuationLost(Exception):
+    """A pause continuation swap lost a compare-and-set; both rows roll back."""
 
 
 @dataclass(frozen=True)
@@ -254,6 +260,170 @@ def link_message(turn_id: str, message_id: Optional[int]) -> bool:
     from chatbot.models import Message
 
     return bool(Message.objects.filter(pk=message_id).update(turn_id=turn_id))
+
+
+def count_queued(room_id: Any, user_id: Any) -> int:
+    """How many messages are waiting for this room/user right now."""
+    return Turn.objects.filter(
+        room_id=room_id, user_id=user_id, state="queued",
+    ).count()
+
+
+def claim_next_queued(room_id: Any, user_id: Any) -> Optional[Turn]:
+    """Claim the oldest queued Turn for one key, FIFO enforced in the UPDATE.
+
+    The conditional update requires that no older queued row exists for the
+    key, so two drainers can race on the same row but only one wins; the loser
+    re-reads and either claims the next row or finds the key busy. A key with
+    a live running/committing row is left alone: that owner drains it.
+    """
+    from django.db.models import OuterRef, Subquery
+
+    from chatbot.models import Message
+
+    def _queued():
+        # FIFO is keyed on the request message's autoincrement id: it is
+        # monotonic even when two rows share a microsecond of created_at.
+        return (
+            Turn.objects.filter(room_id=room_id, user_id=user_id, state="queued")
+            .annotate(
+                request_id=Subquery(
+                    Message.objects.filter(turn_id=OuterRef("pk"))
+                    .order_by("id")
+                    .values("id")[:1]
+                )
+            )
+            .order_by("request_id", "created_at", "pk")
+        )
+
+    for _attempt in range(10):
+        oldest = _queued().first()
+        if oldest is None:
+            return None
+        active = (
+            Turn.objects.filter(
+                room_id=room_id,
+                user_id=user_id,
+                state__in=("running", "committing"),
+            )
+            .order_by("started_at")
+            .first()
+        )
+        if active is not None:
+            if active.lease_expires_at is not None:
+                # A lapsed owner is taken over by the same reap routine the
+                # periodic sweep uses; a live owner drains the queue itself.
+                if not reap_turn(active, require_lapsed=True):
+                    return None
+                continue
+            if _is_stale(active):
+                transition(
+                    str(active.pk), active.version, "failed",
+                    from_state=active.state, end_reason="abandoned",
+                )
+                continue
+            return None
+        if oldest.request_id is None:
+            older = (
+                _queued()
+                .filter(request_id__isnull=True, created_at__lt=oldest.created_at)
+                .exclude(pk=oldest.pk)
+            )
+        else:
+            older = _queued().filter(request_id__lt=oldest.request_id)
+        updated = (
+            Turn.objects.filter(
+                pk=oldest.pk, state="queued", version=oldest.version,
+            )
+            .filter(~Exists(older))
+            .update(
+                state="running",
+                version=F("version") + 1,
+                started_at=Now(),
+                attempt=F("attempt") + 1,
+                owner_id=PROCESS_OWNER_ID,
+                lease_expires_at=lease_expiry(),
+            )
+        )
+        if updated == 1:
+            oldest.refresh_from_db()
+            return oldest
+    return None
+
+
+def continue_pause(
+    placeholder: Turn,
+    paused_turn: Turn,
+    *,
+    message_id: Optional[int] = None,
+) -> Optional[TurnRef]:
+    """Swap a running placeholder for the paused Turn in one transaction.
+
+    Both compare-and-sets must win or the whole block raises and rolls back, so
+    a concurrently continued pause never half-swaps. The claimed placeholder is
+    left running for the runner to end honestly (#216b-2, item 4).
+    """
+    with transaction.atomic():
+        superseded = (
+            Turn.objects.filter(
+                pk=placeholder.pk,
+                version=placeholder.version,
+                state="running",
+            ).update(
+                state="superseded",
+                version=F("version") + 1,
+                ended_at=Now(),
+                end_reason="continued_pause",
+                superseded_by_id=paused_turn.pk,
+                owner_id=None,
+                lease_expires_at=None,
+            )
+        )
+        if superseded != 1:
+            raise PauseContinuationLost("placeholder")
+        resumed = (
+            Turn.objects.filter(
+                pk=paused_turn.pk,
+                version=paused_turn.version,
+                state="paused",
+            ).update(
+                state="running",
+                version=F("version") + 1,
+                attempt=F("attempt") + 1,
+                owner_id=PROCESS_OWNER_ID,
+                lease_expires_at=lease_expiry(),
+                pause_kind=None,
+                pause_expires_at=None,
+                end_reason=None,
+            )
+        )
+        if resumed != 1:
+            raise PauseContinuationLost("paused")
+        if message_id is not None:
+            from chatbot.models import Message
+
+            Message.objects.filter(pk=message_id).update(
+                turn_id=str(paused_turn.pk),
+            )
+    record_event("turn_transition", {
+        "turn_id": str(placeholder.pk),
+        "from": "running",
+        "to": "superseded",
+        "end_reason": "continued_pause",
+        "version": placeholder.version + 1,
+    })
+    record_event("turn_transition", {
+        "turn_id": str(paused_turn.pk),
+        "from": "paused",
+        "to": "running",
+        "end_reason": "continued_pause",
+        "version": paused_turn.version + 1,
+    })
+    return TurnRef(
+        id=str(paused_turn.pk),
+        version=paused_turn.version + 1,
+        state="running",
+    )
 
 
 def get_paused_turn(

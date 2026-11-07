@@ -711,26 +711,42 @@ class LiteChatTests(TestCase):
 
     @patch("orchestration.coordinator.OrchestrationCoordinator")
     def test_new_message_completes_in_the_lite_profile_with_debug_off(self, mock_coord):
+        from chatbot.tasks import _get_room_cipher
+        from chatbot.turn_runner import drain
+
         mock_coord.return_value.handle_message = AsyncMock(
             return_value=OrchestrationResult(full_response="hello back", persist=True)
         )
         mock_coord.return_value.finalize_turn = AsyncMock(return_value=True)
         consumer = self._consumer()
+        consumer.aes_gcm = _get_room_cipher(self.chatroom)
+        consumer.encrypt_message = ChatConsumer.encrypt_message.__get__(consumer)
 
-        async_to_sync(consumer.new_message)(
-            {"from": self.user.username, "message": "@kazi hi", "chatid": str(self.chatroom.id)}
-        )
+        async def scenario():
+            with patch(
+                "chatbot.turn_runner.get_channel_layer",
+                return_value=consumer.channel_layer,
+            ):
+                await consumer.new_message(
+                    {"from": self.user.username, "message": "@kazi hi",
+                     "chatid": str(self.chatroom.id)},
+                )
+                await drain()
+
+        async_to_sync(scenario)()
 
         mock_coord.return_value.handle_message.assert_awaited_once()
         self.assertTrue(Message.objects.filter(member=self.member).exists())
         self.assertTrue(Message.objects.filter(member__User__username="kazi").exists())
-        consumer.channel_layer.group_send.assert_awaited_once()
-        group, event = consumer.channel_layer.group_send.await_args.args
-        self.assertEqual(group, consumer.room_group_name)
-        self.assertEqual(event["type"], "ai_message_saved")
-        self.assertEqual(event["message"]["member"], "kazi")
-        self.assertEqual(event["message"]["content"], "hello back")
-        self.assertIsNotNone(event["message"]["id"])
+        from chatbot.history import decrypt_stored
+
+        reply = Message.objects.filter(
+            member__User__username="kazi",
+        ).order_by("-id").first()
+        self.assertIsNotNone(reply)
+        content, payload = decrypt_stored(self.chatroom, reply)
+        self.assertEqual(content, "hello back")
+        self.assertEqual(payload.get("origin"), "turn")
         sent = [
             call.args[0] if call.args else call.kwargs
             for call in consumer.send_chat_message.await_args_list

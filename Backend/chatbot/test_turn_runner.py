@@ -432,7 +432,9 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
                     cap=3,
                 ))
             finally:
-                close_old_connections()
+                # close_old_connections() keeps a healthy connection
+                # younger than CONN_MAX_AGE; this thread's must close.
+                connection.close()
 
         threads = [
             threading.Thread(target=worker, args=(message,))
@@ -616,7 +618,9 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
                     lock=lock,
                 ))
             finally:
-                close_old_connections()
+                # close_old_connections() keeps a healthy connection
+                # younger than CONN_MAX_AGE; this thread's must close.
+                connection.close()
 
         threads = [
             threading.Thread(target=worker, args=(message, locks[index]))

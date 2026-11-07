@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, connection, transaction
 from django.test import SimpleTestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 
@@ -284,7 +284,9 @@ class ClaimTurnTests(_TurnTelemetryMixin, TransactionTestCase):
             try:
                 results.append(claim_next_queued(self.room.id, self.user.id))
             finally:
-                close_old_connections()
+                # close_old_connections() keeps a healthy connection
+                # younger than CONN_MAX_AGE; this thread's must close.
+                connection.close()
 
         threads = [threading.Thread(target=worker) for _ in range(2)]
         try:

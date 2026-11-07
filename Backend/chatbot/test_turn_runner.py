@@ -97,6 +97,10 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
         turn_leases._LIVE_TURNS.clear()
         turn_leases._FENCED_TURNS.clear()
         turn_leases._LAST_RENEWAL.clear()
+        from orchestration import agent_loop
+
+        agent_loop._circuit_state.clear()
+        self.addCleanup(agent_loop._circuit_state.clear)
         import chatbot.turn_runner as runner_mod
 
         runner_mod._DEFAULT_RUNNER = TurnRunner()

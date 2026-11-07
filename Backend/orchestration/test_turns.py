@@ -1027,6 +1027,15 @@ class TurnWriteCeilingTests(_CoordinatorTurnBase):
 class AgentLoopEndReasonTests(SimpleTestCase):
     """The three break paths no longer fall through to `finished`."""
 
+    def setUp(self):
+        super().setUp()
+        from orchestration import agent_loop
+
+        # Failing tools here trip the module-level circuit breaker; leaving it
+        # open blocks the same tool in whichever test module runs next.
+        agent_loop._circuit_state.clear()
+        self.addCleanup(agent_loop._circuit_state.clear)
+
     def _loop(self, responses, preferences=None, tools=None):
         from orchestration.agent_loop import run_agent_loop
 

@@ -42,6 +42,20 @@ from orchestration.models import Turn
 from orchestration.turns import REAP_NOTICE, create_turn
 
 
+def _closing(fn):
+    """Wrap a worker-thread read so it closes that thread's DB connection.
+
+    Django never closes connections opened on asgiref worker threads; left
+    open, Postgres refuses to drop the test database at teardown.
+    """
+    def run():
+        try:
+            return fn()
+        finally:
+            connection.close()
+    return run
+
+
 def _text(text):
     return {"type": "text", "text": text}
 
@@ -1436,14 +1450,14 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
             if message.get("type") == "lifespan.shutdown.complete":
                 # A worker-thread read: a test may have the shared ORM thread
                 # deliberately blocked to prove the shutdown bound.
-                at_complete["turns"] = await sync_to_async(lambda: {
+                at_complete["turns"] = await sync_to_async(_closing(lambda: {
                     str(pk): (state, reason, partial)
                     for pk, state, reason, partial in Turn.objects.values_list(
                         "id", "state", "end_reason", "partial",
                     )
-                }, thread_sensitive=False)()
+                }), thread_sensitive=False)()
                 at_complete["notices"] = await sync_to_async(
-                    self._turn_notices, thread_sensitive=False,
+                    _closing(self._turn_notices), thread_sensitive=False,
                 )()
 
         await lifespan({"type": "lifespan"}, receive, send)

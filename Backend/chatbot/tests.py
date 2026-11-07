@@ -383,9 +383,19 @@ class ChatConsumerRoutingTests(TransactionTestCase):
 
                     # The persist holds the shared ORM thread; read the count
                     # on a separate thread so this cannot deadlock behind it.
+                    def _count_and_close():
+                        from django.db import connection
+
+                        try:
+                            return Turn.objects.filter(state="queued").count()
+                        finally:
+                            # Django never closes a worker thread's
+                            # connection; Postgres can't drop the test DB
+                            # while it stays open.
+                            connection.close()
+
                     queued = await sync_to_async(
-                        lambda: Turn.objects.filter(state="queued").count(),
-                        thread_sensitive=False,
+                        _count_and_close, thread_sensitive=False,
                     )()
                     self.assertEqual(queued, 1)
                 finally:

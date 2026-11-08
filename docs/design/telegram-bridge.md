@@ -695,6 +695,96 @@ All rows are append-style. Revocation sets `revoked_at` and never deletes.
 `kazi_status --json` should report whether the bridge is enabled, the lease holder,
 `last_ok_at` and `last_error`, so `./kazi status` can show it.
 
+### 3.5 Multimodal: voice, photos and files
+
+**Rule for this section: build what the platforms handle well today.** Each choice
+below rests on a provider or Telegram doc read on 2026-11-08.
+
+**Sources and how far to trust them**
+- **Official pages I fetched and read:**
+  - OpenAI: `developers.openai.com/api/docs/` — `deprecations`, `guides/text-to-speech`,
+    `guides/speech-to-text`, `guides/audio`, `guides/voice-agents`,
+    `guides/audio-chat-completions`, `models/gpt-audio`.
+  - DeepSeek: `api-docs.deepseek.com` — `guides/vision/`, `quick_start/pricing`,
+    `updates/`.
+  - Telegram: `core.telegram.org/bots/api`.
+- **Anthropic rows:** a research pass fetched and read `platform.claude.com/docs/en/build-with-claude/vision`,
+  `/pdf-support` and `/models/overview`.
+- **Rows marked (S):** search-result summaries only.
+
+#### What each provider does natively
+
+| Capability | Anthropic | OpenAI | DeepSeek | Kazi today [Verified in code] |
+|---|---|---|---|---|
+| Image input to the chat model | Yes, all current models; JPEG/PNG/GIF/WebP; base64, URL or file id | Yes (S) | **Only `deepseek-flash`**, via the OpenAI-style `image_url` part (vision guide). `deepseek-v4-pro` lists no image input | **No path.** The user message is always a string (`agent_loop.py:2924`). The DeepSeek adapter turns unknown blocks into `str(block)`, which would put base64 into the prompt (`llm_client.py:420-421`) |
+| PDF input | Native | Native (S) | Not confirmed | `pypdf` text from the first 10 pages (`chatbot/tasks.py:976-1000`) |
+| Audio input to the chat model | No | `gpt-audio-1.5` in Chat Completions (examples use wav). The `gpt-audio-2025-08-28` snapshot is marked Deprecated | No | **Kazi has no OpenAI chat provider.** Providers are Anthropic, DeepSeek and Hugging Face (`llm_client.py:29-34`) |
+| Speech-to-text | None | `gpt-transcribe` recommended. Files up to 25 MB; "mp3, mp4, mpeg, mpga, m4a, wav, and webm": **no ogg**. `whisper-1` and `gpt-4o-*-transcribe` are removed **2027-02-26** | None | `whisper-1` (`chatbot/tasks.py:264`). It never starts a turn and stores the transcript in plaintext (`:268-270`) |
+| Speech output | None | `tts-1`, `tts-1-hd` and `gpt-4o-mini-tts` are removed **2027-01-06**. The named replacement, `gpt-realtime-2.1-mini`, "isn't a supported model for /v1/audio/speech" (Realtime only) | None | Two paths, both on models being removed. `generate_voice_response` uses `tts-1` and writes mp3 (`chatbot/tasks.py:334-349`). The `generate_speech` connector uses `gpt-4o-mini-tts` and returns base64 that nothing delivers (`orchestration/connectors/tts_connector.py`) |
+| Image generation | None | Yes (S) | None | None. Out of scope |
+
+#### What Telegram does natively [Verified: `core.telegram.org/bots/api`]
+
+- **Voice replies.** `sendVoice` plays as a voice bubble if "your audio must be in an .OGG
+  file encoded with OPUS, or in .MP3 format, or in .M4A format". The limit is 50 MB.
+  - So an **MP3 from text-to-speech can be sent as a voice note without conversion.**
+  - Hermes Agent's docs still say MP3 needs ffmpeg for a voice bubble. I could not find
+    when Telegram changed this in the changelog, so test it once on real clients.
+- **Downloads and photo sends.** `getFile` downloads up to 20 MB. `sendPhoto` takes up
+  to 10 MB.
+- **Albums** arrive as separate updates that share `media_group_id`.
+- **Chat actions.** `sendChatAction` shows `typing`, `record_voice`, `upload_voice` or
+  `upload_photo` "for 5 seconds or less", so repeat it about every 4 s while working.
+- **Streaming drafts.** `sendMessageDraft` is "a temporary 30-second preview". The final
+  text must still be sent with `sendMessage`.
+
+#### Architecture: a chained voice pipeline, with voice models at the edges
+
+The agent stays a **text** agent on whichever provider the room uses. Voice is
+converted at the two ends:
+
+```
+voice note ─► ear (speech-to-text) ─► Kazi turn (any provider, text) ─► text reply ─► mouth (speech) ─► sendVoice
+```
+
+**Why not a native speech-to-speech agent for Telegram:**
+1. **OpenAI recommends this split for Kazi's case.** Its audio guide maps "a voice
+   interface for an existing text agent" to "speech-to-text, the text-agent workflow,
+   then text-to-speech". Its voice-agents guide says the chained path is for when "you
+   want to inspect or transform text between" stages.
+2. **Kazi's governance runs on text:**
+   - exact whole-message approvals (`orchestration/shell/chat_intents.py:77-107`);
+   - the injection check on the query (`tool_executor.py:117-123`);
+   - history, receipts, and v0.8's verification layer.
+3. **Telegram voice notes are recorded clips, not a live call.** Native speech-to-speech
+   wins on latency, interruption and full duplex. None of that applies here.
+4. **Only OpenAI has native audio models,** and Kazi does not run OpenAI as a chat
+   provider. Going native would tie every voice room to one provider and add a new one.
+5. **OpenAI's audio models are churning.** Three removal dates fall between
+   2027-01-06 and 2027-02-26. Keeping the ear and mouth as small swappable adapters
+   absorbs that.
+
+**Where a native voice model fits later: live calls**, the "Live calls (V-5)" track in
+#303. OpenAI's voice-agents guide describes GPT-Live with **client delegation**: "Connect
+your own agent or workflow, using the backend model and provider you choose… your
+application controls permissions and business records." For Kazi, the voice model would
+talk and Kazi's agent would stay the backend, with approvals and receipts unchanged.
+This does not apply to Telegram, which has no calls in the Bot API [Known].
+
+#### What to build, and what not to
+
+| Piece | Build | Pattern borrowed |
+|---|---|---|
+| **Voice in** | 1. Download the voice note and send `record_voice` while working. 2. Convert OGG/Opus to WebM by **stream copy, with no re-encode** (`ffmpeg -c:a copy`). WebM is on OpenAI's list and ffmpeg is already in the image (`Dockerfile:13-18`) [Inference: Opus in WebM is a valid stream copy; test it]. 3. Pass it to the **ear adapter**. 4. **Echo the transcript** ("🎙 heard: …"). 5. Submit it through `submit_user_message(via="telegram_voice")`. Cap length at about 5 minutes. On failure, give an honest reply and start no turn. | Hermes Agent: transcribes and injects as text, with STT providers `local` (faster-whisper), `groq` and `openai`. OpenClaw: the transcript "replaces the message body", so commands still work |
+| **Ear adapter** | One interface. `STT_PROVIDER=openai` (model from config, default `gpt-transcribe`) or `openai_compatible` with `STT_URL`, which covers a local faster-whisper server or Groq. This is the same shape as the TTS connector's `openai_compatible` provider (`tts_connector.py:29-45`). | Hermes provider switch |
+| **Voice is not consent** | A transcribed "yes" must **not** approve or continue a pause, because of mis-hearing and background speech. The seam passes `consent_eligible=False` and the coordinator skips approval and continue matching for it. Buttons are the way to approve | OpenClaw frames voice transcripts as "machine-generated, untrusted text in agent context" |
+| **Voice out** | **Reply in kind:** speak the reply only when the user sent a voice note, plus a `/voice on|off|always` toggle per binding. The **text reply is always sent too**, because text is the record. Speak only short replies (cap about 600 characters); longer ones go as text with a note. The **mouth adapter** (`TTS_PROVIDER` / model from config) sends MP3 straight to `sendVoice`, falling back to an OGG/Opus encode only if clients don't render a bubble. It replaces both existing TTS paths, and audio bytes never enter the model context. | Hermes: `/voice on` "sends voice replies only when you send a voice message" |
+| **Photos, stage 1 (bridge)** | Store the photo in the room and answer honestly: "📷 saved. This room's model can't see images yet." Any caption runs as text. Group albums by `media_group_id` (collect for about 1 s, then treat as one message). | — |
+| **Photos, stage 2 (core, plan first)** | **Describe-first pre-pass:** one call to a configured `VISION_MODEL` (`claude-haiku-*` or `deepseek-flash`). The description goes into `DocumentUpload.processed_text`, which today holds only "Indexed image metadata." (`chatbot/tasks.py:1003-1018`). It is **framed as untrusted** text, because images can carry instructions, which closes G9 for images. It is cached by `file_unique_id`. It works for every provider and for web uploads too, with no agent-loop change. | OpenClaw: a text-only main model gets a separate image model's description, and descriptions are cached "to reduce repeated vision calls" |
+| **Photos, stage 3 (only if stage 2 isn't enough)** | Native image blocks: an attachments parameter through coordinator and `run_agent_loop` (protected), per-provider adapters, `ModelInfo.vision`, and base64 kept out of history and paused state (`agent_loop.py:1269-1300`, `:192-196`). | — |
+| **Documents** | The existing PDF path. | — |
+| **Not building** | Speech-to-speech agent turns over Telegram; image generation; video and video-note analysis (store and mark "not analysed"); live calls; a local GPU transcription default (possible through `openai_compatible`). | — |
+
 ---
 
 ## 4. Sequences
@@ -798,7 +888,7 @@ after `workflow__user=user` and `status="waiting"` checks copied from
 ### 4.3 File upload
 
 ```
- update.message.document | photo (largest size) | voice (later)
+ update.message.document | photo (largest size)     (voice notes: §3.5, TB-M1; albums: TB-M3)
  1 filters as in 4.1 steps 1-6
  2 check the declared file_size against Kazi limits (PDF 10 MB, image 5 MB) before
    getFile; Telegram caps downloads at 20 MB
@@ -912,6 +1002,12 @@ seam as the WebSocket (§1.8).
 | **D12** | Static allowlist env in addition to pairing | yes; no | **Yes, optional.** `ALLOWED_TELEGRAM_USER_IDS` empty means pairing alone. Cheap defence in depth. |
 | **D13** | What happens to the v0.4.2 Telegram connector | (a) leave it; (b) rebuild it on `telegram_bridge/bot_api.py`; (c) retire it | **(b), after the bridge ships.** Its sends go through the new client, so the token leak and MarkdownV2 bugs disappear with it. One Bot API client, one bot. Until then, keep it. Retiring it removes agent-initiated sends to arbitrary chats; that is your product call. |
 | **D14** | Should T-A2's frames be in-process callbacks or channel-layer group messages | callbacks (sinks registered with the runner); group messages only | **Both: a sink registry in the runner that the consumer and the bridge both register with.** The channel layer stays the fan-out to browser sockets. In-process sinks avoid channels_redis capacity drops and expiry for the bridge, which runs in the same process (§1.5). This is T-A2 design input; decide it there. |
+| **D15** | Voice architecture for Telegram | native speech-to-speech agent; chained (ear → text agent → mouth) | **Chained** (§3.5). Native voice belongs to live calls later: GPT-Live with Kazi as the delegated backend. |
+| **D16** | Can a spoken "yes" approve | yes; no | **No.** Transcripts are `consent_eligible=False` (TB-M0); approve with the buttons. |
+| **D17** | Default speech-to-text | OpenAI `gpt-transcribe`; local faster-whisper; Groq | **OpenAI by default, plus `openai_compatible`** so local or Groq is one setting. This adds a disclosure: audio goes to the STT provider as well as Telegram. |
+| **D18** | When to reply with voice | always; reply in kind; never | **Reply in kind, plus `/voice`.** Text is always sent as well. |
+| **D19** | How photos reach the agent | native image blocks; describe-first pre-pass | **Describe-first** (TB-M4). It works on all three providers with no protected-path change. Native blocks only if it proves insufficient. |
+| **D20** | Which voice model speaks after 2027-01-06 | an OpenAI Realtime or audio model; a third-party or local TTS through `openai_compatible` | **Decide before January.** The mouth adapter takes the model from config; test an option before OpenAI removes `tts-1` and `gpt-4o-mini-tts`. |
 
 ---
 
@@ -987,6 +1083,17 @@ replaces it.
 | **TB-19** | D13: rebuild the v0.4.2 connector's sends on `bot_api.py`, or retire it | S |
 | **TB-18** | Docs and architecture: rewrite `docs/telegram.md` (setup, modes, disclosure, rotation runbook); add the variables to `docs/configuration.md` and `.env.example`; update `docs/architecture/model.js` (an external "Telegram Bot API" node, a bridge module in `web`, edges, a "Telegram approval" scenario); run `python scripts/check_architecture_model.py`; add the bridge to `kazi_status`. Ship this with TB-8/TB-10, not at the end | S |
 
+### Track M: multimodal (§3.5)
+
+| Ticket | Needs | What | Tests (each shown failing first) | Size |
+|---|---|---|---|---|
+| **TB-M0** (core, small) | TB-1 | `consent_eligible` flag on `submit_user_message`. When it is False, the coordinator does not treat the text as an approval, decline or continue reply (`coordinator.py:1218-1236,1346-1431`) | A transcribed "yes" leaves a real paused Turn paused and its approval pending; a typed "yes" still approves | S |
+| **TB-M1** | TB-M0, TB-9 | Voice in: download, OGG→WebM stream copy, ear adapter, transcript echo, `via="telegram_voice"`; the transcript is stored encrypted | The fake STT transport receives an allowed format, never raw `.ogg`; the stored message decrypts to the transcript and is not plaintext; over the duration cap → refused with no turn; STT error → honest reply with no turn | M |
+| **TB-M2** | TB-10 | Mouth adapter (one module replacing `generate_voice_response` and the `generate_speech` delivery gap); reply in kind plus `/voice`; the text is always sent; MP3 to `sendVoice`; a character cap | A text-only reply when the user typed; a voice plus text reply when the user sent voice; over the cap → text only; audio bytes never reach the model context (the connector result has no base64) | M |
+| **TB-M3** | TB-9, TB-3 | Photos stage 1: store, honest note, caption as text, album grouping by `media_group_id` | Three updates sharing one `media_group_id` become one room message and at most one turn; the note names the room's model | S |
+| **TB-M4** (core, plan) | TB-3 | Photos stage 2: describe-first vision pre-pass into `processed_text`, framed untrusted in the context prompt, cached by `file_unique_id`, `VISION_MODEL` config | The description reaches the context inside an untrusted frame; an image whose text says "ignore previous instructions" does not unlock a sensitive action; a second identical photo makes no second vision call | M |
+| **TB-M5** (core, later) | T-A2, plan | Photos stage 3: native image blocks. Only if TB-M4 proves insufficient | — | L |
+
 ### Separate PRs, not part of the bridge
 
 - **The token leak in the shipped connector.** It is a live issue in today's
@@ -998,6 +1105,18 @@ replaces it.
 - **AGENTS.md discrepancies** in §1.8: receipts editable, capability gate open on
   missing preferences, `approval.md` drift.
 - **Notification email and WhatsApp `execute` call bugs** (§1.6).
+- **The DeepSeek default model is a retired name.** `DEEPSEEK_MODEL` defaults to
+  `deepseek-chat` (`Backend/settings.py:696`, `orchestration/llm_client.py:282-285`).
+  DeepSeek's updates page says that name was discontinued on 2026-07-24. Also,
+  `model_catalog.py:29-31` lists legacy V4 names that DeepSeek now routes to
+  `deepseek-flash`.
+- **Move off OpenAI audio models before they are removed.** `whisper-1`
+  (`chatbot/tasks.py:264`, removed 2027-02-26) and `tts-1` / `gpt-4o-mini-tts`
+  (`chatbot/tasks.py:334-340`, `tts_connector.py`, removed 2027-01-06). The web voice
+  features break on those dates even without the bridge.
+- **TTS settings can't be set from the environment.** `tts_connector.py` reads
+  `TTS_PROVIDER`/`TTS_URL`/`TTS_MODEL`/`TTS_VOICE` only from Django settings, and
+  `settings.py` defines none of them.
 
 ---
 

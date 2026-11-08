@@ -45,7 +45,9 @@ event reaches clients.
     unchanged.
   - The button carries only a random single-use token. That token must match the
     approval row's id, turn and short id, because the row can be reused by a later
-    pause.
+    pause. The decision is also bound to that approval inside the coordinator (TB-16),
+    because the consent-timing check alone does not cover a tap that waits on a PIN
+    (§4.2).
 - **The poller should run inside the ASGI web process as a lifespan task, held by a
   lease.** It should not be a Celery task or (in lite) a separate process. Turns must
   be drained by a long-lived event loop that owns them, and lite's channel layer is
@@ -75,7 +77,7 @@ of slices. The latest, 216b-2 (the turn runner, PR #303), merged on 2026-11-07. 
 | 216b-0: consent postdates the prompt | #291 | Merged | `CONSENT_SKEW_SECONDS` (`CHANGELOG.md:229-236`) |
 | 216b-1: turn leases, self-fence, one reap routine | #292 | Merged | `CHANGELOG.md:266-286` |
 | 216b-2: the turn runner | #303 | Merged 2026-11-07 | Queue, FIFO claim, pause continuation, shutdown endings (`CHANGELOG.md:10-37`) |
-| **216b-3** | — | **Not started** | Named in #303 for: a person's cancel as `cancel_requested_at` → `cancelled(user_cancel)`; consent-postdates for **budget** pauses (`paused_at`). Today a queued "ok" can resume a budget pause without that check (#303, round 2, item 13). In code it appears only as a docstring (`orchestration/coordinator.py:183`) |
+| **216b-3** | — | **No PR found** | Named in #303 for: a person's cancel as `cancel_requested_at` → `cancelled(user_cancel)`; consent-postdates for **budget** pauses (`paused_at`). Today a queued "ok" can resume a budget pause without that check (#303, round 2, item 13). In code it appears only as a docstring (`orchestration/coordinator.py:183`) |
 
 Other v0.8 tickets: T-A4 #219 and T-B3 #222 are closed. T-A2 #217, T-A3 #218 and
 T-B1/B2/B4 and T-C1-3 (#220-221, #223-226) are open. There are no T-A2 emitters in the
@@ -83,9 +85,9 @@ code.
 
 **What I cannot see.** The approved #216b plan is not in `docs/plans/` or on GitHub. Nor
 is the roadmap the plans cite, with its T-D, T-F, P3, E and V items
-(`docs/plans/2026-10-per-message-work.md:8`). Local planning docs are gitignored
+(`docs/plans/2026-10-per-message-work.md:9`). Local planning docs are gitignored
 (`.gitignore:172-182`). So the placement below covers the slices I can see. Anything
-after 216b-3 in your plan may move it.
+after 216b-3 in the #216b plan may move it.
 
 **What #303 says about callers like the bridge** [Verified: the #303 description, "Live
 calls (V-5)"]. The runner's only public contract is `submit(room_id, user_id)` and the
@@ -144,10 +146,13 @@ v0.8 work the web UI needs too.
 - **#216, after 216b-3** (or as a slice of the #216b plan if it has room): the
   transport-neutral `submit_user_message` (TB-1).
 - **#217 (T-A2):** these three should live with that ticket:
-  - `approval.requested` carries `approval_id`, `approval_kind` and a risk class (TB-4);
+  - `approval.requested` carries `approval_pk`, `short_id`, `approval_kind` and a risk
+    class (TB-4). Today's `confirmation` event uses the name `approval_id` for the
+    8-hex short id (`agent_loop.py:3596`), so name both fields explicitly;
   - frames reach any in-process subscriber, not only the consumer, through a
     subscription hook (TB-4);
-  - `approval.resolved` names the decision source (TB-16).
+  - `approval.resolved` carries `decision` and `via` (TB-4), and a decision can be bound
+    to a specific approval (TB-16).
 - **#218 (T-A3):** the client contract doc is written for "a client", and its
   reconnect and duplicate fixtures run against the bridge as well as the web consumer.
   A second client keeps the contract from encoding web-only assumptions.
@@ -188,17 +193,8 @@ v0.8 work the web UI needs too.
   - It has no retry and no `retry_after` handling.
   - Errors are returned as `"Telegram API error: {exc}"` and logged
     (`telegram_bot_connector.py:297-303`).
-- **[Inference] Bug: the bot token can leak into logs and model context.**
-  - `_tg_post` calls `resp.raise_for_status()` (`:614`), so a Telegram 4xx becomes an
-    `httpx.HTTPStatusError`.
-  - [Known] httpx puts the request URL in that error's message, and the URL contains
-    `bot<TOKEN>`. I could not run httpx here: it is not installed and the rules say
-    no installs.
-  - The message is logged (`:298`) and returned as `clarification_prompt` (`:302`).
-  - `redact_sensitive_text` does not match the `<digits>:<secret>` token shape
-    (`orchestration/security_policy.py:198-203`).
-  - The same `raise_for_status` makes the `ok:false` and `description` branches mostly
-    unreachable.
+- **Security item, handled privately.** One issue in the connector's error handling is
+  handled under `SECURITY.md`; details are left out of this public doc.
 - **[Inference] Bug: buttons can be truncated mid-character.** `callback_data` is cut to
   64 *characters* (`:449`). Telegram's limit is 64 *bytes* (§2), so a multibyte value
   can exceed it.
@@ -318,8 +314,8 @@ and the bridge call it. `chatbot/` is not protected.
      message must be newer than `record.created_at + CONSENT_SKEW_SECONDS` (default 2,
      `Backend/settings.py:545`). A missing message or any error denies.
   2. `resume_after_confirmation` (`agent_loop.py:3875-4007`), which:
-     - claims the paused turn and refuses another room or user (`:3848-3853`) or an
-       expired pause (`:3861-3863`);
+     - claims the paused turn through `_claim_turn_for_resume` (`:3833`), which refuses
+       another room or user (`:3848-3853`) or an expired pause (`:3861-3863`);
      - requires an exact match of call ids and argument hashes (`:3960-3981`);
      - consumes the row with a conditional UPDATE, with reviewer equal to requester
        (`:881-904`, `:3983-3986`).
@@ -353,11 +349,8 @@ and the bridge call it. `chatbot/` is not protected.
   - **Workflow approvals:** call `submit_execution_approval`, after the same owner and
     status checks as `_approval_action`. [Verified that both views call it; Inference
     that the bridge should.]
-- **[Verified] Side finding (out of scope; queued separately).** `approve_execution_ui`
-  and `reject_execution_ui` (`workflows/ui_views.py:399-406`) have `@login_required`
-  but no POST requirement. `_approval_decision_ui` (`:354-396`) never checks the
-  method. [Inference] A GET from a logged-in operator's browser, for example an
-  `<img src>` on another site, would record a decision.
+- **Security item, handled privately.** One workflow-approval issue found during this
+  pass is handled under `SECURITY.md`; details are left out of this public doc.
 
 ### 1.5 Agent events and streaming
 
@@ -397,7 +390,7 @@ and the bridge call it. `chatbot/` is not protected.
   `turn.started`, `approval.requested` and `turn.completed`
   (`docs/proposals/2026-10-turn-state-and-verification.md:96-113,151-167`). The
   contract doc `turn-stream.md` would come with T-A3. Neither exists yet. The bridge
-  should be built behind an adapter so it can switch.
+  consumes v2 frames only (§0.1).
 
 ### 1.6 Notifications
 
@@ -437,7 +430,7 @@ and the bridge call it. `chatbot/` is not protected.
     `asyncio.run` plus `worker.run()`) and `run_shell_exec`;
   - in-process lifespan tasks: `InProcessScheduler` (`Backend/asgi.py:87-91`, stopped at
     `:120-122`), the turn heartbeat and the runner drainers.
-- **[Verified] Celery cannot host a long poll.**
+- **Celery is a poor host for a long poll** [Verified settings; Inference conclusion].
   - Concurrency 1, prefetch 1, 30-minute hard limit, recycled children
     (`Backend/settings.py:427-432`).
   - In lite it runs eagerly (`:393`).
@@ -456,14 +449,14 @@ and the bridge call it. `chatbot/` is not protected.
 
 | # | Hook | Where | Fail behaviour | Bridge gets it by |
 |---|---|---|---|---|
-| 1 | Room membership | `consumers.py:958`; `security_policy.user_has_room_access` `:123-138` | Closed | Calling `user_has_room_access` per update (new) |
+| 1 | Room membership | `consumers.py:958`; `security_policy.user_has_room_access` `:123-138` | Closed on missing ids; a DB error raises (`security_policy.py:135-137`), so callers must deny on exception | Calling `user_has_room_access` per update (new), catching errors as deny |
 | 2 | Mute | `consumers.py:590-602,861-874` | Raises, then rejects | Shared seam |
 | 3 | Message rate limit, 30/min | `consumers.py:576-588` | **[Inference] Open** when Redis is down (`IGNORE_EXCEPTIONS`, `settings.py:438`) | Shared seam, plus the bridge's own closed limiter |
 | 4 | Length 1-5000 | `consumers.py:899-908` | Closed | Shared seam |
 | 5 | Moderation buffer | `consumers.py:604-674` | Best effort | Shared seam |
 | 6 | Kill-switch directives | `turn_runner.run_immediate_directives` `:101-184` | Closed | Shared seam |
 | 7 | Queue cap | `enqueue_turn` `turn_runner.py:920-962` | Closed | Shared seam |
-| 8 | Consent timing | `coordinator._consent_postdates_prompt` `:127-175` | Closed | Unchanged (`Message.timestamp` = receive time) |
+| 8 | Consent timing | `coordinator._consent_postdates_prompt` `:127-175` | Closed | Unchanged. `Message.timestamp` is when the bridge saves the message, not Telegram's `date` (see §4.2 on why that matters) |
 | 9 | Whole-message approve/decline match | `chat_intents.py:77-107` | Closed | The button sends the exact word |
 | 10 | Prompt-injection check on the query | `security_policy.should_block_action` `:97-102`, used `tool_executor.py:117-123` via `raw_query` (`coordinator.py:955`) | Blocks sensitive actions | Unchanged, as long as the text reaches the coordinator as the query |
 | 11 | Injection in parameters; parameter sanitizing | `tool_executor.py:124-139`; `security_policy.sanitize_parameters` `:105-120` | Closed | Unchanged |
@@ -472,8 +465,8 @@ and the bridge call it. `chatbot/` is not protected.
 | 14 | Room taint | `agent_loop.py:302-352` | Closed on exception; [Inference] open when Redis is down | Unchanged |
 | 15 | Token quota | `llm_client._check_token_quota` `:685-730` | Closed | Unchanged |
 | 16 | Output redaction | `agent_loop.py:3175` (model text); `_sanitize_tool_result` `:1570-1589` | — | Already applied to frames. The bridge re-applies `redact_sensitive_text` before sending |
-| 17 | Action receipts | `action_receipts.record_action_receipt` `:229-284`, via `agent_loop._record_receipt` `:1841-1879` | **[Verified] Open**: a failure is logged and swallowed (`:1878-1879`) | Unchanged. The bridge keeps its own append-only decision rows |
-| 18 | Sandbox environment | `shell_exec/backends.py:57-80` (allowlist) | Closed | `TELEGRAM_BOT_TOKEN` is not on the allowlist, so it stays out of commands |
+| 17 | Action receipts | `action_receipts.record_action_receipt` `:227-284`, via `agent_loop._record_receipt` `:1841-1879` | **[Verified] Open**: a failure is logged and swallowed (`:1878-1879`) | Unchanged. The bridge keeps its own append-only decision rows |
+| 18 | Sandbox environment | `orchestration/shell_exec/backends.py:57-80` (allowlist) | Closed | `TELEGRAM_BOT_TOKEN` is not on the allowlist, so it stays out of commands |
 
 **Where reality disagrees with AGENTS.md (§10 asks me to report these):**
 
@@ -492,7 +485,8 @@ and the bridge call it. `chatbot/` is not protected.
 
 - **[Verified] The freeze.**
   - It started in v0.4 as a one-cycle freeze on new connectors, explicitly including
-    "messaging channels" and "surfaces" (`docs/v0.4-brief.md:47-52,199-201`).
+    "messaging channels", with "scheduling surfaces" listed under domain features
+    (`docs/v0.4-brief.md:47-52,199-201`).
   - It became the lasting "shell is the reach story" direction (`docs/roadmap.md:12-13`;
     `AGENTS.md`, "v0.7 direction").
   - v0.8 adds "No new connectors/features under a broken truth model"
@@ -516,7 +510,7 @@ and the bridge call it. `chatbot/` is not protected.
     (`docs/v0.6-brief.md:43-50,69`).
   - There is no roadmap item for inbound channels or remote control.
 - **[Verified] Boundaries.** `scripts/check_boundaries.py:23-51` has two rules:
-  - connector files may not import core modules;
+  - connector files may not import six named core modules (`:28-35`);
   - no raw shell anywhere.
   - [Inference] A new `telegram_bridge/` app may import `chatbot`, `orchestration` and
     `workflows` without a violation. Putting bridge logic *in the connector* would
@@ -553,8 +547,6 @@ as blocking, but `.github/workflows/main.yml` does not run it.
 - The official pages were fetched with curl on 2026-11-08 and read as text:
   `core.telegram.org/bots/api`, `/bots/api-changelog`, `/bots/faq`, `/bots/features`,
   `/api/end-to-end`.
-- The host was blocked at first. It was added to this session's network allowlist so
-  the checks could use primary sources.
 - The newest version on the changelog is **Bot API 10.3, August 24, 2026**.
 - GitHub issue pages were read through a fetch tool that returns a summary, not raw HTML.
   Treat those quotes as close paraphrase.
@@ -626,13 +618,13 @@ Backend/orchestration/approval_view.py   (new, read-only, not protected)
 ```
 
 **Why not the connector?**
-- Boundary rule 1 forbids connector files from importing core (`scripts/check_boundaries.py:23-51`).
+- Boundary rule 1 forbids connector files from importing six named core modules: `agent_loop`, `tool_executor`, `tool_router`, `security_policy`, `action_receipts`, `workflow_planner` (`scripts/check_boundaries.py:28-35`). The bridge needs several of them.
 - `docs/golden-principles/connectors.md:7` forbids calling other apps' models.
 - The bridge must drive rooms and turns, which needs both.
 
 **Built from scratch.** `bot_api.py` is new code and does not reuse the v0.4.2
-connector. The connector's `_tg_post` leaks the token in its error path (§1.1). The
-connector's future is D13.
+connector. The connector's error handling is not reusable (§1.1). The connector's
+future is D13.
 
 ### 3.2 Where the bridge runs
 
@@ -660,7 +652,7 @@ All rows are append-style. Revocation sets `revoked_at` and never deletes.
 | `TelegramPollerState` (singleton) | `offset` BigInt, `bot_id` BigInt (pinned at first `getMe`), `lease_owner`, `lease_expires_at`, `last_ok_at`, `last_error` | one row |
 | `TelegramApprovalCard` | `token_hash`, `binding` FK, `approval` FK `WorkflowApprovalRecord`, `turn_id` UUID, `short_id`, `chat_id`, `message_id`, `risk`, `created_at`, `decided_at`, `decision`, `decided_by_telegram_user_id`, `outcome_message_id` FK `Message` | conditional UPDATE on `decided_at IS NULL` |
 | `TelegramOutbound` | `binding` FK, `kind` (status/reply/card), `step_id`, `turn_id`, `telegram_message_id`, `last_text_hash`, `last_edit_at` | for edits and throttling |
-| `TelegramInbound` | `update_id` unique, `chat_id`, `message_id`, `kind`, `received_at`, `result` (accepted / rejected:<reason>), `kazi_message_id` | dedupe and audit; holds no message text |
+| `TelegramInbound` | `update_id` unique, `chat_id`, `message_id`, `kind`, `received_at`, `result` (`accepted` / `rejected:<reason>`), `kazi_message_id` | dedupe and audit; holds no message text |
 
 **Notes**
 - **Mode A** (one DM, `/room` switching) is one `TelegramRoomBinding` with
@@ -716,7 +708,7 @@ below rests on a provider or Telegram doc read on 2026-11-08.
 
 | Capability | Anthropic | OpenAI | DeepSeek | Kazi today [Verified in code] |
 |---|---|---|---|---|
-| Image input to the chat model | Yes, all current models; JPEG/PNG/GIF/WebP; base64, URL or file id | Yes (S) | **Only `deepseek-flash`**, via the OpenAI-style `image_url` part (vision guide). `deepseek-v4-pro` lists no image input | **No path.** The user message is always a string (`agent_loop.py:2924`). The DeepSeek adapter turns unknown blocks into `str(block)`, which would put base64 into the prompt (`llm_client.py:420-421`) |
+| Image input to the chat model | Yes, all current models; JPEG/PNG/GIF/WebP; base64, URL or file id | Yes (S) | **Only `deepseek-flash`**, via the OpenAI-style `image_url` part (vision guide). `deepseek-v4-pro` lists no image input | **No path.** The user message is always a string (`agent_loop.py:2924`). The picker already offers "DeepSeek Flash Vision" (`model_catalog.py:31`, `tier="vision"`), which cannot receive images through Kazi today. The DeepSeek adapter turns unknown blocks into `str(block)`, which would put base64 into the prompt (`llm_client.py:420-421`) |
 | PDF input | Native | Native (S) | Not confirmed | `pypdf` text from the first 10 pages (`chatbot/tasks.py:976-1000`) |
 | Audio input to the chat model | No | `gpt-audio-1.5` in Chat Completions (examples use wav). The `gpt-audio-2025-08-28` snapshot is marked Deprecated | No | **Kazi has no OpenAI chat provider.** Providers are Anthropic, DeepSeek and Hugging Face (`llm_client.py:29-34`) |
 | Speech-to-text | None | `gpt-transcribe` recommended. Files up to 25 MB; "mp3, mp4, mpeg, mpga, m4a, wav, and webm": **no ogg**. `whisper-1` and `gpt-4o-*-transcribe` are removed **2027-02-26** | None | `whisper-1` (`chatbot/tasks.py:264`). It never starts a turn and stores the transcript in plaintext (`:268-270`) |
@@ -727,7 +719,8 @@ below rests on a provider or Telegram doc read on 2026-11-08.
 
 - **Voice replies.** `sendVoice` plays as a voice bubble if "your audio must be in an .OGG
   file encoded with OPUS, or in .MP3 format, or in .M4A format". The limit is 50 MB.
-  - So an **MP3 from text-to-speech can be sent as a voice note without conversion.**
+  - So an MP3 from text-to-speech **should** play as a voice note without conversion
+    [Unconfirmed until tested on real clients].
   - Hermes Agent's docs still say MP3 needs ffmpeg for a voice bubble. I could not find
     when Telegram changed this in the changelog, so test it once on real clients.
 - **Downloads and photo sends.** `getFile` downloads up to 20 MB. `sendPhoto` takes up
@@ -748,7 +741,8 @@ voice note ─► ear (speech-to-text) ─► Kazi turn (any provider, text) ─
 ```
 
 **Why not a native speech-to-speech agent for Telegram:**
-1. **OpenAI recommends this split for Kazi's case.** Its audio guide maps "a voice
+1. **OpenAI recommends this split for an existing text agent**, which Kazi is
+   [Inference for the mapping]. Its audio guide maps "a voice
    interface for an existing text agent" to "speech-to-text, the text-agent workflow,
    then text-to-speech". Its voice-agents guide says the chained path is for when "you
    want to inspect or transform text between" stages.
@@ -778,7 +772,7 @@ This does not apply to Telegram, which has no calls in the Bot API [Known].
 | **Voice in** | 1. Download the voice note and send `record_voice` while working. 2. Convert OGG/Opus to WebM by **stream copy, with no re-encode** (`ffmpeg -c:a copy`). WebM is on OpenAI's list and ffmpeg is already in the image (`Dockerfile:13-18`) [Inference: Opus in WebM is a valid stream copy; test it]. 3. Pass it to the **ear adapter**. 4. **Echo the transcript** ("🎙 heard: …"). 5. Submit it through `submit_user_message(via="telegram_voice")`. Cap length at about 5 minutes. On failure, give an honest reply and start no turn. | Hermes Agent: transcribes and injects as text, with STT providers `local` (faster-whisper), `groq` and `openai`. OpenClaw: the transcript "replaces the message body", so commands still work |
 | **Ear adapter** | One interface. `STT_PROVIDER=openai` (model from config, default `gpt-transcribe`) or `openai_compatible` with `STT_URL`, which covers a local faster-whisper server or Groq. This is the same shape as the TTS connector's `openai_compatible` provider (`tts_connector.py:29-45`). | Hermes provider switch |
 | **Voice is not consent** | A transcribed "yes" must **not** approve or continue a pause, because of mis-hearing and background speech. The seam passes `consent_eligible=False` and the coordinator skips approval and continue matching for it. Buttons are the way to approve | OpenClaw frames voice transcripts as "machine-generated, untrusted text in agent context" |
-| **Voice out** | **Reply in kind:** speak the reply only when the user sent a voice note, plus a `/voice on|off|always` toggle per binding. The **text reply is always sent too**, because text is the record. Speak only short replies (cap about 600 characters); longer ones go as text with a note. The **mouth adapter** (`TTS_PROVIDER` / model from config) sends MP3 straight to `sendVoice`, falling back to an OGG/Opus encode only if clients don't render a bubble. It replaces both existing TTS paths, and audio bytes never enter the model context. | Hermes: `/voice on` "sends voice replies only when you send a voice message" |
+| **Voice out** | **Reply in kind:** speak the reply only when the user sent a voice note, plus a `/voice on`, `/voice off` or `/voice always` toggle per binding. The **text reply is always sent too**, because text is the record. Speak only short replies (cap about 600 characters); longer ones go as text with a note. The **mouth adapter** (`TTS_PROVIDER` / model from config) sends MP3 straight to `sendVoice`, falling back to an OGG/Opus encode only if clients don't render a bubble. It replaces both existing TTS paths, and audio bytes never enter the model context. | Hermes: `/voice on` "sends voice replies only when you send a voice message" |
 | **Photos, stage 1 (bridge)** | Store the photo in the room and answer honestly: "📷 saved. This room's model can't see images yet." Any caption runs as text. Group albums by `media_group_id` (collect for about 1 s, then treat as one message). | — |
 | **Photos, stage 2 (core, plan first)** | **Describe-first pre-pass:** one call to a configured `VISION_MODEL` (`claude-haiku-*` or `deepseek-flash`). The description goes into `DocumentUpload.processed_text`, which today holds only "Indexed image metadata." (`chatbot/tasks.py:1003-1018`). It is **framed as untrusted** text, because images can carry instructions, which closes G9 for images. It is cached by `file_unique_id`. It works for every provider and for web uploads too, with no agent-loop change. | OpenClaw: a text-only main model gets a separate image model's description, and descriptions are cached "to reduce repeated vision calls" |
 | **Photos, stage 3 (only if stage 2 isn't enough)** | Native image blocks: an attachments parameter through coordinator and `run_agent_loop` (protected), per-provider adapters, `ModelInfo.vision`, and base64 kept out of history and paused state (`agent_loop.py:1269-1300`, `:192-196`). | — |
@@ -804,7 +798,7 @@ Phone        Telegram          Bridge (poller task in web process)              
   |         |                   |   require from.id == link.telegram_user_id (else drop, silent)
   |         |                   | 4 binding = (link, thread_key) → room; none → reply
   |         |                   |   "not linked, use /room"
-  |         |                   | 5 user_has_room_access(link.user, room)  [fails closed]
+  |         |                   | 5 user_has_room_access(link.user, room)  [a DB error raises: catch it and deny]
   |         |                   | 6 bridge rate limit (cache.add, closed on error)
   |         |                   | 7 submit_user_message(room, user, text, via=telegram) -->|
   |         |                   |                                  mute, length, encrypt+save,
@@ -842,10 +836,10 @@ v2 makes the persisted text authoritative (proposal §4.2).
 
 ```
  core: run pauses → save_pending_confirmation (row R, created_at T0) → frame:
-       approval.requested {turn_id, approval_id, approval_kind, risk}   (v2, T-A2 + TB-4)
+       approval.requested {turn_id, approval_pk, short_id, approval_kind, risk}  (v2, T-A2 + TB-4)
  relay: on approval.requested:
         a = approval_view.pending_agent_approval(room, user) → {pk, turn_id, short_id,
-            message (redacted), effects, tools, risk}; require a.pk == approval_id and
+            message (redacted), effects, tools, risk}; require a.pk == approval_pk and
             a.turn_id == frame.turn_id (the database is the truth, the frame is the trigger)
         token = secrets.token_urlsafe(12)            # 16 chars, about 96 bits
         store TelegramApprovalCard(token_hash, pk, turn_id, short_id, risk)
@@ -865,20 +859,29 @@ v2 makes the persisted text authoritative (proposal §4.2).
           5 failures → lock the link 15 min and send an in-app notification
         6 conditional UPDATE card SET decided_at, decision WHERE decided_at IS NULL
           (one winner on double tap)
-        7 submit_user_message(room, user, "yes" | "no", via=telegram)
+        6b re-run step 3 (same pk, turn_id and short_id) immediately before step 7,
+          because the PIN round trip can take far longer than CONSENT_SKEW_SECONDS
+        7 submit_user_message(room, user, "yes" | "no", via=telegram,
+          decision_for=(pk, turn_id))          # TB-16; the coordinator refuses a mismatch
           → coordinator: consent check (Message.timestamp > T0 + skew), approve or decline
             routing, resume_after_confirmation (hash match, single-consumer UPDATE),
             receipts basis="human"
-        8 on approval.resolved {turn_id, approval_id, decision, via}: editMessageReplyMarkup to
+        8 on approval.resolved {turn_id, approval_pk, decision, via}: editMessageReplyMarkup to
           remove buttons, and edit the text to "Approved via Telegram HH:MM". The same frame
           also closes cards when the decision was made on the web.
 ```
 
-**Why the consent check still protects a stale tap [Inference].** Suppose a new pause
-replaces R after step 3. The "yes" message was saved before the new row's
-`created_at`, so `_consent_postdates_prompt` refuses it. The existing test
-`test_a_queued_yes_cannot_approve_a_prompt_it_never_saw` covers this window
-(`chatbot/test_turn_runner.py:679-729`). TB-16 closes it explicitly.
+**Why the consent check alone does not protect a stale tap [Inference].** The "yes"
+`Message` is saved at step 7, so its timestamp is when the bridge processes the tap.
+Suppose a pause started from the web replaces R between steps 3 and 7, for example
+while the user is typing the PIN. The "yes" then postdates the new row's `created_at`,
+and `_consent_postdates_prompt` accepts it. The 2-second skew (`coordinator.py:170`,
+`settings.py:545`) does not cover that gap. The existing test
+`test_a_queued_yes_cannot_approve_a_prompt_it_never_saw` (`chatbot/test_turn_runner.py:680`)
+covers a different case: a message saved *before* the prompt existed. So step 6b
+narrows the gap, and **TB-16 closes it**: the decision names the approval it answers,
+and the coordinator refuses it if the pending row differs. **TB-16 is a hard
+prerequisite of TB-11.**
 
 **Workflow approvals** (TB-15) follow the same card flow. Step 7 becomes
 `submit_execution_approval(execution, approval_id=record.pk, reviewer_id=user.id, decision)`,
@@ -943,11 +946,11 @@ gap G9.
 
 | Threat | What an attacker gets | Mitigations |
 |---|---|---|
-| **Stolen bot token** | **Reading.** They can call getUpdates and consume or read incoming messages, which races our poller. **Sending.** They can send as the bot, for example fake approval cards. **Denial of service.** They can set a webhook, which stops our polling. **What they cannot do** [Inference]: forge an update whose `from.id` is the paired user, because updates come from Telegram. So with the token alone they cannot drive Kazi or approve anything. Their forged buttons carry tokens not in our database. | • Keep the token in env only. It is already excluded from the sandbox (`shell_exec/backends.py:57-80`). Warn that the `open` shell profile runs on the host and can read `.env` (`docs/contracts/credential-scoping.md:84-90`). • The new `bot_api.py` never puts the URL in errors (TB-6); fix the shipped connector separately (§8). Never log file URLs. • At startup call `getWebhookInfo`. If a webhook URL is set, refuse to poll, do not delete it, and send an in-app alert. • Pin `bot_id` from the first `getMe`; a changed id means the token was swapped, so stop. • Treat repeated 409 Conflict as "another poller holds this token": alert and back off. • Runbook: revoke in BotFather, rotate the env var, restart. |
+| **Stolen bot token** | **Reading.** They can call getUpdates and consume or read incoming messages, which races our poller. **Sending.** They can send as the bot, for example fake approval cards. **Denial of service.** They can set a webhook, which stops our polling. [Inference] They cannot forge an update whose `from.id` is the paired user, because updates come from Telegram, and buttons they create carry tokens not in our database. **But they can tamper with a genuine card.** A holder who wins a getUpdates race sees the card's `chat_id`, `message_id` and callback data. With `editMessageText` or `editMessageReplyMarkup` they can change what the card says, or which button approves. They can also read the PIN message. | • Keep the token in env only. It is already excluded from the sandbox (`orchestration/shell_exec/backends.py:57-80`). Warn that the `open` shell profile runs on the host and can read `.env` (`docs/contracts/credential-scoping.md:84-90`). • The new `bot_api.py` never puts the URL in errors (TB-6). Never log file URLs. • Against card tampering: the callback's `message.message_id` must equal `card.message_id`, and the PIN or confirm step shows the action summary read from the database, not the card text. • Treat a 409 or a newly set webhook as possible compromise: disable every open card. • At startup call `getWebhookInfo`. If a webhook URL is set, refuse to poll, do not delete it, and send an in-app alert. • Pin `bot_id` from the first `getMe`; a changed id means the token was swapped, so stop. • Treat repeated 409 Conflict as "another poller holds this token": alert and back off. • Runbook: revoke in BotFather, rotate the env var, restart. |
 | **chat_id spoofing** | There is no inbound endpoint (polling only), so nothing on the network can be spoofed. Inside Telegram, anyone can message the bot, and anyone in a group can post in a bound topic. | • Accept only `chat.id` with an active link **and** `from.id == link.telegram_user_id`, on every update and callback. • Reject `sender_chat` (anonymous admins, channels), `from.is_bot`, `via_bot`, guest updates. • Pairing codes: about 40 bits, 10 minutes, single use, hashed, private chats only, rate-limited per chat and globally. • Unpaired chats get no reply, or one generic reply per day, so the bot's activity is not revealed. • An in-app notification on every pairing. `/unpair` from the phone; `telegram_unpair` locally. • Per-update `user_has_room_access`. |
 | **Forwarded-message injection** | Text written by someone else arrives with the owner's authority. | • Reject `forward_origin` and `is_automatic_forward` messages by default, saying why (D6). • Read only `text` or `caption`. Ignore `external_reply`/`quote` content, or pass it as labelled quoted data, never as the instruction. • Downstream protections still apply because the text is the query: `should_block_action` on `raw_query` (`tool_executor.py:117-123`), capability gates, risk bucketing and human approval. Pasted text cannot be told apart from typed text, and that is accepted, as on the web. • File contents go to the document path, not the query. |
-| **Approval replay or mis-binding** | Re-using an old tap or callback; a stale card approving a newer action; a double tap; someone else in a group tapping. | • A random 96-bit token per card, stored hashed, single use through a conditional UPDATE. • Bound to approval pk + turn_id + short_id. All three must match the *current* pending row, because the row is reused (`agent_loop.py:839-851`). • `callback.from.id` must be the paired user; agent-loop approvals are requester-only already (`agent_loop.py:3983-3986`). • Cards are acted on only within `MAX_UPDATE_AGE`, and the row's own `expires_at` applies (`resume_after_confirmation` refuses expired pauses, `:3861-3863`). • The decision goes through consent timing (`coordinator.py:127-175`). • Buttons are removed after any outcome, and lazily on a stale tap. |
-| **Telegram reads the content** | Telegram's servers see everything relayed: prompts, replies, file contents, approval text, the PIN. Room messages are encrypted at rest in Kazi (`chatbot/models.py:43,49-60`); binding a room undermines that for what is relayed. | • Explicit disclosure at pairing, and in `docs/telegram.md`. • `CONTENT_MODE` (D5): `summary` sends status and short replies; `notify_only` sends "Reply ready in <room>" plus approve and reject only. • Outbound text is re-run through `redact_sensitive_text`. Status messages carry phase only, never tool inputs. • `callback_data` carries only the random token, never parameters. • The PIN is described as protection against someone holding your unlocked phone or a hijacked Telegram session, **not** against Telegram. Advise a PIN not reused elsewhere. • Recommend binding only rooms you would put in a cloud chat. |
+| **Approval replay or mis-binding** | Re-using an old tap or callback; a stale card approving a newer action; a double tap; someone else in a group tapping. | • A random 96-bit token per card, stored hashed, single use through a conditional UPDATE. • Bound to approval pk + turn_id + short_id. All three must match the *current* pending row, because the row is reused (`agent_loop.py:839-851`). • `callback.from.id` must be the paired user; agent-loop approvals are requester-only already (`agent_loop.py:3983-3986`). • Cards are acted on only within `MAX_UPDATE_AGE`, and the row's own `expires_at` applies (`_claim_turn_for_resume` refuses expired pauses, `agent_loop.py:3861-3863`). • The decision goes through consent timing (`coordinator.py:127-175`). • Buttons are removed after any outcome, and lazily on a stale tap. |
+| **Telegram reads the content** | Telegram's servers see everything relayed: prompts, replies, file contents, approval text, the PIN. Room messages are encrypted at rest in Kazi (`chatbot/models.py:43,49-60`); binding a room undermines that for what is relayed. | • Explicit disclosure at pairing, and in `docs/telegram.md`. • `CONTENT_MODE` (D5): `summary` sends status and short replies; `notify_only` sends "Reply ready in `<room>`" plus approve and reject only. • Outbound text is re-run through `redact_sensitive_text`. Status messages carry phase only, never tool inputs. • `callback_data` carries only the random token, never parameters. • The PIN is described as protection against someone holding your unlocked phone or a hijacked Telegram session, **not** against Telegram. Advise a PIN not reused elsewhere. • Recommend binding only rooms you would put in a cloud chat. |
 | **Telegram account takeover (SMS hijack, lost phone)** | The attacker becomes the paired user. | • PIN for high-risk approvals (`PIN_POLICY`), with lockout and an in-app alert. • `/unpair` and the web settings, plus `telegram_unpair` locally. • Tell the user to enable Telegram two-step verification ([Known]: Telegram offers a cloud password). |
 | **Stale backlog after downtime** | Telegram keeps updates for 24 h, so a message sent yesterday could run today. | • `MAX_UPDATE_AGE` (default 10 min). Older text is shown as "not run, resend". Older callbacks are refused. |
 | **Group exposure (mode C)** | Other members read everything and see the cards. | • Recommend a private group with only the user and the bot. • Inbound accepts only the paired `from.id`. • Show a warning if `getChatMemberCount` is above 2 ([Inference]: the method exists in the Bot API; I did not check its current wording). |
@@ -969,7 +972,7 @@ seam as the WebSocket (§1.8).
 | G3 | Public read of the pending approval (pk, turn, short id, risk) | Partly there: `pending_approval_prompt` (`agent_loop.py:3774-3801`), private `_pending_approval_record`; risk derivable via `is_high_risk_action` (`action_catalog.py:695`) | S |
 | G4 | Structured approval event to clients | Missing; dropped at `coordinator.py:905`. Comes with v0.8 T-A2 (`approval.requested` / `approval.resolved`) | Part of T-A2 (+ TB-4 fields) |
 | G4b | Typed per-turn frames (`turn.started`, tool events, one terminal event, `seq`) and a non-consumer subscription hook | Missing. This is T-A2 (#217), not started | Part of T-A2 |
-| G5 | Bot API client without the token leak, with 429 handling | Missing; connector's is unsafe (§1.1) | S |
+| G5 | Bot API client with safe error handling and 429 handling | Missing; the connector's client is not reusable (§1.1) | S |
 | G6 | Poller with lease, offset and webhook check | Missing; lease pattern reusable (`turn_leases.py`, `in_process_scheduler.py:209-258`) | M |
 | G7 | Pairing and allowlist models and commands | Missing | M |
 | G8 | Document ingest helper | Logic exists inline (`message_actions.py:221-346`) | S |
@@ -989,10 +992,10 @@ seam as the WebSocket (§1.8).
 | # | Decision | Options | Recommendation |
 |---|---|---|---|
 | **D1** | When to build | **Decided (2026-11-08):** the freeze does not apply. Build from scratch on the v0.8 core | Order: seams inside T-A1/T-A2, then the bridge app once T-A2's frames exist (§0.1, §8). |
-| **D2** | How a button approves | (a) feed "yes"/"no" through the chat path; (b) call `resume_after_confirmation` directly; (c) a new approve-by-id API | **(a).** No core or contract change, and it keeps every existing guard. (b) skips consent and the runner. (c) touches protected `agent_loop.py` for no gain. Add TB-16 later for explicit binding. |
+| **D2** | How a button approves | (a) feed "yes"/"no" through the chat path; (b) call `resume_after_confirmation` directly; (c) a new approve-by-id API | **(a).** No core or contract change, and it keeps every existing guard. (b) skips consent and the runner. (c) touches protected `agent_loop.py` for no gain. **TB-16 is required before TB-11 ships**, because without it a pause that replaces the card's approval can absorb the tap (§4.2). |
 | **D3** | Where the poller runs | (a) lifespan task in the web process plus a database lease; (b) its own management command and compose service with its own `TurnRunner`; (c) Celery | **(a).** Works in lite and full, and inherits runner shutdown. (b) breaks in lite (in-memory layer, boot sweep at `turns.py:1176-1187`) and edits protected `docker-compose*.yml`. (c) is ruled out (§1.7). |
 | **D4** | Which modes in v1 | A only; A+B; A+B+C | **A first, then B.** B depends on BotFather topic mode, and on Telegram fixing per-topic failures (#905, open). C adds group-exposure risk. Ship C last, with the member-count warning. |
-| **D5** | Default content mode | full; summary; notify_only | **`full`, with a disclosure the user must confirm at pairing**, plus a per-binding override. You asked for remote control, and notify_only would make it useless. Because the disclosure is explicit, the default is an informed choice. |
+| **D5** | Default content mode | full; summary; notify_only | **`full`, with a disclosure the user must confirm at pairing**, plus a per-binding override. The goal is remote control, and notify_only would make it useless. Because the disclosure is explicit, the default is an informed choice. |
 | **D6** | Forwarded messages | reject; accept as quoted data | **Reject**, with "forwarded messages aren't run; copy the text if you mean it". Simpler and closed. |
 | **D7** | Injection-check hit on inbound text | block; pass through (downstream blocks sensitive actions); pass plus taint the room | **Pass through, and show a warning chip in Telegram.** The owner wrote it. `should_block_action` already blocks sensitive actions on that query (`tool_executor.py:117-123`). Hard-blocking the owner's own text would differ from the web. Revisit when room taint for inbound messages lands (`docs/plans/170-taint-flag.md:15-16`). |
 | **D8** | PIN policy | off; high-risk only; every approval | **High-risk only**, where high-risk means catalog `risk_level=="high"`, or a shell tier of destructive or egress. Set the PIN locally (`telegram_pair --set-pin`) or in web settings, never over Telegram. |
@@ -1000,7 +1003,7 @@ seam as the WebSocket (§1.8).
 | **D10** | Use `sendMessageDraft` instead of status edits | now; later | **Later.** Edits are well understood and rate-limit-safe at 3 s. Drafts are newer (9.3/9.5/10.3) and stream reply text, which this design does not need for v1. |
 | **D11** | Raise `send_telegram_*` risk to require confirmation | yes (separate PR, protected `action_catalog.py`); no | **Yes, separately.** It is unrelated to the bridge, but the low rating is inconsistent with outside-world doctrine. |
 | **D12** | Static allowlist env in addition to pairing | yes; no | **Yes, optional.** `ALLOWED_TELEGRAM_USER_IDS` empty means pairing alone. Cheap defence in depth. |
-| **D13** | What happens to the v0.4.2 Telegram connector | (a) leave it; (b) rebuild it on `telegram_bridge/bot_api.py`; (c) retire it | **(b), after the bridge ships.** Its sends go through the new client, so the token leak and MarkdownV2 bugs disappear with it. One Bot API client, one bot. Until then, keep it. Retiring it removes agent-initiated sends to arbitrary chats; that is your product call. |
+| **D13** | What happens to the v0.4.2 Telegram connector | (a) leave it; (b) rebuild it on `telegram_bridge/bot_api.py`; (c) retire it | **(b), after the bridge ships.** Its sends go through the new client, so the connector's error-handling and MarkdownV2 problems go with it. One Bot API client, one bot. Until then, keep it. Retiring it removes agent-initiated sends to arbitrary chats; that is your product call. |
 | **D14** | Should T-A2's frames be in-process callbacks or channel-layer group messages | callbacks (sinks registered with the runner); group messages only | **Both: a sink registry in the runner that the consumer and the bridge both register with.** The channel layer stays the fan-out to browser sockets. In-process sinks avoid channels_redis capacity drops and expiry for the bridge, which runs in the same process (§1.5). This is T-A2 design input; decide it there. |
 | **D15** | Voice architecture for Telegram | native speech-to-speech agent; chained (ear → text agent → mouth) | **Chained** (§3.5). Native voice belongs to live calls later: GPT-Live with Kazi as the delegated backend. |
 | **D16** | Can a spoken "yes" approve | yes; no | **No.** Transcripts are `consent_eligible=False` (TB-M0); approve with the buttons. |
@@ -1042,7 +1045,7 @@ All of these need a plan and a human OK.
 | Ticket | Lands in | What | Tests (each shown failing first) | Size |
 |---|---|---|---|---|
 | **TB-1** | #216, after 216b-3 | `chatbot/inbound.py::submit_user_message(room, user, text, *, via)`, extracted from `ChatConsumer.new_message`; the consumer becomes transport only, as #216 asks | (1) existing `test_turn_runner` WebSocket tests unchanged; (2) a message submitted through the seam, with no socket, runs a turn whose reply is saved; (3) a "yes" through the seam resumes a real paused turn (`_PauseHarness`, `CONSENT_SKEW_SECONDS=0`) and writes a `basis="human"` receipt; (4) a non-member is refused and **no** `Message` row is created (fixes the orphan row at `consumers.py:935` vs `:958`) | M |
-| **TB-4** | #217 T-A2 | (a) `approval.requested` carries `approval_id`, `approval_kind` and a risk class; `approval.resolved` carries `decision` and `via`; (b) a frame-sink registry on the runner that the consumer registers with, and any in-process client can too (D14); (c) read helper `orchestration/approval_view.pending_agent_approval` | Every frame carries `turn_id` and a monotonic `seq`; a second registered sink receives the same frames as the consumer; a sink that raises never aborts the turn (T-A2's best-effort rule); the reused-row case returns the *new* turn_id and short_id; another user's row is invisible | M |
+| **TB-4** | #217 T-A2 | (a) `approval.requested` carries `approval_pk`, `short_id`, `approval_kind` and a risk class; `approval.resolved` carries `approval_pk`, `decision` and `via` (today's `confirmation` event calls the short id `approval_id`, `agent_loop.py:3596`); (b) a frame-sink registry on the runner that the consumer registers with, and any in-process client can too (D14); (c) read helper `orchestration/approval_view.pending_agent_approval` | Every frame carries `turn_id` and a monotonic `seq`; a second registered sink receives the same frames as the consumer; a sink that raises never aborts the turn (T-A2's best-effort rule); the reused-row case returns the *new* turn_id and short_id; another user's row is invisible | M |
 | **TB-2** | #217 T-A2 | A user-message frame (for example `message.received {turn_id, message_id, via}`) so every client sees human messages from other surfaces | Two clients; B receives A's message with `via` | S |
 | **TB-16** | #217 T-A2, contract in #218 | A decision submitted for a specific `approval_id` (through `submit_user_message(..., decision_for=approval_id)`) is refused by the coordinator if the pending row's id or turn differs. Minor bump to `approval.md` | The §4.2 race, forced with an event at the seam: a stale decision is refused and the new pause stays pending | M |
 | **TB-A3** | #218 T-A3 | Write the client contract doc for *a client*, not the browser. The duplicate, reorder, reconnect and terminal fixtures run against a generic test sink, so the bridge plugs in later | Fixtures pass for the consumer and for the test sink | S (on top of T-A3) |
@@ -1076,6 +1079,9 @@ replaces it.
 
 ### Track 3: after the bridge
 
+(There is no TB-17: it was the interim adapter for today's frames, dropped when the bridge
+moved to v2 frames only.)
+
 | Ticket | What | Size |
 |---|---|---|
 | **TB-14** | Modes B and C: `/newtopic` and `/bind`, the `has_topics_enabled` check, and handling of "message thread not found" (#905): mark the binding broken and never post to General | M |
@@ -1096,20 +1102,20 @@ replaces it.
 
 ### Separate PRs, not part of the bridge
 
-- **The token leak in the shipped connector.** It is a live issue in today's
-  release, so fix it now (§1.1), even though TB-19 will replace that code. The same
-  applies to the unescaped MarkdownV2 send in `chatbot/tasks.py:555-559`.
+- **Two security items found during this pass** are handled privately under
+  `SECURITY.md` (§1.1, §1.4).
+- **The unescaped MarkdownV2 reminder send** in `chatbot/tasks.py:555-559`: send plain
+  text.
 - **D11:** raise the `send_telegram_*` risk (`action_catalog.py` is protected).
-- **Workflow UI views without a POST check** (`workflows/ui_views.py:399-406`). A task
-  card is queued.
 - **AGENTS.md discrepancies** in §1.8: receipts editable, capability gate open on
   missing preferences, `approval.md` drift.
 - **Notification email and WhatsApp `execute` call bugs** (§1.6).
 - **The DeepSeek default model is a retired name.** `DEEPSEEK_MODEL` defaults to
   `deepseek-chat` (`Backend/settings.py:696`, `orchestration/llm_client.py:282-285`).
   DeepSeek's updates page says that name was discontinued on 2026-07-24. Also,
-  `model_catalog.py:29-31` lists legacy V4 names that DeepSeek now routes to
-  `deepseek-flash`.
+  `model_catalog.py:30-31` lists `deepseek-v4-flash` and `deepseek-v4-flash-vision-exp`,
+  legacy names DeepSeek now routes to `deepseek-flash`. `deepseek-v4-pro` (`:29`) is
+  current.
 - **Move off OpenAI audio models before they are removed.** `whisper-1`
   (`chatbot/tasks.py:264`, removed 2027-02-26) and `tts-1` / `gpt-4o-mini-tts`
   (`chatbot/tasks.py:334-340`, `tts_connector.py`, removed 2027-01-06). The web voice
@@ -1122,8 +1128,6 @@ replaces it.
 
 ## 9. What I could not verify
 
-- Whether httpx 0.28's `HTTPStatusError` message includes the URL. [Known] It does. I
-  could not run it: httpx is not installed here, and installing it was out of scope.
 - Whether private-chat topics display for users without Premium.
 - Telegram's real `editMessageText` limits.
 - Whether Telegram states anywhere official that bot chats are not end-to-end encrypted.

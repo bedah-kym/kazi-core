@@ -843,12 +843,20 @@ ignore duplicate or reordered frames.
 `closed_at`, not only non-terminal turns, and reconciles each against its `Turn`:
 - **Still running or paused:** resume by `turn_id` + last `seq`, per the T-A3 contract.
 - **Ended while the bridge was down:** edit the status to its ending. Then, if
-  `reply_sent_at` is empty, send the persisted final reply and set it.
+  `reply_sent_at` is empty, send the persisted final reply.
+
+  **`closed_at` is written last, in the same database write as `reply_sent_at`**, and
+  only after the reply has been sent. A turn that ended with no reply to send (for
+  example cancelled) writes `closed_at` alone. So a crash anywhere before that write
+  leaves the row in the scan. Re-editing the status is harmless: Telegram's "message
+  is not modified" error is ignored. The same ordering applies on the live path, not
+  only on recovery.
 
   This is **at-least-once**, not exactly-once. Telegram has no idempotency key for
   sends [Known], so a crash after Telegram accepts the reply but before
   `reply_sent_at` is saved re-sends it on restart. The bound is at most one duplicate
-  per crash. The resend is prefixed "(re-sent after a restart)" so a duplicate reads
+  per crash in that window. Repeated crashes before the resend is recorded can each
+  add one more. The resend is prefixed "(re-sent after a restart)" so a duplicate reads
   as one. Losing a reply is worse than a rare duplicate.
 
 Web-started runs in the room are mirrored if `SHOW_WEB_RUNS` is on.
@@ -1109,7 +1117,7 @@ replaces it.
 
 | Ticket | What | Tests | Size |
 |---|---|---|---|
-| **TB-10** | Relay registered as a frame sink (TB-4b): status message per `turn_id`, edits on tool events, terminal frame closes it, final reply read from the persisted message | Real runner and `_FakeLLM`: one status message per turn; edits at most every N seconds with identical text skipped; `turn.failed{partial}` renders as "Ended", never "Done"; duplicate or reordered `seq` is ignored; the reply is split at 4096, plain text; a fake `sk-…` key in model text never reaches the fake transport; restart resumes by `turn_id` + `seq`; the bridge stopped after "Thinking" while the turn completes → on restart the status closes with its ending and the reply is sent once; a crash injected after the fake transport accepts the send but before `reply_sent_at` is saved re-sends it once with the restart prefix, and never a third time | M |
+| **TB-10** | Relay registered as a frame sink (TB-4b): status message per `turn_id`, edits on tool events, terminal frame closes it, final reply read from the persisted message | Real runner and `_FakeLLM`: one status message per turn; edits at most every N seconds with identical text skipped; `turn.failed{partial}` renders as "Ended", never "Done"; duplicate or reordered `seq` is ignored; the reply is split at 4096, plain text; a fake `sk-…` key in model text never reaches the fake transport; restart resumes by `turn_id` + `seq`; the bridge stopped after "Thinking" while the turn completes → on restart the status closes with its ending and the reply is sent once; a crash injected after the fake transport accepts the send but before `reply_sent_at` is saved re-sends it once with the restart prefix, and once that resend is recorded a further restart sends nothing; a crash after the status edit but before the reply write leaves `closed_at` empty, so the reply is still sent on restart | M |
 | **TB-11** | Approval cards from `approval.requested`; decision through `submit_user_message(..., decision_for=…)` (TB-16) | Approve resumes and writes a receipt; reject cancels; a double tap gives exactly one decision (barrier); a stale card after row reuse is refused; another Telegram user is refused; an expired card is refused; `approval.resolved` from the web closes the card; `answerCallbackQuery` is always called; a failure injected between the card UPDATE and the decision `Message` rolls both back so a re-tap works; a reaped decision Turn with the approval still pending gets a fresh card on restart | M |
 | **TB-11b** | "Continue" buttons for budget and quota pauses. Needs 216b-3's `paused_at` consent check | A "continue" queued before the budget pause existed does not resume it (mirror `test_a_queued_yes_cannot_approve_a_prompt_it_never_saw`) | S |
 | **TB-12** | PIN for high-risk approvals, challenged only in the link's private chat | A high-risk card asks for the PIN in the DM even when the card is in a group topic; an unreachable DM refuses the approval; a PIN typed in the group is ignored and deleted; a wrong PIN ×5 locks the link and notifies; the PIN message is deleted; a low-risk card skips the PIN | S-M |

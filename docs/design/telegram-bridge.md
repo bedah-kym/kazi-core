@@ -50,10 +50,72 @@ event reaches clients.
   lease.** It should not be a Celery task or (in lite) a separate process. Turns must
   be drained by a long-lived event loop that owns them, and lite's channel layer is
   in-memory.
-- **Freeze conflict.** The v0.8 cycle's stated anti-pattern is "no new connectors or
-  features under a broken truth model" (`docs/proposals/2026-10-turn-state-and-verification.md:260`).
-  This feature is a new surface. Scheduling it is your call (§7, D1). The first phase
-  of tickets is v0.8-aligned refactoring and bug fixes that are worth doing anyway.
+- **Freeze: does not apply.** The maintainer decided on 2026-11-08 that the "no new
+  connectors" line does not apply to this work.
+- **Built new.** The bridge is built from scratch on the v0.8 core. It does not reuse
+  the v0.4.2 connector, and it does not use today's stream frames (§0.1).
+
+---
+
+## 0.1 Where this fits in the roadmap
+
+The roadmap (`docs/roadmap.md:28-33`) has v0.8, "turns that own the truth", in flight.
+Its epic is #227, and its build order is A, then B, then C, with "do NOT jump ahead".
+
+**Status on 2026-11-08** [Verified: GitHub issue states and the code]
+
+| Ticket | State | Evidence |
+|---|---|---|
+| T-A1 #216, Turn record and state machine | Open, mostly landed | `Turn` model, leases and the turn runner are in Unreleased (`CHANGELOG.md:10-37`; `orchestration/models.py:9-65`; `chatbot/turn_runner.py`) |
+| T-A4 #219, retire the direct-send path | Closed | |
+| T-B3 #222, workflow handoff schedule read-back | Closed | |
+| T-A2 #217, stream protocol v2 | Open, not started | No `turn.started` / `approval.requested` emitters in non-test code |
+| T-A3 #218, stream tests and client contract doc | Open | |
+| T-B1 #220, T-B2 #221, T-B4 #223, T-C1-3 #224-226 | Open | |
+
+**Placement.** The bridge is the **second client of the turn**. Phase A is the work that
+makes a turn safe to watch from anywhere. So the bridge sits on Phase A, runs in
+parallel with Phase B, and does not wait for Phase C.
+
+```
+ v0.8 Phase A ─ T-A1 (closing) ─► T-A2 ─► T-A3 ───────────────► Phase B ─► Phase C
+                    │               │        │
+ bridge:   inbound seam      approval.requested   bridge = 2nd client
+           (TB-1, in T-A1)   + subscription hook  in the contract tests
+                             (TB-4, in T-A2)      (TB-10/11, after T-A3 doc)
+                                                  └─► bridge app (Phase 2 tickets)
+```
+
+**Why this order.** Three core needs coincide with what the bridge needs. Each is
+v0.8 work the web UI needs too.
+
+1. **A transport-neutral inbound door.** #216's rule is "consumers only transport
+   frames". Today the consumer still owns persistence, routing gates and enqueueing
+   (`consumers.py:861-1057`). Moving that into `chatbot/inbound.py` finishes T-A1's
+   intent, and it is the bridge's entry point.
+2. **Typed frames with `turn_id`, `seq`, `approval.requested` and one terminal event.**
+   That is #217. For the bridge, this means:
+   - the per-run status message is a direct mapping (`turn.started` sends it, tool
+     events edit it, the terminal event closes it);
+   - approval cards come from `approval.requested`, instead of reading the coordinator's
+     prose (`coordinator.py:903-906`);
+   - restart recovery uses `turn_id` + last `seq`.
+   Building on today's `ai_step_event` text would mean building twice.
+3. **Truth on the phone.** Phase B makes the terminal event honest: a claim with no
+   matching write-set ends as `turn.failed{partial}` (#221). A bridge built on v2
+   frames inherits that. A "✅ Done" on the phone then means the record says done, which
+   is the epic's success metric.
+
+**What to fold into existing v0.8 tickets** (proposed; not filed):
+- **#216 (T-A1) closeout:** the transport-neutral `submit_user_message` (TB-1).
+- **#217 (T-A2):** these three should live with that ticket:
+  - `approval.requested` carries `approval_id`, `approval_kind` and a risk class (TB-4);
+  - frames reach any in-process subscriber, not only the consumer, through a
+    subscription hook (TB-4);
+  - `approval.resolved` names the decision source (TB-16).
+- **#218 (T-A3):** the client contract doc is written for "a client", and its
+  reconnect and duplicate fixtures run against the bridge as well as the web consumer.
+  A second client keeps the contract from encoding web-only assumptions.
 
 ---
 
@@ -402,10 +464,8 @@ and the bridge call it. `chatbot/` is not protected.
     (`docs/proposals/2026-10-turn-state-and-verification.md:260`).
   - Telegram itself shipped in 0.4.2 (`CHANGELOG.md:929-938`) as an undocumented
     exception.
-- **[Inference] Does this feature break the freeze?**
-  - **It adds no connector and no tool action**, so the connector freeze holds.
-  - **It is a new surface**, which collides with the v0.8 "no new features" line. That
-    is D1.
+- **Maintainer decision (2026-11-08):** the freeze does not apply to this work. The
+  facts above are kept for the record.
 - **Contracts** (`docs/contracts/`: `tool-schema`, `connector-execution`, `approval`,
   `execution-detail`, `replay-safety`, `credential-scoping`):
   - **[Inference] No change is needed if approvals go through the chat-reply path.**
@@ -508,9 +568,9 @@ Backend/telegram_bridge/            (new Django app; not a connector, not offere
                   webhook check, stale-update cut-off.
   inbound.py      Update → filters → binding lookup → commands (/pair /room /rooms
                   /unpair /status /stop) or chatbot.inbound.submit_user_message.
-  relay.py        Channel-layer subscriber per bound room: status message (edit),
-                  final reply (send), approval cards. Behind a FrameAdapter so the
-                  v0.8 stream protocol can replace today's frames.
+  relay.py        Subscriber to stream protocol v2 frames (T-A2) per bound room:
+                  status message (edit), final reply (send), approval cards.
+                  No adapter for today's ai_step_event / ai_stream_chunk frames.
   approvals.py    Card rendering, callback validation, PIN challenge, decision
                   → submit_user_message("yes"/"no"), or submit_execution_approval
                   for workflows (later).
@@ -535,8 +595,9 @@ Backend/orchestration/approval_view.py   (new, read-only, not protected)
 - `docs/golden-principles/connectors.md:7` forbids calling other apps' models.
 - The bridge must drive rooms and turns, which needs both.
 
-**Why a separate `bot_api.py`?** The connector's `_tg_post` leaks the token in its error
-path (§1.1). The connector can adopt the fixed client later (TB-0a).
+**Built from scratch.** `bot_api.py` is new code and does not reuse the v0.4.2
+connector. The connector's `_tg_post` leaks the token in its error path (§1.1). The
+connector's future is D13.
 
 ### 3.2 Where the bridge runs
 
@@ -626,30 +687,41 @@ Phone        Telegram          Bridge (poller task in web process)              
   |         |                   |                                  enqueue_turn, runner.submit
   |         |                   | 8 commit offset = update_id + 1                      |
   |         |                   |                                                      |
-  |         |                   |<== group chat_<room>: ai_step_event (step_id=turn_<msg>)
-  |         |<--sendMessage "⏳ Thinking…" (status, stored in TelegramOutbound)       |
+  |         |                   |<== turn.started {turn_id, message_id}  (v2, T-A2)    |
+  |         |<--sendMessage "⏳ Thinking…" (status, stored in TelegramOutbound by turn_id)
+  |         |                   |<== tool.started / tool.result {turn_id, seq, name}   |
   |         |<--editMessageText "🔧 Running web_search…" (≥3 s apart, skip if same)  |
-  |         |                   |<== ai_message_saved (reply text, already redacted)   |
-  |         |<--editMessageText "✅ Done · 2 tools · 14 s"                             |
-  |         |<--sendMessage reply (redact again, plain text, split at 4096)            |
+  |         |                   |<== turn.completed {turn_id, final_message_id}        |
+  |         |                   |    (or turn.failed{partial} / cancelled / superseded)
+  |         |<--editMessageText "✅ Done · 2 tools · 14 s"  or  "⚠️ Ended: <reason>"   |
+  |         |<--sendMessage reply = persisted final message (read by final_message_id,
+  |         |                   |    redact again, plain text, split at 4096)          |
 ```
 
 **Ordering.** The offset is committed after step 7 returns, so a crash replays the
 update. Step 1 makes the replay a no-op, which gives at-least-once delivery with
 idempotent handling.
 
-**Turn ownership.** Step 7's `step_id` (`turn_<request_message_id>`, `coordinator.py:461`)
-tells the relay which status message to edit. Web-started runs in the room are
-mirrored if `SHOW_WEB_RUNS` is on.
+**Turn ownership.** Every v2 frame carries `turn_id`. Step 7 returns the queued
+turn, so the relay knows which status message belongs to which run. `seq` lets it
+ignore duplicate or reordered frames.
+
+**Recovery.** After a bridge restart, it reads non-terminal `Turn` rows for bound
+rooms and resumes by `turn_id` + last `seq`, per the T-A3 contract. Web-started runs in
+the room are mirrored if `SHOW_WEB_RUNS` is on.
+
+**Truth.** The reply sent is the persisted final message, not the concatenated stream.
+v2 makes the persisted text authoritative (proposal §4.2).
 
 ### 4.2 Approval round trip (agent loop)
 
 ```
- core: run pauses → save_pending_confirmation (row R, created_at T0) → frames:
-       harness text + ai_step_event(validating, "Waiting for confirmation.")
- relay: on that step (or Turn paused, pause_kind=approval):
+ core: run pauses → save_pending_confirmation (row R, created_at T0) → frame:
+       approval.requested {turn_id, approval_id, approval_kind, risk}   (v2, T-A2 + TB-4)
+ relay: on approval.requested:
         a = approval_view.pending_agent_approval(room, user) → {pk, turn_id, short_id,
-            message (redacted), effects, tools, risk}
+            message (redacted), effects, tools, risk}; require a.pk == approval_id and
+            a.turn_id == frame.turn_id (the database is the truth, the frame is the trigger)
         token = secrets.token_urlsafe(12)            # 16 chars, about 96 bits
         store TelegramApprovalCard(token_hash, pk, turn_id, short_id, risk)
         sendMessage(card text, inline_keyboard=[[Approve ka:<token>:y],[Reject ka:<token>:n]])
@@ -672,7 +744,9 @@ mirrored if `SHOW_WEB_RUNS` is on.
           → coordinator: consent check (Message.timestamp > T0 + skew), approve or decline
             routing, resume_after_confirmation (hash match, single-consumer UPDATE),
             receipts basis="human"
-        8 editMessageReplyMarkup: remove buttons; edit the text to "Approved via Telegram HH:MM"
+        8 on approval.resolved {turn_id, approval_id, decision, via}: editMessageReplyMarkup to
+          remove buttons, and edit the text to "Approved via Telegram HH:MM". The same frame
+          also closes cards when the decision was made on the web.
 ```
 
 **Why the consent check still protects a stale tap [Inference].** Suppose a new pause
@@ -744,7 +818,7 @@ gap G9.
 
 | Threat | What an attacker gets | Mitigations |
 |---|---|---|
-| **Stolen bot token** | **Reading.** They can call getUpdates and consume or read incoming messages, which races our poller. **Sending.** They can send as the bot, for example fake approval cards. **Denial of service.** They can set a webhook, which stops our polling. **What they cannot do** [Inference]: forge an update whose `from.id` is the paired user, because updates come from Telegram. So with the token alone they cannot drive Kazi or approve anything. Their forged buttons carry tokens not in our database. | • Keep the token in env only. It is already excluded from the sandbox (`shell_exec/backends.py:57-80`). Warn that the `open` shell profile runs on the host and can read `.env` (`docs/contracts/credential-scoping.md:84-90`). • Fix the token leak in error messages (TB-0a). Never log file URLs. • At startup call `getWebhookInfo`. If a webhook URL is set, refuse to poll, do not delete it, and send an in-app alert. • Pin `bot_id` from the first `getMe`; a changed id means the token was swapped, so stop. • Treat repeated 409 Conflict as "another poller holds this token": alert and back off. • Runbook: revoke in BotFather, rotate the env var, restart. |
+| **Stolen bot token** | **Reading.** They can call getUpdates and consume or read incoming messages, which races our poller. **Sending.** They can send as the bot, for example fake approval cards. **Denial of service.** They can set a webhook, which stops our polling. **What they cannot do** [Inference]: forge an update whose `from.id` is the paired user, because updates come from Telegram. So with the token alone they cannot drive Kazi or approve anything. Their forged buttons carry tokens not in our database. | • Keep the token in env only. It is already excluded from the sandbox (`shell_exec/backends.py:57-80`). Warn that the `open` shell profile runs on the host and can read `.env` (`docs/contracts/credential-scoping.md:84-90`). • The new `bot_api.py` never puts the URL in errors (TB-6); fix the shipped connector separately (§8). Never log file URLs. • At startup call `getWebhookInfo`. If a webhook URL is set, refuse to poll, do not delete it, and send an in-app alert. • Pin `bot_id` from the first `getMe`; a changed id means the token was swapped, so stop. • Treat repeated 409 Conflict as "another poller holds this token": alert and back off. • Runbook: revoke in BotFather, rotate the env var, restart. |
 | **chat_id spoofing** | There is no inbound endpoint (polling only), so nothing on the network can be spoofed. Inside Telegram, anyone can message the bot, and anyone in a group can post in a bound topic. | • Accept only `chat.id` with an active link **and** `from.id == link.telegram_user_id`, on every update and callback. • Reject `sender_chat` (anonymous admins, channels), `from.is_bot`, `via_bot`, guest updates. • Pairing codes: about 40 bits, 10 minutes, single use, hashed, private chats only, rate-limited per chat and globally. • Unpaired chats get no reply, or one generic reply per day, so the bot's activity is not revealed. • An in-app notification on every pairing. `/unpair` from the phone; `telegram_unpair` locally. • Per-update `user_has_room_access`. |
 | **Forwarded-message injection** | Text written by someone else arrives with the owner's authority. | • Reject `forward_origin` and `is_automatic_forward` messages by default, saying why (D6). • Read only `text` or `caption`. Ignore `external_reply`/`quote` content, or pass it as labelled quoted data, never as the instruction. • Downstream protections still apply because the text is the query: `should_block_action` on `raw_query` (`tool_executor.py:117-123`), capability gates, risk bucketing and human approval. Pasted text cannot be told apart from typed text, and that is accepted, as on the web. • File contents go to the document path, not the query. |
 | **Approval replay or mis-binding** | Re-using an old tap or callback; a stale card approving a newer action; a double tap; someone else in a group tapping. | • A random 96-bit token per card, stored hashed, single use through a conditional UPDATE. • Bound to approval pk + turn_id + short_id. All three must match the *current* pending row, because the row is reused (`agent_loop.py:839-851`). • `callback.from.id` must be the paired user; agent-loop approvals are requester-only already (`agent_loop.py:3983-3986`). • Cards are acted on only within `MAX_UPDATE_AGE`, and the row's own `expires_at` applies (`resume_after_confirmation` refuses expired pauses, `:3861-3863`). • The decision goes through consent timing (`coordinator.py:127-175`). • Buttons are removed after any outcome, and lazily on a stale tap. |
@@ -753,7 +827,7 @@ gap G9.
 | **Stale backlog after downtime** | Telegram keeps updates for 24 h, so a message sent yesterday could run today. | • `MAX_UPDATE_AGE` (default 10 min). Older text is shown as "not run, resend". Older callbacks are refused. |
 | **Group exposure (mode C)** | Other members read everything and see the cards. | • Recommend a private group with only the user and the bot. • Inbound accepts only the paired `from.id`. • Show a warning if `getChatMemberCount` is above 2 ([Inference]: the method exists in the Bot API; I did not check its current wording). |
 | **Flooding and cost** | Many messages or files trigger turns and LLM spend. | • The existing queue cap, token quota and upload quota. • The bridge's own closed per-chat limiter. • Outbound pacing at one per second per chat; honour `retry_after`. |
-| **Formatting injection** | MarkdownV2 or HTML in model output breaks sends or spoofs UI (fake buttons and links). | • Send plain text (no `parse_mode`), or HTML built with `html.escape`. Never pass model text as MarkdownV2. The connector's reminder path has this bug: `chatbot/tasks.py:555-559` uses the default MarkdownV2 without escaping (TB-0c). |
+| **Formatting injection** | MarkdownV2 or HTML in model output breaks sends or spoofs UI (fake buttons and links). | • Send plain text (no `parse_mode`), or HTML built with `html.escape`. Never pass model text as MarkdownV2. The connector's reminder path has this bug: `chatbot/tasks.py:555-559` uses the default MarkdownV2 without escaping (separate fix, §8). |
 
 **Hooks the bridge must not skip.** Steps 3-7 of §4.1 and steps 1-7 of §4.2. Everything
 from the turn runner onward runs unchanged, because the bridge enters through the same
@@ -768,7 +842,8 @@ seam as the WebSocket (§1.8).
 | G1 | Inbound seam `submit_user_message` (extracted from the consumer) | Missing; logic exists inline (`consumers.py:861-1057`) | M |
 | G2 | Broadcast human messages to the room group, so web tabs see Telegram-sent text | Missing (`consumers.py:979`) | S |
 | G3 | Public read of the pending approval (pk, turn, short id, risk) | Partly there: `pending_approval_prompt` (`agent_loop.py:3774-3801`), private `_pending_approval_record`; risk derivable via `is_high_risk_action` (`action_catalog.py:695`) | S |
-| G4 | Structured approval event to clients | Missing; dropped at `coordinator.py:905`. v0.8 T-A2 adds `approval.requested` | S now (heuristic plus DB read); free with T-A2 |
+| G4 | Structured approval event to clients | Missing; dropped at `coordinator.py:905`. Comes with v0.8 T-A2 (`approval.requested` / `approval.resolved`) | Part of T-A2 (+ TB-4 fields) |
+| G4b | Typed per-turn frames (`turn.started`, tool events, one terminal event, `seq`) and a non-consumer subscription hook | Missing. This is T-A2 (#217), not started | Part of T-A2 |
 | G5 | Bot API client without the token leak, with 429 handling | Missing; connector's is unsafe (§1.1) | S |
 | G6 | Poller with lease, offset and webhook check | Missing; lease pattern reusable (`turn_leases.py`, `in_process_scheduler.py:209-258`) | M |
 | G7 | Pairing and allowlist models and commands | Missing | M |
@@ -788,7 +863,7 @@ seam as the WebSocket (§1.8).
 
 | # | Decision | Options | Recommendation |
 |---|---|---|---|
-| **D1** | When to build, given the v0.8 "no new features" line | (a) after v0.8 Phase A (T-A2/T-A3); (b) now, as a written exception; (c) Phase 0/1 now, bridge after T-A2 | **(c).** TB-0 and TB-1..4 are fixes and seams that v0.8 also wants. Starting the bridge after T-A2 avoids building on frames that are about to change. If you want it sooner, record the exception in the brief, as 0.4.2 should have. |
+| **D1** | When to build | **Decided (2026-11-08):** the freeze does not apply. Build from scratch on the v0.8 core | Order: seams inside T-A1/T-A2, then the bridge app once T-A2's frames exist (§0.1, §8). |
 | **D2** | How a button approves | (a) feed "yes"/"no" through the chat path; (b) call `resume_after_confirmation` directly; (c) a new approve-by-id API | **(a).** No core or contract change, and it keeps every existing guard. (b) skips consent and the runner. (c) touches protected `agent_loop.py` for no gain. Add TB-16 later for explicit binding. |
 | **D3** | Where the poller runs | (a) lifespan task in the web process plus a database lease; (b) its own management command and compose service with its own `TurnRunner`; (c) Celery | **(a).** Works in lite and full, and inherits runner shutdown. (b) breaks in lite (in-memory layer, boot sweep at `turns.py:1176-1187`) and edits protected `docker-compose*.yml`. (c) is ruled out (§1.7). |
 | **D4** | Which modes in v1 | A only; A+B; A+B+C | **A first, then B.** B depends on BotFather topic mode, and on Telegram fixing per-topic failures (#905, open). C adds group-exposure risk. Ship C last, with the member-count warning. |
@@ -800,6 +875,8 @@ seam as the WebSocket (§1.8).
 | **D10** | Use `sendMessageDraft` instead of status edits | now; later | **Later.** Edits are well understood and rate-limit-safe at 3 s. Drafts are newer (9.3/9.5/10.3) and stream reply text, which this design does not need for v1. |
 | **D11** | Raise `send_telegram_*` risk to require confirmation | yes (separate PR, protected `action_catalog.py`); no | **Yes, separately.** It is unrelated to the bridge, but the low rating is inconsistent with outside-world doctrine. |
 | **D12** | Static allowlist env in addition to pairing | yes; no | **Yes, optional.** `ALLOWED_TELEGRAM_USER_IDS` empty means pairing alone. Cheap defence in depth. |
+| **D13** | What happens to the v0.4.2 Telegram connector | (a) leave it; (b) rebuild it on `telegram_bridge/bot_api.py`; (c) retire it | **(b), after the bridge ships.** Its sends go through the new client, so the token leak and MarkdownV2 bugs disappear with it. One Bot API client, one bot. Until then, keep it. Retiring it removes agent-initiated sends to arbitrary chats; that is your product call. |
+| **D14** | Should T-A2's frames be in-process callbacks or channel-layer group messages | callbacks (sinks registered with the runner); group messages only | **Both: a sink registry in the runner that the consumer and the bridge both register with.** The channel layer stays the fan-out to browser sockets. In-process sinks avoid channels_redis capacity drops and expiry for the bridge, which runs in the same process (§1.5). This is T-A2 design input; decide it there. |
 
 ---
 
@@ -807,128 +884,80 @@ seam as the WebSocket (§1.8).
 
 Every ticket follows `docs/golden-principles/tests-and-evals.md`:
 - show each new test failing for the right reason before the change;
-- mock only at the Telegram HTTP boundary (`bot_api` transport) and the LLM
+- mock only at the Telegram HTTP boundary (the `bot_api` transport) and the LLM
   (`_FakeLLM`);
 - use the real runner, database and channel layer;
 - run CI's blocking commands (`:68-80`).
 
-**Freeze and contracts.** No ticket adds a connector or a tool action, and none changes
-a contract, except TB-16 (a minor bump to `approval.md`, needing a human OK) and TB-17
-(needs T-A3's `turn-stream.md`).
+**Approach.** The freeze does not apply, and the bridge is built from scratch on the v0.8
+core. There is no interim build on today's frames or on the v0.4.2 connector.
 
-**Protected paths touched:**
+**Three tracks.**
+- **Track 1** is core work. It belongs inside the v0.8 Phase A tickets you are on now.
+- **Track 2a** needs only TB-1, so it can start as soon as TB-1 merges.
+- **Track 2b** needs T-A2's frames.
+
+**Protected paths and contracts touched:**
 - migrations (TB-5, TB-15);
-- `.env.example` (TB-18);
-- `action_catalog.py` (D11, separate).
+- `docs/contracts/approval.md` (TB-16, minor bump);
+- `docs/contracts/turn-stream.md`, which is T-A3's own deliverable;
+- `.env.example` (TB-18).
 
-### Phase 0: fixes that stand alone (freeze-safe)
+All of these need a plan and a human OK.
 
-- **TB-0a: Connector token leak.** Stop `_tg_post` from raising errors that carry the
-  URL. Parse `ok:false`/`description`; never include the URL.
-  - Test: a 400 response produces a result and log text that do **not** contain the
-    fake token. It must fail today. S.
-- **TB-0b: `docs/telegram.md` webhook step.** Remove step 3, or mark it unsupported
-  until the bridge exists. Fix the "send and receive" docstring. S.
-- **TB-0c: Reminder Telegram send.** `chatbot/tasks.py:555-559` sends unescaped
-  MarkdownV2. Send plain text instead.
-  - Test: content with `.`, `!` or `(` is sent with no `parse_mode`. S.
-- **TB-0d: Byte-safe `callback_data`.** Truncate by UTF-8 bytes, not characters.
-  - Test: 40 two-byte characters are cut to ≤64 bytes. S.
+### Track 1: core strengthening (inside v0.8 Phase A)
 
-### Phase 1: seams (v0.8-aligned refactors, no behaviour change)
+| Ticket | Lands in | What | Tests (each shown failing first) | Size |
+|---|---|---|---|---|
+| **TB-1** | #216 T-A1 closeout | `chatbot/inbound.py::submit_user_message(room, user, text, *, via)`, extracted from `ChatConsumer.new_message`; the consumer becomes transport only, as #216 asks | (1) existing `test_turn_runner` WebSocket tests unchanged; (2) a message submitted through the seam, with no socket, runs a turn whose reply is saved; (3) a "yes" through the seam resumes a real paused turn (`_PauseHarness`, `CONSENT_SKEW_SECONDS=0`) and writes a `basis="human"` receipt; (4) a non-member is refused and **no** `Message` row is created (fixes the orphan row at `consumers.py:935` vs `:958`) | M |
+| **TB-4** | #217 T-A2 | (a) `approval.requested` carries `approval_id`, `approval_kind` and a risk class; `approval.resolved` carries `decision` and `via`; (b) a frame-sink registry on the runner that the consumer registers with, and any in-process client can too (D14); (c) read helper `orchestration/approval_view.pending_agent_approval` | Every frame carries `turn_id` and a monotonic `seq`; a second registered sink receives the same frames as the consumer; a sink that raises never aborts the turn (T-A2's best-effort rule); the reused-row case returns the *new* turn_id and short_id; another user's row is invisible | M |
+| **TB-2** | #217 T-A2 | A user-message frame (for example `message.received {turn_id, message_id, via}`) so every client sees human messages from other surfaces | Two clients; B receives A's message with `via` | S |
+| **TB-16** | #217 T-A2, contract in #218 | A decision submitted for a specific `approval_id` (through `submit_user_message(..., decision_for=approval_id)`) is refused by the coordinator if the pending row's id or turn differs. Minor bump to `approval.md` | The §4.2 race, forced with an event at the seam: a stale decision is refused and the new pause stays pending | M |
+| **TB-A3** | #218 T-A3 | Write the client contract doc for *a client*, not the browser. The duplicate, reorder, reconnect and terminal fixtures run against a generic test sink, so the bridge plugs in later | Fixtures pass for the consumer and for the test sink | S (on top of T-A3) |
+| **TB-3** | independent | `chatbot/documents.py::ingest_room_document`, extracted from `upload_document_to_ai` | Quota, type and size limits; the view's existing tests still pass | S |
+| **TB-G9** | independent (investigation) | Does document text in `ContextManager` count as untrusted or tainted? Write the answer down and file an issue if not | — | S |
 
-- **TB-1: `chatbot/inbound.py::submit_user_message`.** Extract it from
-  `ChatConsumer.new_message`, and make the consumer call it.
-  - Tests: (1) all existing `test_turn_runner` WebSocket tests pass unchanged; (2) a
-    message submitted through the seam, with no socket, runs a turn whose reply is
-    saved; (3) a "yes" through the seam resumes a real paused turn (`_PauseHarness`
-    pattern, `CONSENT_SKEW_SECONDS=0`) and writes a `basis="human"` receipt; (4) a
-    non-member is refused and **no** `Message` row is created. This fixes the orphan
-    row at `consumers.py:935` vs `:958`. M.
-- **TB-2: `user_message_saved` group frame.** The consumer forwards it, so other tabs
-  and the bridge see human messages.
-  - Test: two communicators; B receives A's message. S.
-- **TB-3: `chatbot/documents.py::ingest_room_document`.** Extract it from
-  `upload_document_to_ai`.
-  - Tests: quota, type and size limits; the view still passes its tests. S.
-- **TB-4: `orchestration/approval_view.pending_agent_approval`.** Read-only: pk,
-  turn_id, short_id, redacted message, effects, tools, risk.
-  - Tests: the reused-row case returns the *new* turn_id and short_id; another user's
-    row is invisible. S.
-- **TB-G9 (investigation).** Does document text in `ContextManager` count as untrusted
-  or tainted? Write down the answer. If it does not, file an issue. S.
+### Track 2a: bridge foundation (needs TB-1 only; new app, plan first because of migrations)
 
-### Phase 2: bridge core (new app; plan in `docs/plans/` first because of migrations)
+| Ticket | What | Tests | Size |
+|---|---|---|---|
+| **TB-5** | Models and migrations (§3.3) | A second active link for a chat is refused and a revoked one is allowed; conditional-UPDATE helpers have exactly one winner under a barrier race | M |
+| **TB-6** | `bot_api.py`, from scratch | A 429 with `retry_after` waits for it (fake clock); `ok:false` maps to a typed error; the token never appears in `str(error)` or in logs (`assertLogs`); per-chat pacing allows at most one send per second | S |
+| **TB-7** | Pairing: `telegram_pair` / `telegram_unpair` commands and the `/pair` handler | Expired, used, wrong, group-chat and over-limit codes are refused; a cache error refuses (closed); success binds `from.id` and emits the in-app notification | M |
+| **TB-8** | Poller and lifespan wiring | A webhook already set → no polling, plus an alert; two pollers → exactly one holds the lease (barrier); restart resumes from the stored offset with no duplicate `Message`; updates older than `MAX_UPDATE_AGE` do not enqueue; a `bot_id` change stops the poller; lifespan stop happens before runner shutdown | M |
+| **TB-9** | Inbound routing, mode A (`/rooms`, `/room`, `/status`, `/stop` mapped to the existing cancel directive) | One test per filter, each failing when its guard line is removed: wrong `from.id`, `sender_chat`, `is_bot`, forwarded, guest, revoked link, no room access. Text reaches `submit_user_message` with `via=telegram` | M |
+| **TB-13** | Files: `getFile` → `ingest_room_document` (needs TB-3) | An oversized declared size never calls `getFile`; the type is sniffed (a PDF named `.jpg`); the token URL never appears in logs; a caption turn starts after the document completes (event-based wait) | M |
 
-- **TB-5: Models and migrations** from §3.3.
-  - Tests: unique-active constraints (a second active link for a chat is refused; a
-    revoked one is allowed); the conditional-UPDATE helpers have exactly one winner
-    under a barrier race. M.
-- **TB-6: `bot_api.py`.**
-  - Tests: a 429 with `retry_after` waits for it (using a fake clock); `ok:false` maps
-    to a typed error; the token never appears in `str(error)` or in logs (assert with
-    `assertLogs`); per-chat pacing allows at most one send per second. S.
-- **TB-7: Pairing.** `telegram_pair` / `telegram_unpair` commands and the `/pair`
-  handler.
-  - Tests: expired, used, wrong, group-chat and over-limit codes are refused; a cache
-    error refuses (closed); success binds `from.id` and emits the in-app notification. M.
-- **TB-8: Poller and lifespan.**
-  - Tests: a webhook already set → no polling, plus an alert; two pollers →
-    exactly one holds the lease (barrier); restart resumes from the stored offset with
-    no duplicate `Message`; updates older than `MAX_UPDATE_AGE` do not enqueue; a
-    `bot_id` change stops the poller; lifespan stop happens before runner shutdown. M.
-- **TB-9: Inbound routing, mode A** (`/rooms`, `/room`, `/status`, `/stop` mapped to
-  the existing cancel directive).
-  - Tests, one per filter, each failing when its guard line is removed: wrong `from.id`,
-    `sender_chat`, `is_bot`, forwarded, guest, revoked link, no room access. Text
-    reaches `submit_user_message` with `via=telegram`. M.
-- **TB-10: Relay.**
-  - Tests, with a real runner, `InMemoryChannelLayer` and `_FakeLLM`: one status
-    message per run, edited (never re-sent) at most every N seconds with identical text
-    skipped; the final reply is sent as a new message, split at 4096; plain text only;
-    secrets in model text are redacted on the way out (a fake `sk-…` key never reaches
-    the fake transport). M-L.
-- **TB-11: Approval cards (agent loop).**
-  - Tests: approve resumes and writes a receipt; reject cancels; a double tap gives
-    exactly one decision (barrier); a stale card after row reuse is refused; another
-    Telegram user is refused; an expired card is refused; buttons are removed after the
-    outcome; `answerCallbackQuery` is always called. M.
-- **TB-12: PIN for high-risk.**
-  - Tests: a high-risk card asks for the PIN; a wrong PIN ×5 locks the link and
-    notifies; the PIN message is deleted; a low-risk card skips the PIN. S-M.
-- **TB-13: Files.**
-  - Tests: an oversized declared size never calls `getFile`; the type is sniffed (a PDF
-    named `.jpg`); the token URL never appears in logs; a caption turn starts after the
-    document completes (bounded wait, with an event rather than a sleep). M.
+At the end of 2a you can talk to Kazi from the phone. Replies come back only once the
+relay ships in 2b. A minimal "reply ready" fallback is possible by watching
+`Turn` terminal states in the database, but I don't recommend building it, since 2b
+replaces it.
 
-### Phase 3: topics, workflow approvals, hardening
+### Track 2b: relay and approvals (needs T-A2 merged)
 
-- **TB-14: Modes B and C.** `/newtopic` and `/bind`, the `has_topics_enabled` check, and
-  handling of "message thread not found" (#905): mark the binding broken and never
-  post to General.
-  - Tests: per-thread routing; two topics map to two rooms; a broken-topic path. M.
-- **TB-15: Telegram notification channel and workflow approval cards** through
-  `submit_execution_approval`.
-  - Tests: owner check; non-waiting execution refused; an `ApprovalMismatch` 409 path
-    (reuse `_submission_env`). Adds `delivered_telegram` (a migration). M.
-- **TB-16: Explicit approval binding.** The inbound decision carries the card's
-  approval pk and turn_id, and the coordinator refuses a mismatch.
-  - Touches `coordinator.py` (not protected) and documents a minor bump to
-    `approval.md` (protected; human OK).
-  - Test: the race in §4.2, forced with an event at the seam. M.
-- **TB-17: Switch the relay's `FrameAdapter` to the v0.8 stream protocol** once T-A2
-  and T-A3 land. Drop the "Waiting for confirmation." heuristic. S-M.
-- **TB-18: Docs and architecture.** Rewrite `docs/telegram.md` (setup, modes,
-  disclosure, rotation runbook); add the variables to `docs/configuration.md` and
-  `.env.example`; update `docs/architecture/model.js` (an external "Telegram Bot API"
-  node, a bridge module in `web`, edges, a "Telegram approval" scenario mirroring
-  `shell`); run `python scripts/check_architecture_model.py`; add the bridge to
-  `kazi_status`. S.
+| Ticket | What | Tests | Size |
+|---|---|---|---|
+| **TB-10** | Relay registered as a frame sink (TB-4b): status message per `turn_id`, edits on tool events, terminal frame closes it, final reply read from the persisted message | Real runner and `_FakeLLM`: one status message per turn; edits at most every N seconds with identical text skipped; `turn.failed{partial}` renders as "Ended", never "Done"; duplicate or reordered `seq` is ignored; the reply is split at 4096, plain text; a fake `sk-…` key in model text never reaches the fake transport; restart resumes by `turn_id` + `seq` | M |
+| **TB-11** | Approval cards from `approval.requested`; decision through `submit_user_message(..., decision_for=…)` (TB-16) | Approve resumes and writes a receipt; reject cancels; a double tap gives exactly one decision (barrier); a stale card after row reuse is refused; another Telegram user is refused; an expired card is refused; `approval.resolved` from the web closes the card; `answerCallbackQuery` is always called | M |
+| **TB-12** | PIN for high-risk approvals | A high-risk card asks for the PIN; a wrong PIN ×5 locks the link and notifies; the PIN message is deleted; a low-risk card skips the PIN | S-M |
+
+### Track 3: after the bridge
+
+| Ticket | What | Size |
+|---|---|---|
+| **TB-14** | Modes B and C: `/newtopic` and `/bind`, the `has_topics_enabled` check, and handling of "message thread not found" (#905): mark the binding broken and never post to General | M |
+| **TB-15** | Telegram notification channel and workflow approval cards through `submit_execution_approval`. Owner and status checks; the `ApprovalMismatch` 409 path (reuse `_submission_env`). Adds `delivered_telegram` (a migration) | M |
+| **TB-19** | D13: rebuild the v0.4.2 connector's sends on `bot_api.py`, or retire it | S |
+| **TB-18** | Docs and architecture: rewrite `docs/telegram.md` (setup, modes, disclosure, rotation runbook); add the variables to `docs/configuration.md` and `.env.example`; update `docs/architecture/model.js` (an external "Telegram Bot API" node, a bridge module in `web`, edges, a "Telegram approval" scenario); run `python scripts/check_architecture_model.py`; add the bridge to `kazi_status`. Ship this with TB-8/TB-10, not at the end | S |
 
 ### Separate PRs, not part of the bridge
 
-- **D11:** raise the `send_telegram_*` risk.
-- **Workflow UI views without a POST check** (`workflows/ui_views.py:399-406`).
+- **The token leak in the shipped connector.** It is a live issue in today's
+  release, so fix it now (§1.1), even though TB-19 will replace that code. The same
+  applies to the unescaped MarkdownV2 send in `chatbot/tasks.py:555-559`.
+- **D11:** raise the `send_telegram_*` risk (`action_catalog.py` is protected).
+- **Workflow UI views without a POST check** (`workflows/ui_views.py:399-406`). A task
+  card is queued.
 - **AGENTS.md discrepancies** in §1.8: receipts editable, capability gate open on
   missing preferences, `approval.md` drift.
 - **Notification email and WhatsApp `execute` call bugs** (§1.6).

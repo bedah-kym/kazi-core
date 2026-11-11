@@ -597,6 +597,50 @@ class CancelPollTests(_TurnLeaseBase):
         self.assertFalse(turn_fenced(str(turn.pk)))
         unregister_live_turn(str(turn.pk))
 
+    def _flagged_then_paused(self):
+        from orchestration.turns import request_stop_for_key, transition
+
+        turn = self._running(owner=turn_leases.PROCESS_OWNER_ID)
+        # The stop lands while the row is still running, just before the loop's
+        # pause write: the window between its last hook check and the edge.
+        result = request_stop_for_key(self.room.id, self.user.id)
+        self.assertTrue(result.flagged)
+        turn.refresh_from_db()
+        self.assertTrue(transition(
+            str(turn.pk), turn.version, "paused",
+            from_state="running", pause_kind="approval",
+        ))
+        turn.refresh_from_db()
+        return turn
+
+    def _assert_resumed_turn_is_live(self, turn_id):
+        register_live_turn(turn_id)
+        self.addCleanup(unregister_live_turn, turn_id)
+        found = turn_leases._poll_cancels_and_close()
+        self.assertEqual(found, set())
+        self.assertTrue(turn_live(turn_id))
+        self.assertIsNone(Turn.objects.get(pk=turn_id).cancel_requested_at)
+
+    def test_a_turn_resumed_by_consent_does_not_inherit_an_earlier_stop(self):
+        from orchestration.turns import continue_pause
+
+        paused = self._flagged_then_paused()
+        placeholder = self._running(owner=turn_leases.PROCESS_OWNER_ID)
+        ref = continue_pause(placeholder, paused)
+
+        self.assertEqual(ref.state, "running")
+        self._assert_resumed_turn_is_live(ref.id)
+
+    def test_a_budget_resume_does_not_inherit_an_earlier_stop(self):
+        from orchestration.turns import transition
+
+        paused = self._flagged_then_paused()
+        self.assertTrue(transition(
+            str(paused.pk), paused.version, "running", from_state="paused",
+        ))
+
+        self._assert_resumed_turn_is_live(str(paused.pk))
+
 
 class AgentLoopFenceTests(SimpleTestCase):
     def _loop(self, responses, *, context, patches=None, resumed_state=None,

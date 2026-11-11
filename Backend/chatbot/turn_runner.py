@@ -184,11 +184,8 @@ async def run_immediate_directives(
                 "I couldn't confirm autopilot was disarmed. Disarm it from the "
                 "operations inbox to be sure."
             )
-        # The disarm words are part of the exact-stop set (#216b-3, Q1), so a
-        # running turn is stopped here too.
-        stop_notice = await _stop_active_turn(room_id, user_id)
-        if stop_notice is not None:
-            return stop_notice
+        # Disarming is not a stop (#216b-3, Q1: the stop set is
+        # is_cancel_command): the running turn keeps going and asks as usual.
         if disarmed:
             return "Autopilot disarmed for this room."
         return "Autopilot was not armed for this room."

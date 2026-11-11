@@ -314,6 +314,64 @@ class StopCancelsWebsocketTests(TransactionTestCase):
             "marked interrupted" in text for text in self._notice_texts()
         ))
 
+    def test_autopilot_off_mid_run_disarms_without_stopping_the_turn(self):
+        # The stop set is is_cancel_command (rev 3, Q1). "autopilot off" only
+        # disarms: the rest of the turn asks as usual, it is not cancelled.
+        receipts_done = asyncio.Event()
+        release = asyncio.Event()
+        real_receipt = agent_loop._record_receipt
+
+        async def receipt_wrapper(name, *args, **kwargs):
+            await real_receipt(name, *args, **kwargs)
+            if name == "set_reminder" and not receipts_done.is_set():
+                receipts_done.set()
+                await release.wait()
+
+        self.llm.queue(
+            _response(
+                [_text("working"), _tool("a1", "set_reminder", REMINDER_A)],
+                stop_reason="tool_use",
+            ),
+            _response([_text("all done")]),
+        )
+
+        async def scenario():
+            with patch(
+                "orchestration.agent_loop._record_receipt",
+                new=receipt_wrapper,
+            ):
+                comm = await self._connect()
+                await self._send(comm, "@kazi set reminder a")
+                await asyncio.wait_for(receipts_done.wait(), timeout=8)
+                turn = await sync_to_async(self._running_turn)()
+                await self._send(comm, "@kazi autopilot off")
+                self.assertTrue(await self._wait_for(
+                    lambda: any(
+                        "Autopilot was not armed" in text
+                        for text in self._notice_texts()
+                    ),
+                    timeout=5,
+                ))
+                release.set()
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(
+                        pk=turn.pk, state="completed",
+                    ).exists(),
+                    timeout=8,
+                ))
+                await self.runner.drain(timeout=15)
+                return turn.pk
+
+        turn_id = self._run(scenario())
+
+        turn = Turn.objects.get(pk=turn_id)
+        self.assertEqual(turn.state, "completed")
+        self.assertIsNone(turn.cancel_requested_at)
+        self.assertEqual(len(self.llm.calls), 2)
+        self.assertFalse(any(
+            STOP_NOTICE in text for text in self._notice_texts()
+        ))
+
     def test_a_stop_from_another_worker_is_honoured_within_the_poll(self):
         entered = asyncio.Event()
         release = asyncio.Event()

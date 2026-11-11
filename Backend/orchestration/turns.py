@@ -523,6 +523,7 @@ def continue_pause(
                 pause_kind=None,
                 pause_expires_at=None,
                 paused_at=None,
+                cancel_requested_at=None,
                 end_reason=None,
             )
         )
@@ -875,6 +876,10 @@ def transition(
         updates["paused_at"] = timezone.now()
     elif to_state == "running" and "paused_at" not in updates:
         updates["paused_at"] = None
+    if to_state == "running":
+        # A stop that landed just before a pause edge must not end the resumed
+        # turn: the resume is consent that postdates the pause, so it is newer.
+        updates["cancel_requested_at"] = None
 
     # Ownership follows the running/committing states. A pause or a terminal
     # edge gives the row back, so no heartbeat and no lease survives it.

@@ -67,6 +67,10 @@ BUSY_LIVE = "busy_live"
 TOOK_OVER = "took_over"
 LOST = "lost"
 
+# The ending a person's exact stop writes. It is never `lease_lost`: the two
+# are told apart by the cancel flag, not by the loop's stopped_reason (#216b-3).
+USER_CANCEL = "user_cancel"
+
 # Test seam for the deterministic claim race: called after the oldest queued
 # row is selected and before the conditional update. Production leaves it None.
 _CLAIM_RACE_HOOK = None
@@ -78,6 +82,23 @@ class ClaimResult:
 
     status: str
     turn: Optional[Turn] = None
+
+
+@dataclass(frozen=True)
+class StopResult:
+    """What one exact stop did to a key (#216b-3).
+
+    ``flagged`` means a running Turn really carried the flag; the notice may
+    only say "stopping" then. ``committing`` and the absence of both mean the
+    turn had already moved on, and the notice must say so instead.
+    """
+
+    active: bool = False
+    flagged: bool = False
+    committing: bool = False
+    paused: bool = False
+    running_turn_id: Optional[str] = None
+    queued_cancelled: int = 0
 
 
 class PauseContinuationLost(Exception):
@@ -285,6 +306,88 @@ def count_queued(room_id: Any, user_id: Any) -> int:
     ).count()
 
 
+def request_stop_for_key(room_id: Any, user_id: Any) -> StopResult:
+    """Flag a running Turn and drop everything waiting for one key.
+
+    The flag is written beside the state, never as a transition: the owner
+    still writes the ``cancelled(user_cancel)`` ending with its own version,
+    so this write must not bump ``version`` (#216b-3, item 5). The bulk queued
+    cancel is the only other write. A pause that waits alongside the running
+    turn is reported, and the caller ends it through the existing cancel path.
+    """
+    if room_id is None:
+        return StopResult()
+    with transaction.atomic():
+        running = (
+            Turn.objects.select_for_update()
+            .filter(room_id=room_id, user_id=user_id, state="running")
+            .order_by("started_at")
+            .first()
+        )
+        committing = Turn.objects.filter(
+            room_id=room_id, user_id=user_id, state="committing",
+        ).exists()
+        queued = Turn.objects.filter(
+            room_id=room_id, user_id=user_id, state="queued",
+        )
+        paused = Turn.objects.filter(
+            room_id=room_id, user_id=user_id, state="paused",
+        ).exists()
+        # Only an active turn makes this an exact stop. Queued-only or a pause
+        # on its own keeps today's path: the stop becomes a Turn and the
+        # coordinator handles the queue or the pause honestly.
+        active = bool(running is not None or committing)
+        if not active:
+            return StopResult(paused=paused)
+
+        flagged = False
+        running_id = None
+        if running is not None:
+            updated = Turn.objects.filter(
+                pk=running.pk, state="running",
+            ).update(cancel_requested_at=timezone.now())
+            if updated == 1:
+                flagged = True
+                running_id = str(running.pk)
+            elif not committing:
+                # The row moved on between the read and the flag write. Say
+                # what it moved to instead of claiming a stop happened.
+                committing = Turn.objects.filter(
+                    pk=running.pk, state="committing",
+                ).exists()
+
+        cancelled = queued.update(
+            state="cancelled",
+            end_reason=USER_CANCEL,
+            version=F("version") + 1,
+            ended_at=Now(),
+            owner_id=None,
+            lease_expires_at=None,
+        )
+    return StopResult(
+        active=True,
+        flagged=flagged,
+        committing=committing,
+        paused=paused,
+        running_turn_id=running_id,
+        queued_cancelled=cancelled,
+    )
+
+
+def previous_turn_for_key(
+    room_id: Any, user_id: Any, *, exclude_turn_id: Any = None,
+) -> Optional[Turn]:
+    """The newest Turn for a key other than ``exclude_turn_id``.
+
+    Used only to decide whether the next turn's model input carries the one
+    "the user stopped the earlier request" harness line (#216b-3, item 8).
+    """
+    query = Turn.objects.filter(room_id=room_id, user_id=user_id)
+    if exclude_turn_id:
+        query = query.exclude(pk=exclude_turn_id)
+    return query.order_by("-created_at").first()
+
+
 def claim_next_queued(room_id: Any, user_id: Any) -> Optional[Turn]:
     """Claim the oldest queued Turn for one key, FIFO enforced in the UPDATE.
 
@@ -419,6 +522,7 @@ def continue_pause(
                 lease_expires_at=lease_expiry(),
                 pause_kind=None,
                 pause_expires_at=None,
+                paused_at=None,
                 end_reason=None,
             )
         )
@@ -726,6 +830,7 @@ def transition(
     model: Any = _UNSET,
     pause_expires_at: Any = _UNSET,
     paused_state_enc: Any = _UNSET,
+    paused_at: Any = _UNSET,
     superseded_by_id: Any = _UNSET,
 ) -> bool:
     """Move a turn with one compare-and-set write.
@@ -756,11 +861,20 @@ def transition(
         "model": model,
         "pause_expires_at": pause_expires_at,
         "paused_state_enc": paused_state_enc,
+        "paused_at": paused_at,
         "superseded_by_id": superseded_by_id,
     }
     for field, value in optional.items():
         if value is not _UNSET:
             updates[field] = value
+
+    # Every pause edge stamps when it happened, and a resume clears the stamp.
+    # The stamp is the app host's clock, the same clock as a message timestamp,
+    # so a budget/quota "continue" can be checked against it (#216b-3, item 6).
+    if to_state == "paused" and "paused_at" not in updates:
+        updates["paused_at"] = timezone.now()
+    elif to_state == "running" and "paused_at" not in updates:
+        updates["paused_at"] = None
 
     # Ownership follows the running/committing states. A pause or a terminal
     # edge gives the row back, so no heartbeat and no lease survives it.

@@ -554,6 +554,11 @@ class CoordinatorTurnTests(_CoordinatorTurnBase):
                     if pause_kind == "budget"
                     else "orchestration.coordinator.resume_after_quota"
                 )
+                # The resume is consent only when it was sent after the pause
+                # (#216b-3 item 6). The fixture reuses one message row.
+                Message.objects.filter(pk=self.message.pk).update(
+                    timestamp=timezone.now() + timedelta(seconds=5),
+                )
                 with patch(resume_name, new=self._loop(
                     AgentEvent("text_delta", {"text": "Done."}),
                     AgentEvent("done", {"end_reason": "finished"}),

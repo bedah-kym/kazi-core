@@ -47,6 +47,12 @@ class Turn(models.Model):
     # Ownership and leasing arrive in P3-4; both stay null here.
     owner_id = models.CharField(max_length=128, null=True, blank=True)
     lease_expires_at = models.DateTimeField(null=True, blank=True)
+    # A person's stop is a flag beside the state, never a state transition: the
+    # owner still writes the honest `cancelled(user_cancel)` ending (#216b-3).
+    cancel_requested_at = models.DateTimeField(null=True, blank=True)
+    # When the turn entered `paused`. A budget/quota "continue" is consent only
+    # if it was sent after this stamp plus CONSENT_SKEW_SECONDS.
+    paused_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     started_at = models.DateTimeField(null=True, blank=True)
     ended_at = models.DateTimeField(null=True, blank=True)

@@ -28,8 +28,11 @@ from orchestration.coordinator import OrchestrationCoordinator
 from orchestration.models import Turn
 from orchestration.turn_leases import (
     beat_once,
+    cancel_requested,
     live_turn_ids,
     register_live_turn,
+    request_cancel,
+    turn_fenced,
     turn_live,
     unregister_live_turn,
 )
@@ -89,6 +92,7 @@ class _TurnLeaseBase(TransactionTestCase):
         turn_leases._LIVE_TURNS.clear()
         turn_leases._FENCED_TURNS.clear()
         turn_leases._LAST_RENEWAL.clear()
+        turn_leases._CANCELLED_TURNS.clear()
         layer = MagicMock()
         layer.group_send = AsyncMock()
         patcher = patch(
@@ -101,6 +105,7 @@ class _TurnLeaseBase(TransactionTestCase):
         turn_leases._LIVE_TURNS.clear()
         turn_leases._FENCED_TURNS.clear()
         turn_leases._LAST_RENEWAL.clear()
+        turn_leases._CANCELLED_TURNS.clear()
         super().tearDown()
 
     def _running(
@@ -519,6 +524,78 @@ class HeartbeatTests(_TurnLeaseBase):
         self.assertTrue(callable(seen.get("turn_live")))
         self.assertTrue(seen.get("live_during_loop"))
         self.assertFalse(turn_live("00000000-0000-0000-0000-00000000dead"))
+
+
+class StopFlagTests(SimpleTestCase):
+    """#216b-3: a person's stop is an in-memory read in the loop hook."""
+
+    def setUp(self):
+        turn_leases._LIVE_TURNS.clear()
+        turn_leases._FENCED_TURNS.clear()
+        turn_leases._LAST_RENEWAL.clear()
+        turn_leases._CANCELLED_TURNS.clear()
+        self.addCleanup(turn_leases._LIVE_TURNS.clear)
+        self.addCleanup(turn_leases._FENCED_TURNS.clear)
+        self.addCleanup(turn_leases._LAST_RENEWAL.clear)
+        self.addCleanup(turn_leases._CANCELLED_TURNS.clear)
+
+    def _register(self, turn_id="turn-1"):
+        now = turn_leases._MONOTONIC()
+        with turn_leases._REGISTRY_LOCK:
+            turn_leases._LIVE_TURNS[turn_id] = now
+            turn_leases._LAST_RENEWAL[turn_id] = now
+
+    def test_a_same_process_stop_makes_the_next_hook_call_false(self):
+        self._register()
+        self.assertTrue(turn_live("turn-1"))
+        request_cancel("turn-1")
+        self.assertFalse(turn_live("turn-1"))
+        self.assertTrue(cancel_requested("turn-1"))
+        self.assertFalse(turn_fenced("turn-1"))
+
+    def test_the_hook_makes_no_query_per_iteration(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        self._register()
+        with CaptureQueriesContext(connection) as queries:
+            for _ in range(100):
+                self.assertTrue(turn_live("turn-1"))
+                self.assertFalse(cancel_requested("turn-1"))
+        self.assertEqual(len(queries), 0)
+
+    def test_a_stop_and_a_fence_resolve_as_the_fence(self):
+        self._register()
+        request_cancel("turn-1")
+        with turn_leases._REGISTRY_LOCK:
+            turn_leases._FENCED_TURNS.add("turn-1")
+        self.assertTrue(turn_fenced("turn-1"))
+        self.assertFalse(turn_live("turn-1"))
+
+    def test_an_idle_process_does_not_query_for_cancels(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        with CaptureQueriesContext(connection) as queries:
+            self.assertEqual(turn_leases._poll_cancels_and_close(), set())
+        self.assertEqual(len(queries), 0)
+
+
+class CancelPollTests(_TurnLeaseBase):
+    def test_the_poll_reads_the_flag_once_and_marks_the_turn(self):
+        turn = self._running(owner=turn_leases.PROCESS_OWNER_ID)
+        turn.cancel_requested_at = timezone.now()
+        turn.save(update_fields=["cancel_requested_at"])
+        register_live_turn(str(turn.pk))
+
+        with self.assertNumQueries(1):
+            found = turn_leases._poll_cancels_and_close()
+
+        self.assertEqual(found, {str(turn.pk)})
+        self.assertTrue(cancel_requested(str(turn.pk)))
+        self.assertFalse(turn_live(str(turn.pk)))
+        self.assertFalse(turn_fenced(str(turn.pk)))
+        unregister_live_turn(str(turn.pk))
 
 
 class AgentLoopFenceTests(SimpleTestCase):

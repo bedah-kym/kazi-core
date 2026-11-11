@@ -41,12 +41,18 @@ _REGISTRY_LOCK = threading.Lock()
 # Turn id -> the monotonic time of its last successful renewal. It is per turn
 # so one turn's failing beats can never reset another turn's fence clock.
 _LAST_RENEWAL: dict[str, float] = {}
+# Turn ids this process knows are stopped by a person (#216b-3). It is filled
+# two ways: synchronously when the stop is handled in this process, and by one
+# short poll for a stop written by another worker.
+_CANCELLED_TURNS: set[str] = set()
 _HEARTBEAT_TASK: asyncio.Task | None = None
+_CANCEL_POLL_TASK: asyncio.Task | None = None
 _MONOTONIC = time.monotonic
 
 DEFAULT_LEASE_SECONDS = 90
 DEFAULT_HEARTBEAT_SECONDS = 30
 DEFAULT_FENCE_MARGIN_SECONDS = 30
+DEFAULT_CANCEL_POLL_SECONDS = 2
 _WARNED_LEASE_CONFIGS: set[tuple[int, int, int]] = set()
 _LEASE_CONFIG_LOCK = threading.Lock()
 
@@ -127,6 +133,35 @@ def lease_expiry():
     return Now() + timedelta(seconds=lease)
 
 
+def cancel_poll_seconds() -> int:
+    return _int_setting(
+        "TURN_CANCEL_POLL_SECONDS", DEFAULT_CANCEL_POLL_SECONDS,
+    )
+
+
+def request_cancel(turn_id) -> None:
+    """Record a person's stop for a live Turn in this process, with no wait.
+
+    The database flag is written by the stop path; this is the same-process
+    fast path so the loop's next :func:`turn_live` call sees it immediately.
+    """
+    tid = str(turn_id or "")
+    if not tid:
+        return
+    with _REGISTRY_LOCK:
+        _CANCELLED_TURNS.add(tid)
+    ensure_cancel_poll()
+
+
+def cancel_requested(turn_id) -> bool:
+    """Whether this process has observed a stop for ``turn_id``."""
+    tid = str(turn_id or "")
+    if not tid:
+        return False
+    with _REGISTRY_LOCK:
+        return tid in _CANCELLED_TURNS
+
+
 def register_live_turn(turn_id) -> None:
     """Add this process's Turn to the heartbeat registry and start the beat."""
     tid = str(turn_id or "")
@@ -138,8 +173,12 @@ def register_live_turn(turn_id) -> None:
         # resumed turn therefore is not capped from its first start (H1).
         _LIVE_TURNS[tid] = now
         _FENCED_TURNS.discard(tid)
+        # A stale observation from an earlier segment must not stop a fresh
+        # one; the poll re-adds it if the row still carries the flag.
+        _CANCELLED_TURNS.discard(tid)
         _LAST_RENEWAL[tid] = now
     ensure_heartbeat()
+    ensure_cancel_poll()
 
 
 def unregister_live_turn(turn_id) -> None:
@@ -150,6 +189,7 @@ def unregister_live_turn(turn_id) -> None:
         _LIVE_TURNS.pop(tid, None)
         _FENCED_TURNS.discard(tid)
         _LAST_RENEWAL.pop(tid, None)
+        _CANCELLED_TURNS.discard(tid)
 
 
 def live_turn_ids() -> list[str]:
@@ -236,10 +276,82 @@ def _beat_and_close() -> int:
             pass
 
 
+def _poll_cancels_and_close() -> set[str]:
+    """One indexed read for every live Turn in this process (E2, E13).
+
+    Returns the ids that carry a person's stop. The query is skipped entirely
+    when this process has no live turn, so an idle worker costs nothing. It
+    runs off the shared ORM thread and closes its connection (#303's rule).
+    """
+    ids = live_turn_ids()
+    if not ids:
+        return set()
+    try:
+        found = {
+            str(pk) for pk in Turn.objects.filter(
+                pk__in=ids,
+                state="running",
+                cancel_requested_at__isnull=False,
+            ).values_list("pk", flat=True)
+        }
+        with _REGISTRY_LOCK:
+            for tid in found:
+                if tid in _LIVE_TURNS:
+                    _CANCELLED_TURNS.add(tid)
+        return found
+    finally:
+        try:
+            from django.db import connection
+
+            connection.close()
+        except Exception:
+            pass
+
+
+async def _cancel_poll_loop() -> None:
+    interval = max(1, cancel_poll_seconds())
+    while True:
+        await asyncio.sleep(interval)
+        if not live_turn_ids():
+            continue
+        try:
+            await sync_to_async(
+                _poll_cancels_and_close, thread_sensitive=False,
+            )()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("Turn cancel poll failed", exc_info=True)
+
+
+def turn_fenced(turn_id) -> bool:
+    """Whether this process's ownership has lapsed, independent of a stop.
+
+    Used to resolve the case where a stop and a fence both hold: the fence is
+    the ending that wins, because the row is no longer this owner's to write.
+    """
+    tid = str(turn_id or "")
+    if not tid:
+        return True
+    with _REGISTRY_LOCK:
+        if tid in _FENCED_TURNS:
+            return True
+        if tid not in _LIVE_TURNS:
+            return True
+        last = _LAST_RENEWAL.get(tid)
+    if last is None:
+        return True
+    lease, _heartbeat, margin = _lease_settings()
+    budget = max(1, lease - margin)
+    return (_MONOTONIC() - last) > budget
+
+
 def turn_live(turn_id) -> bool:
     """Whether this process may still act for ``turn_id``.
 
-    Fail closed: an unregistered, fenced, or lapsed owner is not live.
+    Fail closed: an unregistered, fenced, lapsed or person-stopped owner is not
+    live. This is the hook the async loop calls per iteration and per tool, so
+    it must stay an in-memory read; the poll puts the database flag here.
     """
     tid = str(turn_id or "")
     if not tid:
@@ -248,6 +360,8 @@ def turn_live(turn_id) -> bool:
         if tid not in _LIVE_TURNS:
             return False
         if tid in _FENCED_TURNS:
+            return False
+        if tid in _CANCELLED_TURNS:
             return False
         last = _LAST_RENEWAL.get(tid)
     if last is None:
@@ -288,10 +402,41 @@ def ensure_heartbeat() -> asyncio.Task | None:
     return _HEARTBEAT_TASK
 
 
+def ensure_cancel_poll() -> asyncio.Task | None:
+    """Start the one stop-poll task for the running event loop, if needed."""
+    global _CANCEL_POLL_TASK
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+    current = _CANCEL_POLL_TASK
+    if current is not None and not current.done() and current.get_loop() is loop:
+        return current
+    _CANCEL_POLL_TASK = loop.create_task(
+        _cancel_poll_loop(), name="kazi-turn-cancel-poll",
+    )
+    return _CANCEL_POLL_TASK
+
+
+async def stop_cancel_poll() -> None:
+    global _CANCEL_POLL_TASK
+    task = _CANCEL_POLL_TASK
+    _CANCEL_POLL_TASK = None
+    if task is None or task.done():
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
 async def stop_heartbeat() -> None:
+    """Stop the heartbeat and the stop poll for this event loop."""
     global _HEARTBEAT_TASK
     task = _HEARTBEAT_TASK
     _HEARTBEAT_TASK = None
+    await stop_cancel_poll()
     if task is None or task.done():
         return
     task.cancel()

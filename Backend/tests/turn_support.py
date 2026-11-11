@@ -30,4 +30,7 @@ def turn_test_patches() -> dict:
         # Consent timing needs the request Message and the approval row; the
         # dedicated consent tests exercise the real check.
         "orchestration.coordinator._consent_postdates_prompt": AsyncMock(return_value=True),
+        "orchestration.coordinator._consent_postdates_pause": AsyncMock(return_value=True),
+        # The stop-line lookup reads the previous Turn; a routing test must not.
+        "orchestration.coordinator.previous_turn_for_key": lambda *a, **k: None,
     }

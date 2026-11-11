@@ -61,6 +61,13 @@ DISARM_FAILED_NOTICE = (
 RECORD_FAILED_NOTICE = (
     "I couldn't record this message, so nothing was run. Please try again."
 )
+# The exact-stop notice (#216b-3). "Stopping" is only used when a running Turn
+# was really flagged; otherwise the honest state is said instead.
+STOP_NOTICE = "Stopping before the next step."
+STOP_COMMITTING_NOTICE = (
+    "That reply is already being saved, so it will finish."
+)
+STOP_ENDED_NOTICE = "That request had already finished."
 # A claim that keeps failing retries the same drainer with this backoff.
 CLAIM_RETRY_BASE_SECONDS = 2
 CLAIM_RETRY_MAX_SECONDS = 60
@@ -96,6 +103,48 @@ def _fail_turn(turn: Turn, reason: str) -> bool:
         str(turn.pk), turn.version, "failed",
         from_state=turn.state, end_reason=reason,
     )
+
+
+async def _stop_active_turn(room_id: Any, user_id: int) -> Optional[str]:
+    """Stop the key's running turn before its next step (#216b-3, item 2).
+
+    Returns the one notice to save, or ``None`` when the key has no active
+    Turn, which keeps today's "stop runs as its own turn" behaviour. The flag
+    write is beside the state, so the owner still writes the honest
+    ``cancelled(user_cancel)`` ending with its own version.
+    """
+    from orchestration.agent_loop import cancel_pending_action
+    from orchestration.turn_leases import request_cancel
+    from orchestration.turns import request_stop_for_key
+
+    try:
+        result = await sync_to_async(request_stop_for_key)(room_id, user_id)
+    except Exception as exc:
+        logger.warning(
+            "Stop lookup failed; leaving the message to normal handling: %s",
+            type(exc).__name__,
+        )
+        return None
+    if not result.active:
+        return None
+    if result.running_turn_id:
+        # Same process: the loop's next turn_live() call sees this with no wait.
+        request_cancel(result.running_turn_id)
+    if result.paused:
+        # A pause waiting beside the running turn ends too, through the same
+        # cancel path a bare stop already uses (#216b-3, item 4).
+        try:
+            await cancel_pending_action(room_id, user_id)
+        except Exception as exc:
+            logger.warning(
+                "Waiting pause not ended after a stop: %s",
+                type(exc).__name__,
+            )
+    if result.flagged:
+        return STOP_NOTICE
+    if result.committing:
+        return STOP_COMMITTING_NOTICE
+    return STOP_ENDED_NOTICE
 
 
 async def run_immediate_directives(
@@ -135,6 +184,11 @@ async def run_immediate_directives(
                 "I couldn't confirm autopilot was disarmed. Disarm it from the "
                 "operations inbox to be sure."
             )
+        # The disarm words are part of the exact-stop set (#216b-3, Q1), so a
+        # running turn is stopped here too.
+        stop_notice = await _stop_active_turn(room_id, user_id)
+        if stop_notice is not None:
+            return stop_notice
         if disarmed:
             return "Autopilot disarmed for this room."
         return "Autopilot was not armed for this room."
@@ -158,7 +212,8 @@ async def run_immediate_directives(
     # A bare stop/cancel reduces permission too. It is not terminal: the
     # message still runs through its normal handling (which may cancel a
     # pending action). Disarm now so a live turn's mid-run re-read sees it.
-    cancel = is_cancel_command(query)
+    strict_cancel = is_cancel_command(query)
+    cancel = strict_cancel
     if not cancel and is_cancel_request(query):
         from orchestration.agent_loop import has_pending_agent_state
 
@@ -181,6 +236,10 @@ async def run_immediate_directives(
                 logger.warning(
                     "Disarm-failure notice not saved: %s", type(exc).__name__,
                 )
+    if strict_cancel:
+        stop_notice = await _stop_active_turn(room_id, user_id)
+        if stop_notice is not None:
+            return stop_notice
     return None
 
 

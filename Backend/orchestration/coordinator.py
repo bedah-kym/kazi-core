@@ -24,6 +24,7 @@ from orchestration.turns import (
     BUSY_LIVE,
     PauseContinuationLost,
     TERMINAL_STATES,
+    USER_CANCEL,
     TurnRef,
     aclaim_turn,
     afinalize_turn,
@@ -31,10 +32,13 @@ from orchestration.turns import (
     aget_turn,
     alink_message,
     atransition,
+    previous_turn_for_key,
     ref_from_turn,
 )
 from orchestration.turn_leases import (
+    cancel_requested,
     register_live_turn,
+    turn_fenced,
     turn_live,
     unregister_live_turn,
 )
@@ -65,6 +69,7 @@ from orchestration.shell.chat_intents import (
 )
 from orchestration.agent_loop import (
     AGENT_LOOP_APPROVAL_KIND,
+    LEASE_LOST_NOTE,
     run_agent_loop,
     has_pending_agent_state,
     has_pending_budget_state,
@@ -173,6 +178,79 @@ async def _consent_postdates_prompt(
             return False
 
     return await sync_to_async(_check)()
+
+
+async def _consent_postdates_pause(
+    paused_turn: Optional[Any], message_id: Optional[int],
+) -> bool:
+    """Whether a budget/quota reply was sent after the pause existed.
+
+    The same rule as an approval reply (#216b-0): a "continue" that waited on
+    the lock, or came from a second tab, must not resume work it never saw.
+    A missing stamp, a missing message or an unreadable clock denies consent.
+    """
+    if paused_turn is None or message_id is None:
+        return False
+    paused_at = getattr(paused_turn, "paused_at", None)
+    if paused_at is None:
+        return False
+
+    def _check() -> bool:
+        from chatbot.models import Message
+
+        try:
+            sent_at = (
+                Message.objects.filter(pk=message_id)
+                .values_list("timestamp", flat=True)
+                .first()
+            )
+            if sent_at is None:
+                return False
+            skew = int(getattr(settings, "CONSENT_SKEW_SECONDS", 2))
+            return sent_at > paused_at + timedelta(seconds=skew)
+        except Exception as exc:
+            logger.warning("Pause consent timestamp check failed: %s", exc)
+            return False
+
+    return await sync_to_async(_check)()
+
+
+STOPPED_TURN_NOTE = (
+    "[Harness: the user stopped the previous request partway through. Do not "
+    "redo or resume it unless the user asks again.]"
+)
+
+
+async def _stopped_turn_note(
+    room_id: Any, user_id: int, current_turn_id: Optional[str],
+) -> str:
+    """One line for the turn right after a person's stop (#216b-3, item 8).
+
+    It is built from the Turn record, never from message text, so typing the
+    same words as a user message gives them no harness standing. It is only
+    the stopped turn immediately before this one; it never grows with history.
+    """
+    turn = await sync_to_async(previous_turn_for_key)(
+        room_id, user_id, exclude_turn_id=current_turn_id,
+    )
+    if turn is not None and turn.state == "cancelled" and turn.end_reason == USER_CANCEL:
+        return STOPPED_TURN_NOTE
+    return ""
+
+
+async def _user_cancel_ending(ref: TurnRef) -> bool:
+    """Whether a loop that stopped should end as a person's cancel, not a fence.
+
+    A fence and a stop that both hold resolve as the fence: the row is no
+    longer this owner's to write, so ``failed(lease_lost)`` wins. The DB flag
+    is authoritative; the in-memory check keeps normal endings query-free.
+    """
+    if not cancel_requested(ref.id):
+        return False
+    if turn_fenced(ref.id):
+        return False
+    row = await aget_turn(ref.id)
+    return bool(row is not None and row.cancel_requested_at is not None)
 
 
 async def _end_unexpected_turn(turn_box: Dict, stream_state: Dict, outcome: str) -> None:
@@ -584,6 +662,15 @@ class OrchestrationCoordinator:
             ref = turn_box.get("ref")
             if ref is None:
                 return
+            if reason == "lease_lost" and await _user_cancel_ending(ref):
+                # The loop stops before its next step on either a fence or a
+                # person's stop; the flag tells them apart (#216b-3, G5). Keep
+                # results and receipts; end honestly as the person's cancel.
+                partial = bool(stream_state["tools"] or stream_state["model"])
+                await _advance_turn(
+                    "cancelled", end_reason=USER_CANCEL, partial=partial,
+                )
+                return
             if reason in ("budget", "asked_for_more"):
                 # At the configured ceiling the loop keeps no state to resume,
                 # so a pause here would strand the turn. End it for good.
@@ -875,7 +962,18 @@ class OrchestrationCoordinator:
                 elif event.kind == "text_delta":
                     await broadcast_chunk(event.data.get("text", ""))
                 elif event.kind == "harness":
-                    await broadcast_chunk(event.data.get("text", ""), harness=True)
+                    text = event.data.get("text", "")
+                    turn_id = _turn_id()
+                    if (
+                        text == LEASE_LOST_NOTE
+                        and cancel_requested(turn_id)
+                        and not turn_fenced(turn_id)
+                    ):
+                        # A person's stop is not a lost lease. The saved stop
+                        # notice already says what happened; never print the
+                        # fence line for it (#216b-3, item 5).
+                        continue
+                    await broadcast_chunk(text, harness=True)
                 elif event.kind == "thinking":
                     await emit_progress("thinking", "started", "Reasoning…")
                 elif event.kind == "tool_start":
@@ -949,6 +1047,12 @@ class OrchestrationCoordinator:
         async def _handle_agent_loop(query_text: str, history_msgs, ctx_prompt: str, mem_summary: str, env_block: str = ""):
             """Run the agentic loop and map AgentEvents to WebSocket frames."""
             turn_box["agent_ran"] = True
+            pending_note = "\n".join(
+                note for note in (
+                    turn_box.get("pending_note", ""),
+                    turn_box.get("stop_note", ""),
+                ) if note
+            )
             await emit_progress("planning", "started", "Thinking…")
             await _relay_agent_events(run_agent_loop(
                 user_message=query_text,
@@ -959,7 +1063,7 @@ class OrchestrationCoordinator:
                 environment_block=env_block,
                 history=history_msgs or None,
                 history_tainted=_history_replays_untrusted(history_msgs),
-                pending_note=turn_box.get("pending_note", ""),
+                pending_note=pending_note,
                 nothing_pending=bool(turn_box.get("nothing_pending")),
             ))
 
@@ -1234,10 +1338,20 @@ class OrchestrationCoordinator:
                 or (is_approval_reply(query) and consent_postdates_prompt)
             )
         )
+        budget_yes = bool(
+            is_budget_extend_reply(query) or is_approval_reply(query)
+        )
+        # A budget/quota "continue" is consent only if it postdates the pause
+        # (#216b-3, item 6). A late no or cancel still cancels whichever stamp
+        # it carries, because that fails safe.
+        budget_consent = bool(
+            pending_budget and budget_yes
+            and await _consent_postdates_pause(paused_turn, message_id)
+        )
         budget_continues = bool(
             pending_budget and (
-                is_budget_extend_reply(query) or is_decline_reply(query)
-                or is_cancel_command(query) or is_approval_reply(query)
+                budget_consent or is_decline_reply(query)
+                or is_cancel_command(query)
             )
         )
         continues_paused = approval_continues or budget_continues
@@ -1432,7 +1546,7 @@ class OrchestrationCoordinator:
 
         # --- Agent loop budget / quota resume (T-F3, T-F3b) ---
         if not pending_handled and pending_budget:
-            if is_budget_extend_reply(query) or is_approval_reply(query):
+            if budget_yes and budget_consent:
                 ctx_prompt = ""
                 try:
                     ctx_prompt = await get_context_prompt() or ""
@@ -1517,6 +1631,11 @@ class OrchestrationCoordinator:
             ctx_prompt = await _with_persona_identity(room_id, user_id, ctx_prompt)
             env_block = await _environment_block()
             mem_sum = memory_summary or ""
+            ref = turn_box.get("ref")
+            if ref is not None:
+                turn_box["stop_note"] = await _stopped_turn_note(
+                    room_id, user_id, ref.id,
+                )
             try:
                 await _handle_agent_loop(
                     query,

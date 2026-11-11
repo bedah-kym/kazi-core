@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from datetime import timedelta
+from unittest import skipIf
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from asgiref.sync import async_to_sync, sync_to_async
@@ -17,6 +19,7 @@ from channels.routing import URLRouter
 from channels.testing import WebsocketCommunicator
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
+from django.db import connection
 from django.test import TransactionTestCase, override_settings
 from django.utils import timezone
 
@@ -25,6 +28,7 @@ from chatbot.kazi_messages import encrypt_for_room
 from chatbot.models import Chatroom, Member, Message
 from chatbot.turn_runner import (
     STOP_COMMITTING_NOTICE,
+    STOP_FAILED_NOTICE,
     STOP_NOTICE,
     TurnRunner,
 )
@@ -32,9 +36,14 @@ from orchestration import agent_loop
 from orchestration import turn_leases
 from orchestration import turns as turns_mod
 from orchestration.action_receipts import ActionReceipt
-from orchestration.coordinator import STOPPED_TURN_NOTE, OrchestrationCoordinator
+from orchestration.coordinator import (
+    STOPPED_TURN_NOTE,
+    OrchestrationCoordinator,
+)
 from orchestration.models import Turn
+from orchestration.shell.profiles import PROFILES
 from orchestration.turns import USER_CANCEL, create_turn
+from workflows.models import WorkflowApprovalRecord
 
 
 def _text(text):
@@ -103,6 +112,7 @@ class _ForceUser:
     CHANNEL_LAYERS={"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}},
     TURN_QUEUE_MAX=3,
     TURN_CANCEL_POLL_SECONDS=1,
+    CONSENT_SKEW_SECONDS=0,
 )
 class StopCancelsWebsocketTests(TransactionTestCase):
     def setUp(self):
@@ -244,6 +254,49 @@ class StopCancelsWebsocketTests(TransactionTestCase):
         turn.refresh_from_db()
         return turn
 
+    def _saved_reply(self, turn_id):
+        from chatbot.history import decrypt_stored
+
+        message = Message.objects.filter(
+            turn_id=turn_id, member__User__username="kazi",
+        ).order_by("-timestamp").first()
+        if message is None:
+            return "", {}
+        content, payload = decrypt_stored(self.room, message)
+        return content, (payload or {})
+
+    def _arm_autopilot(self):
+        from orchestration.shell import autopilot
+        from users.models import UserProfile
+
+        UserProfile.objects.get_or_create(user=self.user)
+        with patch("orchestration.shell.autopilot.can_arm", return_value=True):
+            self.assertTrue(
+                autopilot.arm(self.user.id, self.room.id, armed_by=self.user.id),
+            )
+
+    def _is_autopilot_armed(self):
+        from orchestration.shell import autopilot
+
+        return autopilot.is_armed(self.user.id, self.room.id)
+
+    def _open_profile(self):
+        return patch(
+            "orchestration.shell.profiles.resolve_profile",
+            return_value=PROFILES["open"],
+        )
+
+    async def _pause_for_blocks(self, blocks, *, text="@kazi do it"):
+        self.llm.queue(_response(blocks, stop_reason="tool_use"))
+        comm = await self._connect()
+        await self._send(comm, text)
+        self.assertTrue(await self._wait_for(
+            lambda: Turn.objects.filter(state="paused").exists(),
+        ))
+        return comm, await sync_to_async(
+            lambda: Turn.objects.get(state="paused")
+        )()
+
     # --- must-fail tests -------------------------------------------------
 
     def test_a_mid_run_stop_keeps_tool_a_and_never_runs_b(self):
@@ -288,6 +341,12 @@ class StopCancelsWebsocketTests(TransactionTestCase):
                     lambda: any(STOP_NOTICE in text for text in self._notice_texts()),
                     timeout=5,
                 ))
+                notice = next(
+                    text for text in await sync_to_async(self._notice_texts)()
+                    if STOP_NOTICE in text
+                )
+                self.assertIn("The step already running will finish", notice)
+                self.assertNotIn("Stopping before the next step", notice)
                 release.set()
                 self.assertTrue(await self._wait_for(
                     lambda: Turn.objects.filter(
@@ -310,9 +369,9 @@ class StopCancelsWebsocketTests(TransactionTestCase):
             ActionReceipt.objects.filter(action="set_reminder").count(), 1,
         )
         self.assertFalse(Turn.objects.filter(state="completed").exists())
-        self.assertFalse(any(
-            "marked interrupted" in text for text in self._notice_texts()
-        ))
+        content, _payload = self._saved_reply(turn_id)
+        self.assertNotIn("marked interrupted", content)
+        self.assertIn("you stopped this turn", content)
 
     def test_autopilot_off_mid_run_disarms_without_stopping_the_turn(self):
         # The stop set is is_cancel_command (rev 3, Q1). "autopilot off" only
@@ -370,6 +429,41 @@ class StopCancelsWebsocketTests(TransactionTestCase):
         self.assertEqual(len(self.llm.calls), 2)
         self.assertFalse(any(
             STOP_NOTICE in text for text in self._notice_texts()
+        ))
+
+    def test_a_stop_notice_says_autopilot_is_off_when_it_disarmed(self):
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def before(n):
+            if n == 1:
+                entered.set()
+                await release.wait()
+
+        self.llm.before_call = before
+        self.llm.queue(_response([_text("working")]))
+        self._arm_autopilot()
+
+        async def scenario():
+            comm = await self._connect()
+            await self._send(comm, "@kazi long thing")
+            await asyncio.wait_for(entered.wait(), timeout=5)
+            await self._send(comm, "@kazi stop")
+            self.assertTrue(await self._wait_for(
+                lambda: any(
+                    "Autopilot is now off" in text
+                    for text in self._notice_texts()
+                ),
+                timeout=5,
+            ))
+            release.set()
+            await self.runner.drain(timeout=15)
+
+        self._run(scenario())
+
+        self.assertFalse(self._is_autopilot_armed())
+        self.assertTrue(any(
+            "Autopilot is now off" in text for text in self._notice_texts()
         ))
 
     def test_a_stop_from_another_worker_is_honoured_within_the_poll(self):
@@ -478,7 +572,8 @@ class StopCancelsWebsocketTests(TransactionTestCase):
         )
         self.assertFalse(Turn.objects.filter(state="completed").exists())
         notices = self._notice_texts()
-        self.assertTrue(any(STOP_NOTICE in text for text in notices))
+        stop_notice = next(text for text in notices if STOP_NOTICE in text)
+        self.assertIn("3 waiting message(s) weren't answered", stop_notice)
         self.assertFalse(any("3 messages waiting" in text for text in notices))
         self.assertEqual(Turn.objects.get(pk=turn_id).state, "cancelled")
 
@@ -644,6 +739,374 @@ class StopCancelsWebsocketTests(TransactionTestCase):
             3,
         )
 
+    @skipIf(
+        connection.vendor == "sqlite",
+        "SQLite serialises writers; the two-connection race is the Postgres "
+        "guarantee. The deterministic seam test covers the logic on SQLite.",
+    )
+    def test_a_stop_during_a_resume_wins_when_the_stop_commits_first(self):
+        entered = threading.Event()
+        release = threading.Event()
+        real_continue = turns_mod.continue_pause
+
+        def blocking_continue(placeholder, paused, *, message_id=None):
+            entered.set()
+            release.wait(10)
+            return real_continue(placeholder, paused, message_id=message_id)
+
+        tool = _tool("c1", "send_email", {"to": "a@b.c", "body": "hi"})
+
+        async def scenario():
+            with patch(
+                "chatbot.turn_runner.continue_pause_turn",
+                side_effect=blocking_continue,
+            ), patch(
+                "chatbot.turn_runner._writes_are_thread_sensitive",
+                return_value=False,
+            ):
+                comm, paused = await self._pause_for_blocks([tool])
+                await self._send(comm, "@kazi yes")
+                entered_ok = await asyncio.get_running_loop().run_in_executor(
+                    None, entered.wait, 5,
+                )
+                self.assertTrue(entered_ok, "the pause swap never ran")
+                placeholder = await sync_to_async(self._running_turn)()
+                await self._send(comm, "@kazi stop")
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(
+                        pk=placeholder.pk, cancel_requested_at__isnull=False,
+                    ).exists(),
+                    timeout=5,
+                ))
+                release.set()
+                self.assertTrue(await self._wait_for(
+                    lambda: not Turn.objects.filter(
+                        state__in=("running", "committing", "paused"),
+                    ).exists(),
+                    timeout=8,
+                ))
+                await self.runner.drain(timeout=15)
+                return placeholder.pk, paused.pk
+
+        placeholder_id, paused_id = self._run(scenario())
+
+        placeholder = Turn.objects.get(pk=placeholder_id)
+        paused = Turn.objects.get(pk=paused_id)
+        self.assertEqual(placeholder.state, "cancelled")
+        self.assertEqual(placeholder.end_reason, USER_CANCEL)
+        self.assertEqual(paused.state, "cancelled")
+        self.assertEqual(self.execute_tool.await_count, 0)
+        self.assertEqual(len(self.llm.calls), 1)
+        self.assertFalse(
+            WorkflowApprovalRecord.objects.filter(status="pending").exists(),
+        )
+        content, _payload = self._saved_reply(placeholder_id)
+        self.assertNotIn("already resumed elsewhere", content)
+        self.assertIn("you stopped this turn", content)
+
+    @skipIf(
+        connection.vendor == "sqlite",
+        "SQLite serialises writers; the two-connection race is the Postgres "
+        "guarantee. The deterministic seam test covers the logic on SQLite.",
+    )
+    def test_a_stop_during_a_resume_wins_when_the_swap_commits_first(self):
+        entered = threading.Event()
+        release = threading.Event()
+        real_continue = turns_mod.continue_pause
+
+        def blocking_continue(placeholder, paused, *, message_id=None):
+            ref = real_continue(placeholder, paused, message_id=message_id)
+            entered.set()
+            release.wait(10)
+            return ref
+
+        tool = _tool("c1", "send_email", {"to": "a@b.c", "body": "hi"})
+
+        async def scenario():
+            with patch(
+                "chatbot.turn_runner.continue_pause_turn",
+                side_effect=blocking_continue,
+            ), patch(
+                "chatbot.turn_runner._writes_are_thread_sensitive",
+                return_value=False,
+            ):
+                comm, paused = await self._pause_for_blocks([tool])
+                await self._send(comm, "@kazi yes")
+                entered_ok = await asyncio.get_running_loop().run_in_executor(
+                    None, entered.wait, 5,
+                )
+                self.assertTrue(entered_ok, "the pause swap never committed")
+                placeholder = await sync_to_async(
+                    lambda: Turn.objects.get(state="superseded")
+                )()
+                await self._send(comm, "@kazi stop")
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(
+                        pk=paused.pk, cancel_requested_at__isnull=False,
+                    ).exists(),
+                    timeout=5,
+                ))
+                release.set()
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(
+                        pk=paused.pk, state="cancelled",
+                    ).exists(),
+                    timeout=8,
+                ))
+                await self._send(comm, "@kazi ok")
+                self.assertTrue(await self._wait_for(
+                    lambda: len(self.llm.calls) >= 2,
+                    timeout=8,
+                ))
+                await self.runner.drain(timeout=15)
+                return paused.pk, placeholder.pk
+
+        paused_id, placeholder_id = self._run(scenario())
+
+        resumed = Turn.objects.get(pk=paused_id)
+        self.assertEqual(resumed.state, "cancelled")
+        self.assertEqual(resumed.end_reason, USER_CANCEL)
+        self.assertEqual(Turn.objects.get(pk=placeholder_id).state, "superseded")
+        self.assertEqual(self.execute_tool.await_count, 0)
+        self.assertEqual(len(self.llm.calls), 2)
+        self.assertFalse(
+            WorkflowApprovalRecord.objects.filter(status="pending").exists(),
+        )
+        next_call = self.llm.calls[1]
+        messages = json.dumps(next_call["messages"], default=str)
+        self.assertIn(STOPPED_TURN_NOTE, messages)
+        self.assertEqual(messages.count(STOPPED_TURN_NOTE), 1)
+
+    def test_the_stop_line_ignores_the_queued_rows_a_stop_dropped(self):
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def before(n):
+            if n == 1:
+                entered.set()
+                await release.wait()
+
+        self.llm.before_call = before
+        self.llm.queue(
+            _response(
+                [_text("working"), _tool("b1", "set_reminder", REMINDER_B)],
+                stop_reason="tool_use",
+            ),
+            _response([_text("next answer")]),
+        )
+
+        async def scenario():
+            comm = await self._connect()
+            await self._send(comm, "@kazi set reminder b")
+            await asyncio.wait_for(entered.wait(), timeout=5)
+            turn = await sync_to_async(self._running_turn)()
+            for text in ("one", "two", "three"):
+                await sync_to_async(self._queued_request)(f"@kazi {text}")
+            await self._send(comm, "@kazi stop")
+            self.assertTrue(await self._wait_for(
+                lambda: Turn.objects.filter(state="queued").count() == 0,
+                timeout=5,
+            ))
+            release.set()
+            self.assertTrue(await self._wait_for(
+                lambda: Turn.objects.filter(
+                    pk=turn.pk, state="cancelled",
+                ).exists(),
+                timeout=8,
+            ))
+            await self.runner.drain(timeout=15)
+            await self._send(comm, "@kazi next")
+            self.assertTrue(await self._wait_for(
+                lambda: len(self.llm.calls) >= 2,
+                timeout=8,
+            ))
+            await self.runner.drain(timeout=15)
+
+        self._run(scenario())
+
+        next_call = self.llm.calls[1]
+        messages = json.dumps(next_call["messages"], default=str)
+        self.assertIn(STOPPED_TURN_NOTE, messages)
+        self.assertEqual(messages.count(STOPPED_TURN_NOTE), 1)
+
+    def test_a_committing_stop_drops_the_queue_and_gives_no_stop_line(self):
+        turn = self._committing_turn()
+        for text in ("one", "two", "three"):
+            self._queued_request(f"@kazi {text}")
+
+        def _finish_committing():
+            row = Turn.objects.get(pk=turn.pk)
+            return turns_mod.transition(
+                str(row.pk), row.version, "completed",
+                from_state="committing",
+            )
+
+        async def scenario():
+            comm = await self._connect()
+            await self._send(comm, "@kazi stop")
+            self.assertTrue(await self._wait_for(
+                lambda: any(
+                    STOP_COMMITTING_NOTICE in text
+                    for text in self._notice_texts()
+                ),
+                timeout=5,
+            ))
+            notice = next(
+                text for text in await sync_to_async(self._notice_texts)()
+                if STOP_COMMITTING_NOTICE in text
+            )
+            self.assertIn("3 waiting message(s) weren't answered", notice)
+            self.assertTrue(await sync_to_async(_finish_committing)())
+            await self._send(comm, "@kazi next")
+            self.assertTrue(await self._wait_for(
+                lambda: len(self.llm.calls) >= 1,
+                timeout=8,
+            ))
+            await self.runner.drain(timeout=15)
+
+        self._run(scenario())
+
+        call = next(
+            call for call in self.llm.calls
+            if "next" in json.dumps(call["messages"], default=str)
+        )
+        self.assertNotIn(
+            STOPPED_TURN_NOTE, json.dumps(call["messages"], default=str),
+        )
+        self.assertEqual(
+            Turn.objects.filter(state="cancelled", end_reason=USER_CANCEL).count(),
+            3,
+        )
+
+    def test_a_stop_before_a_pause_edge_ends_cancelled_without_a_prompt(self):
+        tool = _tool("c1", "send_email", {"to": "a@b.c", "body": "hi"})
+        self.llm.queue(_response([tool], stop_reason="tool_use"))
+
+        async def preview(name, tool_input, context):
+            turn_id = context.get("turn_id")
+            await sync_to_async(
+                lambda: Turn.objects.filter(pk=turn_id).update(
+                    cancel_requested_at=timezone.now(),
+                )
+            )()
+            return None
+
+        async def scenario():
+            with patch(
+                "orchestration.agent_loop.preview_tool", side_effect=preview,
+            ):
+                comm = await self._connect()
+                await self._send(comm, "@kazi send it")
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(
+                        state="cancelled", end_reason=USER_CANCEL,
+                    ).exists(),
+                    timeout=8,
+                ))
+                await self.runner.drain(timeout=15)
+                return await sync_to_async(
+                    lambda: Turn.objects.get(end_reason=USER_CANCEL)
+                )()
+
+        turn = self._run(scenario())
+
+        self.assertEqual(turn.state, "cancelled")
+        self.assertEqual(self.execute_tool.await_count, 0)
+        self.assertFalse(
+            WorkflowApprovalRecord.objects.filter(status="pending").exists(),
+        )
+        content, _payload = self._saved_reply(turn.pk)
+        self.assertNotIn("Please confirm", content)
+        self.assertIn("you stopped this turn", content)
+
+    def test_a_fenced_turn_still_keeps_the_lease_lost_line(self):
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def before(n):
+            if n == 1:
+                entered.set()
+                await release.wait()
+
+        self.llm.before_call = before
+        self.llm.queue(_response(
+            [_text("working"), _tool("b1", "set_reminder", REMINDER_B)],
+            stop_reason="tool_use",
+        ))
+
+        async def scenario():
+            comm = await self._connect()
+            await self._send(comm, "@kazi set reminder b")
+            await asyncio.wait_for(entered.wait(), timeout=5)
+            turn = await sync_to_async(self._running_turn)()
+            turn_leases._FENCED_TURNS.add(str(turn.pk))
+            release.set()
+            self.assertTrue(await self._wait_for(
+                lambda: Turn.objects.filter(
+                    pk=turn.pk, state="failed", end_reason="lease_lost",
+                ).exists(),
+                timeout=8,
+            ))
+            await self.runner.drain(timeout=15)
+            return turn.pk
+
+        turn_id = self._run(scenario())
+
+        content, _payload = self._saved_reply(turn_id)
+        self.assertIn("marked interrupted", content)
+        self.assertNotIn("you stopped this turn", content)
+        self.assertEqual(self.execute_tool.await_count, 0)
+
+    def test_a_stop_lookup_error_saves_a_notice_and_falls_back(self):
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def before(n):
+            if n == 1:
+                entered.set()
+                await release.wait()
+
+        self.llm.before_call = before
+        self.llm.queue(_response([_text("working")]), _response([_text("ok")]))
+        self._arm_autopilot()
+
+        async def scenario():
+            comm = await self._connect()
+            await self._send(comm, "@kazi long thing")
+            await asyncio.wait_for(entered.wait(), timeout=5)
+            turn = await sync_to_async(self._running_turn)()
+            with patch(
+                "orchestration.turns.request_stop_for_key",
+                side_effect=RuntimeError("db down"),
+            ):
+                await self._send(comm, "@kazi stop")
+                self.assertTrue(await self._wait_for(
+                    lambda: any(
+                        STOP_FAILED_NOTICE in text
+                        for text in self._notice_texts()
+                    ),
+                    timeout=5,
+                ))
+            self.assertFalse(await sync_to_async(self._is_autopilot_armed)())
+            release.set()
+            self.assertTrue(await self._wait_for(
+                lambda: Turn.objects.filter(
+                    pk=turn.pk, state="completed",
+                ).exists(),
+                timeout=8,
+            ))
+            await self.runner.drain(timeout=15)
+            return turn.pk
+
+        turn_id = self._run(scenario())
+
+        notice = next(
+            text for text in self._notice_texts()
+            if STOP_FAILED_NOTICE in text
+        )
+        self.assertIn("Autopilot is now off", notice)
+        self.assertEqual(Turn.objects.get(pk=turn_id).state, "completed")
+
     def test_a_stop_with_nothing_running_keeps_todays_behaviour(self):
         self.llm.queue(_response([_text("nothing to stop")]))
 
@@ -724,6 +1187,16 @@ class PauseConsentTests(TransactionTestCase):
         turn.refresh_from_db()
         return turn
 
+    def _legacy_paused_turn(self, *, expires_in=300):
+        # A pause written before migration 0005 has an expiry but no stamp.
+        turn = self._paused_turn(timezone.now())
+        Turn.objects.filter(pk=turn.pk).update(
+            paused_at=None,
+            pause_expires_at=timezone.now() + timedelta(seconds=expires_in),
+        )
+        turn.refresh_from_db()
+        return turn
+
     def _message(self, text, timestamp):
         message = Message.objects.create(
             member=self.member, content=text, timestamp=timestamp,
@@ -731,23 +1204,28 @@ class PauseConsentTests(TransactionTestCase):
         self.room.chats.add(message)
         return message
 
-    def _drive(self, query, message_id):
+    def _drive(self, query, message_id, *, send_chunk=None):
+        send_chunk = send_chunk or AsyncMock()
+
         async def _inner():
             coordinator = OrchestrationCoordinator()
-            result = await coordinator.handle_message(
-                query=query,
-                user_id=self.user.id,
-                room_id=self.room.id,
-                username=self.user.username,
-                message_id=message_id,
-                send_chunk=AsyncMock(),
-                send_step_event=AsyncMock(),
-                get_context_prompt=AsyncMock(return_value=""),
-                bump_signals=MagicMock(),
-            )
-            if result.turn_state == "committing":
-                await coordinator.finalize_turn(result, reply_saved=True)
-            return result
+            try:
+                result = await coordinator.handle_message(
+                    query=query,
+                    user_id=self.user.id,
+                    room_id=self.room.id,
+                    username=self.user.username,
+                    message_id=message_id,
+                    send_chunk=send_chunk,
+                    send_step_event=AsyncMock(),
+                    get_context_prompt=AsyncMock(return_value=""),
+                    bump_signals=MagicMock(),
+                )
+                if result.turn_state == "committing":
+                    await coordinator.finalize_turn(result, reply_saved=True)
+                return result
+            finally:
+                await turn_leases.stop_heartbeat()
 
         return async_to_sync(_inner)()
 
@@ -772,3 +1250,30 @@ class PauseConsentTests(TransactionTestCase):
 
         turn.refresh_from_db()
         self.assertEqual(turn.state, "completed")
+
+    def test_a_legacy_pause_derives_its_time_from_the_expiry(self):
+        turn = self._legacy_paused_turn(expires_in=300)
+        new = self._message("continue", timezone.now())
+
+        self._drive("continue", new.id)
+
+        turn.refresh_from_db()
+        self.assertEqual(turn.state, "completed")
+
+    def test_an_old_continue_on_a_legacy_pause_tells_the_user_to_retry(self):
+        turn = self._legacy_paused_turn(expires_in=300)
+        old = self._message(
+            "continue", timezone.now() - timedelta(seconds=400),
+        )
+        chunks = []
+
+        async def _send(correlation_id, text, is_final=False):
+            chunks.append(text)
+
+        self._drive("continue", old.id, send_chunk=_send)
+
+        turn.refresh_from_db()
+        self.assertEqual(turn.state, "paused")
+        self.assertTrue(any(
+            "still paused waiting for more budget" in text for text in chunks
+        ))

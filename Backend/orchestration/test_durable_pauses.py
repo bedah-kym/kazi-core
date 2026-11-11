@@ -17,6 +17,7 @@ from django.test import TransactionTestCase, override_settings
 from django.utils import timezone
 
 from chatbot.models import Chatroom, Member, Message
+from orchestration import turn_leases
 from orchestration import turns as turns_mod
 from orchestration.agent_loop import (
     LENGTH_LIMIT_NOTE,
@@ -39,6 +40,10 @@ def _run(coro):
     try:
         return loop.run_until_complete(coro)
     finally:
+        try:
+            loop.run_until_complete(turn_leases.stop_heartbeat())
+        except Exception:
+            pass
         loop.close()
 
 
@@ -690,18 +695,21 @@ class CoordinatorRestartTests(_PauseHarness):
             return None
 
         async def _run(query, message_id):
-            return await OrchestrationCoordinator().handle_message(
-                query=query,
-                user_id=self.user.id,
-                room_id=self.room.id,
-                username=self.user.username,
-                message_id=message_id,
-                send_chunk=_send,
-                send_step_event=_send_step,
-                get_context_prompt=AsyncMock(return_value=""),
-                bump_signals=MagicMock(),
-                history_messages=None,
-            )
+            try:
+                return await OrchestrationCoordinator().handle_message(
+                    query=query,
+                    user_id=self.user.id,
+                    room_id=self.room.id,
+                    username=self.user.username,
+                    message_id=message_id,
+                    send_chunk=_send,
+                    send_step_event=_send_step,
+                    get_context_prompt=AsyncMock(return_value=""),
+                    bump_signals=MagicMock(),
+                    history_messages=None,
+                )
+            finally:
+                await turn_leases.stop_heartbeat()
 
         patches = {
             "orchestration.coordinator.load_memory_summary": AsyncMock(return_value=None),

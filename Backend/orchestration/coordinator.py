@@ -23,6 +23,7 @@ from orchestration.telemetry import record_event
 from orchestration.turns import (
     BUSY_LIVE,
     PauseContinuationLost,
+    PauseContinuationStopped,
     TERMINAL_STATES,
     USER_CANCEL,
     TurnRef,
@@ -32,12 +33,14 @@ from orchestration.turns import (
     aget_turn,
     alink_message,
     atransition,
-    previous_turn_for_key,
+    last_ran_turn_before,
+    pause_ttl_seconds,
     ref_from_turn,
 )
 from orchestration.turn_leases import (
     cancel_requested,
     register_live_turn,
+    request_cancel,
     turn_fenced,
     turn_live,
     unregister_live_turn,
@@ -85,6 +88,7 @@ from orchestration.agent_loop import (
     cancel_pending_action,
     clear_loop_state,
     dismiss_pending_confirmation,
+    _resolve_pending_approval,
     _untrusted_source,
     _conversation_tainted,
 )
@@ -193,6 +197,13 @@ async def _consent_postdates_pause(
         return False
     paused_at = getattr(paused_turn, "paused_at", None)
     if paused_at is None:
+        # Pauses written before migration 0005 have no stamp. Derive one from
+        # the expiry and the TTL. The quota TTL can be longer than the setting,
+        # so this derived time is at or after the real pause: strictly safe.
+        expires_at = getattr(paused_turn, "pause_expires_at", None)
+        if expires_at is not None:
+            paused_at = expires_at - timedelta(seconds=pause_ttl_seconds())
+    if paused_at is None:
         return False
 
     def _check() -> bool:
@@ -219,6 +230,37 @@ STOPPED_TURN_NOTE = (
     "[Harness: the user stopped the previous request partway through. Do not "
     "redo or resume it unless the user asks again.]"
 )
+STOP_ENDED_REPLY_LINE = (
+    "\n\n[Harness: you stopped this turn. The step that was already running "
+    "finished, and nothing after it ran.]"
+)
+
+
+async def _flag_after_message(flag_at: Any, message_id: Optional[int]) -> bool:
+    """Whether a stop flag is at least as new as the reply being handled.
+
+    On an unreadable clock the stop wins (fail closed): a resume must not run
+    a step when the person's stop may be the newer instruction.
+    """
+    if message_id is None:
+        return True
+
+    def _check() -> bool:
+        from chatbot.models import Message
+
+        try:
+            sent_at = (
+                Message.objects.filter(pk=message_id)
+                .values_list("timestamp", flat=True)
+                .first()
+            )
+        except Exception:
+            return True
+        if sent_at is None:
+            return True
+        return flag_at >= sent_at
+
+    return await sync_to_async(_check)()
 
 
 async def _stopped_turn_note(
@@ -227,13 +269,21 @@ async def _stopped_turn_note(
     """One line for the turn right after a person's stop (#216b-3, item 8).
 
     It is built from the Turn record, never from message text, so typing the
-    same words as a user message gives them no harness standing. It is only
-    the stopped turn immediately before this one; it never grows with history.
+    same words as a user message gives them no harness standing. Only the last
+    Turn of this key that actually ran before the current one decides it; a
+    continuation placeholder, a queued row or a later row never does. The stop
+    must carry the flag (`cancel_requested_at`), which is what separates a real
+    stop from the queued rows a stop bulk-cancels (round 2, item 2).
     """
-    turn = await sync_to_async(previous_turn_for_key)(
-        room_id, user_id, exclude_turn_id=current_turn_id,
+    turn = await sync_to_async(last_ran_turn_before)(
+        room_id, user_id, current_turn_id,
     )
-    if turn is not None and turn.state == "cancelled" and turn.end_reason == USER_CANCEL:
+    if (
+        turn is not None
+        and turn.state == "cancelled"
+        and turn.end_reason == USER_CANCEL
+        and turn.cancel_requested_at is not None
+    ):
         return STOPPED_TURN_NOTE
     return ""
 
@@ -543,6 +593,13 @@ class OrchestrationCoordinator:
             ref = turn_box.get("ref")
             return ref.id if ref else ""
 
+        def _register_turn(turn_id: str) -> None:
+            """Register without losing a stop that landed just before this."""
+            stopped = cancel_requested(turn_id)
+            register_live_turn(turn_id)
+            if stopped:
+                request_cancel(turn_id)
+
         async def _start_turn() -> Optional[TurnRef]:
             claim = await aclaim_turn(
                 room_id=room_id,
@@ -555,7 +612,7 @@ class OrchestrationCoordinator:
                 return None
             ref = ref_from_turn(turn)
             turn_box["ref"] = ref
-            register_live_turn(ref.id)
+            _register_turn(ref.id)
             return ref
 
         async def _adopt_paused_turn() -> bool:
@@ -586,6 +643,11 @@ class OrchestrationCoordinator:
                 # really resumes, not when the message is first read.
                 try:
                     new_ref = await continue_pause(paused, message_id)
+                except PauseContinuationStopped:
+                    # The person's stop is newer than this reply: nothing
+                    # resumed runs a step (#216b-3 round 2, item 1).
+                    await _end_resume_stopped()
+                    return False
                 except PauseContinuationLost:
                     # The other writer won; the caller shows the honest line.
                     return False
@@ -598,8 +660,16 @@ class OrchestrationCoordinator:
                 # A paused Turn was missing (an older turn or a test double);
                 # the new record is already running, so only link the reply.
                 await alink_message(ref.id, message_id)
-                register_live_turn(ref.id)
+                _register_turn(ref.id)
                 return True
+            row = await aget_turn(ref.id)
+            if (
+                row is not None
+                and row.cancel_requested_at is not None
+                and await _flag_after_message(row.cancel_requested_at, message_id)
+            ):
+                await _end_resume_stopped()
+                return False
             moved = await atransition(
                 ref.id, ref.version, "running",
                 from_state="paused", pause_kind=None, pause_expires_at=None,
@@ -609,7 +679,7 @@ class OrchestrationCoordinator:
                 return False
             ref = TurnRef(id=ref.id, version=ref.version + 1, state="running")
             turn_box["ref"] = ref
-            register_live_turn(ref.id)
+            _register_turn(ref.id)
             await alink_message(ref.id, message_id)
             return True
 
@@ -645,6 +715,82 @@ class OrchestrationCoordinator:
                 unregister_live_turn(ref.id)
             return True
 
+        async def _add_stopped_reply_line() -> None:
+            """End the saved reply with the one honest stop line, once."""
+            if turn_box.get("stopped_reply_added"):
+                return
+            turn_box["stopped_reply_added"] = True
+            await broadcast_chunk(STOP_ENDED_REPLY_LINE, harness=True)
+
+        async def _stop_pause_edge() -> bool:
+            """End a flagged Turn at a pause edge instead of showing a prompt."""
+            turn_id = _turn_id()
+            if not turn_id or turn_box.get("settled"):
+                return False
+            if not cancel_requested(turn_id):
+                row = await aget_turn(turn_id)
+                if row is None or row.cancel_requested_at is None:
+                    return False
+                request_cancel(turn_id)
+            else:
+                row = await aget_turn(turn_id)
+            if (
+                row is None
+                or row.cancel_requested_at is None
+                or row.state not in ("running", "paused")
+            ):
+                return False
+            partial = bool(stream_state["tools"] or stream_state["model"])
+            moved = await atransition(
+                str(row.pk), row.version, "cancelled",
+                from_state=row.state, end_reason=USER_CANCEL, partial=partial,
+            )
+            if moved:
+                turn_box["ref"] = TurnRef(
+                    id=str(row.pk), version=row.version + 1, state="cancelled",
+                )
+            turn_box["settled"] = True
+            unregister_live_turn(str(row.pk))
+            try:
+                await _resolve_pending_approval(
+                    room_id, user_id, "cancelled",
+                    comment="The user stopped this turn.",
+                    turn_id=str(row.pk),
+                )
+            except Exception:
+                logger.warning(
+                    "Stopped pause approval row not resolved", exc_info=True,
+                )
+            clear_loop_state(room_id, user_id)
+            await _add_stopped_reply_line()
+            return True
+
+        async def _end_resume_stopped() -> None:
+            """A stop beat the resume swap: end the pause and the placeholder."""
+            turn_box["stopped"] = True
+            ref = turn_box.get("ref")
+            if ref is not None and ref.state in ("running", "paused"):
+                await _add_stopped_reply_line()
+                await _advance_turn(
+                    "cancelled", end_reason=USER_CANCEL,
+                    partial=bool(stream_state["tools"] or stream_state["model"]),
+                )
+            try:
+                # The stop path normally did this. It is idempotent and keeps
+                # the invariant when the swap lost before the stop handler ran.
+                await cancel_pending_action(room_id, user_id)
+            except Exception:
+                logger.warning("Stopped resume pause not cancelled", exc_info=True)
+
+        async def _resume_lost() -> None:
+            """The 'elsewhere' line, unless the person's stop was the reason."""
+            if turn_box.get("stopped"):
+                return
+            await broadcast_chunk(
+                "This turn was already resumed elsewhere. Nothing further was run.",
+                harness=True,
+            )
+
         async def _cancel_other_turn(turn, reason: str) -> None:
             await atransition(
                 str(turn.pk), turn.version, "cancelled",
@@ -667,6 +813,7 @@ class OrchestrationCoordinator:
                 # person's stop; the flag tells them apart (#216b-3, G5). Keep
                 # results and receipts; end honestly as the person's cancel.
                 partial = bool(stream_state["tools"] or stream_state["model"])
+                await _add_stopped_reply_line()
                 await _advance_turn(
                     "cancelled", end_reason=USER_CANCEL, partial=partial,
                 )
@@ -986,6 +1133,10 @@ class OrchestrationCoordinator:
                     status = result.get("status", "")
                     await emit_progress("executing", "completed", f"{tool.replace('_', ' ')}: {status}")
                 elif event.kind == "paused":
+                    if turn_box.get("settled"):
+                        continue
+                    if await _stop_pause_edge():
+                        continue
                     pause_kind = event.data.get("pause_kind") or "approval"
                     await _advance_turn(
                         "paused",
@@ -999,10 +1150,14 @@ class OrchestrationCoordinator:
                         ),
                     )
                 elif event.kind == "confirmation":
+                    if await _stop_pause_edge():
+                        continue
                     turn_box["new_pause_shown"] = True
                     await broadcast_chunk(event.data.get("message", "Please confirm.") + await _autopilot_hint(), harness=True)
                     await emit_progress("validating", "completed", "Waiting for confirmation.")
                 elif event.kind == "budget_request":
+                    if await _stop_pause_edge():
+                        continue
                     await broadcast_chunk(
                         "\n\nI've paused this turn because it needs more budget than it "
                         "has left. Reply **more budget** and I'll continue from where I "
@@ -1493,11 +1648,7 @@ class OrchestrationCoordinator:
                             if await _resume_turn(turn_box["ref"]):
                                 await _resume_confirmed()
                             else:
-                                await broadcast_chunk(
-                                    "This turn was already resumed elsewhere. "
-                                    "Nothing further was run.",
-                                    harness=True,
-                                )
+                                await _resume_lost()
                             pending_handled = True
                         else:
                             if _paused_still_held():
@@ -1516,10 +1667,7 @@ class OrchestrationCoordinator:
                     if await _resume_turn(turn_box["ref"]):
                         await _resume_confirmed()
                     else:
-                        await broadcast_chunk(
-                            "This turn was already resumed elsewhere. Nothing further was run.",
-                            harness=True,
-                        )
+                        await _resume_lost()
                     pending_handled = True
                 else:
                     # D8: a question or another request is not consent. The
@@ -1571,18 +1719,12 @@ class OrchestrationCoordinator:
                         )
                         await _handle_agent_quota_resume(ctx_prompt, mem_sum, env_block)
                     else:
-                        await broadcast_chunk(
-                            "This turn was already resumed elsewhere. Nothing further was run.",
-                            harness=True,
-                        )
+                        await _resume_lost()
                 elif await _resume_turn(turn_box["ref"]):
                     await broadcast_chunk("Continuing with more budget.\n\n", harness=True)
                     await _handle_agent_budget_resume(ctx_prompt, mem_sum, env_block)
                 else:
-                    await broadcast_chunk(
-                        "This turn was already resumed elsewhere. Nothing further was run.",
-                        harness=True,
-                    )
+                    await _resume_lost()
                 pending_handled = True
             elif is_decline_reply(query) or is_cancel_command(query):
                 # A whole-message no/stop ends the paused turn for good.

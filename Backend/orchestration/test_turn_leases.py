@@ -631,6 +631,17 @@ class CancelPollTests(_TurnLeaseBase):
         self.assertEqual(ref.state, "running")
         self._assert_resumed_turn_is_live(ref.id)
 
+    def test_a_resumed_turn_registered_after_the_stop_keeps_the_flag(self):
+        from chatbot.turn_runner import _register_resumed_turn
+
+        resumed = self._running(owner=turn_leases.PROCESS_OWNER_ID)
+        request_cancel(str(resumed.pk))
+        _register_resumed_turn(str(resumed.pk))
+
+        self.assertTrue(cancel_requested(str(resumed.pk)))
+        self.assertFalse(turn_live(str(resumed.pk)))
+        unregister_live_turn(str(resumed.pk))
+
     def test_a_budget_resume_does_not_inherit_an_earlier_stop(self):
         from orchestration.turns import transition
 

@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Kazi chat list, dragging a chat into a group</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<style>
+body{margin:0}
+button{font:inherit;cursor:pointer}
+a{color:#8a3016}a:hover{color:#6f2611}
+.brick{background-image:url("Backend/chatbot/static/img/brick-wall.svg");background-size:96px 48px}
+</style>
+</helmet>
+<aside aria-label="Chats" class="brick" style="position: relative; width: 340px; height: 900px; box-sizing: border-box; background-color: #fcfbf8; display: flex; flex-direction: column; padding: 14px 10px; gap: 10px; overflow: hidden; font-family: Inter, system-ui, sans-serif; font-size: 15px; line-height: 1.5; color: #3d3929">
+  <div style="display: flex; align-items: center; justify-content: space-between; padding: 0 6px; height: 40px">
+    <h2 style="margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -0.02em">Chats</h2>
+    <span style="font-size: 13px; color: #6e6a5e">Moving 1 chat</span>
+  </div>
+
+  <div style="font-size: 11px; font-weight: 600; letter-spacing: .1em; color: #6e6a5e; padding: 6px 8px 0">PINNED</div>
+  <div style="display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; border-radius: 12px">
+    <span style="width: 36px; height: 36px; flex: none; border-radius: 50%; background: #e9e4d8; color: #57513f; font-weight: 600; font-size: 14px; display: flex; align-items: center; justify-content: center; margin-top: 2px">H</span>
+    <span style="display: flex; flex-direction: column; min-width: 0; flex-grow: 1">
+      <span style="font-weight: 600">Home admin</span>
+      <span style="font-size: 13px; color: #57513f; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Bills, renewals and reminders for the house</span>
+    </span>
+  </div>
+
+  <!-- Drop target: the group lights up while a chat is held over it -->
+  <div style="display: flex; flex-direction: column; gap: 4px; padding: 6px; border-radius: 16px; background: rgba(95,107,58,.12); outline: 2px dashed #5f6b3a; outline-offset: -2px">
+    <div style="display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border-radius: 999px; background: #5f6b3a; color: #fff; font-size: 13px; font-weight: 600">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+      <span style="flex-grow: 1">School project</span>
+      <span style="font-weight: 500; opacity: .85">4</span>
+    </div>
+    <div style="display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; margin-left: 8px; border-left: 3px solid #5f6b3a; border-radius: 0 12px 12px 0">
+      <span style="width: 36px; height: 36px; flex: none; border-radius: 50%; background: #e7ead9; color: #4a5630; font-weight: 600; font-size: 14px; display: flex; align-items: center; justify-content: center; margin-top: 2px">W</span>
+      <span style="display: flex; flex-direction: column; min-width: 0; flex-grow: 1">
+        <span style="font-weight: 600">Essay draft</span>
+        <span style="font-size: 13px; color: #57513f; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Second draft of the introduction</span>
+      </span>
+    </div>
+    <div style="display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; margin-left: 8px; border-left: 3px solid #5f6b3a; border-radius: 0 12px 12px 0">
+      <span style="width: 36px; height: 36px; flex: none; border-radius: 50%; background: #e7ead9; color: #4a5630; font-weight: 600; font-size: 14px; display: flex; align-items: center; justify-content: center; margin-top: 2px">R</span>
+      <span style="display: flex; flex-direction: column; min-width: 0; flex-grow: 1">
+        <span style="font-weight: 600">Research notes</span>
+        <span style="font-size: 13px; color: #57513f; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Six sources summarised, two still to read</span>
+      </span>
+    </div>
+    <!-- Insertion line: where the chat will land -->
+    <div role="img" aria-label="Drop position" style="display: flex; align-items: center; gap: 0; margin: 2px 4px 2px 8px">
+      <span style="width: 10px; height: 10px; border-radius: 50%; border: 2px solid #5f6b3a; box-sizing: border-box; background: #fcfbf8"></span>
+      <span style="flex-grow: 1; height: 2px; background: #5f6b3a"></span>
+    </div>
+    <div style="display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; margin-left: 8px; border-left: 3px solid #5f6b3a; border-radius: 0 12px 12px 0">
+      <span style="width: 36px; height: 36px; flex: none; border-radius: 50%; background: #e7ead9; color: #4a5630; font-weight: 600; font-size: 14px; display: flex; align-items: center; justify-content: center; margin-top: 2px">A</span>
+      <span style="display: flex; flex-direction: column; min-width: 0; flex-grow: 1">
+        <span style="font-weight: 600">Data and charts</span>
+        <span style="font-size: 13px; color: #57513f; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Survey sheet cleaned, three charts ready</span>
+      </span>
+    </div>
+    <div style="display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; margin-left: 8px; border-left: 3px solid #5f6b3a; border-radius: 0 12px 12px 0">
+      <span style="width: 36px; height: 36px; flex: none; border-radius: 50%; background: #e7ead9; color: #4a5630; font-weight: 600; font-size: 14px; display: flex; align-items: center; justify-content: center; margin-top: 2px">D</span>
+      <span style="display: flex; flex-direction: column; min-width: 0; flex-grow: 1">
+        <span style="font-weight: 600">Presentation</span>
+        <span style="font-size: 13px; color: #57513f; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Outline agreed, slides not started</span>
+      </span>
+    </div>
+  </div>
+
+  <div style="display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border-radius: 999px; background: #8a5e10; color: #fff; font-size: 13px; font-weight: 600">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+    <span style="flex-grow: 1">Client work</span>
+    <span style="font-weight: 500; opacity: .85">3</span>
+  </div>
+
+  <div style="font-size: 11px; font-weight: 600; letter-spacing: .1em; color: #6e6a5e; padding: 6px 8px 0">RECENT</div>
+  <!-- The slot the chat was lifted from -->
+  <div style="height: 56px; border-radius: 12px; border: 2px dashed #cfc8b8; box-sizing: border-box"></div>
+  <div style="display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; border-radius: 12px">
+    <span style="width: 36px; height: 36px; flex: none; border-radius: 50%; background: #e9e4d8; color: #57513f; font-weight: 600; font-size: 14px; display: flex; align-items: center; justify-content: center; margin-top: 2px">G</span>
+    <span style="display: flex; flex-direction: column; min-width: 0; flex-grow: 1">
+      <span style="font-weight: 600">Garden plan</span>
+      <span style="font-size: 13px; color: #57513f; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Planting calendar for the back beds</span>
+    </span>
+  </div>
+
+  <!-- The chat being dragged -->
+  <div style="position: absolute; left: 44px; top: 318px; width: 280px; box-sizing: border-box; display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; border-radius: 12px; background: #fff; border: 1px solid #e5e0d5; box-shadow: 0 14px 32px rgba(61,57,41,.28); transform: rotate(-2deg)">
+    <span style="width: 36px; height: 36px; flex: none; border-radius: 50%; background: #e9e4d8; color: #57513f; font-weight: 600; font-size: 14px; display: flex; align-items: center; justify-content: center; margin-top: 2px">S</span>
+    <span style="display: flex; flex-direction: column; min-width: 0; flex-grow: 1">
+      <span style="font-weight: 600">Sources and citations</span>
+      <span style="font-size: 13px; color: #57513f; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Reference list in the school's format</span>
+    </span>
+  </div>
+  <div style="position: absolute; left: 96px; top: 384px; padding: 4px 12px; border-radius: 999px; background: #3d3929; color: #f6f3ec; font-size: 12px; font-weight: 600; box-shadow: 0 4px 12px rgba(61,57,41,.3)">Add to School project</div>
+</aside>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":340,"height":900}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

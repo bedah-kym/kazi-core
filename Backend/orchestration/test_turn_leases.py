@@ -38,6 +38,8 @@ from orchestration.turn_leases import (
 )
 from orchestration.turns import (
     BUSY_LIVE,
+    CLAIMED,
+    ClaimResult,
     claim_turn,
     reap_boot_rows,
     reap_lapsed_turns,
@@ -553,16 +555,14 @@ class StopFlagTests(SimpleTestCase):
         self.assertTrue(cancel_requested("turn-1"))
         self.assertFalse(turn_fenced("turn-1"))
 
+    # SimpleTestCase forbids every database access on both backends, so any
+    # query in these paths raises DatabaseOperationForbidden and fails the test.
+    # A query counter would itself open a connection, which Postgres refuses here.
     def test_the_hook_makes_no_query_per_iteration(self):
-        from django.db import connection
-        from django.test.utils import CaptureQueriesContext
-
         self._register()
-        with CaptureQueriesContext(connection) as queries:
-            for _ in range(100):
-                self.assertTrue(turn_live("turn-1"))
-                self.assertFalse(cancel_requested("turn-1"))
-        self.assertEqual(len(queries), 0)
+        for _ in range(100):
+            self.assertTrue(turn_live("turn-1"))
+            self.assertFalse(cancel_requested("turn-1"))
 
     def test_a_stop_and_a_fence_resolve_as_the_fence(self):
         self._register()
@@ -573,12 +573,7 @@ class StopFlagTests(SimpleTestCase):
         self.assertFalse(turn_live("turn-1"))
 
     def test_an_idle_process_does_not_query_for_cancels(self):
-        from django.db import connection
-        from django.test.utils import CaptureQueriesContext
-
-        with CaptureQueriesContext(connection) as queries:
-            self.assertEqual(turn_leases._poll_cancels_and_close(), set())
-        self.assertEqual(len(queries), 0)
+        self.assertEqual(turn_leases._poll_cancels_and_close(), set())
 
 
 class CancelPollTests(_TurnLeaseBase):
@@ -959,6 +954,62 @@ class LostAdvanceTests(SimpleTestCase):
             )
 
         self.assertNotIn(turn_id, live_turn_ids())
+
+
+class StopBetweenClaimAndRegisterTests(SimpleTestCase):
+    """#216b-3: a stop that lands after the claim but before the coordinator
+    registers the Turn must still stop it at the loop's first hook check."""
+
+    def setUp(self):
+        for registry in (
+            turn_leases._LIVE_TURNS, turn_leases._FENCED_TURNS,
+            turn_leases._LAST_RENEWAL, turn_leases._CANCELLED_TURNS,
+        ):
+            registry.clear()
+            self.addCleanup(registry.clear)
+
+    def test_a_stop_between_claim_and_register_is_kept(self):
+        turn_id = "00000000-0000-0000-0000-000000000077"
+        turn = SimpleNamespace(pk=turn_id, version=0, state="running")
+        seen = []
+
+        async def _claim_then_stop(**_kwargs):
+            # The person's stop is handled here, in the same process, between
+            # the claim's write and the coordinator's registration.
+            request_cancel(turn_id)
+            return ClaimResult(CLAIMED, turn)
+
+        async def _loop(**kwargs):
+            seen.append(kwargs["context"]["turn_live"]())
+            yield AgentEvent("done", {"end_reason": "finished"})
+
+        patches = {
+            "orchestration.coordinator.load_memory_summary": AsyncMock(return_value=None),
+            "orchestration.coordinator.get_user_preferences": lambda *a, **k: {},
+            "orchestration.coordinator.has_pending_agent_state": AsyncMock(return_value=False),
+            "orchestration.coordinator.has_expired_pause": AsyncMock(return_value=False),
+            "orchestration.coordinator.run_agent_loop": _loop,
+            "orchestration.coordinator.record_event": MagicMock(),
+            "orchestration.coordinator.cache": MagicMock(),
+            **turn_test_patches(),
+        }
+        patches["orchestration.coordinator.aclaim_turn"] = _claim_then_stop
+        with ExitStack() as stack:
+            for target, value in patches.items():
+                stack.enter_context(patch(target, new=value))
+            async_to_sync(OrchestrationCoordinator().handle_message)(
+                query="run the report",
+                user_id=1,
+                room_id="1",
+                username="alice",
+                message_id=42,
+                send_chunk=AsyncMock(),
+                send_step_event=AsyncMock(),
+                get_context_prompt=AsyncMock(return_value=""),
+                bump_signals=MagicMock(),
+            )
+
+        self.assertEqual(seen, [False])
 
 
 class DirectiveOwnershipTests(SimpleTestCase):

@@ -1277,3 +1277,46 @@ class PauseConsentTests(TransactionTestCase):
         self.assertTrue(any(
             "still paused waiting for more budget" in text for text in chunks
         ))
+
+
+class StopLineNeedsTheFlagTests(TransactionTestCase):
+    """#216b-3 item 8: only a Turn a person really flagged earns the stop line.
+
+    A Turn can end ``cancelled(user_cancel)`` without carrying the flag (the
+    queued rows a stop drops, or any other writer of that reason). The line
+    must come from the stop itself, never from the end reason alone.
+    """
+
+    def setUp(self):
+        super().setUp()
+        User = get_user_model()
+        self.user = User.objects.create_user(username="flagless", password="pw")  # nosec B106 — fake test credential
+        member = Member.objects.select_related("User").get(User=self.user)
+        self.room = Chatroom.objects.get(participants=member)
+
+    def _pair(self, *, flagged):
+        now = timezone.now()
+        earlier = Turn.objects.create(
+            room=self.room, user=self.user, state="cancelled",
+            end_reason=USER_CANCEL, started_at=now - timedelta(seconds=30),
+            ended_at=now - timedelta(seconds=20),
+            cancel_requested_at=(now - timedelta(seconds=25)) if flagged else None,
+        )
+        current = Turn.objects.create(
+            room=self.room, user=self.user, state="running", started_at=now,
+        )
+        # Make the order explicit; two creates can share a clock tick.
+        Turn.objects.filter(pk=earlier.pk).update(created_at=now - timedelta(seconds=30))
+        Turn.objects.filter(pk=current.pk).update(created_at=now)
+        return str(current.pk)
+
+    def _note(self, current_id):
+        from orchestration.coordinator import _stopped_turn_note
+
+        return async_to_sync(_stopped_turn_note)(self.room.id, self.user.id, current_id)
+
+    def test_a_flagged_stop_earns_the_line(self):
+        self.assertEqual(self._note(self._pair(flagged=True)), STOPPED_TURN_NOTE)
+
+    def test_user_cancel_without_the_flag_earns_no_line(self):
+        self.assertEqual(self._note(self._pair(flagged=False)), "")

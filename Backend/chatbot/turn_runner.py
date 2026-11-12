@@ -31,7 +31,9 @@ from orchestration.turns import (
     transition,
 )
 from orchestration.turn_leases import (
+    cancel_requested,
     register_live_turn,
+    request_cancel,
     shutdown_grace_seconds,
     unregister_live_turn,
 )
@@ -60,6 +62,19 @@ DISARM_FAILED_NOTICE = (
 )
 RECORD_FAILED_NOTICE = (
     "I couldn't record this message, so nothing was run. Please try again."
+)
+# The exact-stop notice (#216b-3). It is true whatever step was running: the
+# one in flight finishes and nothing after it starts. A committing or ended
+# turn says that instead.
+STOP_NOTICE = (
+    "The step already running will finish; nothing after it will start."
+)
+STOP_COMMITTING_NOTICE = (
+    "That reply is already being saved, so it will finish."
+)
+STOP_ENDED_NOTICE = "That request had already finished."
+STOP_FAILED_NOTICE = (
+    "I couldn't confirm the stop, so the current reply may still finish."
 )
 # A claim that keeps failing retries the same drainer with this backoff.
 CLAIM_RETRY_BASE_SECONDS = 2
@@ -96,6 +111,76 @@ def _fail_turn(turn: Turn, reason: str) -> bool:
         str(turn.pk), turn.version, "failed",
         from_state=turn.state, end_reason=reason,
     )
+
+
+def _stop_notice(
+    result, *, autopilot_off: bool = False,
+) -> str:
+    """The one notice for a stop, including what else changed."""
+    if result.flagged:
+        notice = STOP_NOTICE
+    elif result.committing:
+        notice = STOP_COMMITTING_NOTICE
+    else:
+        notice = STOP_ENDED_NOTICE
+    if result.queued_cancelled:
+        notice += (
+            f" {result.queued_cancelled} waiting message(s) weren't answered; "
+            "please send them again."
+        )
+    if autopilot_off:
+        notice += " Autopilot is now off for this room."
+    return notice
+
+
+async def _stop_active_turn(
+    room_id: Any, user_id: int, *, autopilot_off: bool = False,
+) -> Optional[str]:
+    """Stop the key's running turn before its next step (#216b-3, item 2).
+
+    Returns the one notice to save, or ``None`` when the key has no active
+    Turn, which keeps today's "stop runs as its own turn" behaviour. The flag
+    write is beside the state, so the owner still writes the honest
+    ``cancelled(user_cancel)`` ending with its own version.
+    """
+    from orchestration.agent_loop import cancel_pending_action
+    from orchestration.turn_leases import request_cancel
+    from orchestration.turns import request_stop_for_key
+
+    try:
+        result = await sync_to_async(
+            request_stop_for_key,
+            thread_sensitive=_writes_are_thread_sensitive(),
+        )(room_id, user_id)
+    except Exception as exc:
+        logger.warning(
+            "Stop lookup failed; leaving the message to normal handling: %s",
+            type(exc).__name__,
+        )
+        notice = STOP_FAILED_NOTICE
+        if autopilot_off:
+            notice += " Autopilot is now off for this room."
+        try:
+            await sync_to_async(_persist_immediate_notice)(room_id, notice)
+        except Exception:
+            logger.warning("Stop-failure notice not saved", exc_info=True)
+        return None
+    if not result.active:
+        return None
+    if result.running_turn_id:
+        # Same process: the loop's next turn_live() call sees this with no wait.
+        request_cancel(result.running_turn_id)
+    if result.paused:
+        # A pause waiting beside the running turn ends too, through the same
+        # cancel path a bare stop already uses (#216b-3, item 4).
+        try:
+            await cancel_pending_action(room_id, user_id)
+        except Exception as exc:
+            logger.warning(
+                "Waiting pause not ended after a stop: %s",
+                type(exc).__name__,
+            )
+    return _stop_notice(result, autopilot_off=autopilot_off)
 
 
 async def run_immediate_directives(
@@ -135,6 +220,8 @@ async def run_immediate_directives(
                 "I couldn't confirm autopilot was disarmed. Disarm it from the "
                 "operations inbox to be sure."
             )
+        # Disarming is not a stop (#216b-3, Q1: the stop set is
+        # is_cancel_command): the running turn keeps going and asks as usual.
         if disarmed:
             return "Autopilot disarmed for this room."
         return "Autopilot was not armed for this room."
@@ -158,7 +245,8 @@ async def run_immediate_directives(
     # A bare stop/cancel reduces permission too. It is not terminal: the
     # message still runs through its normal handling (which may cancel a
     # pending action). Disarm now so a live turn's mid-run re-read sees it.
-    cancel = is_cancel_command(query)
+    strict_cancel = is_cancel_command(query)
+    cancel = strict_cancel
     if not cancel and is_cancel_request(query):
         from orchestration.agent_loop import has_pending_agent_state
 
@@ -181,6 +269,12 @@ async def run_immediate_directives(
                 logger.warning(
                     "Disarm-failure notice not saved: %s", type(exc).__name__,
                 )
+    if strict_cancel:
+        stop_notice = await _stop_active_turn(
+            room_id, user_id, autopilot_off=bool(disarmed),
+        )
+        if stop_notice is not None:
+            return stop_notice
     return None
 
 
@@ -257,6 +351,19 @@ def _persist_immediate_notice(room_id: Any, text: str) -> None:
             persist_turn_notice(room, text)
     except Exception as exc:
         logger.warning("Immediate notice not saved: %s", type(exc).__name__)
+
+
+def _register_resumed_turn(turn_id: Any) -> None:
+    """Register a resumed Turn without dropping a stop set during the swap.
+
+    ``register_live_turn`` clears a stale cancel flag for a fresh segment. A
+    stop that lands while the swap is in flight belongs to this new segment,
+    so it is re-applied after registration (#216b-3 round 2, item 1).
+    """
+    stopped = cancel_requested(turn_id)
+    register_live_turn(turn_id)
+    if stopped:
+        request_cancel(turn_id)
 
 
 class TurnRunner:
@@ -803,13 +910,13 @@ class TurnRunner:
                     ref = None
                 if ref is not None:
                     unregister_live_turn(box["ref"].id)
-                    register_live_turn(ref.id)
+                    _register_resumed_turn(ref.id)
                     box["ref"] = ref
                 raise
             if ref is None:
                 raise PauseContinuationLost("paused")
             unregister_live_turn(box["ref"].id)
-            register_live_turn(ref.id)
+            _register_resumed_turn(ref.id)
             box["ref"] = ref
             return ref
 

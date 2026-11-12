@@ -28,13 +28,18 @@ from orchestration.coordinator import OrchestrationCoordinator
 from orchestration.models import Turn
 from orchestration.turn_leases import (
     beat_once,
+    cancel_requested,
     live_turn_ids,
     register_live_turn,
+    request_cancel,
+    turn_fenced,
     turn_live,
     unregister_live_turn,
 )
 from orchestration.turns import (
     BUSY_LIVE,
+    CLAIMED,
+    ClaimResult,
     claim_turn,
     reap_boot_rows,
     reap_lapsed_turns,
@@ -89,6 +94,7 @@ class _TurnLeaseBase(TransactionTestCase):
         turn_leases._LIVE_TURNS.clear()
         turn_leases._FENCED_TURNS.clear()
         turn_leases._LAST_RENEWAL.clear()
+        turn_leases._CANCELLED_TURNS.clear()
         layer = MagicMock()
         layer.group_send = AsyncMock()
         patcher = patch(
@@ -101,6 +107,7 @@ class _TurnLeaseBase(TransactionTestCase):
         turn_leases._LIVE_TURNS.clear()
         turn_leases._FENCED_TURNS.clear()
         turn_leases._LAST_RENEWAL.clear()
+        turn_leases._CANCELLED_TURNS.clear()
         super().tearDown()
 
     def _running(
@@ -521,6 +528,126 @@ class HeartbeatTests(_TurnLeaseBase):
         self.assertFalse(turn_live("00000000-0000-0000-0000-00000000dead"))
 
 
+class StopFlagTests(SimpleTestCase):
+    """#216b-3: a person's stop is an in-memory read in the loop hook."""
+
+    def setUp(self):
+        turn_leases._LIVE_TURNS.clear()
+        turn_leases._FENCED_TURNS.clear()
+        turn_leases._LAST_RENEWAL.clear()
+        turn_leases._CANCELLED_TURNS.clear()
+        self.addCleanup(turn_leases._LIVE_TURNS.clear)
+        self.addCleanup(turn_leases._FENCED_TURNS.clear)
+        self.addCleanup(turn_leases._LAST_RENEWAL.clear)
+        self.addCleanup(turn_leases._CANCELLED_TURNS.clear)
+
+    def _register(self, turn_id="turn-1"):
+        now = turn_leases._MONOTONIC()
+        with turn_leases._REGISTRY_LOCK:
+            turn_leases._LIVE_TURNS[turn_id] = now
+            turn_leases._LAST_RENEWAL[turn_id] = now
+
+    def test_a_same_process_stop_makes_the_next_hook_call_false(self):
+        self._register()
+        self.assertTrue(turn_live("turn-1"))
+        request_cancel("turn-1")
+        self.assertFalse(turn_live("turn-1"))
+        self.assertTrue(cancel_requested("turn-1"))
+        self.assertFalse(turn_fenced("turn-1"))
+
+    # SimpleTestCase forbids every database access on both backends, so any
+    # query in these paths raises DatabaseOperationForbidden and fails the test.
+    # A query counter would itself open a connection, which Postgres refuses here.
+    def test_the_hook_makes_no_query_per_iteration(self):
+        self._register()
+        for _ in range(100):
+            self.assertTrue(turn_live("turn-1"))
+            self.assertFalse(cancel_requested("turn-1"))
+
+    def test_a_stop_and_a_fence_resolve_as_the_fence(self):
+        self._register()
+        request_cancel("turn-1")
+        with turn_leases._REGISTRY_LOCK:
+            turn_leases._FENCED_TURNS.add("turn-1")
+        self.assertTrue(turn_fenced("turn-1"))
+        self.assertFalse(turn_live("turn-1"))
+
+    def test_an_idle_process_does_not_query_for_cancels(self):
+        self.assertEqual(turn_leases._poll_cancels_and_close(), set())
+
+
+class CancelPollTests(_TurnLeaseBase):
+    def test_the_poll_reads_the_flag_once_and_marks_the_turn(self):
+        turn = self._running(owner=turn_leases.PROCESS_OWNER_ID)
+        turn.cancel_requested_at = timezone.now()
+        turn.save(update_fields=["cancel_requested_at"])
+        register_live_turn(str(turn.pk))
+
+        with self.assertNumQueries(1):
+            found = turn_leases._poll_cancels_and_close()
+
+        self.assertEqual(found, {str(turn.pk)})
+        self.assertTrue(cancel_requested(str(turn.pk)))
+        self.assertFalse(turn_live(str(turn.pk)))
+        self.assertFalse(turn_fenced(str(turn.pk)))
+        unregister_live_turn(str(turn.pk))
+
+    def _flagged_then_paused(self):
+        from orchestration.turns import request_stop_for_key, transition
+
+        turn = self._running(owner=turn_leases.PROCESS_OWNER_ID)
+        # The stop lands while the row is still running, just before the loop's
+        # pause write: the window between its last hook check and the edge.
+        result = request_stop_for_key(self.room.id, self.user.id)
+        self.assertTrue(result.flagged)
+        turn.refresh_from_db()
+        self.assertTrue(transition(
+            str(turn.pk), turn.version, "paused",
+            from_state="running", pause_kind="approval",
+        ))
+        turn.refresh_from_db()
+        return turn
+
+    def _assert_resumed_turn_is_live(self, turn_id):
+        register_live_turn(turn_id)
+        self.addCleanup(unregister_live_turn, turn_id)
+        found = turn_leases._poll_cancels_and_close()
+        self.assertEqual(found, set())
+        self.assertTrue(turn_live(turn_id))
+        self.assertIsNone(Turn.objects.get(pk=turn_id).cancel_requested_at)
+
+    def test_a_turn_resumed_by_consent_does_not_inherit_an_earlier_stop(self):
+        from orchestration.turns import continue_pause
+
+        paused = self._flagged_then_paused()
+        placeholder = self._running(owner=turn_leases.PROCESS_OWNER_ID)
+        ref = continue_pause(placeholder, paused)
+
+        self.assertEqual(ref.state, "running")
+        self._assert_resumed_turn_is_live(ref.id)
+
+    def test_a_resumed_turn_registered_after_the_stop_keeps_the_flag(self):
+        from chatbot.turn_runner import _register_resumed_turn
+
+        resumed = self._running(owner=turn_leases.PROCESS_OWNER_ID)
+        request_cancel(str(resumed.pk))
+        _register_resumed_turn(str(resumed.pk))
+
+        self.assertTrue(cancel_requested(str(resumed.pk)))
+        self.assertFalse(turn_live(str(resumed.pk)))
+        unregister_live_turn(str(resumed.pk))
+
+    def test_a_budget_resume_does_not_inherit_an_earlier_stop(self):
+        from orchestration.turns import transition
+
+        paused = self._flagged_then_paused()
+        self.assertTrue(transition(
+            str(paused.pk), paused.version, "running", from_state="paused",
+        ))
+
+        self._assert_resumed_turn_is_live(str(paused.pk))
+
+
 class AgentLoopFenceTests(SimpleTestCase):
     def _loop(self, responses, *, context, patches=None, resumed_state=None,
               confirmed_tool=False):
@@ -827,6 +954,62 @@ class LostAdvanceTests(SimpleTestCase):
             )
 
         self.assertNotIn(turn_id, live_turn_ids())
+
+
+class StopBetweenClaimAndRegisterTests(SimpleTestCase):
+    """#216b-3: a stop that lands after the claim but before the coordinator
+    registers the Turn must still stop it at the loop's first hook check."""
+
+    def setUp(self):
+        for registry in (
+            turn_leases._LIVE_TURNS, turn_leases._FENCED_TURNS,
+            turn_leases._LAST_RENEWAL, turn_leases._CANCELLED_TURNS,
+        ):
+            registry.clear()
+            self.addCleanup(registry.clear)
+
+    def test_a_stop_between_claim_and_register_is_kept(self):
+        turn_id = "00000000-0000-0000-0000-000000000077"
+        turn = SimpleNamespace(pk=turn_id, version=0, state="running")
+        seen = []
+
+        async def _claim_then_stop(**_kwargs):
+            # The person's stop is handled here, in the same process, between
+            # the claim's write and the coordinator's registration.
+            request_cancel(turn_id)
+            return ClaimResult(CLAIMED, turn)
+
+        async def _loop(**kwargs):
+            seen.append(kwargs["context"]["turn_live"]())
+            yield AgentEvent("done", {"end_reason": "finished"})
+
+        patches = {
+            "orchestration.coordinator.load_memory_summary": AsyncMock(return_value=None),
+            "orchestration.coordinator.get_user_preferences": lambda *a, **k: {},
+            "orchestration.coordinator.has_pending_agent_state": AsyncMock(return_value=False),
+            "orchestration.coordinator.has_expired_pause": AsyncMock(return_value=False),
+            "orchestration.coordinator.run_agent_loop": _loop,
+            "orchestration.coordinator.record_event": MagicMock(),
+            "orchestration.coordinator.cache": MagicMock(),
+            **turn_test_patches(),
+        }
+        patches["orchestration.coordinator.aclaim_turn"] = _claim_then_stop
+        with ExitStack() as stack:
+            for target, value in patches.items():
+                stack.enter_context(patch(target, new=value))
+            async_to_sync(OrchestrationCoordinator().handle_message)(
+                query="run the report",
+                user_id=1,
+                room_id="1",
+                username="alice",
+                message_id=42,
+                send_chunk=AsyncMock(),
+                send_step_event=AsyncMock(),
+                get_context_prompt=AsyncMock(return_value=""),
+                bump_signals=MagicMock(),
+            )
+
+        self.assertEqual(seen, [False])
 
 
 class DirectiveOwnershipTests(SimpleTestCase):

@@ -15,6 +15,7 @@ from django.test import SimpleTestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 
 from chatbot.models import Chatroom, Member, Message
+from orchestration import turn_leases
 from orchestration.agent_loop import AgentEvent, HARD_TURN_TIMEOUT_SECONDS
 from orchestration.coordinator import OrchestrationCoordinator
 from orchestration.llm_client import TokenQuotaExceeded
@@ -23,14 +24,18 @@ from orchestration.turns import (
     ALLOWED,
     BUSY_LIVE,
     CLAIMED,
+    PauseContinuationStopped,
     STALE_TURN_MARGIN_SECONDS,
     TERMINAL_STATES,
     TOOK_OVER,
+    USER_CANCEL,
     atransition as real_atransition,
     _notice_text,
     claim_next_queued,
     claim_turn,
+    continue_pause,
     create_turn,
+    last_ran_turn_before,
     reap_lapsed_turns,
     transition,
 )
@@ -450,23 +455,26 @@ class _CoordinatorTurnBase(TransactionTestCase):
             send_step_event = AsyncMock()
 
         async def _call():
-            callback = send_chunk
-            result = await OrchestrationCoordinator().handle_message(
-                query=query,
-                user_id=self.user.id,
-                room_id=self.room.id,
-                username=self.user.username,
-                message_id=self.message.id,
-                send_chunk=callback,
-                send_step_event=send_step_event,
-                get_context_prompt=AsyncMock(return_value=""),
-                bump_signals=MagicMock(),
-            )
-            if finalize:
-                await OrchestrationCoordinator().finalize_turn(
-                    result, reply_saved=reply_saved,
+            try:
+                callback = send_chunk
+                result = await OrchestrationCoordinator().handle_message(
+                    query=query,
+                    user_id=self.user.id,
+                    room_id=self.room.id,
+                    username=self.user.username,
+                    message_id=self.message.id,
+                    send_chunk=callback,
+                    send_step_event=send_step_event,
+                    get_context_prompt=AsyncMock(return_value=""),
+                    bump_signals=MagicMock(),
                 )
-            return result
+                if finalize:
+                    await OrchestrationCoordinator().finalize_turn(
+                        result, reply_saved=reply_saved,
+                    )
+                return result
+            finally:
+                await turn_leases.stop_heartbeat()
 
         with ExitStack() as stack:
             for target, value in patches.items():
@@ -480,6 +488,73 @@ class _CoordinatorTurnBase(TransactionTestCase):
                 yield event
 
         return _events
+
+
+class ContinueStopRaceTests(_CoordinatorTurnBase):
+    def test_the_last_ran_turn_ignores_a_newer_continuation_placeholder(self):
+        now = timezone.now()
+        # Terminal rows always carry ended_at in production; the placeholder
+        # ends after the stopped turn, so only its exclusion can pick `stopped`.
+        stopped = Turn.objects.create(
+            room=self.room, user=self.user, state="cancelled",
+            end_reason=USER_CANCEL, cancel_requested_at=now,
+            started_at=now, ended_at=now - timedelta(seconds=25),
+        )
+        placeholder = Turn.objects.create(
+            room=self.room, user=self.user, state="superseded",
+            end_reason="continued_pause", started_at=now,
+            ended_at=now - timedelta(seconds=10),
+        )
+        current = Turn.objects.create(
+            room=self.room, user=self.user, state="queued",
+        )
+        Turn.objects.filter(pk=stopped.pk).update(
+            created_at=now - timedelta(seconds=30),
+        )
+        Turn.objects.filter(pk=placeholder.pk).update(
+            created_at=now - timedelta(seconds=20),
+        )
+
+        found = last_ran_turn_before(
+            self.room.id, self.user.id, current.pk,
+        )
+
+        self.assertIsNotNone(found)
+        self.assertEqual(found.pk, stopped.pk)
+
+    def test_a_stop_committed_at_the_continue_seam_loses_the_swap(self):
+        from orchestration import turns as turns_mod
+
+        now = timezone.now()
+        placeholder = Turn.objects.create(
+            room=self.room, user=self.user, state="running",
+            started_at=now, attempt=1,
+        )
+        paused = Turn.objects.create(
+            room=self.room, user=self.user, state="paused",
+            started_at=now, attempt=1, pause_kind="approval",
+        )
+        reply = Message.objects.create(
+            member=self.member, content="yes",
+            timestamp=now - timedelta(seconds=1),
+        )
+        self.room.chats.add(reply)
+
+        def _stop_first():
+            Turn.objects.filter(pk=placeholder.pk).update(
+                cancel_requested_at=timezone.now(),
+            )
+
+        turns_mod._CONTINUE_RACE_HOOK = _stop_first
+        self.addCleanup(setattr, turns_mod, "_CONTINUE_RACE_HOOK", None)
+
+        with self.assertRaises(PauseContinuationStopped):
+            continue_pause(placeholder, paused, message_id=reply.id)
+
+        placeholder.refresh_from_db()
+        paused.refresh_from_db()
+        self.assertEqual(placeholder.state, "running")
+        self.assertEqual(paused.state, "paused")
 
 
 class CoordinatorTurnTests(_CoordinatorTurnBase):
@@ -553,6 +628,11 @@ class CoordinatorTurnTests(_CoordinatorTurnBase):
                     "orchestration.coordinator.resume_with_more_budget"
                     if pause_kind == "budget"
                     else "orchestration.coordinator.resume_after_quota"
+                )
+                # The resume is consent only when it was sent after the pause
+                # (#216b-3 item 6). The fixture reuses one message row.
+                Message.objects.filter(pk=self.message.pk).update(
+                    timestamp=timezone.now() + timedelta(seconds=5),
                 )
                 with patch(resume_name, new=self._loop(
                     AgentEvent("text_delta", {"text": "Done."}),

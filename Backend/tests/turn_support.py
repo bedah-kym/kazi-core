@@ -7,7 +7,7 @@ routing assertions independent of the database; ``test_turns.py`` exercises
 the real functions.
 """
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 from orchestration.turns import CLAIMED, ClaimResult
 
@@ -30,4 +30,11 @@ def turn_test_patches() -> dict:
         # Consent timing needs the request Message and the approval row; the
         # dedicated consent tests exercise the real check.
         "orchestration.coordinator._consent_postdates_prompt": AsyncMock(return_value=True),
+        "orchestration.coordinator._consent_postdates_pause": AsyncMock(return_value=True),
+        # The stop-line lookup reads the previous Turn; a routing test must not.
+        "orchestration.coordinator.last_ran_turn_before": lambda *a, **k: None,
+        # Routing tests still exercise the real registry, but must not leave
+        # a heartbeat or cancel-poll task pending when their loop closes.
+        "orchestration.turn_leases.ensure_heartbeat": MagicMock(return_value=None),
+        "orchestration.turn_leases.ensure_cancel_poll": MagicMock(return_value=None),
     }

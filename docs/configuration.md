@@ -251,6 +251,7 @@ in-memory registry, and the owner fences itself before the lease can lapse.
 | `TURN_HEARTBEAT_SECONDS` | `30` | How often the process renews its live Turns. |
 | `TURN_LEASE_FENCE_MARGIN_SECONDS` | `30` | How long before lease expiry the owner stops dispatching. |
 | `TURN_SHUTDOWN_GRACE_SECONDS` | `20` | How long a graceful shutdown waits for live Turns. |
+| `TURN_CANCEL_POLL_SECONDS` | `2` | How often a worker with a live Turn checks for a stop written by another worker. A stop in the same worker is immediate. |
 
 The first three are validated together: unless
 `0 < TURN_HEARTBEAT_SECONDS < TURN_LEASE_SECONDS -

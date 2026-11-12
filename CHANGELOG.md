@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — exact stop cancels the running turn (#216b-3)
+
+- An exact `stop`/`cancel` (the whole set `is_cancel_command` already uses),
+  sent while the key has a running Turn, now stops that turn before its next
+  step instead of waiting for it to finish. It stamps a nullable
+  `Turn.cancel_requested_at`, cancels the key's queued rows as
+  `cancelled(user_cancel)`, keeps the autopilot disarm, and works even at the
+  queue cap. The stop message never becomes a Turn of its own.
+- The running Turn ends `cancelled(user_cancel)`, with `partial=True` when any
+  tool had been dispatched or any text shown. Results and receipts of calls
+  that already ran are kept. A fence and a stop that both hold resolve as the
+  fence (`failed(lease_lost)`), and the false "worker lost the lease" harness
+  line is not printed for a person's stop.
+- The stop flag reaches the loop through the existing in-memory `turn_live()`
+  hook with no DB read per iteration: immediately in the same worker, and
+  within `TURN_CANCEL_POLL_SECONDS` (default 2) from another worker. The poll
+  is one indexed read per process per tick, only while a Turn is live, on a
+  worker thread that closes its connection.
+- If a pause is waiting alongside the running turn, the stop ends it through
+  the existing cancel path, so nothing is left behind for the key.
+- The next Turn for the key carries one harness line saying the user stopped
+  the previous request partway and not to redo it unless asked again. The line
+  is built from the Turn record, never from message text.
+- New nullable `Turn.paused_at`, set on every pause edge. A budget or quota
+  `continue` is now consent only if it was sent after `paused_at` plus
+  `CONSENT_SKEW_SECONDS`; an earlier one leaves the pause armed and runs as a
+  new Turn. A late no or stop still cancels.
+- New setting `TURN_CANCEL_POLL_SECONDS` (default 2) in
+  `docs/configuration.md` next to the other turn settings.
+- Upgrade note: the migration adds only the two nullable columns. A pause
+  created by older code has no `paused_at`; its pause time is derived from
+  `pause_expires_at` minus the pause TTL, so a `continue` sent after that
+  still resumes it. Only an older pause with no expiry either fails closed.
+
 ### Added — the turn runner (#216b-2)
 
 - A turn no longer runs inside the WebSocket handler. The consumer saves the

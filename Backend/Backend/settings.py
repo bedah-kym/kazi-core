@@ -535,6 +535,10 @@ TURN_HEARTBEAT_SECONDS = int(os.environ.get('TURN_HEARTBEAT_SECONDS', 30))
 TURN_LEASE_FENCE_MARGIN_SECONDS = int(os.environ.get('TURN_LEASE_FENCE_MARGIN_SECONDS', 30))
 TURN_REAPER_SECONDS = int(os.environ.get('TURN_REAPER_SECONDS', 30))
 TURN_SHUTDOWN_GRACE_SECONDS = int(os.environ.get('TURN_SHUTDOWN_GRACE_SECONDS', 20))
+# How often a process with a live Turn reads the cancel flag written by another
+# worker (#216b-3). One indexed read per process per poll, and none while idle.
+# A same-process stop skips the wait entirely.
+TURN_CANCEL_POLL_SECONDS = int(os.environ.get('TURN_CANCEL_POLL_SECONDS', 2))
 # How many messages a room/user may have waiting behind a running turn. The
 # next one is saved but gets no Turn, plus a saved turn_notice. The queue is
 # drained oldest-first, one turn at a time, by the turn runner (#216b-2).

@@ -67,9 +67,18 @@ BUSY_LIVE = "busy_live"
 TOOK_OVER = "took_over"
 LOST = "lost"
 
+# The ending a person's exact stop writes. It is never `lease_lost`: the two
+# are told apart by the cancel flag, not by the loop's stopped_reason (#216b-3).
+USER_CANCEL = "user_cancel"
+
 # Test seam for the deterministic claim race: called after the oldest queued
 # row is selected and before the conditional update. Production leaves it None.
 _CLAIM_RACE_HOOK = None
+
+# Test seam for the deterministic stop-during-resume race: called after the
+# reply clock is read and before the swap's compare-and-set. Production leaves
+# it None. It runs on the same connection, so it can commit the stop first.
+_CONTINUE_RACE_HOOK = None
 
 
 @dataclass(frozen=True)
@@ -80,8 +89,34 @@ class ClaimResult:
     turn: Optional[Turn] = None
 
 
+@dataclass(frozen=True)
+class StopResult:
+    """What one exact stop did to a key (#216b-3).
+
+    ``flagged`` means a running Turn really carried the flag; the notice may
+    only say "stopping" then. ``committing`` and the absence of both mean the
+    turn had already moved on, and the notice must say so instead.
+    """
+
+    active: bool = False
+    flagged: bool = False
+    committing: bool = False
+    paused: bool = False
+    running_turn_id: Optional[str] = None
+    queued_cancelled: int = 0
+
+
 class PauseContinuationLost(Exception):
     """A pause continuation swap lost a compare-and-set; both rows roll back."""
+
+
+class PauseContinuationStopped(Exception):
+    """A person stopped the turn as it was being resumed; never run a step.
+
+    The stop is newer than the reply that asked to continue, so the resume is
+    not consent. The caller ends the placeholder and the pause as the person's
+    cancel instead of swapping them (#216b-3 round 2, item 1).
+    """
 
 
 class RequestLinkFailed(Exception):
@@ -285,6 +320,122 @@ def count_queued(room_id: Any, user_id: Any) -> int:
     ).count()
 
 
+def request_stop_for_key(room_id: Any, user_id: Any) -> StopResult:
+    """Flag a running Turn and drop everything waiting for one key.
+
+    The flag is written beside the state, never as a transition: the owner
+    still writes the ``cancelled(user_cancel)`` ending with its own version,
+    so this write must not bump ``version`` (#216b-3, item 5). The bulk queued
+    cancel is the only other write. A pause that waits alongside the running
+    turn is reported, and the caller ends it through the existing cancel path.
+    """
+    if room_id is None:
+        return StopResult()
+    with transaction.atomic():
+        running = (
+            Turn.objects.select_for_update()
+            .filter(room_id=room_id, user_id=user_id, state="running")
+            .order_by("started_at")
+            .first()
+        )
+        committing = Turn.objects.filter(
+            room_id=room_id, user_id=user_id, state="committing",
+        ).exists()
+        queued = Turn.objects.filter(
+            room_id=room_id, user_id=user_id, state="queued",
+        )
+        paused = Turn.objects.filter(
+            room_id=room_id, user_id=user_id, state="paused",
+        ).exists()
+        # Only an active turn makes this an exact stop. Queued-only or a pause
+        # on its own keeps today's path: the stop becomes a Turn and the
+        # coordinator handles the queue or the pause honestly.
+        active = bool(running is not None or committing)
+        if not active:
+            return StopResult(paused=paused)
+
+        flagged = False
+        running_id = None
+        if running is not None:
+            updated = Turn.objects.filter(
+                pk=running.pk, state="running",
+            ).update(cancel_requested_at=timezone.now())
+            if updated == 1:
+                flagged = True
+                running_id = str(running.pk)
+            else:
+                # The row moved on between the read and the flag write. The
+                # common cause is a pause continuation swap: the placeholder
+                # was superseded and the paused row is now running. Flag that
+                # row so the resumed work inherits the stop (item 1).
+                current = (
+                    Turn.objects.select_for_update()
+                    .filter(
+                        room_id=room_id, user_id=user_id, state="running",
+                    )
+                    .order_by("started_at")
+                    .first()
+                )
+                if current is not None:
+                    again = Turn.objects.filter(
+                        pk=current.pk, state="running",
+                    ).update(cancel_requested_at=timezone.now())
+                    if again == 1:
+                        flagged = True
+                        running_id = str(current.pk)
+                if not flagged and not committing:
+                    # Say what it moved to instead of claiming a stop happened.
+                    committing = Turn.objects.filter(
+                        pk=running.pk, state="committing",
+                    ).exists()
+
+        cancelled = queued.update(
+            state="cancelled",
+            end_reason=USER_CANCEL,
+            version=F("version") + 1,
+            ended_at=Now(),
+            owner_id=None,
+            lease_expires_at=None,
+        )
+    return StopResult(
+        active=True,
+        flagged=flagged,
+        committing=committing,
+        paused=paused,
+        running_turn_id=running_id,
+        queued_cancelled=cancelled,
+    )
+
+
+def last_ran_turn_before(
+    room_id: Any, user_id: Any, current_turn_id: Any,
+) -> Optional[Turn]:
+    """The Turn of this key that ran and ended last, other than the current one.
+
+    Used only to decide whether the next turn's model input carries the one
+    "the user stopped the earlier request" harness line (#216b-3, item 8).
+    Rows that never started (queued-only, and the queued rows a stop cancels),
+    rows still open (a waiting pause) and continuation placeholders never
+    decide it. It orders by when a row ended, not when it was created: a
+    resumed pause keeps its early ``created_at`` but may end after turns that
+    ran while it waited. A row created after the current one cannot have run
+    and ended before it starts (one active turn per key, FIFO). The caller then
+    checks whether this really was a person's stop (flag set).
+    """
+    return (
+        Turn.objects.filter(
+            room_id=room_id,
+            user_id=user_id,
+            started_at__isnull=False,
+            ended_at__isnull=False,
+        )
+        .exclude(pk=current_turn_id)
+        .exclude(end_reason="continued_pause")
+        .order_by("-ended_at", "-started_at")
+        .first()
+    )
+
+
 def claim_next_queued(room_id: Any, user_id: Any) -> Optional[Turn]:
     """Claim the oldest queued Turn for one key, FIFO enforced in the UPDATE.
 
@@ -376,6 +527,22 @@ def claim_next_queued(room_id: Any, user_id: Any) -> Optional[Turn]:
     return None
 
 
+def _message_sent_at(message_id: Optional[int]):
+    """The reply's timestamp, or ``None`` when it cannot be read."""
+    if message_id is None:
+        return None
+    from chatbot.models import Message
+
+    try:
+        return (
+            Message.objects.filter(pk=message_id)
+            .values_list("timestamp", flat=True)
+            .first()
+        )
+    except (ValueError, TypeError):
+        return None
+
+
 def continue_pause(
     placeholder: Turn,
     paused_turn: Turn,
@@ -388,13 +555,32 @@ def continue_pause(
     a concurrently continued pause never half-swaps. The claimed placeholder is
     left running for the runner to end honestly (#216b-2, item 4).
     """
+    sent_at = _message_sent_at(message_id)
+    if _CONTINUE_RACE_HOOK is not None:
+        _CONTINUE_RACE_HOOK()
+    # A stop is the person changing their mind. It wins only when it is newer
+    # than the reply that asked to continue; an older flag was cleared by the
+    # newer consent (#216b-3 round 2, item 1 and the lead's resume rule).
+    if sent_at:
+        allow_flag = Q(cancel_requested_at__isnull=True) | Q(
+            cancel_requested_at__lt=sent_at,
+        )
+        stop_is_newer = Q(cancel_requested_at__gte=sent_at)
+    else:
+        # No reply clock (a legacy or test caller): the resume itself is the
+        # newer consent, so an earlier stop does not block it.
+        allow_flag = Q()
+        stop_is_newer = None
+
     with transaction.atomic():
         superseded = (
             Turn.objects.filter(
                 pk=placeholder.pk,
                 version=placeholder.version,
                 state="running",
-            ).update(
+            )
+            .filter(allow_flag)
+            .update(
                 state="superseded",
                 version=F("version") + 1,
                 ended_at=Now(),
@@ -405,13 +591,21 @@ def continue_pause(
             )
         )
         if superseded != 1:
+            if (
+                stop_is_newer is not None
+                and Turn.objects.filter(pk=placeholder.pk)
+                .filter(stop_is_newer).exists()
+            ):
+                raise PauseContinuationStopped("placeholder")
             raise PauseContinuationLost("placeholder")
         resumed = (
             Turn.objects.filter(
                 pk=paused_turn.pk,
                 version=paused_turn.version,
                 state="paused",
-            ).update(
+            )
+            .filter(allow_flag)
+            .update(
                 state="running",
                 version=F("version") + 1,
                 attempt=F("attempt") + 1,
@@ -419,10 +613,18 @@ def continue_pause(
                 lease_expires_at=lease_expiry(),
                 pause_kind=None,
                 pause_expires_at=None,
+                paused_at=None,
+                cancel_requested_at=None,
                 end_reason=None,
             )
         )
         if resumed != 1:
+            if (
+                stop_is_newer is not None
+                and Turn.objects.filter(pk=paused_turn.pk)
+                .filter(stop_is_newer).exists()
+            ):
+                raise PauseContinuationStopped("paused")
             raise PauseContinuationLost("paused")
         if message_id is not None:
             from chatbot.models import Message
@@ -726,6 +928,7 @@ def transition(
     model: Any = _UNSET,
     pause_expires_at: Any = _UNSET,
     paused_state_enc: Any = _UNSET,
+    paused_at: Any = _UNSET,
     superseded_by_id: Any = _UNSET,
 ) -> bool:
     """Move a turn with one compare-and-set write.
@@ -756,11 +959,24 @@ def transition(
         "model": model,
         "pause_expires_at": pause_expires_at,
         "paused_state_enc": paused_state_enc,
+        "paused_at": paused_at,
         "superseded_by_id": superseded_by_id,
     }
     for field, value in optional.items():
         if value is not _UNSET:
             updates[field] = value
+
+    # Every pause edge stamps when it happened, and a resume clears the stamp.
+    # The stamp is the app host's clock, the same clock as a message timestamp,
+    # so a budget/quota "continue" can be checked against it (#216b-3, item 6).
+    if to_state == "paused" and "paused_at" not in updates:
+        updates["paused_at"] = timezone.now()
+    elif to_state == "running" and "paused_at" not in updates:
+        updates["paused_at"] = None
+    if to_state == "running":
+        # A stop that landed just before a pause edge must not end the resumed
+        # turn: the resume is consent that postdates the pause, so it is newer.
+        updates["cancel_requested_at"] = None
 
     # Ownership follows the running/committing states. A pause or a terminal
     # edge gives the row back, so no heartbeat and no lease survives it.

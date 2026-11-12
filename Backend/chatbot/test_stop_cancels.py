@@ -128,6 +128,9 @@ class StopCancelsWebsocketTests(TransactionTestCase):
 
         import chatbot.turn_runner as runner_mod
 
+        self.addCleanup(
+            setattr, runner_mod, "_DEFAULT_RUNNER", runner_mod._DEFAULT_RUNNER,
+        )
         runner_mod._DEFAULT_RUNNER = TurnRunner()
         self.runner = runner_mod._DEFAULT_RUNNER
 
@@ -1019,6 +1022,107 @@ class StopCancelsWebsocketTests(TransactionTestCase):
         self.assertNotIn("Please confirm", content)
         self.assertIn("you stopped this turn", content)
 
+    def test_a_fence_wins_over_a_stop_at_a_pause_edge(self):
+        # A stop and a fence that both hold resolve as the fence: the row is no
+        # longer this owner's to end as the person's cancel (CodeRabbit, #306).
+        tool = _tool("c1", "send_email", {"to": "a@b.c", "body": "hi"})
+        self.llm.queue(_response([tool], stop_reason="tool_use"))
+        real_persist = agent_loop._persist_pause_state
+
+        async def persist_then_stop_and_fence(context, *args, **kwargs):
+            # After the loop's last lease check and before the coordinator
+            # handles the confirmation: a stop lands and the lease is lost.
+            saved = await real_persist(context, *args, **kwargs)
+            turn_id = context.get("turn_id")
+            await sync_to_async(
+                lambda: Turn.objects.filter(pk=turn_id).update(
+                    cancel_requested_at=timezone.now(),
+                )
+            )()
+            with turn_leases._REGISTRY_LOCK:
+                turn_leases._FENCED_TURNS.add(str(turn_id))
+            return saved
+
+        async def scenario():
+            with patch(
+                "orchestration.agent_loop._persist_pause_state",
+                new=persist_then_stop_and_fence,
+            ):
+                comm = await self._connect()
+                await self._send(comm, "@kazi send it")
+                self.assertTrue(await self._wait_for(
+                    lambda: not Turn.objects.filter(state="running").exists()
+                    and Turn.objects.exists(),
+                    timeout=8,
+                ))
+                await self.runner.drain(timeout=15)
+                return await sync_to_async(
+                    lambda: Turn.objects.order_by("-created_at").first()
+                )()
+
+        turn = self._run(scenario())
+
+        self.assertNotEqual(turn.end_reason, USER_CANCEL)
+        self.assertEqual(self.execute_tool.await_count, 0)
+        content, _payload = self._saved_reply(turn.pk)
+        self.assertNotIn("you stopped this turn", content)
+
+    def test_a_lost_cancel_write_at_a_pause_edge_adds_no_stop_line(self):
+        # The reaper ends the row between the stop's read and its cancel write;
+        # the write loses, so this owner must not claim the stop in the reply.
+        tool = _tool("c1", "send_email", {"to": "a@b.c", "body": "hi"})
+        self.llm.queue(_response([tool], stop_reason="tool_use"))
+        real_persist = agent_loop._persist_pause_state
+        from orchestration import coordinator as coordinator_mod
+
+        real_atransition = coordinator_mod.atransition
+
+        async def persist_then_stop(context, *args, **kwargs):
+            saved = await real_persist(context, *args, **kwargs)
+            turn_id = context.get("turn_id")
+            await sync_to_async(
+                lambda: Turn.objects.filter(pk=turn_id).update(
+                    cancel_requested_at=timezone.now(),
+                )
+            )()
+            return saved
+
+        async def reaper_wins(turn_id, version, to_state, **kwargs):
+            if to_state == "cancelled" and kwargs.get("end_reason") == USER_CANCEL:
+                await sync_to_async(
+                    lambda: Turn.objects.filter(pk=turn_id).update(
+                        state="failed", end_reason="lease_lost",
+                        version=version + 1, ended_at=timezone.now(),
+                    )
+                )()
+            return await real_atransition(turn_id, version, to_state, **kwargs)
+
+        async def scenario():
+            with patch(
+                "orchestration.agent_loop._persist_pause_state",
+                new=persist_then_stop,
+            ), patch(
+                "orchestration.coordinator.atransition", new=reaper_wins,
+            ):
+                comm = await self._connect()
+                await self._send(comm, "@kazi send it")
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(
+                        state="failed", end_reason="lease_lost",
+                    ).exists(),
+                    timeout=8,
+                ))
+                await self.runner.drain(timeout=15)
+                return await sync_to_async(
+                    lambda: Turn.objects.order_by("-created_at").first()
+                )()
+
+        turn = self._run(scenario())
+
+        self.assertEqual(turn.end_reason, "lease_lost")
+        content, _payload = self._saved_reply(turn.pk)
+        self.assertNotIn("you stopped this turn", content)
+
     def test_a_fenced_turn_still_keeps_the_lease_lost_line(self):
         entered = asyncio.Event()
         release = asyncio.Event()
@@ -1320,3 +1424,54 @@ class StopLineNeedsTheFlagTests(TransactionTestCase):
 
     def test_user_cancel_without_the_flag_earns_no_line(self):
         self.assertEqual(self._note(self._pair(flagged=False)), "")
+
+
+class StopLineFollowsEndOrderTests(TransactionTestCase):
+    """#216b-3 item 8: "the previous request" is the Turn that ended last.
+
+    A paused Turn keeps its early ``created_at`` when it resumes, so turns that
+    ran while it waited must not outrank it (CodeRabbit, #306).
+    """
+
+    def setUp(self):
+        super().setUp()
+        User = get_user_model()
+        self.user = User.objects.create_user(username="orderly", password="pw")  # nosec B106 — fake test credential
+        member = Member.objects.select_related("User").get(User=self.user)
+        self.room = Chatroom.objects.get(participants=member)
+        self.t0 = timezone.now() - timedelta(minutes=10)
+
+    def _turn(self, *, created, ended, stopped):
+        at = self.t0 + timedelta(minutes=created)
+        turn = Turn.objects.create(
+            room=self.room, user=self.user,
+            state="cancelled" if stopped else "completed",
+            end_reason=USER_CANCEL if stopped else None,
+            started_at=at,
+            ended_at=self.t0 + timedelta(minutes=ended),
+            cancel_requested_at=(self.t0 + timedelta(minutes=ended)) if stopped else None,
+        )
+        Turn.objects.filter(pk=turn.pk).update(created_at=at)
+        return turn
+
+    def _note_for_next(self):
+        from orchestration.coordinator import _stopped_turn_note
+
+        now = timezone.now()
+        current = Turn.objects.create(
+            room=self.room, user=self.user, state="running", started_at=now,
+        )
+        Turn.objects.filter(pk=current.pk).update(created_at=now)
+        return async_to_sync(_stopped_turn_note)(
+            self.room.id, self.user.id, str(current.pk),
+        )
+
+    def test_a_resumed_pause_that_completed_last_gives_no_line(self):
+        self._turn(created=0, ended=3, stopped=False)  # P: paused early, resumed, completed
+        self._turn(created=1, ended=2, stopped=True)   # Q: ran while P waited, stopped
+        self.assertEqual(self._note_for_next(), "")
+
+    def test_a_resumed_pause_that_was_stopped_last_gives_the_line(self):
+        self._turn(created=0, ended=3, stopped=True)   # P: resumed, then stopped
+        self._turn(created=1, ended=2, stopped=False)  # Q: ran while P waited, completed
+        self.assertEqual(self._note_for_next(), STOPPED_TURN_NOTE)

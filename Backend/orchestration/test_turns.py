@@ -493,14 +493,17 @@ class _CoordinatorTurnBase(TransactionTestCase):
 class ContinueStopRaceTests(_CoordinatorTurnBase):
     def test_the_last_ran_turn_ignores_a_newer_continuation_placeholder(self):
         now = timezone.now()
+        # Terminal rows always carry ended_at in production; the placeholder
+        # ends after the stopped turn, so only its exclusion can pick `stopped`.
         stopped = Turn.objects.create(
             room=self.room, user=self.user, state="cancelled",
             end_reason=USER_CANCEL, cancel_requested_at=now,
-            started_at=now,
+            started_at=now, ended_at=now - timedelta(seconds=25),
         )
         placeholder = Turn.objects.create(
             room=self.room, user=self.user, state="superseded",
             end_reason="continued_pause", started_at=now,
+            ended_at=now - timedelta(seconds=10),
         )
         current = Turn.objects.create(
             room=self.room, user=self.user, state="queued",

@@ -410,28 +410,30 @@ def request_stop_for_key(room_id: Any, user_id: Any) -> StopResult:
 def last_ran_turn_before(
     room_id: Any, user_id: Any, current_turn_id: Any,
 ) -> Optional[Turn]:
-    """The newest Turn that actually ran before ``current_turn_id``.
+    """The Turn of this key that ran and ended last, other than the current one.
 
     Used only to decide whether the next turn's model input carries the one
     "the user stopped the earlier request" harness line (#216b-3, item 8).
-    Rows that never started (queued-only, and the queued rows a stop cancels)
-    and continuation placeholders never decide it. Rows created after the
-    current turn never decide it either. The caller then checks whether this
-    really was a person's stop (`cancelled(user_cancel)` with the flag set).
+    Rows that never started (queued-only, and the queued rows a stop cancels),
+    rows still open (a waiting pause) and continuation placeholders never
+    decide it. It orders by when a row ended, not when it was created: a
+    resumed pause keeps its early ``created_at`` but may end after turns that
+    ran while it waited. A row created after the current one cannot have run
+    and ended before it starts (one active turn per key, FIFO). The caller then
+    checks whether this really was a person's stop (flag set).
     """
-    current = (
-        Turn.objects.filter(pk=current_turn_id)
-        .only("created_at")
+    return (
+        Turn.objects.filter(
+            room_id=room_id,
+            user_id=user_id,
+            started_at__isnull=False,
+            ended_at__isnull=False,
+        )
+        .exclude(pk=current_turn_id)
+        .exclude(end_reason="continued_pause")
+        .order_by("-ended_at", "-started_at")
         .first()
     )
-    query = Turn.objects.filter(
-        room_id=room_id,
-        user_id=user_id,
-        started_at__isnull=False,
-    ).exclude(pk=current_turn_id).exclude(end_reason="continued_pause")
-    if current is not None and current.created_at is not None:
-        query = query.filter(created_at__lt=current.created_at)
-    return query.order_by("-created_at").first()
 
 
 def claim_next_queued(room_id: Any, user_id: Any) -> Optional[Turn]:

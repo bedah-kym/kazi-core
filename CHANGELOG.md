@@ -37,8 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New setting `TURN_CANCEL_POLL_SECONDS` (default 2) in
   `docs/configuration.md` next to the other turn settings.
 - Upgrade note: the migration adds only the two nullable columns. A pause
-  created by older code has no `paused_at`, so a `continue` for it fails
-  closed until the turn is paused again.
+  created by older code has no `paused_at`; its pause time is derived from
+  `pause_expires_at` minus the pause TTL, so a `continue` sent after that
+  still resumes it. Only an older pause with no expiry either fails closed.
 
 ### Added — the turn runner (#216b-2)
 

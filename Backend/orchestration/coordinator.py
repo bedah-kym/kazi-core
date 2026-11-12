@@ -727,6 +727,10 @@ class OrchestrationCoordinator:
             turn_id = _turn_id()
             if not turn_id or turn_box.get("settled"):
                 return False
+            if turn_fenced(turn_id):
+                # A fence wins over a stop: the row is no longer this owner's
+                # to end as the person's cancel (same rule as the loop ending).
+                return False
             if not cancel_requested(turn_id):
                 row = await aget_turn(turn_id)
                 if row is None or row.cancel_requested_at is None:
@@ -762,7 +766,10 @@ class OrchestrationCoordinator:
                     "Stopped pause approval row not resolved", exc_info=True,
                 )
             clear_loop_state(room_id, user_id)
-            await _add_stopped_reply_line()
+            if moved:
+                # Only a cancel this owner really wrote earns the stop line; a
+                # lost write means another writer (the reaper) ended the row.
+                await _add_stopped_reply_line()
             return True
 
         async def _end_resume_stopped() -> None:

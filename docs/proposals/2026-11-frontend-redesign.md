@@ -127,7 +127,7 @@ modest hardware.
 - Approved: the CI screenshot harness (F-01). Not yet approved: the payments restyle (F-55)
   and the CSP/inline-script change (F-71); each still needs a plan and a human OK.
 
-Reference designs: twenty mock-up screens, inventoried in the design spec §9, with their
+Reference designs: twenty-three mock-up screens, inventoried in the design spec §9, with their
 sources under `2026-11-frontend-redesign/mockups/`. They are fixed-size pictures, not the
 responsive page.
 

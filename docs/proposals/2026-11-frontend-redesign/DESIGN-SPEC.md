@@ -473,9 +473,12 @@ Researcher, Analyst, Designer, Copywriter), the rooms, messages, file names and 
 | `VoiceFailedPhone.dc.html` | 390 × 844 | Transcription failure, and the microphone-blocked message. |
 | `VoiceConversationPhone.dc.html` | 390 × 844 | Conversation mode. |
 | `VoiceDesktop.dc.html` | 1000 × 640 | Desktop recording bar, spoken reply with playback strip, "Speak replies" switch. |
+| `DarkChatDesktop.dc.html` | 1440 × 900 | Dark mode reference: the `ChatGroups` screen in the §3.3 values, with the Search tab added and a theme button in the sidebar footer. |
+| `DarkChatPhone.dc.html` | 390 × 844 | Dark mode: phone chat with the approval card. |
+| `DarkSignInPhone.dc.html` | 390 × 844 | Dark mode: sign-in as scoped for a home install (no social sign-in, a setup-guide link, a focused field and an error message). Supersedes `SignInPhone` for content. |
 
-Known gaps in the mock-ups: only light mode is drawn (except conversation mode), so dark
-mode is specified in §3.3 but not yet pictured; hover,
+Known gaps in the mock-ups: dark mode is drawn for three screens only (plus conversation
+mode); every other screen follows §3.3; hover,
 focus and disabled states are not drawn; no settings, workflows, notifications, reminders,
 travel, onboarding walkthrough or system-status screens exist yet; the screens are fixed
 sizes, not responsive pages; none was visually verified after publishing.

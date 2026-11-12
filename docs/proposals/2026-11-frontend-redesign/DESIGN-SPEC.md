@@ -143,6 +143,83 @@ The same tint and text pairs colour people in team rooms (Amina blue, Brian plum
 mock-up); a person's colour is stable across the app. White text on every fill above and on
 clay passes 4.5:1; `--ink-soft` on `--paper` passes; do not use `--ink-soft` on tints.
 
+### 3.3 Dark mode
+
+Dark mode is a first-class theme on every page, not an inversion of the light one. The
+mock-ups draw light mode only; this section is the specification for dark.
+
+**Principles**
+
+1. **Warm charcoal, never black.** The page is `#262624`. Pure black and pure white are not
+   used for surfaces or text.
+2. **Depth comes from lighter surfaces, not shadows.** Three steps: paper `#262624`, surface
+   `#30302d`, raised `#383733`. Anything that sits "above" uses the next step and a hairline.
+   Shadows are kept only for things that float over content (menus, sheets, dialogs, the
+   dragged row), and are black, not ink-tinted.
+3. **One accent, two forms.** Clay as a fill stays `#a83c1e` with white text. Clay as text,
+   icon, underline or focus ring becomes the lighter `#ef8460` so it stays readable.
+4. **Softer text, same hierarchy.** Primary `#edeae2`, secondary `#c9c4b8`, meta `#a5a098`.
+   The three levels match the light theme's three levels one for one.
+5. **Tints get stronger, not brighter.** Washes go from 12–14 % to 18–22 % opacity on the
+   surface beneath; status and group tints become deep, low-chroma versions of their hue
+   with light text.
+6. **Borders that controls need are visible.** Decorative hairlines stay subtle (`#3e3d38`);
+   the outline of an input, checkbox or dashed target uses `#8a877c`, which holds 3:1
+   against all three surfaces.
+7. **No glow.** The clay shadow under buttons, the brand mark and the recording bar is
+   removed in dark; the fill alone carries them.
+8. **Texture stays, quieter.** `brick-wall-dark.svg`, same placement rules as light.
+9. **Media is not left blazing.** Images and file previews get a 1 px hairline; the code
+   block goes one step darker than the page so it still reads as inset.
+10. **Follows the system, remembers the user.** First visit follows the operating-system
+    preference; an explicit choice is stored and applied before first paint on every page,
+    including sign-in and onboarding. Browser chrome follows (`color-scheme`, `theme-color`).
+
+**Dark values for the tokens in §3.2**
+
+| Token | Dark value | Notes |
+|---|---|---|
+| `--ink-2` | `#c9c4b8` | 6.9:1 on raised, 8.7:1 on paper |
+| `--line-strong` | `#8a877c` | 3.3:1 on raised, 3.7:1 on surface, 4.2:1 on paper |
+| `--fill-1` | `#3a3935` | Segmented-control track, neutral pill |
+| `--fill-2` | `#44423d` | Neutral avatar |
+| `--clay-line` | `rgba(239,132,96,.35)` | Assistant bubble and "needs you" border |
+| `--clay-on-clay` | `#f6c9b6` | Unchanged |
+| `--bubble-own` | `linear-gradient(135deg, #57513f, #665f4a)`, text `#f6f3ec`, plus a 1 px `rgba(255,255,255,.08)` border | 5.7–7.1:1; lighter than the page so the user's messages still stand forward |
+| `--success-text` | `#63b581` on surfaces (5.3:1); `#8fd0a6` on the success wash (5.6:1) | |
+| `--danger-text` | `#f0907c` | 5.7:1 on surface; `--danger-hex` `#e5664f` is for icons and fills only (4.0:1 as text) |
+| `--warning-strong` | `#d9a63c` | 5.4:1 on raised |
+| `--mark` | `#6b5420` behind `--ink` text | 6.0:1 |
+| `--code-bg` / `--code-fg` / `--code-dim` | `#1e1e1c` / `#edeae2` / `#a5a098` | 13.9:1 and 6.4:1 |
+| `--scrim` | `rgba(0,0,0,.55)` | |
+| Floating shadow | `0 12px 32px rgba(0,0,0,.5)`; dialogs `0 24px 64px rgba(0,0,0,.6)` | Replaces every ink-tinted shadow |
+| Focus ring | 2 px `#ef8460` | 5.9:1 on paper |
+
+Group and person colours in dark: the fill is unchanged (white text passes on all four);
+the tint and its text become:
+
+| Name | Fill | Tint | Text on tint |
+|---|---|---|---|
+| Olive | `#5f6b3a` | `#3a4226` | `#c5d19a` (6.5:1) |
+| Ochre | `#8a5e10` | `#4a3a14` | `#e6c377` (6.5:1) |
+| Blue | `#3f5f7a` | `#26384a` | `#a9c6e0` (6.8:1) |
+| Plum | `#6f4a6a` | `#3f2c3c` | `#dcb6d6` (7.2:1) |
+
+Measured against the existing dark palette: `--ink` on paper 12.6:1; `--ink-soft` 5.8:1 on
+paper, 5.1:1 on surface, 4.6:1 on raised (do not use it on tints); `--clay-fg` 5.9:1 on
+paper, 4.6:1 on raised and on the clay wash; links `#f6a685` 6.8:1; white on clay 6.3:1.
+Ratios were computed with the WCAG formula, not measured on a rendered page.
+
+**Component notes for dark**
+
+- Assistant bubble: surface fill, `--clay-line` border, no shadow.
+- Others' bubbles: surface fill, hairline border.
+- Cards, list rows and inputs: raised fill, hairline (inputs: `--line-strong`).
+- Selected chip: `--ink` fill with paper-coloured text (it inverts with the theme).
+- Translucent bars: `rgba(48,48,45,.90–.96)`.
+- Recording bar and current search result: 2 px `#ef8460` border.
+- Skeletons: fill-1 to fill-2, no shimmer under reduced motion.
+
 Conversation mode (voice) uses the dark palette regardless of theme: background `#262624`,
 card `#30302d`, line `#3e3d38`, text `#edeae2`, meta `#a5a098`, accent text and level bars
 `#ef8460`, primary button `#a83c1e`.
@@ -397,7 +474,8 @@ Researcher, Analyst, Designer, Copywriter), the rooms, messages, file names and 
 | `VoiceConversationPhone.dc.html` | 390 × 844 | Conversation mode. |
 | `VoiceDesktop.dc.html` | 1000 × 640 | Desktop recording bar, spoken reply with playback strip, "Speak replies" switch. |
 
-Known gaps in the mock-ups: only light mode is drawn (except conversation mode); hover,
+Known gaps in the mock-ups: only light mode is drawn (except conversation mode), so dark
+mode is specified in §3.3 but not yet pictured; hover,
 focus and disabled states are not drawn; no settings, workflows, notifications, reminders,
 travel, onboarding walkthrough or system-status screens exist yet; the screens are fixed
 sizes, not responsive pages; none was visually verified after publishing.

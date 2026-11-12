@@ -109,6 +109,9 @@ modest hardware.
   offer retry; spoken replies are a per-room switch and stop when the user starts talking;
   phones get a conversation mode with captions. Approvals always need a tap, never voice
   alone. Transcription and speech both go through the provider-agnostic route (F-85–F-89).
+- Dark mode is a first-class theme on every page, including sign-in, onboarding and the
+  remaining standalone pages: designed, not inverted, and held to the same contrast and
+  screenshot checks as light (F-14; values in the design spec §3.3).
 - At desktop width the full navigation sidebar stays while a chat is open; the details panel
   is collapsible, and its open or closed state is remembered per user (F-40, F-48).
 - Settings gains a read-only system status section (F-62); keys stay in the environment file.
@@ -320,6 +323,25 @@ Each blocked issue ships its layout first and its v0.8 behaviour when the backen
   new and rewritten modules; legacy files join as they are touched.
 - Acceptance: a deliberate type error in a checked module fails the check; nothing is
   emitted and the shipped files are byte-identical to the sources.
+
+**F-14 — Dark mode as a first-class theme** `[Evidence]`
+- Context: a dark token set exists (`kazi-theme.css:74-115`) and is toggled in chat and the
+  app shell, but selectors mix `[data-theme="dark"]`, `body.dark-mode` and `.dark-mode`;
+  several files hard-code light colours (`ai-assistant.css` and `message-actions.css` use no
+  tokens at all); sign-in, register and onboarding have no dark styles; the theme is applied
+  after load, so a dark-mode user sees a light flash; the system preference is ignored.
+- Build: the dark values of the design spec §3.3 for every token, including the ones the
+  redesign adds; one selector (`data-theme` on the root); elevation by surface step with
+  shadows only on floating layers; a separate, lighter clay for text and focus; visible
+  control borders; `color-scheme` and `theme-color` set per theme; the theme applied before
+  first paint and defaulting to the system preference; the F-12 ratchet extended to fail on
+  a colour that has a light value and no dark one.
+- Acceptance: every page in the F-01 harness is captured in both themes; an automated
+  contrast check passes in dark on every page (text 4.5:1, large text and control
+  boundaries 3:1); no element renders with a light-theme hard-coded colour in dark
+  (asserted by scanning computed backgrounds for the light palette); a first-paint
+  screenshot for a stored dark preference shows no light frame; with no stored preference
+  the page follows `prefers-color-scheme`.
 
 ### Phase 2 — Component kit (`F-2x`)
 
@@ -653,7 +675,7 @@ and kit; sign-in links to the docs, not to "request an invite". Acceptance: no i
 ## 6. Build order
 
 1. F-01 → F-04 → F-02 → F-06 → F-05 (with F-33) → F-03.
-2. F-10 → F-11 → F-12 → F-13.
+2. F-10 → F-11 → F-12 → F-13 → F-14. Every later issue ships both themes.
 3. F-20 → F-21.
 4. F-30, then F-31 and F-32.
 5. F-40, F-42, F-43, F-44 (approval card), F-45, F-46 as the kit and shell allow; F-47 once its stored data

@@ -4,7 +4,7 @@
   "http_status": 401,
   "body": {
     "error": {
-      "message": "Incorrect API key provided.",
+      "message": "Incorrect API key provided: sk-proj-****abcd for organization org-abc123.",
       "type": "invalid_request_error",
       "param": null,
       "code": "invalid_api_key"

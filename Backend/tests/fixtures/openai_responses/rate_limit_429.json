@@ -4,7 +4,7 @@
   "http_status": 429,
   "body": {
     "error": {
-      "message": "Rate limit reached for requests.",
+      "message": "Rate limit reached for organization org-abc123 on requests.",
       "type": "rate_limit_error",
       "param": null,
       "code": "rate_limit_exceeded"

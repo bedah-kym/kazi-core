@@ -17,9 +17,13 @@
         "type": "reasoning",
         "id": "rs_crafted_plain",
         "summary": [
-          {"type": "summary_text", "text": "The user wants one word."}
+          {
+            "type": "summary_text",
+            "text": "The user wants one word."
+          }
         ],
-        "encrypted_content": "encrypted-reasoning-plain"
+        "encrypted_content": "encrypted-reasoning-plain",
+        "content": []
       },
       {
         "type": "message",
@@ -27,13 +31,21 @@
         "status": "completed",
         "role": "assistant",
         "content": [
-          {"type": "output_text", "text": "pong", "annotations": []}
-        ]
+          {
+            "type": "output_text",
+            "text": "pong",
+            "annotations": []
+          }
+        ],
+        "phase": "final_answer"
       }
     ],
     "parallel_tool_calls": true,
     "previous_response_id": null,
-    "reasoning": {"effort": "low", "summary": null},
+    "reasoning": {
+      "effort": "low",
+      "summary": null
+    },
     "store": false,
     "temperature": 0.3,
     "tools": [],
@@ -41,9 +53,14 @@
     "truncation": "disabled",
     "usage": {
       "input_tokens": 24,
-      "input_tokens_details": {"cached_tokens": 0},
+      "input_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0
+      },
       "output_tokens": 12,
-      "output_tokens_details": {"reasoning_tokens": 8},
+      "output_tokens_details": {
+        "reasoning_tokens": 8
+      },
       "total_tokens": 36
     }
   }

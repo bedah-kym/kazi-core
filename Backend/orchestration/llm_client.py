@@ -20,6 +20,7 @@ from django.utils import timezone
 
 from orchestration.llm_openai import (
     build_responses_request,
+    error_from_body,
     iter_responses_stream,
     parse_responses_body,
     strip_provider_state_blocks,
@@ -725,6 +726,8 @@ class LLMClient:
             max_tokens=max_tokens,
             reasoning_effort=self.openai_reasoning_effort,
         )
+        if capture is not None:
+            capture["request"] = body
         client = _get_http_client()
         response = await client.post(
             self.openai_url,
@@ -736,7 +739,7 @@ class LLMClient:
             timeout=120.0,
         )
         if response.status_code != 200:
-            raise Exception(f"OpenAI Error {response.status_code}: {response.text}")
+            raise error_from_body(response.status_code, response.text)
         data = response.json()
         if capture is not None:
             capture["body"] = data
@@ -778,9 +781,7 @@ class LLMClient:
         ) as response:
             if response.status_code != 200:
                 error_body = await response.aread()
-                raise Exception(
-                    f"OpenAI Stream Error {response.status_code}: {error_body}"
-                )
+                raise error_from_body(response.status_code, error_body)
             async for event in iter_responses_stream(response.aiter_lines()):
                 yield event
 
@@ -1022,6 +1023,11 @@ class LLMClient:
                         model=self._model_for("openai", model_role),
                     )
                     response = text_from_result(result)
+                    stop_reason = result.get("stop_reason")
+                    if stop_reason == "max_tokens":
+                        raise Exception("OpenAI reply was cut off by the output limit.")
+                    if stop_reason == "refusal" and not response.strip():
+                        raise Exception("OpenAI declined to answer.")
                     usage = result.get("usage", {}) or {}
                     used = (
                         int(usage.get("input_tokens", 0) or 0)
@@ -1151,6 +1157,12 @@ class LLMClient:
                         if event.get("type") == "text" and event.get("text"):
                             emitted = True
                             yield event["text"]
+                        elif event.get("type") == "message_done":
+                            stop_reason = event.get("stop_reason")
+                            if stop_reason == "max_tokens":
+                                raise Exception("OpenAI reply was cut off by the output limit.")
+                            if stop_reason == "refusal" and not emitted:
+                                raise Exception("OpenAI declined to answer.")
                     return
                 except Exception as e:
                     if emitted:

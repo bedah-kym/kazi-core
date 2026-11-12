@@ -22,6 +22,33 @@ class OpenAIResponsesError(Exception):
     """A Responses body or stream ended in a way the loop must not call done."""
 
 
+class OpenAIAPIError(OpenAIResponsesError):
+    """An HTTP error carrying only the status and OpenAI's error type/code.
+
+    The raw body can name the organisation or a masked key tail, so it never
+    travels in the exception text.
+    """
+
+    def __init__(self, status: Any, code: str):
+        self.status = status
+        self.code = code
+        super().__init__(f"OpenAI Error {status}: {code}")
+
+
+def error_from_body(status: Any, body: Any) -> OpenAIAPIError:
+    """Build a safe HTTP error from an OpenAI error body."""
+    text = body.decode("utf-8", errors="replace") if isinstance(body, bytes) else str(body or "")
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        data = {}
+    error = data.get("error") if isinstance(data, dict) else {}
+    if not isinstance(error, dict):
+        error = {}
+    parts = [str(part) for part in (error.get("type"), error.get("code")) if part]
+    return OpenAIAPIError(status, "/".join(parts) or "error")
+
+
 def _is_provider_state(block: Any) -> bool:
     return isinstance(block, dict) and block.get("type") == PROVIDER_STATE_TYPE
 
@@ -77,18 +104,23 @@ def _content_type(role: str) -> str:
 
 
 def _strict_schema(schema: Any) -> bool:
-    """True only for a schema OpenAI's strict tool mode accepts unchanged."""
+    """True only for a schema OpenAI's strict tool mode accepts, at every level."""
     if not isinstance(schema, dict):
         return False
-    if schema.get("type") != "object":
-        return False
-    if schema.get("additionalProperties") is not False:
-        return False
-    properties = schema.get("properties")
-    required = schema.get("required")
-    if not isinstance(properties, dict) or not isinstance(required, list):
-        return False
-    return set(required) == set(properties)
+    schema_type = schema.get("type")
+    if schema_type == "object":
+        if schema.get("additionalProperties") is not False:
+            return False
+        properties = schema.get("properties")
+        required = schema.get("required")
+        if not isinstance(properties, dict) or not isinstance(required, list):
+            return False
+        if set(required) != set(properties):
+            return False
+        return all(_strict_schema(value) for value in properties.values())
+    if schema_type == "array":
+        return _strict_schema(schema.get("items"))
+    return schema_type in {"string", "number", "integer", "boolean", "null"}
 
 
 def tools_to_responses(tools: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
@@ -107,7 +139,31 @@ def tools_to_responses(tools: Optional[List[Dict[str, Any]]]) -> List[Dict[str, 
     return out
 
 
-def _assistant_items(content: List[Any]) -> List[Dict[str, Any]]:
+def _drop_dangling_reasoning(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Drop trailing reasoning items; the API rejects reasoning with nothing after it."""
+    end = len(items)
+    while end > 0 and items[end - 1].get("type") == "reasoning":
+        end -= 1
+    return items[:end]
+
+
+def _assistant_items(
+    content: List[Any], target_model: Optional[str],
+) -> List[Dict[str, Any]]:
+    state = next(
+        (block for block in content if isinstance(block, dict) and _is_provider_state(block)),
+        None,
+    )
+    raw_items = state.get("items") if isinstance(state, dict) else None
+    if (
+        isinstance(raw_items, list)
+        and target_model
+        and state.get("model") == target_model
+    ):
+        return _drop_dangling_reasoning(
+            [item for item in raw_items if isinstance(item, dict)]
+        )
+
     items: List[Dict[str, Any]] = []
     pending_text: List[str] = []
 
@@ -136,10 +192,7 @@ def _assistant_items(content: List[Any]) -> List[Dict[str, Any]]:
                 "arguments": json.dumps(block.get("input", {}), default=str),
             })
         elif _is_provider_state(block):
-            flush_text()
-            raw_items = block.get("items")
-            if isinstance(raw_items, list):
-                items.extend(item for item in raw_items if isinstance(item, dict))
+            continue
     flush_text()
     return items
 
@@ -175,7 +228,9 @@ def _user_items(content: List[Any]) -> List[Dict[str, Any]]:
     return items
 
 
-def messages_to_input_items(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def messages_to_input_items(
+    messages: List[Dict[str, Any]], target_model: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     items: List[Dict[str, Any]] = []
     for message in messages or []:
         role = str(message.get("role") or "user")
@@ -196,7 +251,7 @@ def messages_to_input_items(messages: List[Dict[str, Any]]) -> List[Dict[str, An
                 })
             continue
         if role == "assistant":
-            items.extend(_assistant_items(content))
+            items.extend(_assistant_items(content, target_model))
         elif role == "user":
             items.extend(_user_items(content))
         else:
@@ -227,7 +282,7 @@ def build_responses_request(
     effort = str(reasoning_effort or "low").strip().lower() or "low"
     body: Dict[str, Any] = {
         "model": model,
-        "input": messages_to_input_items(messages),
+        "input": messages_to_input_items(messages, target_model=model),
         "store": False,
         "include": ["reasoning.encrypted_content"],
         "max_output_tokens": max_tokens,
@@ -248,11 +303,12 @@ def _normalise_usage(usage: Optional[Dict[str, Any]]) -> Dict[str, int]:
     total_input = int(usage.get("input_tokens") or 0)
     details = usage.get("input_tokens_details") or {}
     cached = int(details.get("cached_tokens") or 0)
+    written = int(details.get("cache_write_tokens") or 0)
     return {
-        "input_tokens": max(0, total_input - cached),
+        "input_tokens": max(0, total_input - cached - written),
         "output_tokens": int(usage.get("output_tokens") or 0),
         "cache_read_input_tokens": cached,
-        "cache_creation_input_tokens": 0,
+        "cache_creation_input_tokens": written,
     }
 
 
@@ -283,18 +339,16 @@ def parse_responses_body(data: Dict[str, Any]) -> Dict[str, Any]:
 
     status = data.get("status")
     output = data.get("output") or []
-    reasoning_items: List[Dict[str, Any]] = []
+    output_items = [item for item in output if isinstance(item, dict)]
     blocks: List[Dict[str, Any]] = []
     refusal = False
     has_tool_calls = False
 
-    for item in output:
-        if not isinstance(item, dict):
-            continue
+    for item in output_items:
         item_type = item.get("type")
         if item_type == "reasoning":
-            reasoning_items.append(item)
-        elif item_type == "message":
+            continue
+        if item_type == "message":
             for part in item.get("content") or []:
                 if not isinstance(part, dict):
                     continue
@@ -318,11 +372,12 @@ def parse_responses_body(data: Dict[str, Any]) -> Dict[str, Any]:
         refusal, has_tool_calls,
     )
 
-    if reasoning_items:
+    if output_items:
         blocks.insert(0, {
             "type": PROVIDER_STATE_TYPE,
             "provider": OPENAI_PROVIDER,
-            "items": reasoning_items,
+            "model": data.get("model"),
+            "items": output_items,
         })
     if not blocks:
         blocks = [{"type": "text", "text": ""}]
@@ -337,26 +392,17 @@ def parse_responses_body(data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-
-def _call_from_item(item: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "id": str(item.get("call_id") or item.get("id") or ""),
-        "name": item.get("name") or "",
-        "arguments": _parse_arguments(item.get("arguments")),
-    }
-
-
 async def iter_responses_stream(lines: AsyncIterator[Any]) -> AsyncIterator[Dict[str, Any]]:
     """Parse a Responses SSE stream into Kazi's event dicts.
 
-    Content events are emitted as they arrive. ``response.completed`` (or
-    ``response.incomplete``) is recorded as the terminal body and evaluated
-    after the stream ends, so its position does not matter. A stream that ends
-    without a terminal event is an error, never a normal ``done``.
+    Text arrives as it streams. Tool events are buffered and yielded only after
+    the terminal body proves the ending is ``tool_use``, so a cut-off or failed
+    turn never exposes a partial tool call. The terminal event may appear at any
+    position; it is evaluated after the stream ends, and a stream without one is
+    an error, never a normal ``done``.
     """
     terminal: Optional[Dict[str, Any]] = None
-    by_index: Dict[int, Dict[str, Any]] = {}
-    ended: set = set()
+    inputs: Dict[int, List[str]] = {}
     saw_text = False
 
     async for raw in lines:
@@ -380,54 +426,17 @@ async def iter_responses_stream(lines: AsyncIterator[Any]) -> AsyncIterator[Dict
                 saw_text = True
                 yield {"type": "text", "text": text}
 
-        elif event_type == "response.output_item.added":
-            item = event.get("item") or {}
-            if isinstance(item, dict) and item.get("type") == "function_call":
-                index = int(event.get("output_index") or 0)
-                call = _call_from_item(item)
-                call["arguments"] = {}
-                by_index[index] = call
-                yield {
-                    "type": "tool_use_start",
-                    "id": call["id"],
-                    "name": call["name"],
-                }
+        elif event_type == "response.refusal.delta":
+            text = event.get("delta") or ""
+            if text:
+                saw_text = True
+                yield {"type": "text", "text": text}
 
         elif event_type == "response.function_call_arguments.delta":
             delta = event.get("delta") or ""
             if delta:
                 index = int(event.get("output_index") or 0)
-                by_index.setdefault(
-                    index, {"id": "", "name": "", "arguments": {}},
-                )
-                yield {"type": "tool_use_input", "partial_json": delta}
-
-        elif event_type == "response.function_call_arguments.done":
-            index = int(event.get("output_index") or 0)
-            call = by_index.get(index)
-            if call and call.get("id") and call["id"] not in ended:
-                ended.add(call["id"])
-                yield {
-                    "type": "tool_use_end",
-                    "id": call["id"],
-                    "name": call["name"],
-                    "input": _parse_arguments(event.get("arguments")),
-                }
-
-        elif event_type == "response.output_item.done":
-            item = event.get("item") or {}
-            if isinstance(item, dict) and item.get("type") == "function_call":
-                index = int(event.get("output_index") or 0)
-                call = _call_from_item(item)
-                by_index.setdefault(index, call)
-                if call["id"] not in ended:
-                    ended.add(call["id"])
-                    yield {
-                        "type": "tool_use_end",
-                        "id": call["id"],
-                        "name": call["name"],
-                        "input": call["arguments"],
-                    }
+                inputs.setdefault(index, []).append(delta)
 
         elif event_type in ("response.completed", "response.incomplete", "response.failed"):
             response = event.get("response")
@@ -435,8 +444,12 @@ async def iter_responses_stream(lines: AsyncIterator[Any]) -> AsyncIterator[Dict
 
         elif event_type == "error":
             error = event.get("error") or {}
-            code = error.get("code") if isinstance(error, dict) else ""
-            raise OpenAIResponsesError(f"OpenAI stream error: {code or 'unknown error'}.")
+            parts = []
+            if isinstance(error, dict):
+                parts = [str(part) for part in (error.get("type"), error.get("code")) if part]
+            raise OpenAIResponsesError(
+                f"OpenAI stream error: {'/'.join(parts) or 'unknown error'}."
+            )
 
     if terminal is None:
         raise OpenAIResponsesError(
@@ -444,24 +457,6 @@ async def iter_responses_stream(lines: AsyncIterator[Any]) -> AsyncIterator[Dict
         )
 
     parsed = parse_responses_body(terminal)
-
-    for item in terminal.get("output") or []:
-        if isinstance(item, dict) and item.get("type") == "function_call":
-            call = _call_from_item(item)
-            if not any(known.get("id") == call["id"] for known in by_index.values()):
-                yield {
-                    "type": "tool_use_start",
-                    "id": call["id"],
-                    "name": call["name"],
-                }
-            if call["id"] not in ended:
-                ended.add(call["id"])
-                yield {
-                    "type": "tool_use_end",
-                    "id": call["id"],
-                    "name": call["name"],
-                    "input": call["arguments"],
-                }
 
     if not saw_text:
         text = "".join(
@@ -471,6 +466,24 @@ async def iter_responses_stream(lines: AsyncIterator[Any]) -> AsyncIterator[Dict
         )
         if text:
             yield {"type": "text", "text": text}
+
+    if parsed["stop_reason"] == "tool_use":
+        for index, item in enumerate(terminal.get("output") or []):
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") != "function_call":
+                continue
+            call_id = str(item.get("call_id") or item.get("id") or "")
+            name = item.get("name") or ""
+            yield {"type": "tool_use_start", "id": call_id, "name": name}
+            for partial in inputs.get(index) or []:
+                yield {"type": "tool_use_input", "partial_json": partial}
+            yield {
+                "type": "tool_use_end",
+                "id": call_id,
+                "name": name,
+                "input": _parse_arguments(item.get("arguments")),
+            }
 
     provider_state = next(
         (block for block in parsed["content"] if _is_provider_state(block)),

@@ -17,7 +17,8 @@
         "type": "reasoning",
         "id": "rs_crafted_parallel",
         "summary": [],
-        "encrypted_content": "encrypted-reasoning-parallel"
+        "encrypted_content": "encrypted-reasoning-parallel",
+        "content": []
       },
       {
         "type": "function_call",
@@ -38,7 +39,10 @@
     ],
     "parallel_tool_calls": true,
     "previous_response_id": null,
-    "reasoning": {"effort": "low", "summary": null},
+    "reasoning": {
+      "effort": "low",
+      "summary": null
+    },
     "store": false,
     "temperature": 0.3,
     "tools": [],
@@ -46,9 +50,14 @@
     "truncation": "disabled",
     "usage": {
       "input_tokens": 48,
-      "input_tokens_details": {"cached_tokens": 16},
+      "input_tokens_details": {
+        "cached_tokens": 16,
+        "cache_write_tokens": 8
+      },
       "output_tokens": 24,
-      "output_tokens_details": {"reasoning_tokens": 9},
+      "output_tokens_details": {
+        "reasoning_tokens": 9
+      },
       "total_tokens": 72
     }
   }

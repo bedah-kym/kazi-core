@@ -139,10 +139,11 @@ reply are processed on OpenAI's servers (V-4).
 OpenAI uses the native **Responses API** because its current reasoning models
 need it for tool calling. Reasoning travels back to OpenAI as encrypted
 reasoning items held in an opaque `provider_state` content block. The block is
-kept only in the encrypted paused state so a resumed turn can continue; it is
-never sent to Anthropic, DeepSeek or Hugging Face, never shown to users, and
-never written to telemetry or receipts. Switching a room away from OpenAI
-mid-conversation loses only that reasoning.
+kept in the paused state so a resumed turn can continue: encrypted on the
+durable Turn, and plain JSON in the legacy cache fallback (still only OpenAI's
+ciphertext). It is never sent to Anthropic, DeepSeek or Hugging Face, never
+shown to users, and never written to telemetry or receipts. Switching a room
+away from OpenAI mid-conversation loses only that reasoning.
 
 The **model catalog** (`orchestration/model_catalog.py`) is a fixed list of
 models the chatroom picker offers; which ones are available is gated purely by

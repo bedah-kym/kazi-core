@@ -20,8 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it into a silent chat fallback. The key still enables the existing OpenAI
   voice transcription and speech paths; `docs/configuration.md` says so.
 - Reasoning items ride back to OpenAI inside an opaque `provider_state` block,
-  kept only in the encrypted paused state, and stripped before every other
-  provider. A cut-off (`max_output_tokens`) ends as `max_tokens` and never
+  kept in the paused state, and stripped before every other provider. A cut-off (`max_output_tokens`) ends as `max_tokens` and never
   dispatches a partial tool call; a refusal or content filter ends honestly;
   an unknown status/stream ending is an error, never "done". Usage is
   normalised to the same names as the other providers.

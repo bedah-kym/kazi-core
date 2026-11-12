@@ -1,0 +1,39 @@
+{
+  "source": "crafted",
+  "name": "reasoning_only_cut_off",
+  "http_status": 200,
+  "body": {
+    "id": "resp_crafted_reasoning_only",
+    "object": "response",
+    "created_at": 1720000004,
+    "status": "incomplete",
+    "error": null,
+    "incomplete_details": {"reason": "max_output_tokens"},
+    "instructions": "You are a connectivity probe.",
+    "max_output_tokens": 16,
+    "model": "gpt-6.1-sol",
+    "output": [
+      {
+        "type": "reasoning",
+        "id": "rs_crafted_reasoning_only",
+        "summary": [],
+        "encrypted_content": "encrypted-reasoning-only"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "previous_response_id": null,
+    "reasoning": {"effort": "low", "summary": null},
+    "store": false,
+    "temperature": 0.3,
+    "tools": [],
+    "top_p": 1.0,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 22,
+      "input_tokens_details": {"cached_tokens": 0},
+      "output_tokens": 16,
+      "output_tokens_details": {"reasoning_tokens": 16},
+      "total_tokens": 38
+    }
+  }
+}

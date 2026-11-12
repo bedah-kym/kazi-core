@@ -1,0 +1,18 @@
+{
+  "source": "crafted",
+  "name": "stream_answer_with_tool_call",
+  "http_status": 200,
+  "stream": true,
+  "events": [
+    {"type": "response.created", "response": {"id": "resp_crafted_stream", "status": "in_progress", "output": []}},
+    {"type": "response.output_item.added", "output_index": 0, "item": {"type": "reasoning", "id": "rs_crafted_stream", "summary": [], "encrypted_content": "encrypted-reasoning-stream"}},
+    {"type": "response.output_text.delta", "output_index": 1, "content_index": 0, "delta": "Let me "},
+    {"type": "response.output_text.delta", "output_index": 1, "content_index": 0, "delta": "check."},
+    {"type": "response.output_item.added", "output_index": 2, "item": {"type": "function_call", "id": "fc_crafted_stream", "call_id": "call_crafted_stream", "name": "get_weather", "arguments": ""}},
+    {"type": "response.function_call_arguments.delta", "output_index": 2, "item_id": "fc_crafted_stream", "delta": "{\"city\": "},
+    {"type": "response.function_call_arguments.delta", "output_index": 2, "item_id": "fc_crafted_stream", "delta": "\"Nairobi\"}"},
+    {"type": "response.function_call_arguments.done", "output_index": 2, "item_id": "fc_crafted_stream", "arguments": "{\"city\": \"Nairobi\"}"},
+    {"type": "response.output_item.done", "output_index": 2, "item": {"type": "function_call", "id": "fc_crafted_stream", "call_id": "call_crafted_stream", "name": "get_weather", "arguments": "{\"city\": \"Nairobi\"}", "status": "completed"}},
+    {"type": "response.completed", "response": {"id": "resp_crafted_stream", "object": "response", "status": "completed", "output": [{"type": "reasoning", "id": "rs_crafted_stream", "summary": [], "encrypted_content": "encrypted-reasoning-stream"}, {"type": "message", "id": "msg_crafted_stream", "role": "assistant", "content": [{"type": "output_text", "text": "Let me check.", "annotations": []}]}, {"type": "function_call", "id": "fc_crafted_stream", "call_id": "call_crafted_stream", "name": "get_weather", "arguments": "{\"city\": \"Nairobi\"}", "status": "completed"}], "usage": {"input_tokens": 37, "input_tokens_details": {"cached_tokens": 0}, "output_tokens": 21, "output_tokens_details": {"reasoning_tokens": 11}, "total_tokens": 58}}}
+  ]
+}

@@ -31,6 +31,8 @@ CATALOG: List[ModelInfo] = [
     ModelInfo("deepseek", "deepseek-v4-flash-vision-exp", "DeepSeek Flash Vision", "vision"),
     ModelInfo("anthropic", "claude-sonnet-4-6", "Claude Sonnet", "high"),
     ModelInfo("anthropic", "claude-haiku-4-5-20251001", "Claude Haiku", "fast"),
+    ModelInfo("openai", "gpt-6.1-sol", "GPT-6.1 Sol", "high"),
+    ModelInfo("openai", "gpt-6.1-terra", "GPT-6.1 Terra", "fast"),
     ModelInfo("huggingface", "meta-llama/Llama-3.1-8B-Instruct", "Llama 3.1 8B", "fast"),
 ]
 
@@ -39,12 +41,14 @@ _PROVIDER_KEYS = {
     "anthropic": "ANTHROPIC_API_KEY",
     "deepseek": "DEEPSEEK_API_KEY",
     "huggingface": "HF_API_TOKEN",
+    "openai": "OPENAI_API_KEY",
 }
 
 _PROVIDER_LABELS = {
     "deepseek": "DeepSeek",
     "anthropic": "Anthropic",
     "huggingface": "Hugging Face",
+    "openai": "OpenAI",
 }
 
 

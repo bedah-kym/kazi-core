@@ -1,0 +1,49 @@
+{
+  "source": "crafted",
+  "name": "tool_call",
+  "http_status": 200,
+  "body": {
+    "id": "resp_crafted_tool",
+    "object": "response",
+    "created_at": 1720000001,
+    "status": "completed",
+    "error": null,
+    "incomplete_details": null,
+    "instructions": "You are a connectivity probe.",
+    "max_output_tokens": 512,
+    "model": "gpt-6.1-sol",
+    "output": [
+      {
+        "type": "reasoning",
+        "id": "rs_crafted_tool",
+        "summary": [],
+        "encrypted_content": "encrypted-reasoning-tool"
+      },
+      {
+        "type": "function_call",
+        "id": "fc_crafted_tool",
+        "call_id": "call_crafted_1",
+        "name": "get_weather",
+        "arguments": "{\"city\": \"Nairobi\"}",
+        "status": "completed"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "previous_response_id": null,
+    "reasoning": {"effort": "low", "summary": null},
+    "store": false,
+    "temperature": 0.3,
+    "tools": [
+      {"type": "function", "name": "get_weather", "description": "Get the weather.", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}, "strict": false}
+    ],
+    "top_p": 1.0,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 41,
+      "input_tokens_details": {"cached_tokens": 0},
+      "output_tokens": 18,
+      "output_tokens_details": {"reasoning_tokens": 10},
+      "total_tokens": 59
+    }
+  }
+}

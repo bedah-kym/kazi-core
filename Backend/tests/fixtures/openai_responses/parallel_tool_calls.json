@@ -1,0 +1,55 @@
+{
+  "source": "crafted",
+  "name": "parallel_tool_calls",
+  "http_status": 200,
+  "body": {
+    "id": "resp_crafted_parallel",
+    "object": "response",
+    "created_at": 1720000002,
+    "status": "completed",
+    "error": null,
+    "incomplete_details": null,
+    "instructions": "You are a connectivity probe.",
+    "max_output_tokens": 512,
+    "model": "gpt-6.1-sol",
+    "output": [
+      {
+        "type": "reasoning",
+        "id": "rs_crafted_parallel",
+        "summary": [],
+        "encrypted_content": "encrypted-reasoning-parallel"
+      },
+      {
+        "type": "function_call",
+        "id": "fc_crafted_parallel_1",
+        "call_id": "call_crafted_1",
+        "name": "get_weather",
+        "arguments": "{\"city\": \"Nairobi\"}",
+        "status": "completed"
+      },
+      {
+        "type": "function_call",
+        "id": "fc_crafted_parallel_2",
+        "call_id": "call_crafted_2",
+        "name": "get_weather",
+        "arguments": "{\"city\": \"Mombasa\"}",
+        "status": "completed"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "previous_response_id": null,
+    "reasoning": {"effort": "low", "summary": null},
+    "store": false,
+    "temperature": 0.3,
+    "tools": [],
+    "top_p": 1.0,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 48,
+      "input_tokens_details": {"cached_tokens": 16},
+      "output_tokens": 24,
+      "output_tokens_details": {"reasoning_tokens": 9},
+      "total_tokens": 72
+    }
+  }
+}

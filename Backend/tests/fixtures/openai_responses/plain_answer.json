@@ -1,0 +1,50 @@
+{
+  "source": "crafted",
+  "name": "plain_answer",
+  "http_status": 200,
+  "body": {
+    "id": "resp_crafted_plain",
+    "object": "response",
+    "created_at": 1720000000,
+    "status": "completed",
+    "error": null,
+    "incomplete_details": null,
+    "instructions": "You are a connectivity probe. Answer exactly once.",
+    "max_output_tokens": 256,
+    "model": "gpt-6.1-sol",
+    "output": [
+      {
+        "type": "reasoning",
+        "id": "rs_crafted_plain",
+        "summary": [
+          {"type": "summary_text", "text": "The user wants one word."}
+        ],
+        "encrypted_content": "encrypted-reasoning-plain"
+      },
+      {
+        "type": "message",
+        "id": "msg_crafted_plain",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {"type": "output_text", "text": "pong", "annotations": []}
+        ]
+      }
+    ],
+    "parallel_tool_calls": true,
+    "previous_response_id": null,
+    "reasoning": {"effort": "low", "summary": null},
+    "store": false,
+    "temperature": 0.3,
+    "tools": [],
+    "top_p": 1.0,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 24,
+      "input_tokens_details": {"cached_tokens": 0},
+      "output_tokens": 12,
+      "output_tokens_details": {"reasoning_tokens": 8},
+      "total_tokens": 36
+    }
+  }
+}

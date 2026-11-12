@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — OpenAI as a chat provider (T-P4)
+
+- New provider `openai` on the native Responses API (a separate
+  `orchestration/llm_openai.py`; the existing OpenAI-*style* Chat Completions
+  path stays DeepSeek/Hugging Face only). Models `gpt-6.1-sol` (high) and
+  `gpt-6.1-terra` (fast) join the per-room picker when `OPENAI_API_KEY` is set.
+- Settings `OPENAI_API_KEY`, `OPENAI_MODEL` (default `gpt-6.1-sol`),
+  `OPENAI_BASE_URL` (default the Responses endpoint) and
+  `OPENAI_REASONING_EFFORT` (default `low`). OpenAI answers only when named —
+  a room model or `LLM_DEFAULT_PROVIDER=openai` — so the key alone never turns
+  it into a silent chat fallback. The key still enables the existing OpenAI
+  voice transcription and speech paths; `docs/configuration.md` says so.
+- Reasoning items ride back to OpenAI inside an opaque `provider_state` block,
+  kept only in the encrypted paused state, and stripped before every other
+  provider. A cut-off (`max_output_tokens`) ends as `max_tokens` and never
+  dispatches a partial tool call; a refusal or content filter ends honestly;
+  an unknown status/stream ending is an error, never "done". Usage is
+  normalised to the same names as the other providers.
+- `manage.py llm_probe --provider openai` runs one plain and one tool call and
+  prints the normalised result and usage, for recording the contract fixtures.
+
 ### Added — exact stop cancels the running turn (#216b-3)
 
 - An exact `stop`/`cancel` (the whole set `is_cancel_command` already uses),

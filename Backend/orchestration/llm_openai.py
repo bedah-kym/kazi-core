@@ -332,8 +332,15 @@ def _stop_reason(status: Any, incomplete_reason: Any, refusal: bool, has_tool_ca
     return "end_turn"
 
 
-def parse_responses_body(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Turn one Responses body into Kazi's Anthropic-shaped reply."""
+def parse_responses_body(
+    data: Dict[str, Any], requested_model: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Turn one Responses body into Kazi's Anthropic-shaped reply.
+
+    The block records the model the request named, not the body's ``model``:
+    OpenAI answers an alias with its dated snapshot, and replay compares
+    against the next request's model.
+    """
     if not isinstance(data, dict):
         raise OpenAIResponsesError("OpenAI returned a non-object response.")
 
@@ -376,7 +383,7 @@ def parse_responses_body(data: Dict[str, Any]) -> Dict[str, Any]:
         blocks.insert(0, {
             "type": PROVIDER_STATE_TYPE,
             "provider": OPENAI_PROVIDER,
-            "model": data.get("model"),
+            "model": requested_model or data.get("model"),
             "items": output_items,
         })
     if not blocks:
@@ -392,7 +399,9 @@ def parse_responses_body(data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-async def iter_responses_stream(lines: AsyncIterator[Any]) -> AsyncIterator[Dict[str, Any]]:
+async def iter_responses_stream(
+    lines: AsyncIterator[Any], requested_model: Optional[str] = None,
+) -> AsyncIterator[Dict[str, Any]]:
     """Parse a Responses SSE stream into Kazi's event dicts.
 
     Text arrives as it streams. Tool events are buffered and yielded only after
@@ -456,7 +465,7 @@ async def iter_responses_stream(lines: AsyncIterator[Any]) -> AsyncIterator[Dict
             "OpenAI stream ended without a terminal response event."
         )
 
-    parsed = parse_responses_body(terminal)
+    parsed = parse_responses_body(terminal, requested_model)
 
     if not saw_text:
         text = "".join(

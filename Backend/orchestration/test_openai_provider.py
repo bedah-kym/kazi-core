@@ -374,6 +374,85 @@ class ReplayOrderTests(SimpleTestCase):
             [_user_item("go")] + items,
         )
 
+    def test_a_dated_snapshot_reply_still_replays_verbatim_to_the_alias(self):
+        # OpenAI answers an alias request ("gpt-5") with the dated snapshot it
+        # resolved to ("gpt-5-2025-08-07"). The block must remember the model
+        # the request named, or every later call would drop its reasoning.
+        items = [
+            _reasoning("rs_1"),
+            _function_call("fc_1", "call_1"),
+        ]
+        first = _body(items, model="gpt-6.1-sol-2026-11-01")
+
+        def first_handler(request):
+            return httpx.Response(200, json=first)
+
+        result = _run(_with_transport(
+            httpx.MockTransport(first_handler),
+            lambda: _client()._create_openai_responses(
+                messages=[{"role": "user", "content": "go"}],
+                system="sys",
+                tools=None,
+                temperature=0.3,
+                max_tokens=256,
+                model="gpt-6.1-sol",
+            ),
+        ))
+        captured: dict = {}
+
+        def second_handler(request):
+            captured["body"] = json.loads(request.content)
+            return httpx.Response(200, json=_body([_message("done")]))
+
+        _run(_with_transport(
+            httpx.MockTransport(second_handler),
+            lambda: _client()._create_openai_responses(
+                messages=[
+                    {"role": "user", "content": "go"},
+                    {"role": "assistant", "content": result["content"]},
+                ],
+                system="sys",
+                tools=None,
+                temperature=0.3,
+                max_tokens=256,
+                model="gpt-6.1-sol",
+            ),
+        ))
+        self.assertEqual(captured["body"]["input"], [_user_item("go")] + items)
+
+    def test_a_streamed_snapshot_reply_remembers_the_requested_model(self):
+        events = [{
+            "type": "response.completed",
+            "response": _body(
+                [_reasoning("rs_1"), _function_call("fc_1", "call_1")],
+                model="gpt-6.1-sol-2026-11-01",
+            ),
+        }]
+        payload = "".join(f"data: {json.dumps(event)}\n\n" for event in events)
+
+        def handler(request):
+            return httpx.Response(
+                200, content=payload.encode("utf-8"),
+                headers={"content-type": "text/event-stream"},
+            )
+
+        async def collect():
+            return [
+                event
+                async for event in _client()._stream_openai_responses(
+                    messages=[{"role": "user", "content": "go"}],
+                    system="sys",
+                    tools=None,
+                    temperature=0.3,
+                    max_tokens=256,
+                    model="gpt-6.1-sol",
+                )
+            ]
+
+        done = _run(_with_transport(httpx.MockTransport(handler), collect))[-1]
+        self.assertEqual(done["type"], "message_done")
+        self.assertEqual(done["provider_state"]["model"], "gpt-6.1-sol")
+
     def test_replays_message_after_reasoning(self):
         items = [_reasoning("rs_1"), _message("It is 23C.")]
         body = _body(items)
@@ -567,18 +646,26 @@ class ResponsesStreamTests(SimpleTestCase):
             self._stream(events)
 
     def test_stream_error_event_is_an_error(self):
-        with self.assertRaises(OpenAIResponsesError):
-            self._stream([{
-                "type": "error",
-                "error": {"type": "server_error", "code": "boom", "message": "org-secret"},
-            }])
+        # A terminal event follows the error, so only the error handler can
+        # raise here; without it the stream would end as a normal reply.
+        with self.assertRaises(OpenAIResponsesError) as raised:
+            self._stream([
+                {
+                    "type": "error",
+                    "error": {"type": "server_error", "code": "boom", "message": "org-secret"},
+                },
+                {"type": "response.completed", "response": _body([_message("ok")])},
+            ])
+        self.assertEqual(str(raised.exception), "OpenAI stream error: server_error/boom.")
+        self.assertNotIn("org-secret", str(raised.exception))
 
     def test_stream_failed_response_is_an_error(self):
-        with self.assertRaises(OpenAIResponsesError):
+        with self.assertRaises(OpenAIResponsesError) as raised:
             self._stream([{
                 "type": "response.failed",
                 "response": {"status": "failed", "output": []},
             }])
+        self.assertIn("status 'failed'", str(raised.exception))
 
     def test_stream_with_completed_before_deltas_still_ends(self):
         events = list(_fixture("stream_answer_with_tool_call")["events"])

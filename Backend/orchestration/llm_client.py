@@ -743,7 +743,7 @@ class LLMClient:
         data = response.json()
         if capture is not None:
             capture["body"] = data
-        return parse_responses_body(data)
+        return parse_responses_body(data, body["model"])
 
     async def _stream_openai_responses(
         self,
@@ -782,7 +782,7 @@ class LLMClient:
             if response.status_code != 200:
                 error_body = await response.aread()
                 raise error_from_body(response.status_code, error_body)
-            async for event in iter_responses_stream(response.aiter_lines()):
+            async for event in iter_responses_stream(response.aiter_lines(), body["model"]):
                 yield event
 
     async def _get_user_token_budget(

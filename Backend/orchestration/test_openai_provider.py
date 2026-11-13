@@ -19,6 +19,7 @@ from django.test import SimpleTestCase, TransactionTestCase, override_settings
 from orchestration.agent_loop import LENGTH_LIMIT_NOTE, run_agent_loop
 from orchestration.llm_client import LLMClient, _inject_current_datetime
 from orchestration.llm_openai import (
+    OPENAI_READ_TIMEOUT_SECONDS,
     OpenAIResponsesError,
     _strict_schema,
     parse_responses_body,
@@ -722,6 +723,87 @@ class ResponsesStreamTests(SimpleTestCase):
             expected_calls,
         )
         self.assertEqual(parsed[-1]["stop_reason"], "tool_use")
+
+
+class TimeoutTests(SimpleTestCase):
+    """Seen live: a 4096-token reasoning reply outlasted the shared 120 s read
+    timeout, and the user saw "LLM error:" with nothing after it, because an
+    httpx timeout has empty text."""
+
+    def _create(self, handler):
+        return _run(_with_transport(
+            httpx.MockTransport(handler),
+            lambda: _client()._create_openai_responses(
+                messages=[{"role": "user", "content": "hi"}],
+                system="sys",
+                tools=None,
+                temperature=0.3,
+                max_tokens=4096,
+            ),
+        ))
+
+    def _stream(self, handler):
+        async def collect():
+            return [
+                event
+                async for event in _client()._stream_openai_responses(
+                    messages=[{"role": "user", "content": "hi"}],
+                    system="sys",
+                    tools=None,
+                    temperature=0.3,
+                    max_tokens=4096,
+                )
+            ]
+
+        return _run(_with_transport(httpx.MockTransport(handler), collect))
+
+    def test_create_allows_a_long_reasoning_reply(self):
+        seen = {}
+
+        def handler(request):
+            seen.update(request.extensions["timeout"])
+            return httpx.Response(200, json=_body([_message("ok")]))
+
+        self._create(handler)
+        self.assertEqual(seen["read"], OPENAI_READ_TIMEOUT_SECONDS)
+        self.assertGreaterEqual(OPENAI_READ_TIMEOUT_SECONDS, 300)
+        self.assertLessEqual(seen["connect"], 15)
+
+    def test_stream_allows_a_long_reasoning_reply(self):
+        seen = {}
+        payload = f"data: {json.dumps({'type': 'response.completed', 'response': _body([_message('ok')])})}\n\n"
+
+        def handler(request):
+            seen.update(request.extensions["timeout"])
+            return httpx.Response(
+                200, content=payload.encode("utf-8"),
+                headers={"content-type": "text/event-stream"},
+            )
+
+        self._stream(handler)
+        self.assertEqual(seen["read"], OPENAI_READ_TIMEOUT_SECONDS)
+
+    def test_a_create_timeout_says_what_happened(self):
+        def handler(request):
+            raise httpx.ReadTimeout("", request=request)
+
+        with self.assertRaises(OpenAIResponsesError) as raised:
+            self._create(handler)
+        self.assertEqual(
+            str(raised.exception),
+            f"OpenAI did not answer within {OPENAI_READ_TIMEOUT_SECONDS:g} seconds.",
+        )
+
+    def test_a_stream_timeout_says_what_happened(self):
+        def handler(request):
+            raise httpx.ReadTimeout("", request=request)
+
+        with self.assertRaises(OpenAIResponsesError) as raised:
+            self._stream(handler)
+        self.assertEqual(
+            str(raised.exception),
+            f"OpenAI did not answer within {OPENAI_READ_TIMEOUT_SECONDS:g} seconds.",
+        )
 
 
 class EndingTests(SimpleTestCase):

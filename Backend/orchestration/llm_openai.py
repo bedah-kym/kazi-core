@@ -16,6 +16,10 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 
 PROVIDER_STATE_TYPE = "provider_state"
 OPENAI_PROVIDER = "openai"
+# A reasoning model can think for minutes before a long reply; seen live, a
+# 4096-token answer outlasted the 120 s the other providers use.
+OPENAI_READ_TIMEOUT_SECONDS = 300.0
+OPENAI_CONNECT_TIMEOUT_SECONDS = 15.0
 
 
 class OpenAIResponsesError(Exception):
@@ -33,6 +37,16 @@ class OpenAIAPIError(OpenAIResponsesError):
         self.status = status
         self.code = code
         super().__init__(f"OpenAI Error {status}: {code}")
+
+
+class OpenAITimeoutError(OpenAIResponsesError):
+    """OpenAI did not answer in time. httpx timeouts carry no text, so the user
+    would otherwise see a bare "LLM error:"."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            f"OpenAI did not answer within {OPENAI_READ_TIMEOUT_SECONDS:g} seconds."
+        )
 
 
 def error_from_body(status: Any, body: Any) -> OpenAIAPIError:

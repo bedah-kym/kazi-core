@@ -24,8 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dispatches a partial tool call; a refusal or content filter ends honestly;
   an unknown status/stream ending is an error, never "done". Usage is
   normalised to the same names as the other providers.
-- `manage.py llm_probe --provider openai` runs one plain and one tool call and
-  prints the normalised result and usage, for recording the contract fixtures.
+- OpenAI calls wait up to 300 s for a reply (connect 15 s), since a reasoning
+  model can think for minutes before a long answer; the other providers keep
+  120 s. A timeout now says "OpenAI did not answer within 300 seconds." instead
+  of a bare "LLM error:".
+- `manage.py llm_probe --provider openai` runs every recordable contract case
+  (plain, tool call, parallel calls, reasoning replay, cut-off, stream) and
+  prints the normalised result and usage; `--record-dir` writes the fixtures.
+  The contract suite now runs on recorded bodies from `gpt-6.1-sol`.
 
 ### Added — exact stop cancels the running turn (#216b-3)
 

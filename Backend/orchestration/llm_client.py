@@ -19,6 +19,9 @@ from django.core.cache import cache
 from django.utils import timezone
 
 from orchestration.llm_openai import (
+    OPENAI_CONNECT_TIMEOUT_SECONDS,
+    OPENAI_READ_TIMEOUT_SECONDS,
+    OpenAITimeoutError,
     build_responses_request,
     error_from_body,
     iter_responses_stream,
@@ -29,6 +32,10 @@ from orchestration.llm_openai import (
 from orchestration.model_catalog import find_model
 
 logger = logging.getLogger(__name__)
+
+_OPENAI_TIMEOUT = httpx.Timeout(
+    OPENAI_READ_TIMEOUT_SECONDS, connect=OPENAI_CONNECT_TIMEOUT_SECONDS,
+)
 
 _DATE_MARKER = "Current date and time:"
 
@@ -729,15 +736,18 @@ class LLMClient:
         if capture is not None:
             capture["request"] = body
         client = _get_http_client()
-        response = await client.post(
-            self.openai_url,
-            headers={
-                "Authorization": f"Bearer {self.openai_key}",
-                "Content-Type": "application/json",
-            },
-            json=body,
-            timeout=120.0,
-        )
+        try:
+            response = await client.post(
+                self.openai_url,
+                headers={
+                    "Authorization": f"Bearer {self.openai_key}",
+                    "Content-Type": "application/json",
+                },
+                json=body,
+                timeout=_OPENAI_TIMEOUT,
+            )
+        except httpx.TimeoutException:
+            raise OpenAITimeoutError() from None
         if response.status_code != 200:
             raise error_from_body(response.status_code, response.text)
         data = response.json()
@@ -769,21 +779,24 @@ class LLMClient:
         )
         body["stream"] = True
         client = _get_http_client()
-        async with client.stream(
-            "POST",
-            self.openai_url,
-            headers={
-                "Authorization": f"Bearer {self.openai_key}",
-                "Content-Type": "application/json",
-            },
-            json=body,
-            timeout=120.0,
-        ) as response:
-            if response.status_code != 200:
-                error_body = await response.aread()
-                raise error_from_body(response.status_code, error_body)
-            async for event in iter_responses_stream(response.aiter_lines(), body["model"]):
-                yield event
+        try:
+            async with client.stream(
+                "POST",
+                self.openai_url,
+                headers={
+                    "Authorization": f"Bearer {self.openai_key}",
+                    "Content-Type": "application/json",
+                },
+                json=body,
+                timeout=_OPENAI_TIMEOUT,
+            ) as response:
+                if response.status_code != 200:
+                    error_body = await response.aread()
+                    raise error_from_body(response.status_code, error_body)
+                async for event in iter_responses_stream(response.aiter_lines(), body["model"]):
+                    yield event
+        except httpx.TimeoutException:
+            raise OpenAITimeoutError() from None
 
     async def _get_user_token_budget(
         self, user_id: Optional[int], now: Optional[float] = None,

@@ -630,16 +630,14 @@ class KaziAssistant {
             if (!contentDiv) return;
             const raw = streamContainer._rawText || '';
             const lastLen = streamContainer._lastRenderedLen || 0;
-            // Skip render if less than 40 new chars (reduces marked.parse calls for long responses)
+            // Skip render if less than 40 new chars (reduces parser calls for long responses)
             if (!force && raw.length - lastLen < 40) return;
             streamContainer._lastRenderedLen = raw.length;
-            // Render markdown if marked is available, otherwise plain text
-            if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
-                contentDiv.innerHTML = DOMPurify.sanitize(marked.parse(raw));
-            } else if (typeof marked !== 'undefined') {
-                contentDiv.innerHTML = marked.parse(raw);
+            // Render markdown through the shared renderer, otherwise plain text
+            if (window.KaziRender && typeof window.KaziRender.renderInto === 'function') {
+                window.KaziRender.renderInto(contentDiv, raw);
             } else {
-                contentDiv.innerText = raw;
+                contentDiv.textContent = raw;
             }
             if (this._isNearBottom()) this._scrollToBottom();
         };

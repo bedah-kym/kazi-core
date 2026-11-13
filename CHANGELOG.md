@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — approval parameters and chat rendering
+
+- Approval prompts show each parameter exactly as it will run; chat messages
+  render through a narrower sanitiser.
+
 ### Added — exact stop cancels the running turn (#216b-3)
 
 - An exact `stop`/`cancel` (the whole set `is_cancel_command` already uses),

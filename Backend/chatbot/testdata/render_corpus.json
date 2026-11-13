@@ -1,0 +1,15 @@
+{
+  "cases": [
+    {"id": "plain_command", "input": "ls -la"},
+    {"id": "html_block", "input": "<style>body{color:red}</style>\n<img src=\"https://example.test/p.png\" alt=\"x\">"},
+    {"id": "long_fence_run", "input": "`a</code></pre>````x```````"},
+    {"id": "markdown_mix", "input": "**bold** [x](http://x) # h\n- item\n    indented"},
+    {"id": "bidi_marks", "input": "a\u202eb\u200b\r\nc\u00a0d\u27e8"},
+    {"id": "crlf", "input": "one\r\ntwo\r\n"},
+    {"id": "non_breaking_space", "input": "a\u00a0b\u2003c"},
+    {"id": "literal_marker", "input": "\u27e8U+0041\u27e9 and \u27e9"},
+    {"id": "empty", "input": ""},
+    {"id": "unicode_text", "input": "h\u00e9llo \u4e16\u754c \ud83d\ude00"},
+    {"id": "long_value", "input": "The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog."}
+  ]
+}

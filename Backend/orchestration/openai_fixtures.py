@@ -91,7 +91,7 @@ def messages_for(case: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def replay_messages(
-    prior_body: Dict[str, Any], prior_prompt: str, replay_prompt: str,
+    prior_body: Dict[str, Any], prior_prompt: str, replay_prompt: str, model: str,
 ) -> List[Dict[str, Any]]:
     """The second call after a tool step: prompt, OpenAI's reply, tool outputs.
 
@@ -101,7 +101,7 @@ def replay_messages(
     """
     from orchestration.llm_openai import parse_responses_body
 
-    prior = parse_responses_body(prior_body)
+    prior = parse_responses_body(prior_body, model)
     results: List[Dict[str, Any]] = [
         {
             "type": "tool_result",

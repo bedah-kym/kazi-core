@@ -1036,11 +1036,6 @@ class LLMClient:
                         model=self._model_for("openai", model_role),
                     )
                     response = text_from_result(result)
-                    stop_reason = result.get("stop_reason")
-                    if stop_reason == "max_tokens":
-                        raise Exception("OpenAI reply was cut off by the output limit.")
-                    if stop_reason == "refusal" and not response.strip():
-                        raise Exception("OpenAI declined to answer.")
                     usage = result.get("usage", {}) or {}
                     used = (
                         int(usage.get("input_tokens", 0) or 0)
@@ -1050,7 +1045,13 @@ class LLMClient:
                     )
                     if not used:
                         used = estimated_tokens + self._estimate_tokens(response)
+                    # Charge what OpenAI billed even when the reply is rejected below.
                     self._record_token_usage(used, user_id)
+                    stop_reason = result.get("stop_reason")
+                    if stop_reason == "max_tokens":
+                        raise Exception("OpenAI reply was cut off by the output limit.")
+                    if stop_reason == "refusal" and not response.strip():
+                        raise Exception("OpenAI declined to answer.")
                     self._store_cache(cache_key, response)
                     return response
                 except Exception as e:

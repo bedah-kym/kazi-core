@@ -504,6 +504,7 @@ class ReplayOrderTests(SimpleTestCase):
         replay = _fixture("reasoning_replay")
         messages = replay_messages(
             prior["body"], CASES["tool_call"]["prompt"], CASES["reasoning_replay"]["prompt"],
+            _client().openai_model,
         )
         captured = {}
 
@@ -823,6 +824,30 @@ class EndingTests(SimpleTestCase):
                 ),
             ))
         client._store_cache.assert_not_called()
+
+    def test_a_rejected_reply_still_charges_the_tokens_it_spent(self):
+        # A cut-off or empty refusal is rejected, but OpenAI billed it; the
+        # user's token quota must count it (CodeRabbit on #307).
+        for name in ("cut_off_max_output_tokens", "refusal"):
+            fixture = _fixture(name)
+            usage = fixture["body"]["usage"]
+            client = _client()
+
+            def handler(request, fixture=fixture):
+                return httpx.Response(200, json=fixture["body"])
+
+            client._record_token_usage = MagicMock()
+            with self.assertRaises(Exception):
+                _run(_with_transport(
+                    httpx.MockTransport(handler),
+                    lambda client=client: client.generate_text(
+                        system_prompt="sys", user_prompt="hi", provider_preference="openai",
+                        user_id=7,
+                    ),
+                ))
+            client._record_token_usage.assert_called_once_with(
+                usage["input_tokens"] + usage["output_tokens"], 7,
+            )
 
     def test_generate_text_raises_on_a_refusal_without_text(self):
         fixture = _fixture("refusal")

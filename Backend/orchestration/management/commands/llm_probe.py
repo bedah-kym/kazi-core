@@ -199,6 +199,7 @@ class Command(BaseCommand):
             "reasoning_replay",
             replay_messages(
                 prior, CASES["tool_call"]["prompt"], CASES["reasoning_replay"]["prompt"],
+                client.openai_model,
             ),
         )
         summary = _summary(result)

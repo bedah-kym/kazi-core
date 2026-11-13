@@ -137,13 +137,17 @@ Once a room (or the default) names OpenAI, that turn's prompt, tool results and
 reply are processed on OpenAI's servers (V-4).
 
 OpenAI uses the native **Responses API** because its current reasoning models
-need it for tool calling. Reasoning travels back to OpenAI as encrypted
-reasoning items held in an opaque `provider_state` content block. The block is
-kept in the paused state so a resumed turn can continue: encrypted on the
-durable Turn, and plain JSON in the legacy cache fallback (still only OpenAI's
-ciphertext). It is never sent to Anthropic, DeepSeek or Hugging Face, never
-shown to users, and never written to telemetry or receipts. Switching a room
-away from OpenAI mid-conversation loses only that reasoning.
+need it for tool calling. Each OpenAI reply's full output is kept in an opaque
+`provider_state` content block: OpenAI's reasoning items (encrypted by OpenAI),
+plus the reply's own message text and tool-call arguments in plain form, so a
+later call can send them back in their original order. The block is kept in the
+paused state so a resumed turn can continue. On the durable Turn the whole
+paused state is encrypted at rest. The legacy cache fallback stores the paused
+state as plain JSON, as it already does for the rest of the conversation (user
+text, tool results), so the block adds no new kind of data there. It is never
+sent to Anthropic, DeepSeek or Hugging Face, never shown to users, and never
+written to telemetry or receipts. Switching a room away from OpenAI
+mid-conversation loses only the reasoning.
 
 The **model catalog** (`orchestration/model_catalog.py`) is a fixed list of
 models the chatroom picker offers; which ones are available is gated purely by

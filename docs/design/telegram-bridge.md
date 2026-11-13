@@ -547,7 +547,9 @@ as blocking, but `.github/workflows/main.yml` does not run it.
 - The official pages were fetched with curl on 2026-11-08 and read as text:
   `core.telegram.org/bots/api`, `/bots/api-changelog`, `/bots/faq`, `/bots/features`,
   `/api/end-to-end`.
-- The newest version on the changelog is **Bot API 10.3, August 24, 2026**.
+- The newest version on the changelog was **Bot API 10.3, August 24, 2026** when this
+  section was written. **Bot API 10.4 (2026-11-09)** was checked on 2026-11-13; what
+  it adds for the bridge is in §3.6.
 - GitHub issue pages were read through a fetch tool that returns a summary, not raw HTML.
   Treat those quotes as close paraphrase.
 
@@ -778,6 +780,82 @@ This does not apply to Telegram, which has no calls in the Bot API [Known].
 | **Photos, stage 3 (only if stage 2 isn't enough)** | Native image blocks: an attachments parameter through coordinator and `run_agent_loop` (protected), per-provider adapters, `ModelInfo.vision`, and base64 kept out of history and paused state (`agent_loop.py:1269-1300`, `:192-196`). | — |
 | **Documents** | The existing PDF path. | — |
 | **Not building** | Speech-to-speech agent turns over Telegram; image generation; video and video-note analysis (store and mark "not analysed"); live calls; a local GPU transcription default (possible through `openai_compatible`). | — |
+
+### 3.6 Newer Bot API features we use (no Premium)
+
+Re-checked on 2026-11-13 against `core.telegram.org/bots/api`, `/bots/api-changelog`
+and `/bots/widgets`. Bot API 10.4 shipped on 2026-11-09.
+
+**No Premium dependency (D21).** Nothing in this design needs Telegram Premium.
+[Verified] Premium adds only:
+- custom emoji in the bot's messages and buttons, when the bot's owner has Premium;
+- usernames ending in `ai` or `agent` for up to 2 bots (10.4);
+- larger uploads from Premium users. The bot still downloads at most 20 MB per file
+  through `getFile`.
+
+Voice transcription is a feature of the Telegram app; the Bot API has no transcription
+method. Private-chat topics and Business bots don't need Premium.
+
+**Widgets (10.4): optional upgrade for approval cards and status, private chats only.**
+[Verified: `/bots/widgets`]
+- **What a widget is.** One self-contained HTML document with inline CSS and
+  JavaScript: at most 32 KB, and at most 4 KB once zlib-compressed.
+- **Sandboxed.** The JavaScript runs in QuickJS, not a browser. `fetch`, WebSocket and
+  every other network API throw. External resources never load. The widget can't
+  navigate except through `openLink` on a tap.
+- **Fixed code.** The code is set when the widget is sent and never changes. Only its
+  data changes, through `editMessageWidgetData`: `chat_data` up to 1 KB per message,
+  `public_data` up to 1 KB.
+- **One way out.** The widget's only output is a request to the bot of at most
+  64 bytes, made synchronously in a tap handler, one call per tap. It arrives as a
+  `widget_query`, limited to 5 queries per 5 seconds per user. The bot must answer
+  it within 15 seconds with `answerWidgetQuery`.
+- **Can't be forwarded.** In production, widgets work only in private chats and are
+  protected content.
+
+**How the bridge uses widgets:**
+- **Approval widget.** One static template ships in the repo. The card state (redacted
+  summary, risk, pending/approved/expired) lives in `chat_data`, and the widget renders
+  it with `textContent`, never `innerHTML`.
+  - Approve/Reject send `ka:<token>:y|n`, the same ≤64-byte value as the button
+    `callback_data`. That value goes into the **same handler** as a button tap, so
+    every check in §4.2 applies unchanged: `from.id`, chat, `message_id`, token and
+    current-row match, PIN in the private chat, one transaction.
+  - The handler then calls `answerWidgetQuery`, and updates the card with
+    `editMessageWidgetData`.
+- **Status widget.** One per run, in place of the edited text status in private chats.
+  Phase, tools and elapsed time live in `chat_data`, edited at the existing 3-second
+  throttle. The terminal state and the `closed_at`/`reply_sent_at` rules of §4.1 are
+  unchanged. The final reply is still a normal message, so it triggers a notification
+  and stays readable.
+- **Fallback is mandatory.** Groups (mode C), bindings with widgets switched off, and
+  any `sendWidget` error get the plain inline buttons and text status.
+  - [Cannot verify] how well each Telegram app supports widgets yet; the feature is
+    four days old. The default is therefore buttons, with widgets opt-in per binding
+    (`/ui widgets`) after a test widget renders on your device (D22).
+- **Truth.** Telegram still sees everything the widget shows. The data limit and
+  redaction rules are the same as for text. "Can't be forwarded" makes it harder to
+  leak a card by mistake; it does not hide anything from Telegram.
+
+**Links straight to a room's topic (10.4).** [Verified] `https://t.me/<bot_username>/<message_thread_id>`
+opens that topic, but only for the user whose private chat holds it. The web room page
+can show "Open in Telegram" for bindings that use per-room topics (mode B).
+
+**Ephemeral replies to button taps (10.4).** [Verified] A message shown only to the
+user who tapped, in any chat except channel direct-message chats. These messages "may
+disappear automatically after some time, or if the app is restarted", so they are used
+**only for throwaway notes**, never for cards or anything durable. Examples:
+- "This approval is no longer current."
+- "Locked for 15 minutes after 5 wrong PINs."
+- "This card belongs to another user" (mode C).
+
+In groups this keeps those notes from cluttering the chat for everyone else.
+
+**Data model and config changes:**
+- `TelegramApprovalCard` and `TelegramOutbound` gain `render` (`buttons` / `widget`).
+- `TelegramRoomBinding` gains `ui` (`buttons` / `widgets`).
+- New setting `TELEGRAM_BRIDGE_UI_DEFAULT` (default `buttons`).
+- `allowed_updates` adds `widget_query`.
 
 ---
 
@@ -1056,6 +1134,8 @@ seam as the WebSocket (§1.8).
 | **D18** | When to reply with voice | always; reply in kind; never | **Reply in kind, plus `/voice`.** Text is always sent as well. |
 | **D19** | How photos reach the agent | native image blocks; describe-first pre-pass | **Describe-first** (TB-M4). It works on all three providers with no protected-path change. Native blocks only if it proves insufficient. |
 | **D20** | Which voice model speaks after 2027-01-06 | an OpenAI Realtime or audio model; a third-party or local TTS through `openai_compatible` | **Decide before January.** The mouth adapter takes the model from config; test an option before OpenAI removes `tts-1` and `gpt-4o-mini-tts`. |
+| **D21** | Depend on Telegram Premium | yes; no | **Decided (2026-11-13): no.** Premium adds only cosmetic bot features (§3.6). |
+| **D22** | Default UI for approval cards and status in private chats | inline buttons and text status; widgets (10.4) | **Buttons by default; widgets opt-in per binding** (`/ui widgets`) once a test widget renders on your device. Groups always use buttons. Revisit the default once widget support across Telegram apps is known. |
 
 ---
 
@@ -1144,6 +1224,15 @@ moved to v2 frames only.)
 | **TB-M3** | TB-9, TB-3 | Photos stage 1: store, honest note, caption as text, album grouping by `media_group_id` | Three updates sharing one `media_group_id` become one room message and at most one turn; the note names the room's model | S |
 | **TB-M4** (core, plan) | TB-3 | Photos stage 2: describe-first vision pre-pass into `processed_text`, framed untrusted in the context prompt, cached by `file_unique_id`, `VISION_MODEL` config | The description reaches the context inside an untrusted frame; an image whose text says "ignore previous instructions" does not unlock a sensitive action; a second identical photo makes no second vision call | M |
 | **TB-M5** (core, later) | T-A2, plan | Photos stage 3: native image blocks. Only if TB-M4 proves insufficient | — | L |
+
+### Track W: newer Bot API features (§3.6; after the matching 2b ticket)
+
+| Ticket | Needs | What | Tests (each shown failing first) | Size |
+|---|---|---|---|---|
+| **TB-W1** | TB-11 | Approval widget. A static template in the repo; card state in `chat_data`; taps go through the same handler as buttons; `answerWidgetQuery` within 15 s; fallback to buttons | The template is ≤32 KB and ≤4 KB at zlib level 9 (CI test). The template uses `textContent` and never `innerHTML` on data. A widget tap and a button tap with the same token produce the same decision through one handler. A double tap gives one winner. A stale card is refused. A `sendWidget` error falls back to buttons. A mode C binding always gets buttons | M |
+| **TB-W2** | TB-10, TB-W1 | Status widget per run in private chats, replacing the edited text status where the binding uses widgets | One widget per turn; `chat_data` edits throttled; `turn.failed{partial}` renders "Ended", never "Done"; restart recovery follows the same `closed_at`/`reply_sent_at` rules; the final reply is still a normal message | M |
+| **TB-W3** | TB-14 | "Open in Telegram" link on the web room page for mode B bindings (`https://t.me/<bot>/<thread_id>`) | The link appears only for the bound user and only for topic bindings | S |
+| **TB-W4** | TB-11 | Ephemeral replies to button taps for throwaway notes (stale card, PIN lockout, not your card) | The note goes to the tapping user only; nothing durable is sent ephemerally (a static test that cards and replies never use ephemeral parameters) | S |
 
 ### Separate PRs, not part of the bridge
 

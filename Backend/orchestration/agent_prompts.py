@@ -341,22 +341,62 @@ def build_system_prompt(
 _MARKER_OPEN = "\u27e8"
 _MARKER_CLOSE = "\u27e9"
 
+# Unicode 15.0 Default_Ignorable_Code_Point (DerivedCoreProperties.txt).
+_DEFAULT_IGNORABLE_RANGES = (
+    (0x00AD, 0x00AD),
+    (0x034F, 0x034F),
+    (0x061C, 0x061C),
+    (0x115F, 0x1160),
+    (0x17B4, 0x17B5),
+    (0x180B, 0x180F),
+    (0x200B, 0x200F),
+    (0x202A, 0x202E),
+    (0x2060, 0x206F),
+    (0x3164, 0x3164),
+    (0xFE00, 0xFE0F),
+    (0xFEFF, 0xFEFF),
+    (0xFFA0, 0xFFA0),
+    (0xFFF0, 0xFFF8),
+    (0x1BCA0, 0x1BCA3),
+    (0x1D173, 0x1D17A),
+    (0xE0000, 0xE0FFF),
+)
 
-def _is_hidden_character(char: str) -> bool:
-    if char in ("\n", "\t"):
-        return False
+
+def _is_default_ignorable(char: str) -> bool:
+    codepoint = ord(char)
+    return any(start <= codepoint <= end for start, end in _DEFAULT_IGNORABLE_RANGES)
+
+
+def _is_hidden_character(char: str, *, inline: bool) -> bool:
     category = unicodedata.category(char)
-    if category in ("Cc", "Cf", "Zl", "Zp"):
+    if inline:
+        if category == "Cc":
+            return True
+    elif category == "Cc" and char not in ("\n", "\t"):
         return True
-    return category == "Zs" and char != " "
+    if category in ("Cf", "Zl", "Zp"):
+        return True
+    if category == "Zs" and char != " ":
+        return True
+    return _is_default_ignorable(char)
 
 
-def _shown_text(text: str) -> tuple[str, int]:
+def _shown_text(text: str, *, inline: bool = False) -> tuple[str, int]:
     """Replace characters that could hide or reorder the display with markers."""
     shown: List[str] = []
     hidden = 0
-    for char in text:
-        if char == _MARKER_OPEN or _is_hidden_character(char):
+    last_index = len(text) - 1
+    line_end = last_index if text.endswith("\n") else len(text)
+    trailing_start = len(text[:line_end].rstrip(" \t"))
+    for index, char in enumerate(text):
+        marked = char == _MARKER_OPEN or _is_hidden_character(char, inline=inline)
+        if not inline:
+            if index == last_index and char == "\n":
+                marked = True
+            if trailing_start <= index < line_end and char in (" ", "\t"):
+                marked = True
+        if marked:
             shown.append(f"{_MARKER_OPEN}U+{ord(char):04X}{_MARKER_CLOSE}")
             hidden += 1
         else:
@@ -372,8 +412,8 @@ def _fence_for(text: str) -> str:
     return "`" * max(3, _longest_backtick_run(text) + 1)
 
 
-def _inline_code(text: str) -> str:
-    shown, _hidden = _shown_text(text)
+def _inline_code(text: Any) -> str:
+    shown, _hidden = _shown_text(str(text), inline=True)
     delimiter = "`" * max(1, _longest_backtick_run(shown) + 1)
     pad = " " if shown.startswith("`") or shown.endswith("`") else ""
     return f"{delimiter}{pad}{shown}{pad}{delimiter}"
@@ -384,7 +424,7 @@ def _plural(count: int, singular: str, plural: str) -> str:
 
 
 def _parameter_label(
-    key: str, characters: int, lines: int, hidden: int, empty: bool,
+    key: str, kind: str, characters: int, lines: int, hidden: int, empty: bool,
 ) -> str:
     parts = []
     if empty:
@@ -393,7 +433,7 @@ def _parameter_label(
         f"{characters} {_plural(characters, 'character', 'characters')}, "
         f"{lines} {_plural(lines, 'line', 'lines')}"
     )
-    label = f"{_inline_code(key)} \u2014 " + ", ".join(parts)
+    label = f"{_inline_code(key)} ({kind}) \u2014 " + ", ".join(parts)
     if hidden:
         label += (
             f"; contains {hidden} "
@@ -403,14 +443,22 @@ def _parameter_label(
     return label + ":"
 
 
-def _parameter_block(key: str, value: Any) -> str:
+def _parameter_block(key: Any, value: Any) -> str:
+    key = str(key)
     if isinstance(value, str):
         raw = value
+        kind = "text"
     else:
-        raw = json.dumps(value, ensure_ascii=False, indent=2)
+        try:
+            raw = json.dumps(value, ensure_ascii=False, indent=2)
+            kind = "JSON"
+        except (TypeError, ValueError, OverflowError, RecursionError):
+            raw = str(value)
+            kind = "fallback text"
     shown, hidden = _shown_text(raw)
     label = _parameter_label(
         key,
+        kind,
         characters=len(raw),
         lines=raw.count("\n") + 1,
         hidden=hidden,

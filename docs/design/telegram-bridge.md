@@ -66,9 +66,10 @@ Its epic is #227, and its build order is A, then B, then C, with "do NOT jump ah
 
 **Status on 2026-11-08** [Verified: GitHub PRs and issues, `CHANGELOG.md`, the code]
 
-**We are in the middle of T-A1 (#216), not near its end.** #216 is delivered as a series
-of slices. The latest, 216b-2 (the turn runner, PR #303), merged on 2026-11-07. It is
-"216b-2 from the approved #216b plan". At least one slice, 216b-3, is still to come.
+**We are in the middle of T-A1 (#216).** #216 is delivered as a series of slices from
+the approved #216b plan. 216b-2 (the turn runner, #303) merged on 2026-11-07, and
+216b-3 (exact stop cancels the running turn, #306) merged on 2026-11-12. Updated
+2026-11-13.
 
 | Slice | PR | State | What it did |
 |---|---|---|---|
@@ -77,7 +78,7 @@ of slices. The latest, 216b-2 (the turn runner, PR #303), merged on 2026-11-07. 
 | 216b-0: consent postdates the prompt | #291 | Merged | `CONSENT_SKEW_SECONDS` (`CHANGELOG.md:229-236`) |
 | 216b-1: turn leases, self-fence, one reap routine | #292 | Merged | `CHANGELOG.md:266-286` |
 | 216b-2: the turn runner | #303 | Merged 2026-11-07 | Queue, FIFO claim, pause continuation, shutdown endings (`CHANGELOG.md:10-37`) |
-| **216b-3** | — | **No PR found** | Named in #303 for: a person's cancel as `cancel_requested_at` → `cancelled(user_cancel)`; consent-postdates for **budget** pauses (`paused_at`). Today a queued "ok" can resume a budget pause without that check (#303, round 2, item 13). In code it appears only as a docstring (`orchestration/coordinator.py:183`) |
+| 216b-3: exact stop cancels the running turn | #306 | Merged 2026-11-12 | `Turn.cancel_requested_at`: an exact stop ends the running turn as `cancelled(user_cancel)` within `TURN_CANCEL_POLL_SECONDS` (default 2). `Turn.paused_at`: a budget or quota `continue` is consent only if sent after `paused_at` + skew (`CHANGELOG.md` on `main`, "exact stop cancels the running turn") |
 
 Other v0.8 tickets: T-A4 #219 and T-B3 #222 are closed. T-A2 #217, T-A3 #218 and
 T-B1/B2/B4 and T-C1-3 (#220-221, #223-226) are open. There are no T-A2 emitters in the
@@ -86,8 +87,8 @@ code.
 **What I cannot see.** The approved #216b plan is not in `docs/plans/` or on GitHub. Nor
 is the roadmap the plans cite, with its T-D, T-F, P3, E and V items
 (`docs/plans/2026-10-per-message-work.md:9`). Local planning docs are gitignored
-(`.gitignore:172-182`). So the placement below covers the slices I can see. Anything
-after 216b-3 in the #216b plan may move it.
+(`.gitignore:172-182`). So the placement below covers the slices I can see. Any later
+slice of the #216b plan may move it.
 
 **What #303 says about callers like the bridge** [Verified: the #303 description, "Live
 calls (V-5)"]. The runner's only public contract is `submit(room_id, user_id)` and the
@@ -101,10 +102,10 @@ makes a turn safe to watch from anywhere. So the bridge sits on Phase A, runs in
 parallel with Phase B, and does not wait for Phase C.
 
 ```
- T-A1 #216:  216a ✓ ─ P3-3 ✓ ─ 216b-0 ✓ ─ 216b-1 ✓ ─ 216b-2 ✓ (#303) ─► 216b-3 ─► (rest of #216b plan?)
-                                                                        │
- bridge needs from it:                                person cancel (/stop), budget-pause consent
-                                                                        │
+ T-A1 #216:  216a ✓ ─ P3-3 ✓ ─ 216b-0 ✓ ─ 216b-1 ✓ ─ 216b-2 ✓ (#303) ─ 216b-3 ✓ (#306) ─► (rest of #216b plan?)
+                                                                                     │
+ bridge got from it:                                   person cancel (/stop), budget-pause consent
+                                                                                     │
  then:   inbound seam (TB-1) ─► T-A2 #217 (+TB-2/TB-4/TB-16) ─► T-A3 #218 (+TB-A3) ─► Phase B ─► C
              │                         │                              │
          Track 2a (bridge app,     Track 2b (relay, cards)        bridge in the
@@ -117,9 +118,8 @@ v0.8 work the web UI needs too.
 1. **A transport-neutral inbound door.** #216's rule is "consumers only transport
    frames". After #303 the consumer still owns persistence, routing gates and
    enqueueing (`consumers.py:861-1057`). Moving that into `chatbot/inbound.py` is in
-   T-A1's spirit, and it is the bridge's entry point. Do it **after 216b-3**: 216b-3
-   changes how a cancel is recorded, and that logic lives in the same consumer path.
-   Otherwise you refactor it twice.
+   T-A1's spirit, and it is the bridge's entry point. It waited on 216b-3, which changed
+   how a cancel is recorded in that same consumer path. With #306 merged, it can start.
 2. **Typed frames with `turn_id`, `seq`, `approval.requested` and one terminal event.**
    That is #217. For the bridge, this means:
    - the per-run status message is a direct mapping (`turn.started` sends it, tool
@@ -133,18 +133,18 @@ v0.8 work the web UI needs too.
    frames inherits that. A "✅ Done" on the phone then means the record says done, which
    is the epic's success metric.
 
-**What 216b-3 gives the bridge.** Two bridge features wait on it:
-- **`/stop` from the phone.** It should record a person's cancel. #303 moved that to
-  `cancel_requested_at` in 216b-3. A socket close, or a poller restart, is no longer a
-  cancel.
-- **Budget- and quota-pause "Continue" buttons.** Until 216b-3 adds `paused_at`, a
-  queued "ok" can resume a budget pause without the consent-postdates check, and a
-  button would inherit that gap. Approval-pause cards are not affected: 216b-0 already
-  covers them.
+**What 216b-3 (#306) gives the bridge.** Two bridge features waited on it, and both are
+now unblocked:
+- **`/stop` from the phone.** The bridge sends an exact `stop` through the shared entry
+  point, and #306 records it as `cancel_requested_at`. The running turn ends as
+  `cancelled(user_cancel)`. A socket close, or a poller restart, is still not a cancel.
+- **Budget- and quota-pause "Continue" buttons.** A `continue` now counts only if it was
+  sent after `Turn.paused_at`, so a button inherits the same consent check as
+  approval-pause cards (216b-0).
 
 **What to fold into existing v0.8 work** (proposed; not filed):
-- **#216, after 216b-3** (or as a slice of the #216b plan if it has room): the
-  transport-neutral `submit_user_message` (TB-1).
+- **#216, now that 216b-3 has merged** (or as a slice of the #216b plan if it has
+  room): the transport-neutral `submit_user_message` (TB-1).
 - **#217 (T-A2):** these three should live with that ticket:
   - `approval.requested` carries `approval_pk`, `short_id`, `approval_kind` and a risk
     class (TB-4). Today's `confirmation` event uses the name `approval_id` for the
@@ -1153,8 +1153,8 @@ core. There is no interim build on today's frames or on the v0.4.2 connector.
 
 **Three tracks.**
 - **Track 1** is core work. It belongs inside the v0.8 Phase A tickets you are on now.
-- **Track 2a** needs only TB-1. TB-1 itself waits for 216b-3, so 2a starts once
-  TB-1 merges.
+- **Track 2a** needs only TB-1. TB-1 can start now that 216b-3 (#306) has merged, and
+  2a starts once TB-1 merges.
 - **Track 2b** needs T-A2's frames.
 
 **Protected paths and contracts touched:**
@@ -1169,7 +1169,7 @@ All of these need a plan and a human OK.
 
 | Ticket | Lands in | What | Tests (each shown failing first) | Size |
 |---|---|---|---|---|
-| **TB-1** | #216, after 216b-3 | `chatbot/inbound.py::submit_user_message(room, user, text, *, via, within_txn=None)`, extracted from `ChatConsumer.new_message`; the consumer becomes transport only, as #216 asks. `within_txn` runs inside the same transaction as the `Message` and queued-`Turn` writes, and `runner.submit` happens after commit (used by TB-8 and TB-11 for crash-safe dedupe and card decisions) | (1) existing `test_turn_runner` WebSocket tests unchanged; (2) a message submitted through the seam, with no socket, runs a turn whose reply is saved; (3) a "yes" through the seam resumes a real paused turn (`_PauseHarness`, `CONSENT_SKEW_SECONDS=0`) and writes a `basis="human"` receipt; (4) a non-member is refused and **no** `Message` row is created (fixes the orphan row at `consumers.py:935` vs `:958`) | M |
+| **TB-1** | #216 (unblocked: 216b-3 merged in #306) | `chatbot/inbound.py::submit_user_message(room, user, text, *, via, within_txn=None)`, extracted from `ChatConsumer.new_message`; the consumer becomes transport only, as #216 asks. `within_txn` runs inside the same transaction as the `Message` and queued-`Turn` writes, and `runner.submit` happens after commit (used by TB-8 and TB-11 for crash-safe dedupe and card decisions) | (1) existing `test_turn_runner` WebSocket tests unchanged; (2) a message submitted through the seam, with no socket, runs a turn whose reply is saved; (3) a "yes" through the seam resumes a real paused turn (`_PauseHarness`, `CONSENT_SKEW_SECONDS=0`) and writes a `basis="human"` receipt; (4) a non-member is refused and **no** `Message` row is created (fixes the orphan row at `consumers.py:935` vs `:958`) | M |
 | **TB-4** | #217 T-A2 | (a) `approval.requested` carries `approval_pk`, `short_id`, `approval_kind` and a risk class; `approval.resolved` carries `approval_pk`, `decision` and `via` (today's `confirmation` event calls the short id `approval_id`, `agent_loop.py:3596`); (b) a frame-sink registry on the runner that the consumer registers with, and any in-process client can too (D14); (c) read helper `orchestration/approval_view.pending_agent_approval` | Every frame carries `turn_id` and a monotonic `seq`; a second registered sink receives the same frames as the consumer; a sink that raises never aborts the turn (T-A2's best-effort rule); the reused-row case returns the *new* turn_id and short_id; another user's row is invisible | M |
 | **TB-2** | #217 T-A2 | A user-message frame (for example `message.received {turn_id, message_id, via}`) so every client sees human messages from other surfaces | Two clients; B receives A's message with `via` | S |
 | **TB-16** | #217 T-A2, contract in #218 | A decision submitted for a specific `approval_id` (through `submit_user_message(..., decision_for=approval_id)`) is refused by the coordinator if the pending row's id or turn differs. Minor bump to `approval.md` | The §4.2 race, forced with an event at the seam: a stale decision is refused and the new pause stays pending | M |
@@ -1185,7 +1185,7 @@ All of these need a plan and a human OK.
 | **TB-6** | `bot_api.py`, from scratch | A 429 with `retry_after` waits for it (fake clock); `ok:false` maps to a typed error; the token never appears in `str(error)` or in logs (`assertLogs`); per-chat pacing allows at most one send per second | S |
 | **TB-7** | Pairing: `telegram_pair` / `telegram_unpair` commands and the `/pair` handler | Expired, used, wrong, group-chat and over-limit codes are refused; a cache error refuses (closed); success binds `from.id` and emits the in-app notification | M |
 | **TB-8** | Poller and lifespan wiring | A webhook already set → no polling, plus an alert; two pollers → exactly one holds the lease (barrier); restart resumes from the stored offset with no duplicate `Message`; a failure injected inside step 7's transaction leaves neither the `TelegramInbound` row nor the `Message`, and the replay then produces exactly one `Message`; updates older than `MAX_UPDATE_AGE` do not enqueue; a `bot_id` change stops the poller; lifespan stop happens before runner shutdown | M |
-| **TB-9** | Inbound routing, mode A (`/rooms`, `/room`, `/status`, `/stop` recorded as a person's cancel through 216b-3's `cancel_requested_at`) | One test per filter, each failing when its guard line is removed: wrong `from.id`, `sender_chat`, `is_bot`, forwarded, guest, revoked link, no room access. Text reaches `submit_user_message` with `via=telegram` | M |
+| **TB-9** | Inbound routing, mode A (`/rooms`, `/room`, `/status`, `/stop` recorded as a person's cancel through `cancel_requested_at` (216b-3, #306)) | One test per filter, each failing when its guard line is removed: wrong `from.id`, `sender_chat`, `is_bot`, forwarded, guest, revoked link, no room access. Text reaches `submit_user_message` with `via=telegram` | M |
 | **TB-13** | Files: `getFile` → `ingest_room_document` (needs TB-3) | An oversized declared size never calls `getFile`; the type is sniffed (a PDF named `.jpg`); the token URL never appears in logs; a caption turn starts after the document completes (event-based wait) | M |
 
 At the end of 2a you can talk to Kazi from the phone. Replies come back only once the
@@ -1199,7 +1199,7 @@ replaces it.
 |---|---|---|---|
 | **TB-10** | Relay registered as a frame sink (TB-4b): status message per `turn_id`, edits on tool events, terminal frame closes it, final reply read from the persisted message | Real runner and `_FakeLLM`: one status message per turn; edits at most every N seconds with identical text skipped; `turn.failed{partial}` renders as "Ended", never "Done"; duplicate or reordered `seq` is ignored; the reply is split at 4096, plain text; a fake `sk-…` key in model text never reaches the fake transport; restart resumes by `turn_id` + `seq`; the bridge stopped after "Thinking" while the turn completes → on restart the status closes with its ending and the reply is sent once; a crash injected after the fake transport accepts the send but before `reply_sent_at` is saved re-sends it once with the restart prefix, and once that resend is recorded a further restart sends nothing; a crash after the status edit but before the reply write leaves `closed_at` empty, so the reply is still sent on restart | M |
 | **TB-11** | Approval cards from `approval.requested`; decision through `submit_user_message(..., decision_for=…)` (TB-16) | Approve resumes and writes a receipt; reject cancels; a double tap gives exactly one decision (barrier); a stale card after row reuse is refused; another Telegram user is refused; an expired card is refused; `approval.resolved` from the web closes the card; `answerCallbackQuery` is always called; a failure injected between the card UPDATE and the decision `Message` rolls both back so a re-tap works; a reaped decision Turn with the approval still pending gets a fresh card on restart | M |
-| **TB-11b** | "Continue" buttons for budget and quota pauses. Needs 216b-3's `paused_at` consent check | A "continue" queued before the budget pause existed does not resume it (mirror `test_a_queued_yes_cannot_approve_a_prompt_it_never_saw`) | S |
+| **TB-11b** | "Continue" buttons for budget and quota pauses. Uses the `paused_at` consent check from 216b-3 (#306) | A "continue" queued before the budget pause existed does not resume it (mirror `test_a_queued_yes_cannot_approve_a_prompt_it_never_saw`) | S |
 | **TB-12** | PIN for high-risk approvals, challenged only in the link's private chat | A high-risk card asks for the PIN in the DM even when the card is in a group topic; an unreachable DM refuses the approval; a PIN typed in the group is ignored and deleted; a wrong PIN ×5 locks the link and notifies; the PIN message is deleted; a low-risk card skips the PIN | S-M |
 
 ### Track 3: after the bridge

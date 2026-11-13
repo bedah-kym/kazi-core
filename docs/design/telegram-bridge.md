@@ -1,17 +1,21 @@
-# Telegram remote-control bridge: design
+# Telegram remote-control bridge: design and plan
 
-Status: **proposal, no code**. This is an investigation and design pass. It does not
-approve any change. The data model needs migrations (a protected path), so
-implementation starts with a plan under `docs/plans/` and a human OK (`AGENTS.md` §0).
+Status: **proposal, no code. Waiting for approval to start development.** Nothing in
+this document approves a change. The data model needs migrations and one ticket
+touches the coordinator and a contract (protected paths), so development starts with
+plans under `docs/plans/` and a human OK (`AGENTS.md` §0).
 
-Date of investigation: 2026-11-08, against `main` at `121df6d` (includes #303, the turn
-runner).
+- Investigation: 2026-11-08, against `main` at `121df6d` (includes #303, the turn
+  runner).
+- Plan revised: 2026-11-13, after #306 merged and after a review of how other teams'
+  bridges failed (§2.1). This revision replaces the earlier tracks with one staged
+  plan (§8).
 
 **How to read the labels**
 
 | Label | Meaning |
 |---|---|
-| **[Verified]** | Read in the code or docs during this pass. A `file:line` follows. |
+| **[Verified]** | Read in the code or docs during this pass. A `file:line` or page follows. |
 | **[Inference]** | My conclusion from verified facts. Not run or tested. |
 | **[Known]** | From background knowledge. Not checked this session. |
 | **[Cannot verify]** | Could not be confirmed either way with the sources reachable. |
@@ -27,38 +31,70 @@ the design depends on.
 
 ---
 
-## 0. Summary
+## 0. The plan on one page
 
-The bridge is feasible without touching any protected core module. The work is mostly
-plumbing: there is no non-WebSocket way into a room today, and no structured approval
-event reaches clients.
+**What it is.** A way to talk to a Kazi room from Telegram when you are away from the
+keyboard: send it work, see what it answers, and approve or reject what it asks.
 
-- **The existing Telegram connector is outbound only.** It cannot receive anything.
-  - The webhook URL its docs tell you to set does not exist.
-  - The right home for remote control is a new Django app (`telegram_bridge/`), **not**
-    the connector. The model never sees bridge actions, so no tool catalog entry
-    changes.
-- **Approving from a button should feed the existing chat-reply path, not bypass it.**
-  - The button sends the user's "yes" or "no" through the same inbound seam as a typed
-    reply.
-  - The existing consent-timing, single-consumer and argument-hash checks then run
-    unchanged.
-  - The button carries only a random single-use token. That token must match the
-    approval row's id, turn and short id, because the row can be reused by a later
-    pause. The decision is also bound to that approval inside the coordinator (TB-16),
-    because the consent-timing check alone does not cover a tap that waits on a PIN
-    (§4.2).
-- **The poller should run inside the ASGI web process as a lifespan task, held by a
-  lease.** It should not be a Celery task or (in lite) a separate process. Turns must
-  be drained by a long-lived event loop that owns them, and lite's channel layer is
-  in-memory.
-- **Freeze: does not apply.** The maintainer decided on 2026-11-08 that the "no new
-  connectors" line does not apply to this work.
-- **Built new.** The bridge is built from scratch on the v0.8 core. It does not reuse
-  the v0.4.2 connector, and it does not use today's stream frames (§0.1).
-- **Each Kazi room is its own topic** in the bot's private chat (D4), with no `/room`
-  switching. Creating a topic in Telegram starts a new room (D23). General is the
-  lobby for pairing, `/status` and notices.
+**The principle: Telegram is a window onto the room.**
+- The room does all the work, once. Telegram shows it and feeds it.
+- A room has one history. What you type in Telegram appears on the web, and what
+  happens on the web appears in Telegram.
+- If Telegram and the web ever disagree, the database is right.
+
+**What you will see**
+- **Each Kazi room is its own topic** in your private chat with the bot. There is no
+  switching command. Typing a new message in the bot's main view starts a new topic,
+  which becomes a new room (D4, D23).
+- **Send** text, voice notes, files and photos into a topic. They go into that room
+  exactly as if typed on the web.
+- **See** Kazi's replies, its "ended" notices and anything typed on the web, in order.
+- **While Kazi works** you see "Thinking…" with a Stop button, then live progress
+  lines once the core's stream protocol lands (T-A2, #217).
+- **Approve or reject** from buttons under a card. High-risk approvals ask for a PIN.
+- **`/status`** and a "Telegram: connected" line on the web tell you whether the
+  bridge is alive.
+
+**The priority order: reliability and consistency first, features on top.**
+- **The delivery layer must not fail quietly.** Every message Telegram accepts from
+  you gets a visible outcome. Every room message reaches Telegram at least once, in
+  order, across restarts.
+- **Everything else may degrade.** If a progress line, a "Thinking…" draft or a widget
+  fails, you lose that decoration and nothing else.
+
+**How it works, in five facts**
+1. **A new Django app, `telegram_bridge/`, not the connector.** The existing Telegram
+   connector only sends (§1.1). The model never sees bridge actions, so no tool
+   catalog entry changes.
+2. **In: one shared entry point.** The bridge calls the same
+   `submit_user_message` the web socket calls (TB-1), so every existing gate runs
+   unchanged (§1.8).
+3. **Out: delivered from the database, not from the live stream.** A mirror loop
+   reads each bound room's messages and sends the ones Telegram has not had yet,
+   recording each send (§4.1). This needs nothing from T-A2.
+4. **Approvals feed the existing chat-reply path.** A button sends your "yes" or "no"
+   through the same entry point as a typed reply, named for the one approval it
+   answers (TB-16). Cards are read from the database.
+5. **One poller, inside the web process, held by a database lease.** It retries
+   forever and reports its own health (§3.2, §4.5).
+
+**Build order** (§8)
+
+| Stage | What you get | Waits on |
+|---|---|---|
+| 0. Device checks and plans | Answers to the open Telegram behaviour questions, on your phone | Approval of this plan |
+| 1. Delivery layer | Pairing, a topic per room, text in, everything mirrored out, "Thinking…" and Stop, Approve/Reject cards, health. **Usable every day** | TB-1 and TB-16 in core |
+| 2. Rich, no stream needed | PIN approvals, Continue buttons, topic lifecycle, files, voice notes in, photos, workflow approvals, notifications | Stage 1 |
+| 3. Live | Progress lines while Kazi works | T-A2 (#217) |
+| 4. Extras, each optional | Voice replies, photo understanding, widgets, group mode | Your call per item |
+
+**Decisions already made** (§7): the connector freeze does not apply (D1); no Telegram
+Premium (D21); no native speech model, voice is transcribed at the edges (D15); a topic
+per room with no switching (D4); built new on the v0.8 core.
+
+**Two things I still need from you** (they don't block approval):
+- **Group mode (TB-14).** Will anyone but you use this bot? If not, I would drop it.
+- **Voice replies (TB-M2).** Spoken answers, or are voice notes in and text out enough?
 
 ---
 
@@ -67,12 +103,11 @@ event reaches clients.
 The roadmap (`docs/roadmap.md:28-33`) has v0.8, "turns that own the truth", in flight.
 Its epic is #227, and its build order is A, then B, then C, with "do NOT jump ahead".
 
-**Status on 2026-11-08** [Verified: GitHub PRs and issues, `CHANGELOG.md`, the code]
+**Status on 2026-11-13** [Verified: GitHub PRs and issues, `CHANGELOG.md`, the code]
 
-**We are in the middle of T-A1 (#216).** #216 is delivered as a series of slices from
-the approved #216b plan. 216b-2 (the turn runner, #303) merged on 2026-11-07, and
-216b-3 (exact stop cancels the running turn, #306) merged on 2026-11-12. Updated
-2026-11-13.
+**T-A1 (#216) is delivered as a series of slices** from the approved #216b plan.
+216b-2 (the turn runner, #303) merged on 2026-11-07, and 216b-3 (exact stop cancels
+the running turn, #306) merged on 2026-11-12.
 
 | Slice | PR | State | What it did |
 |---|---|---|---|
@@ -100,65 +135,58 @@ consumer. A future voice-call caller would submit a claimed Turn directly, keyed
 session rather than (room, user). The bridge is a message-based caller, so it uses
 `enqueue_turn` + `submit` exactly as the consumer does, which needs no runner change.
 
-**Placement.** The bridge is the **second client of the turn**. Phase A is the work that
-makes a turn safe to watch from anywhere. So the bridge sits on Phase A, runs in
-parallel with Phase B, and does not wait for Phase C.
+**Placement.** The bridge is the **second client of the turn**. It sits on Phase A and
+runs beside Phase B. Only its live progress lines wait for T-A2.
 
 ```
- T-A1 #216:  216a ✓ ─ P3-3 ✓ ─ 216b-0 ✓ ─ 216b-1 ✓ ─ 216b-2 ✓ (#303) ─ 216b-3 ✓ (#306) ─► (rest of #216b plan?)
-                                                                                     │
- bridge got from it:                                   person cancel (/stop), budget-pause consent
-                                                                                     │
- then:   inbound seam (TB-1) ─► T-A2 #217 (+TB-2/TB-4/TB-16) ─► T-A3 #218 (+TB-A3) ─► Phase B ─► C
-             │                         │                              │
-         Track 2a (bridge app,     Track 2b (relay, cards)        bridge in the
-         no relay)                                                contract fixtures
+ T-A1 #216:  216a ✓ ─ P3-3 ✓ ─ 216b-0 ✓ ─ 216b-1 ✓ ─ 216b-2 ✓ (#303) ─ 216b-3 ✓ (#306)
+                                                                              │
+ core tickets the bridge adds:        TB-1 shared entry point ── TB-16 decision names its approval
+                                                │                        │
+ bridge:                 Stage 1 delivery layer ─────────────► Stage 2 rich features
+                                                                         │
+ T-A2 #217 (typed frames, + TB-4 fields and sinks) ────────────► Stage 3 live progress
+ T-A3 #218 (client contract, + TB-A3)              ────────────► bridge in the contract fixtures
 ```
 
-**Why this order.** Three core needs coincide with what the bridge needs. Each is
-v0.8 work the web UI needs too.
+**What the bridge needs from the core, and when**
 
-1. **A transport-neutral inbound door.** #216's rule is "consumers only transport
-   frames". After #303 the consumer still owns persistence, routing gates and
-   enqueueing (`consumers.py:861-1057`). Moving that into `chatbot/inbound.py` is in
-   T-A1's spirit, and it is the bridge's entry point. It waited on 216b-3, which changed
-   how a cancel is recorded in that same consumer path. With #306 merged, it can start.
-2. **Typed frames with `turn_id`, `seq`, `approval.requested` and one terminal event.**
-   That is #217. For the bridge, this means:
-   - the per-run status message is a direct mapping (`turn.started` sends it, tool
-     events edit it, the terminal event closes it);
-   - approval cards come from `approval.requested`, instead of reading the coordinator's
-     prose (`coordinator.py:903-906`);
-   - restart recovery uses `turn_id` + last `seq`.
-   Building on today's `ai_step_event` text would mean building twice.
-3. **Truth on the phone.** Phase B makes the terminal event honest: a claim with no
-   matching write-set ends as `turn.failed{partial}` (#221). A bridge built on v2
-   frames inherits that. A "✅ Done" on the phone then means the record says done, which
-   is the epic's success metric.
+1. **A transport-neutral inbound door (TB-1). Needed for stage 1.** #216's rule is
+   "consumers only transport frames". After #303 the consumer still owns persistence,
+   routing gates and enqueueing (`consumers.py:861-1057`). Moving that into
+   `chatbot/inbound.py` is in T-A1's spirit. It waited on 216b-3, which changed how a
+   cancel is recorded in that same path. With #306 merged, it can start.
+2. **A decision that names its approval (TB-16). Needed for stage 1.** Without it, a
+   stale tap can be absorbed by a newer pause (§4.2). It touches the coordinator and
+   `docs/contracts/approval.md`, so it needs a plan.
+3. **Typed frames (T-A2, #217). Needed only for stage 3.** Messages, endings and
+   approval cards come from the database (§4.1, §4.2). Only the per-tool progress
+   lines need `turn.started` and tool events. Building those on today's
+   `ai_step_event` text would mean building twice, so stage 3 waits.
+4. **Truth on the phone (Phase B).** The bridge sends the persisted final message,
+   never the concatenated stream. When Phase B makes endings honest (#221), Telegram
+   inherits that with no bridge change.
 
-**What 216b-3 (#306) gives the bridge.** Two bridge features waited on it, and both are
-now unblocked:
-- **`/stop` from the phone.** The bridge sends an exact `stop` through the shared entry
+**What 216b-3 (#306) already gives the bridge**
+- **Stop from the phone.** The bridge sends an exact `stop` through the shared entry
   point, and #306 records it as `cancel_requested_at`. The running turn ends as
   `cancelled(user_cancel)`. A socket close, or a poller restart, is still not a cancel.
-- **Budget- and quota-pause "Continue" buttons.** A `continue` now counts only if it was
-  sent after `Turn.paused_at`, so a button inherits the same consent check as
-  approval-pause cards (216b-0).
+- **"Continue" buttons for budget and quota pauses.** A `continue` counts only if it
+  was sent after `Turn.paused_at`, so a button inherits the same consent check as
+  approval cards (216b-0).
 
-**What to fold into existing v0.8 work** (proposed; not filed):
-- **#216, now that 216b-3 has merged** (or as a slice of the #216b plan if it has
-  room): the transport-neutral `submit_user_message` (TB-1).
-- **#217 (T-A2):** these three should live with that ticket:
-  - `approval.requested` carries `approval_pk`, `short_id`, `approval_kind` and a risk
-    class (TB-4). Today's `confirmation` event uses the name `approval_id` for the
-    8-hex short id (`agent_loop.py:3596`), so name both fields explicitly;
-  - frames reach any in-process subscriber, not only the consumer, through a
-    subscription hook (TB-4);
-  - `approval.resolved` carries `decision` and `via` (TB-4), and a decision can be bound
-    to a specific approval (TB-16).
+**What to fold into existing v0.8 work** (proposed; not filed)
+- **#216:** the transport-neutral `submit_user_message` (TB-1), and the broadcast of
+  human messages to the room group so web tabs see Telegram-typed text (TB-2).
+- **#217 (T-A2):** `approval.requested` carries `approval_pk`, `short_id`,
+  `approval_kind` and a risk class; `approval.resolved` carries `decision` and `via`;
+  frames reach any in-process subscriber through a sink registry (TB-4). Today's
+  `confirmation` event uses the name `approval_id` for the 8-hex short id
+  (`agent_loop.py:3596`), so name both fields explicitly.
 - **#218 (T-A3):** the client contract doc is written for "a client", and its
-  reconnect and duplicate fixtures run against the bridge as well as the web consumer.
-  A second client keeps the contract from encoding web-only assumptions.
+  reconnect and duplicate fixtures run against a generic sink as well as the web
+  consumer (TB-A3). A second client keeps the contract from encoding web-only
+  assumptions.
 
 ---
 
@@ -393,7 +421,8 @@ and the bridge call it. `chatbot/` is not protected.
   `turn.started`, `approval.requested` and `turn.completed`
   (`docs/proposals/2026-10-turn-state-and-verification.md:96-113,151-167`). The
   contract doc `turn-stream.md` would come with T-A3. Neither exists yet. The bridge
-  consumes v2 frames only (§0.1).
+  delivers messages from the database (§3.1) and uses v2 frames only for progress
+  lines (stage 3). It never reads today's frames.
 
 ### 1.6 Notifications
 
@@ -572,8 +601,8 @@ as blocking, but `.github/workflows/main.yml` does not run it.
 **Other changelog items that matter to this design [Verified]**
 
 - **`sendMessageDraft` (9.3; "allowed all bots" in 9.5, March 1, 2026; `can_stop`/`keep_on_stop`
-  in 10.3).** It streams partial messages. This is a possible later alternative to
-  repeated `editMessageText`.
+  in 10.3).** It streams partial messages. The plan uses it for "Thinking…", Stop and
+  progress lines (D10, §4.5); details are under "Facts added on 2026-11-13" below.
 - **Guest mode (10.0).** Bots can receive `guest_message` updates from chats they are
   not in. Exclude them with `allowed_updates`, and reject anything with `guest_query_id`.
 - **Bots can see some other bots' messages in groups (10.0).** Reject `from.is_bot`.
@@ -586,42 +615,170 @@ as blocking, but `.github/workflows/main.yml` does not run it.
 - **`editMessageText` 48-hour limit** applies only to business messages, not to the
   bot's own messages.
 
+**Facts added on 2026-11-13** [Verified: `core.telegram.org/api/forum`,
+`core.telegram.org/api/bots/ai`, `telegram.org/tos/bot-developers`, Bot API reference]
+
+- **Topics in a private chat are turned on per bot in @BotFather ("Threaded mode").**
+  The forum page: "Bots can also behave like forums if Threaded mode is enabled via
+  @botfather". The Bot API reports it as `has_topics_enabled`.
+- **It costs nothing unless the bot sells things for Telegram Stars.** Terms §6.2.6:
+  while topics in private chats are enabled, "all subsequent Telegram Stars purchases
+  carried out within that TPA shall be subject to a non-refundable fee of 15%". The
+  bridge sells nothing. The same clause says the feature works "provided that the
+  relevant users' clients support these features".
+- **When users may create topics, there is no General box to type in.** The forum
+  page: "graphical clients should prevent users from sending topic-less messages" and
+  the General view shows "Type any message to create a new thread". A message typed
+  there creates a new topic. The Bot API marks such a topic with `is_name_implicit`:
+  the name "wasn't specified explicitly by its creator and likely needs to be changed
+  by the bot". This changes the earlier "General is the lobby" idea (D4, §4.4).
+  - When users may **not** create topics (the BotFather option "Disallow users to
+    create new threads"), clients do allow messages in General.
+- **A deleted topic sends the bot nothing.** The forum page: "There is no dedicated
+  update emitted when a topic is deleted"; it shows up as message deletions, which the
+  Bot API does not deliver to bots. The bridge learns of it from a failed send.
+- **`sendMessageDraft` is for private chats only** (`chat_id`: "Unique identifier for
+  the target private chat"), takes a `message_thread_id`, and is "a temporary
+  30-second preview".
+  - Empty text shows a "Thinking…" placeholder.
+  - `can_stop` shows a Stop button, and the bot receives a
+    `stopped_message_generation` update when it is pressed.
+- **Drafts and "typing…" share one rate limit, per chat:** "Max 20 calls in 5 seconds"
+  and "Max 40 calls in 30 seconds", and "the same ratelimits apply to… sendMessageDraft,
+  sendChatAction". The server "may still send short cool-down FLOOD_WAITs (at most 3
+  seconds)".
+- **Not every app shows several drafts in one topic.** "Not all Telegram clients
+  currently support rendering multiple live drafts… in the same topic concurrently."
+  The bridge uses one draft per topic.
+
 ---
 
-## 3. Proposed architecture
+## 2.1 Lessons from people who built this kind of bridge
+
+Read on 2026-11-13. **(R)** means I fetched and read the page. **(S)** means I saw only
+a search-result summary, so treat it as a lead, not a fact. Pages that only resell or
+summarise other people's work were left out.
+
+### What went wrong for others, and what this plan does about it
+
+| # | Who | What happened | What this plan does |
+|---|---|---|---|
+| L1 | **Libera.Chat ⇄ Matrix bridge**, shut down August 2023. Libera's retrospective (R), Matrix.org's closing post (R) | After a change that kept connections alive across bridge restarts, "the bridge began silently dropping ranges of messages, resulting in roughly one out of every five messages being dropped during periods of high bridge activity. These issues were often undetectable by the average user on either side." Outages were ones the operator "failed to notice until Libera staff put substantial effort into documenting the symptoms". The final trigger was a privacy filter that stopped working: people saw channel content they should not have. Matrix.org later wrote that it "does not have the resources to maintain and operate the bridge" | **No silent drops:** every send is a row in a delivery ledger, so a missing message is a visible pending row, and `/status` shows the count (§4.1). **Simple restarts:** the bridge keeps no state in memory that matters; on restart it re-reads the database. **Its own health check** (§4.5). **Access is re-checked on every tick and fails closed** (§4.1 step 1). **Small enough for one maintainer:** one process, one loop, no second queue |
+| L2 | **grammY**, a widely used Telegram bot framework: reliability guide and flood-limit guide (R) | "Bots cannot guarantee an *exactly once* execution". Plain long polling gives "*at least once*" and "users may receive duplicate messages". Its concurrent runner confirms updates "prematurely", so a kill at the wrong moment "leads to data loss". On limits: "They are unspecified… they are flexible constraints". "Hitting rate limits does not lead to bans. Ignoring them does." A 429 "can happen anytime", on any method | **Advance the update offset only after the update's outcome is committed** (§4.1). **Process updates one at a time.** Accept at-least-once and make it harmless with idempotent rows. **Always obey `retry_after`**, on every method, and never rely on a fixed limit number |
+| L3 | **OpenClaw**, an agent gateway with a Telegram channel: transports, messaging and troubleshooting docs, and the 2026.8.1 release notes (R) | The 2026.8.1 notes list what broke in production: "Prevent Telegram messages from being lost after restarts", "Prevent duplicate Telegram replies", "Keep concurrent Telegram updates in the correct session", "Keep Telegram reactions and poll answers in their original topics", "Recover stalled Telegram media downloads without blocking later messages", "Prevent stalled Telegram responses from blocking groups". Their fixes: updates are "saved to a durable queue and processed in order for each chat and topic"; the restart position is saved "after an update is committed to the durable ingress queue"; polling is rebuilt "after 120 seconds without completed long-poll liveness"; "timeouts after sending remain ambiguous to avoid duplicate replies". In the same release the **default changed** from streaming the answer into an edited message to "one editable status draft during the turn" with "the final answer as a normal message" | **Same shape, arrived at independently:** durable inbound, order per topic, the final answer as a normal message, status as a separate throwaway thing. **Slow work (downloads, transcription) never runs on the poll loop** (§4.3). **A stall watchdog** (§4.5). **An ambiguous send is tracked as its own state** and re-sent once with a note, because for an away-from-keyboard user a lost reply is worse than a rare duplicate (§4.1) |
+| L4 | **A developer's flood-control write-up** (ai-muninn, R) | A bot "streamed" a slow model's answer by editing one message every 0.8 s for 175 s. Telegram answered "flood control, waiting 247.0s", and then the **final answer could not be sent either**: "by then it isn't just edits getting blocked". Extra edits with no new text failed with "Message is not modified" | **Decoration must never be able to block a reply.** Progress is shown in a draft, which has its own limit (§2). Where an edited message is the fallback, edits are at least 3 s apart, skipped when the text is unchanged, and **dropped for the rest of the turn on the first 429**, never queued |
+| L5 | **Claude Code channels** (Anthropic's Telegram and Discord plugins): official docs (R), a launch-week write-up (R, third party), and the plugin's issue list (S) | At launch a write-up reported that "there is no way to respond to permission prompts from Telegram… If Claude hits a permission gate, it stops", so people ran with every permission check turned off. The docs now describe relaying prompts and warn: "Anyone who can reply through the channel can approve or deny tool use in your session". Issue titles (S) describe the poller: "polling exits permanently on network errors", "poller gives up on 409 after ~28 s and never recovers, while /mcp still reports 'connected'", "duplicate bot processes across sessions, causing message loss", "inbound messages silently dropped when… busy" | **Approvals are in stage 1**, because a remote control that cannot approve pushes people to turn safety off. **Only the paired numeric user id can approve.** **The poll loop never exits:** every error is retried with backoff, including 409. **One poller, enforced by a database lease.** **"Connected" means a recent completed poll**, not "the process is up" (§4.5) |
+| L6 | **OpenClaw security advisories**: GHSA-j4c9-w69r-cw33 via a CVE report (R, third party); a February 2026 fix list (R, third party); an allowlist advisory (S); Zenity Labs research (R) | (a) "unauthorized users… send inline button callbacks that mutate session state, circumventing the direct message pairing restrictions": the button path skipped the check the message path had. (b) The bot "would download and write the media to disk before checking if the sender was authorized". (c) (S) An allowlist that matched changeable usernames instead of numeric ids. (d) An injected instruction made the agent "establish a backdoor… by adding a new chat integration under their control" | (a) **One authorisation gate for every update type**, before any handler, with a test per type (§5). (b) **Nothing is downloaded before that gate passes.** (c) **Numeric `from.id` only.** (d) **The agent cannot pair, unpair or change the allowlist:** the bridge exposes no tools, and pairing codes come only from a logged-in person (§5) |
+| L7 | **Telegram's own bug tracker** (R) and **tdlib/telegram-bot-api #847, #905** (summaries, §2) | An open report: in a private-chat topic the "typing…" indicator "renders in parent chat instead of DM topic" on macOS and iOS, while Desktop and Web are correct. #905: a new private-chat topic sometimes refuses every bot write | **Check on the real phone before building** (TB-0). **A broken topic is marked broken and reported**, never silently redirected (§4.4) |
+| L8 | **Hermes Agent** docs (R, earlier pass) and a Habr post on Threaded mode (R, third party) | Hermes: private-chat topics need Threaded Mode in BotFather, and without it the bot logs "The chat is not a forum". Habr (in Russian; my paraphrase): after turning Threaded mode on, a bot that does not send into a `message_thread_id` most likely stops working. Drafts have no `message_id` and disappear when the app redraws, so the real message must still be sent | **Pairing checks `has_topics_enabled` and stops with the one BotFather step if it is off.** **A draft is only ever decoration**; the reply is always a normal message |
+
+### Patterns worth copying
+
+| # | Source | Pattern | Where it lands |
+|---|---|---|---|
+| P1 | Brandur Leach, "Transactionally Staged Job Drains in Postgres" (R) | Enqueue-after-commit can lose work: "you run the risk of your program crashing after the commit, but before the job makes it to the queue… you almost certainly won't notice". The fix is to write the work item in the same transaction as the data | The inbound `Message`, its queued `Turn` and the `TelegramInbound` row commit together. Outbound sends are ledger rows, written before the send |
+| P2 | Slack Events API docs (R) | Acknowledge within three seconds, do the work afterwards, and expect retries: "we'll retry three times", each with a retry-number header and a stable `event_id` | Answer a button tap at once and do the work after. Dedupe updates by `update_id` |
+| P3 | Telegram callback behaviour (S; one developer measured about 15 s) | An unanswered button tap expires and the answer call then fails with "query is too old" | Call `answerCallbackQuery` first. Treat a late-answer error as harmless once the decision is recorded |
+| P4 | Write-ups from people who built phone remotes for coding agents (S) | "The phone never talks to the agent directly. It talks to a dumb inbox." Approvals only became usable with push notifications. Notify only for "finish, approval, and error" | The bridge is exactly an inbox and a mirror. **Replies and approval cards notify. Progress, "Thinking…" and mirrored web messages are silent** (§4.1) |
+| P5 | Matrix bridges (matterbridge commit notes, S; [Known] for mautrix) | Keep a map from each side's message id to the other's, or edits, replies and deletes cannot be matched | The delivery ledger stores the Telegram `message_id` for every room message it sends |
+
+### What I looked for and did not find
+- A public post-mortem of a Telegram bridge losing an **approval** decision. The
+  closest are L5 and L6.
+- First-hand detail on the Claude Code plugin's polling bugs: I saw issue titles and
+  summaries on a mirror site, not the issues themselves.
+- Any official statement of Telegram's edit limits (§9).
+
+### Sources
+
+Read directly (R):
+- Libera.Chat, "Matrix Bridge Temporary Shutdown, a Retrospective", 2023-08-10:
+  `libera.chat/news/matrix-bridge-disabled-retrospective`
+- Matrix.org, "Shutting down the Matrix bridge to Libera.Chat", 2023-11-28:
+  `matrix.org/blog/2023/11/28/shutting-down-bridge-to-libera-chat/`
+- grammY, "Scaling Up III: Reliability" and "Scaling Up IV: Flood Limits":
+  `grammy.dev/advanced/reliability`, `grammy.dev/advanced/flood`
+- OpenClaw docs: `docs.openclaw.ai/channels/telegram/transports`, `/messaging`,
+  `/troubleshooting`, `/threads-and-sessions`, `/rich-messages`, and
+  `docs.openclaw.ai/releases/2026.8.1/messaging`
+- ai-muninn, "Progressive Streaming on a Slow Model Got My Bot Rate-Limited by
+  Telegram": `ai-muninn.com/en/blog/telegram-streaming-flood-control-slow-llm`
+- Claude Code channels: `code.claude.com/docs/en/channels`; launch-week write-up at
+  `dev.to/ji_ai/claude-code-channels-vs-openclaw-the-tradeoffs-nobodys-talking-about-2h5h`
+- GHSA-j4c9-w69r-cw33 report on dev.to (`cverports`); the February 2026 fix list at
+  `insiderllm.com/guides/openclaw-security-february-2026/`; Zenity Labs, "OpenClaw or
+  OpenDoor?" at `labs.zenity.io`
+- Telegram: `core.telegram.org/api/forum`, `core.telegram.org/api/bots/ai`,
+  `telegram.org/tos/bot-developers` (§6.2.6), `bugs.telegram.org/c/62822`
+- Habr, article 984554 (Threaded mode and drafts)
+- Brandur Leach, `brandur.org/job-drain`; Slack, `docs.slack.dev/apis/events-api/`
+
+Search summaries only (S): the Claude Code plugin issue list (a mirror at
+`claudeissues.com`), the OpenClaw username-allowlist advisory (GHSA-mj5r-hh7j-4gxf),
+phone-remote write-ups (`dev.to/yureki_lab`, `tacticremote.com`), a callback-timing
+gist, and matterbridge commit notes.
+
+---
+
+## 3. Architecture
 
 ### 3.1 Components
 
+**Two layers.** The delivery layer is the part that must not fail quietly. The live
+layer is decoration: if it breaks, the delivery layer is unaffected.
+
 ```
 Backend/telegram_bridge/            (new Django app; not a connector, not offered to the model)
+
+  Delivery layer (stage 1)
   bot_api.py      Minimal Bot API client: httpx, token never in errors or logs,
-                  ok:false parsing, 429 retry_after, per-chat send pacing.
-  poller.py       getUpdates long poll (timeout 50 s): lease, offset persistence,
-                  webhook check, stale-update cut-off.
-  inbound.py      Update → filters → topic-binding lookup → commands (/pair /unpair
-                  /status /stop /help) or chatbot.inbound.submit_user_message.
-                  Topic service messages create, rename, pause or resume bindings.
-  relay.py        Subscriber to stream protocol v2 frames (T-A2) per bound room:
-                  status message (edit), final reply (send), approval cards.
-                  No adapter for today's ai_step_event / ai_stream_chunk frames.
-  approvals.py    Card rendering, callback validation, PIN challenge, decision
-                  → submit_user_message("yes"/"no"), or submit_execution_approval
-                  for workflows (later).
-  files.py        getFile download → chatbot.documents.ingest_room_document.
+                  ok:false parsing, 429 retry_after on every method, one sender per chat.
+  poller.py       getUpdates long poll (timeout 50 s): lease, offset saved after commit,
+                  webhook check, stale-update cut-off, retry forever, stall watchdog.
+  gate.py         The one authorisation gate every update passes first (§5).
+  inbound.py      Update → gate → topic binding → command (/pair /unpair /status
+                  /stop /help) or chatbot.inbound.submit_user_message.
+  mirror.py       The mirror loop: room messages → delivery ledger → Telegram, in
+                  order, per topic. Also drives approval cards and the ending safety net.
+  approvals.py    Card rendering, tap validation, PIN challenge, decision →
+                  submit_user_message("yes"/"no", decision_for=…), or
+                  submit_execution_approval for workflows (stage 2).
   pairing.py      Code issue and verify.
+  health.py       last-poll and last-send times, /status text, alerts.
   lifespan.py     start() / stop(), called from Backend/asgi.py lifespan when
                   TELEGRAM_BRIDGE_ENABLED.
   management/commands/telegram_pair.py     Prints a one-time code locally.
   management/commands/telegram_unpair.py   Revokes a chat link.
 
+  Live layer (stage 1: "Thinking…" + Stop; stage 3: progress lines)
+  working.py      Per running turn: a draft with a Stop button, or "typing…" where
+                  drafts don't render. Holds no durable state.
+
+  Media (stage 2)
+  files.py        getFile download → chatbot.documents.ingest_room_document.
+  voice.py        Voice note → transcript (ear adapter) → submit_user_message.
+
 Backend/chatbot/inbound.py          (new, extracted from ChatConsumer.new_message)
-  submit_user_message(room, user, text, *, via="web"|"telegram", reply_to=None)
+  submit_user_message(room, user, text, *, via, decision_for=None,
+                      consent_eligible=True, within_txn=None)
 Backend/chatbot/documents.py        (new, extracted from upload_document_to_ai)
   ingest_room_document(room, user, data, filename, mime) -> DocumentUpload
-Backend/orchestration/approval_view.py   (new, read-only, not protected)
+Backend/orchestration/approval_view.py   (new, read-only)
   pending_agent_approval(room_id, user_id) -> {pk, turn_id, short_id, message,
                                                effects, tools, risk}
 ```
+
+**Why messages come from the database and not from the stream**
+- **It is what makes "no silent drops" provable.** A room message either has a
+  delivery row marked sent, or it is visibly pending (L1).
+- **The stream is at-most-once.** `group_send` drops silently when a channel is full,
+  and lite's layer lives in one process's memory (§1.5).
+- **It needs nothing that does not exist yet.** Replies, turn notices and reminders
+  are already saved as room messages through `persist_kazi_message`
+  (`chatbot/kazi_messages.py:125-189`; turn notices at `orchestration/turns.py:952`,
+  `orchestration/coordinator.py:332`, `chatbot/turn_runner.py:971`) [Verified].
+- **It mirrors everything for free:** replies, endings, reminders, nudges and what you
+  typed on the web.
 
 **Why not the connector?**
 - Boundary rule 1 forbids connector files from importing six named core modules: `agent_loop`, `tool_executor`, `tool_router`, `security_policy`, `action_receipts`, `workflow_planner` (`scripts/check_boundaries.py:28-35`). The bridge needs several of them.
@@ -652,20 +809,20 @@ All rows are append-style. Revocation sets `revoked_at` and never deletes.
 
 | Model | Fields | Constraints |
 |---|---|---|
-| `TelegramChatLink` (the allowlist) | `user` FK, `chat_id` BigInt, `chat_type` (private/supergroup), `telegram_user_id` BigInt (must equal `from.id` on every update), `paired_at`, `revoked_at`, `revoked_reason`, `pin_hash` (Django `make_password`, nullable), `pin_failures`, `locked_until` | unique `(chat_id)` where `revoked_at IS NULL` |
-| `TelegramRoomBinding` | `link` FK, `room` FK `Chatroom`, `thread_key` BigInt (0 = no thread, else `message_thread_id`), `mode` (dm_topic / group_topic), `label` (topic name), `state` (active / paused / broken), `created_at`, `revoked_at` | unique `(link, thread_key)` where active |
+| `TelegramChatLink` (the allowlist) | `user` FK, `chat_id` BigInt, `chat_type` (private/supergroup), `telegram_user_id` BigInt (must equal `from.id` on every update), `system_thread_key` BigInt (the bot's own "Kazi" topic for notices), `paired_at`, `revoked_at`, `revoked_reason`, `pin_hash` (Django `make_password`, nullable), `pin_failures`, `locked_until` | unique `(chat_id)` where `revoked_at IS NULL` |
+| `TelegramRoomBinding` | `link` FK, `room` FK `Chatroom`, `thread_key` BigInt (the topic's `message_thread_id`), `label` (topic name), `state` (active / paused / broken), `bookmark_message_id` BigInt (every room message up to here is delivered), `created_at`, `revoked_at` | unique `(link, thread_key)` where active; unique `(link, room)` where active |
 | `TelegramPairingCode` | `code_hash` (sha256), `user` FK, `issued_at`, `expires_at`, `used_at`, `used_by_chat_id` | single use |
-| `TelegramPollerState` (singleton) | `offset` BigInt, `bot_id` BigInt (pinned at first `getMe`), `lease_owner`, `lease_expires_at`, `last_ok_at`, `last_error` | one row |
-| `TelegramApprovalCard` | `token_hash`, `binding` FK, `approval` FK `WorkflowApprovalRecord`, `turn_id` UUID, `short_id`, `chat_id`, `message_id`, `risk`, `created_at`, `decided_at`, `decision`, `decided_by_telegram_user_id`, `outcome_message_id` FK `Message` | conditional UPDATE on `decided_at IS NULL` |
-| `TelegramOutbound` | `binding` FK, `kind` (status/reply/card), `step_id`, `turn_id`, `telegram_message_id`, `last_text_hash`, `last_edit_at`, `closed_at`, `reply_sent_at` | for edits, throttling and restart reconciliation (§4.1 Recovery) |
-| `TelegramInbound` | `update_id` unique, `chat_id`, `message_id`, `kind`, `received_at`, `result` (`accepted` / `rejected:<reason>`), `kazi_message_id` | dedupe and audit; holds no message text. An `accepted` row is written only in the same transaction as its `Message` (§4.1 Ordering) |
+| `TelegramPollerState` (singleton) | `offset` BigInt, `bot_id` BigInt (pinned at first `getMe`), `lease_owner`, `lease_expires_at`, `last_poll_ok_at`, `last_send_ok_at`, `conflict_since`, `last_error` | one row |
+| `TelegramInbound` | `update_id` unique, `chat_id`, `message_id`, `kind`, `received_at`, `state` (`accepted` / `rejected:<reason>` / `media_pending` / `media_done` / `media_failed`), `kazi_message_id` | dedupe, audit and the queue for slow media work; holds no message text. An `accepted` row is written only in the same transaction as its `Message` (§4.1) |
+| `TelegramDelivery` (the ledger) | `binding` FK, `kind` (`message` / `ending` / `notice`), `kazi_message_id` (nullable), `turn_id` (nullable), `part` (0, 1, … for long messages), `state` (`pending` / `sending` / `sent` / `failed`), `attempts`, `telegram_message_id`, `sent_at`, `last_error` | unique `(binding, kazi_message_id, part)`; unique `(binding, turn_id)` for `ending`. Holds no message text |
+| `TelegramApprovalCard` | `token_hash`, `binding` FK, `approval` FK `WorkflowApprovalRecord`, `turn_id` UUID, `short_id`, `chat_id`, `message_id`, `risk`, `render` (buttons/widget), `created_at`, `decided_at`, `decision`, `decided_by_telegram_user_id`, `closed_at`, `outcome_message_id` FK `Message` | conditional UPDATE on `decided_at IS NULL`; at most one open card per `(binding)` |
 
 **Notes**
-- **One binding per topic.** Each Kazi room is one topic in the bot's private chat
-  (D4), and later in a group (mode C). `thread_key=0` means General, which is never
-  bound to a room. There is no `/room` switching.
-- **Why a 0 sentinel?** Postgres treats NULLs as distinct in unique constraints, so a
-  NULL thread id would allow duplicates.
+- **One binding per topic, one topic per room.** There is no `/room` switching.
+- **The ledger is the proof of delivery.** It also maps each room message to its
+  Telegram `message_id` (P5), which later features need (reply threading, edits).
+- **Progress and "Thinking…" have no table.** They are decoration and are rebuilt
+  from the `Turn` rows after a restart.
 - **No changes to `Chatroom`, `Message` or `WorkflowApprovalRecord`.**
   - "Via Telegram" is recorded as a `via` key inside the user message's encrypted JSON
     payload. `history.decrypt_stored` reads only `content`, so the extra key is
@@ -682,16 +839,23 @@ All rows are append-style. Revocation sets `revoked_at` and never deletes.
 | `TELEGRAM_BRIDGE_ENABLED` | `false` | Start the lifespan task. |
 | `TELEGRAM_BRIDGE_POLL_TIMEOUT_SECONDS` | `50` | getUpdates `timeout`. The httpx timeout is this plus 15. |
 | `TELEGRAM_BRIDGE_LEASE_SECONDS` | `60` | Poller lease. Renewed on every loop. |
-| `TELEGRAM_BRIDGE_MAX_UPDATE_AGE_SECONDS` | `600` | Inbound text or callbacks older than this are not acted on; the user is told. |
+| `TELEGRAM_BRIDGE_STALL_SECONDS` | `120` | No completed poll for this long: rebuild the HTTP client and report (L3). |
+| `TELEGRAM_BRIDGE_MAX_UPDATE_AGE_SECONDS` | `600` | Inbound text or taps older than this are not acted on; the user is told. |
+| `TELEGRAM_BRIDGE_MIRROR_ACTIVE_SECONDS` | `1` | Mirror tick while any bound room has a queued, running or paused turn. |
+| `TELEGRAM_BRIDGE_MIRROR_IDLE_SECONDS` | `5` | Mirror tick otherwise. |
+| `TELEGRAM_BRIDGE_CATCHUP_MAX_MESSAGES` | `20` | After downtime, send at most this many waiting messages per topic and summarise the rest (D25). |
+| `TELEGRAM_BRIDGE_MIRROR_WEB_MESSAGES` | `true` | Show messages typed on the web in the room's topic. |
 | `TELEGRAM_BRIDGE_PAIRING_CODE_TTL_SECONDS` | `600` | Code lifetime. |
 | `TELEGRAM_BRIDGE_ALLOWED_TELEGRAM_USER_IDS` | empty (any user may pair) | Optional static allowlist: who may pair at all. |
 | `TELEGRAM_BRIDGE_PIN_POLICY` | `high_risk` | `off`, `high_risk` or `all`. Applies once a PIN is set. |
 | `TELEGRAM_BRIDGE_CONTENT_MODE` | see D5 | `full`, `summary` or `notify_only`. |
-| `TELEGRAM_BRIDGE_STATUS_EDIT_MIN_SECONDS` | `3` | Status-edit throttle. |
-| `TELEGRAM_BRIDGE_SHOW_WEB_RUNS` | `true` | Mirror runs started from the web UI in that room's Telegram space. |
+| `TELEGRAM_BRIDGE_WORKING_UI` | `draft` | `draft`, `typing` or `off`. Set from the TB-0 result (D10). |
+| `TELEGRAM_BRIDGE_PROGRESS_MIN_SECONDS` | `3` | Least time between progress updates (stage 3). |
+| `TELEGRAM_BRIDGE_UI_DEFAULT` | `buttons` | `buttons` or `widgets` for approval cards (D22). |
 
-`kazi_status --json` should report whether the bridge is enabled, the lease holder,
-`last_ok_at` and `last_error`, so `./kazi status` can show it.
+`kazi_status --json` reports whether the bridge is enabled, the lease holder,
+`last_poll_ok_at`, `last_send_ok_at`, the number of pending deliveries and `last_error`,
+so `./kazi status` can show it (§4.5).
 
 ### 3.5 Multimodal: voice, photos and files
 
@@ -735,7 +899,8 @@ below rests on a provider or Telegram doc read on 2026-11-08.
 - **Chat actions.** `sendChatAction` shows `typing`, `record_voice`, `upload_voice` or
   `upload_photo` "for 5 seconds or less", so repeat it about every 4 s while working.
 - **Streaming drafts.** `sendMessageDraft` is "a temporary 30-second preview". The final
-  text must still be sent with `sendMessage`.
+  text must still be sent with `sendMessage`. The bridge uses a draft only for
+  "Thinking…" and progress (§4.5), never for the reply.
 
 #### Architecture: a chained voice pipeline, with voice models at the edges
 
@@ -827,13 +992,13 @@ method. Private-chat topics and Business bots don't need Premium.
     current-row match, PIN in the private chat, one transaction.
   - The handler then calls `answerWidgetQuery`, and updates the card with
     `editMessageWidgetData`.
-- **Status widget.** One per run, in place of the edited text status in private chats.
-  Phase, tools and elapsed time live in `chat_data`, edited at the existing 3-second
-  throttle. The terminal state and the `closed_at`/`reply_sent_at` rules of §4.1 are
-  unchanged. The final reply is still a normal message, so it triggers a notification
-  and stays readable.
-- **Fallback is mandatory.** Groups (mode C), bindings with widgets switched off, and
-  any `sendWidget` error get the plain inline buttons and text status.
+- **Status widget.** One per run, in place of the "Thinking…" draft, where widgets
+  are switched on. Phase, tools and elapsed time live in `chat_data`, updated at most
+  every `PROGRESS_MIN_SECONDS`. It is decoration like the draft (§4.5): an error stops
+  it and never delays a reply. The final reply is still a normal message, so it
+  triggers a notification and stays readable.
+- **Fallback is mandatory.** Group mode, bindings with widgets switched off, and
+  any `sendWidget` error get the plain inline buttons and the draft or "typing…".
   - [Cannot verify] how well each Telegram app supports widgets yet; the feature is
     four days old. The default is therefore buttons, with widgets opt-in per binding
     (`/ui widgets`) after a test widget renders on your device (D22).
@@ -851,12 +1016,12 @@ disappear automatically after some time, or if the app is restarted", so they ar
 **only for throwaway notes**, never for cards or anything durable. Examples:
 - "This approval is no longer current."
 - "Locked for 15 minutes after 5 wrong PINs."
-- "This card belongs to another user" (mode C).
+- "This card belongs to another user" (group mode).
 
 In groups this keeps those notes from cluttering the chat for everyone else.
 
 **Data model and config changes:**
-- `TelegramApprovalCard` and `TelegramOutbound` gain `render` (`buttons` / `widget`).
+- `TelegramApprovalCard` has `render` (`buttons` / `widget`).
 - `TelegramRoomBinding` gains `ui` (`buttons` / `widgets`).
 - New setting `TELEGRAM_BRIDGE_UI_DEFAULT` (default `buttons`).
 - `allowed_updates` adds `widget_query`.
@@ -865,22 +1030,26 @@ In groups this keeps those notes from cluttering the chat for everyone else.
 
 ## 4. Sequences
 
-### 4.1 Inbound message
+### 4.1 A message in, and everything out
+
+**In: from the phone to the room**
 
 ```
 Phone        Telegram          Bridge (poller task in web process)                    Kazi core
   |--text-->|                    |                                                      |
-  |         |<--getUpdates(offset, timeout=50, allowed_updates=[message,callback_query])--|
-  |         |--update---------->|                                                      |
+  |         |<--getUpdates(offset, timeout=50, allowed_updates=[message,callback_query,
+  |         |                   |              stopped_message_generation])              |
+  |         |--update---------->|   one update at a time, in order                      |
   |         |                   | 1 skip if TelegramInbound(update_id) already has a result
-  |         |                   |   (a row exists only once its outcome committed; see Ordering)
-  |         |                   | 2 drop if: date older than MAX_UPDATE_AGE; from.is_bot;
-  |         |                   |   sender_chat set; via_bot; guest_query_id;
+  |         |                   |   (a row exists only once its outcome committed)
+  |         |                   | 2 THE GATE (§5), same for every update type:
+  |         |                   |   link = active TelegramChatLink(chat.id);
+  |         |                   |   require from.id == link.telegram_user_id; else drop, silent
+  |         |                   | 3 drop if: date older than MAX_UPDATE_AGE (tell the user);
+  |         |                   |   from.is_bot; sender_chat set; via_bot; guest_query_id;
   |         |                   |   forward_origin set (D6); no text/caption/file
-  |         |                   | 3 link = active TelegramChatLink(chat.id),
-  |         |                   |   require from.id == link.telegram_user_id (else drop, silent)
-  |         |                   | 4 binding = (link, thread_key) → room; none → reply
-  |         |                   |   "pick a room's topic, or create a topic for a new task"
+  |         |                   | 4 binding = (link, message_thread_id) → room
+  |         |                   |   no binding and the topic is new → §4.4 (new topic = new room)
   |         |                   | 5 user_has_room_access(link.user, room)  [a DB error raises: catch it and deny]
   |         |                   | 6 bridge rate limit (cache.add, closed on error)
   |         |                   | 7 submit_user_message(room, user, text, via=telegram,  -->|
@@ -890,113 +1059,154 @@ Phone        Telegram          Bridge (poller task in web process)              
   |         |                   |                                  [one transaction: Message +
   |         |                   |                                   queued Turn + within_txn]
   |         |                   |                                  then runner.submit after commit
-  |         |                   |   (a step 2-6 rejection records TelegramInbound(rejected:…) on its own)
-  |         |                   | 8 commit offset = update_id + 1                      |
-  |         |                   |                                                      |
-  |         |                   |<== turn.started {turn_id, message_id}  (v2, T-A2)    |
-  |         |<--sendMessage "⏳ Thinking…" (status, stored in TelegramOutbound by turn_id)
-  |         |                   |<== tool.started / tool.result {turn_id, seq, name}   |
-  |         |<--editMessageText "🔧 Running web_search…" (≥3 s apart, skip if same)  |
-  |         |                   |<== turn.completed {turn_id, final_message_id}        |
-  |         |                   |    (or turn.failed{partial} / cancelled / superseded)
-  |         |<--editMessageText "✅ Done · 2 tools · 14 s"  or  "⚠️ Ended: <reason>"   |
-  |         |<--sendMessage reply = persisted final message (read by final_message_id,
-  |         |                   |    redact again, plain text, split at 4096)          |
+  |         |                   |   (a step 3-6 rejection records TelegramInbound(rejected:…) on its own)
+  |         |                   | 8 save offset = update_id + 1                          |
 ```
 
-**Ordering.** The offset is committed after step 7 returns, so a crash replays the
-update. The `TelegramInbound` row is written **in the same transaction** as the user
-`Message` and its queued `Turn` (step 7's `within_txn`), never before it. That gives two
-cases:
-- **Crash before that commit:** there is no row and no message, so the replay processes
-  the update normally.
-- **Crash after it:** the message and queued Turn exist, so the replay is skipped. The
-  queued Turn is then drained or, if this process died, reaped with #303's saved
-  "waiting messages weren't answered" notice, so the user sees an honest ending
-  rather than silence.
+**Why the order matters.** The offset is saved after step 7 commits, never before
+(L2, L3). So a crash replays the update, and step 1 decides what the replay does:
+- **Crash before the commit:** there is no row and no message. The replay processes the
+  update normally.
+- **Crash after it:** the message and its queued Turn exist, so the replay is skipped.
+  The queued Turn is drained or, if this process died, reaped with #303's saved
+  "waiting messages weren't answered" notice. That notice is a room message, so the
+  mirror delivers it.
 
-Together that is at-least-once delivery with idempotent handling, and no silent drop.
+This is at-least-once delivery made harmless by an idempotent row (P1).
 
-**Turn ownership.** Every v2 frame carries `turn_id`. Step 7 returns the queued
-turn, so the relay knows which status message belongs to which run. `seq` lets it
-ignore duplicate or reordered frames.
+**The poll loop does only fast work.** Filtering, one transaction and one enqueue.
+Anything slow (a file download, a transcription) is recorded as `media_pending` in the
+same way and done by a per-topic worker (§4.3), so one large voice note cannot hold up
+other topics (L3).
 
-**Recovery.** After a bridge restart, it scans `TelegramOutbound` status rows with no
-`closed_at`, not only non-terminal turns, and reconciles each against its `Turn`:
-- **Still running or paused:** resume by `turn_id` + last `seq`, per the T-A3 contract.
-- **Ended while the bridge was down:** edit the status to its ending. Then, if
-  `reply_sent_at` is empty, send the persisted final reply.
+**Out: the mirror loop, from the room to the phone**
 
-  **`closed_at` is written last, in the same database write as `reply_sent_at`**, and
-  only after the reply has been sent. A turn that ended with no reply to send (for
-  example cancelled) writes `closed_at` alone. So a crash anywhere before that write
-  leaves the row in the scan. Re-editing the status is harmless: Telegram's "message
-  is not modified" error is ignored. The same ordering applies on the live path, not
-  only on recovery.
+```
+every tick (1 s while a bound room has a queued, running or paused Turn; else 5 s):
+  for each active binding B (room R ⇄ topic T):
+    1 access   user_has_room_access(link.user, R). False or any error → set B paused,
+               send nothing more, say so once in the system topic
+    2 collect  R's messages with id > B.bookmark − 200 that have no TelegramDelivery
+               row for B → create one row each:
+                 came from this topic (TelegramInbound.kazi_message_id) → row already "sent"
+                 a Kazi message (reply, turn notice, reminder)           → "pending"
+                 typed on the web (by you or another member)             → "pending",
+                                       shown as "🖥 <name>, on the web: …", sent silently
+    3 send     pending rows in id order, one sender per chat:
+                 set "sending" and commit → sendMessage(message_thread_id = T,
+                     plain text, redacted again, parts of ≤ 4000 characters)
+                 ok                     → "sent" + telegram_message_id + sent_at, commit
+                 429                    → wait retry_after, then the same row again
+                 failed before the request left → the same row again, with backoff
+                 timed out after the request left (unknown) → stays "sending";
+                     re-sent once after 30 s, prefixed "(re-sent)"
+                 "message thread not found" → set B broken, stop, say so in the
+                     system topic (never post into another topic instead)
+                 any other 4xx          → "failed" + last_error; alert; go on to the next row
+    4 bookmark B.bookmark = the highest id below which every row is "sent" or "failed"
+    5 working  R has a running Turn → keep the "Thinking…" draft alive (§4.5); else stop
+    6 cards    pending_agent_approval(R, user) → §4.2
+    7 endings  a Turn of R that ended more than 10 s ago with no room message after
+               its request → one "⚠️ Ended: <state>" line (ledger row, one per turn)
+```
 
-  This is **at-least-once**, not exactly-once. Telegram has no idempotency key for
-  sends [Known], so a crash after Telegram accepts the reply but before
-  `reply_sent_at` is saved re-sends it on restart. The bound is at most one duplicate
-  per crash in that window. Repeated crashes before the resend is recorded can each
-  add one more. The resend is prefixed "(re-sent after a restart)" so a duplicate reads
-  as one. Losing a reply is worse than a rare duplicate.
+**What this guarantees**
+- **At least once.** A room message is not past the bookmark until Telegram has
+  confirmed it.
+- **In order, per topic.** Rows are sent in id order by one sender.
+- **Across restarts, with no special recovery code.** After a restart the same loop
+  runs. `pending` rows go out. `sending` rows are the unknown case and are re-sent once
+  with the "(re-sent)" prefix.
+- **At most one duplicate per crash.** Telegram has no idempotency key for sends
+  [Known], so a crash after Telegram accepts a message and before "sent" is saved
+  re-sends it. A lost reply is worse than a rare, labelled duplicate (L3).
+- **Nothing is skipped by a late commit.** Database ids can become visible out of
+  order when two processes write at once [Known]. The loop therefore re-scans the 200
+  ids before the bookmark, and the unique `(binding, message, part)` key makes the
+  re-scan free.
 
-Web-started runs in the room are mirrored if `SHOW_WEB_RUNS` is on.
+**What it does not do**
+- **It does not replay history at first bind.** The bookmark starts at the room's
+  newest message; older history stays on the web.
+- **It does not flood you after downtime.** If more than `CATCHUP_MAX_MESSAGES` are
+  waiting for a topic, it sends "N earlier messages are on the web" and then the most
+  recent ones (D25).
+- **Edits made in Telegram are not applied.** `edited_message` is not requested in
+  `allowed_updates`. Send a new message instead.
 
-**Truth.** The reply sent is the persisted final message, not the concatenated stream.
-v2 makes the persisted text authoritative (proposal §4.2).
+**Notifications** (P4). Replies, turn notices and approval cards notify. Mirrored web
+messages, catch-up batches, "Thinking…" and progress are silent
+(`disable_notification`).
+
+**Truth.** The text sent is the persisted message, never the concatenated stream.
+[Inference] Every turn ending I traced saves a room message, but I did not trace every
+path, so step 7 is the safety net: a turn can never end without a line in Telegram.
 
 ### 4.2 Approval round trip (agent loop)
 
+Cards are driven by the database, checked on every mirror tick (step 6). No stream
+frame is needed.
+
 ```
- core: run pauses → save_pending_confirmation (row R, created_at T0) → frame:
-       approval.requested {turn_id, approval_pk, short_id, approval_kind, risk}  (v2, T-A2 + TB-4)
- relay: on approval.requested:
-        a = approval_view.pending_agent_approval(room, user) → {pk, turn_id, short_id,
-            message (redacted), effects, tools, risk}; require a.pk == approval_pk and
-            a.turn_id == frame.turn_id (the database is the truth, the frame is the trigger)
-        token = secrets.token_urlsafe(12)            # 16 chars, about 96 bits
-        store TelegramApprovalCard(token_hash, pk, turn_id, short_id, risk)
-        sendMessage(card text, inline_keyboard=[[Approve ka:<token>:y],[Reject ka:<token>:n]])
-                                                     # callback_data is 21 ASCII bytes
- phone: taps Approve → callback_query
- bridge: answerCallbackQuery immediately (clears the spinner)
-        1 callback.from.id == link.telegram_user_id; callback.message.chat.id/thread
-          == card.binding
-        2 card by token_hash; decided_at IS NULL; age < MAX_UPDATE_AGE
-        3 current pending row for (room, user): same pk AND same turn_id AND same short_id
-          (guards row reuse, agent_loop.py:839-851); else "This approval is no longer
-          current" and disable the card
-        4 user_has_room_access
-        5 if risk is high and a PIN is set: send the PIN challenge in the link's **private
-          chat**, never in a group or topic (mode C: the card says "check your DM"); the
-          challenge is bound to this card and its approval pk; the next message from that
-          user in the DM is the PIN (deleteMessage it at once); check_password;
-          5 failures → lock the link 15 min and send an in-app notification;
-          if the DM can't be reached (bot blocked, chat gone) → refuse, nothing approved
-        6b re-run step 3 (same pk, turn_id and short_id) immediately before step 7,
-          because the PIN round trip can take far longer than CONSENT_SKEW_SECONDS
-        6+7 in ONE transaction (submit_user_message's within_txn):
-          conditional UPDATE card SET decided_at, decision WHERE decided_at IS NULL
-          (one winner on double tap) + the decision Message + its queued Turn;
-          runner.submit after commit
-        7 submit_user_message(room, user, "yes" | "no", via=telegram,
-          decision_for=(pk, turn_id),          # TB-16; the coordinator refuses a mismatch
-          within_txn=decide card)
-          → coordinator: consent check (Message.timestamp > T0 + skew), approve or decline
-            routing, resume_after_confirmation (hash match, single-consumer UPDATE),
-            receipts basis="human"
-        8 on approval.resolved {turn_id, approval_pk, decision, via}: editMessageReplyMarkup to
-          remove buttons, and edit the text to "Approved via Telegram HH:MM". The same frame
-          also closes cards when the decision was made on the web.
+ core:   run pauses → save_pending_confirmation (row R, created_at T0)
+ mirror: a = approval_view.pending_agent_approval(room, user)
+             → {pk, turn_id, short_id, message (redacted), effects, tools, risk}
+         nothing pending:
+             an open card for this binding → close it: remove the buttons, set the text
+             from the row's final status ("Approved on the web 14:02", "Rejected", "Expired")
+         pending, and the open card matches (pk, turn_id, short_id): nothing to do
+         pending, and no matching card:
+             close any other open card as "No longer current"
+             token = secrets.token_urlsafe(12)            # 16 chars, about 96 bits
+             store TelegramApprovalCard(token_hash, pk, turn_id, short_id, risk)
+             sendMessage(card text, buttons):             # callback_data is 21 ASCII bytes
+               low or medium risk      [Approve ka:<token>:y] [Reject ka:<token>:n]
+               high risk, stage 1      [Approve on the web → link] [Reject ka:<token>:n]
+               high risk, with a PIN   [Approve ka:<token>:y] → PIN step (stage 2, TB-12)
+
+ phone:  taps Approve → callback_query
+ bridge: 0 THE GATE (§5): the same check as for messages, before anything else
+         1 answerCallbackQuery at once (clears the spinner). If Telegram says the query
+           is too old, carry on: that error is harmless (P3)
+         2 card by token_hash; decided_at IS NULL; age < MAX_UPDATE_AGE;
+           callback.message.message_id == card.message_id and the same chat and topic
+         3 current pending row for (room, user): same pk AND same turn_id AND same short_id
+           (guards row reuse, agent_loop.py:839-851); else "This approval is no longer
+           current" and close the card
+         4 user_has_room_access
+         5 if risk is high and a PIN is set: ask for the PIN in the private chat, in the
+           card's own topic (group mode: in the private chat, and the card says "check
+           your DM"); the challenge is bound to this card and its approval pk; the next
+           message from that user there is the PIN (deleteMessage it at once, never
+           submit it to the room); check_password; 5 failures → lock the link 15 min
+           and send an in-app notification; if the private chat can't be reached →
+           refuse, nothing approved
+         6 re-run step 3 immediately before step 7, because the PIN round trip can take
+           far longer than CONSENT_SKEW_SECONDS
+         7 in ONE transaction (submit_user_message's within_txn):
+             conditional UPDATE card SET decided_at, decision WHERE decided_at IS NULL
+             (one winner on a double tap) + the decision Message + its queued Turn;
+             runner.submit after commit
+           submit_user_message(room, user, "yes" | "no", via=telegram,
+             decision_for=(pk, turn_id),          # TB-16; the coordinator refuses a mismatch
+             within_txn=decide card)
+           → coordinator: consent check (Message.timestamp > T0 + skew), approve or decline
+             routing, resume_after_confirmation (hash match, single-consumer UPDATE),
+             receipts basis="human"
+         8 the next mirror tick sees the row resolved and closes the card
+           ("Approved via Telegram 14:02"). The same step closes cards decided on the web.
 ```
+
+**Rejecting is always allowed from Telegram**, even for high-risk actions, because a
+reject cannot cause harm. Only approving high-risk actions waits for the PIN ticket.
 
 **Interrupted submissions.** Because the card decision and the decision message commit
 together, there are two cases:
 - **Crash before the commit:** the card is still undecided, so the user can tap again.
 - **Crash after it:** the queued decision Turn is drained, or reaped with #303's saved
-  notice. If it is reaped while the approval is still pending, the bridge's restart
-  scan sends a fresh card. The old token stays used, so single use holds.
+  notice. If it is reaped while the approval is still pending, the next mirror tick
+  finds a pending approval with no open card and sends a fresh one. The old token stays
+  used, so single use holds.
 
 **Why the consent check alone does not protect a stale tap [Inference].** The "yes"
 `Message` is saved at step 7, so its timestamp is when the bridge processes the tap.
@@ -1005,82 +1215,145 @@ while the user is typing the PIN. The "yes" then postdates the new row's `create
 and `_consent_postdates_prompt` accepts it. The 2-second skew (`coordinator.py:170`,
 `settings.py:545`) does not cover that gap. The existing test
 `test_a_queued_yes_cannot_approve_a_prompt_it_never_saw` (`chatbot/test_turn_runner.py:680`)
-covers a different case: a message saved *before* the prompt existed. So step 6b
+covers a different case: a message saved *before* the prompt existed. So step 6
 narrows the gap, and **TB-16 closes it**: the decision names the approval it answers,
 and the coordinator refuses it if the pending row differs. **TB-16 is a hard
 prerequisite of TB-11.**
+
+**"Continue" buttons** (TB-11b) for budget and quota pauses follow the same card flow
+and send `continue`. The consent check is the `paused_at` one from #306.
 
 **Workflow approvals** (TB-15) follow the same card flow. Step 7 becomes
 `submit_execution_approval(execution, approval_id=record.pk, reviewer_id=user.id, decision)`,
 after `workflow__user=user` and `status="waiting"` checks copied from
 `workflows/views.py:426-439`.
 
-### 4.3 File upload
+### 4.3 Files, photos and voice notes
 
 ```
- update.message.document | photo (largest size)     (voice notes: §3.5, TB-M1; albums: TB-M3)
- 1 filters as in 4.1 steps 1-6
+ update.message.document | photo (largest size) | voice     (voice: §3.5; albums: TB-M3)
+ on the poll loop (fast):
+ 1 the gate and filters, as in 4.1 steps 1-6. Nothing is downloaded before they pass (L6)
  2 check the declared file_size against Kazi limits (PDF 10 MB, image 5 MB) before
    getFile; Telegram caps downloads at 20 MB
- 3 getFile(file_id) → file_path; download https://api.telegram.org/file/bot<token>/<path>
-   - streamed, size-capped, URL never logged (it contains the token)
- 4 sniff the type from bytes, never trust mime_type or file_name; store under a uuid name
- 5 ingest_room_document(room, user, bytes, safe_name, sniffed_mime)
+ 3 record TelegramInbound(media_pending) and save the offset
+ off the poll loop (one worker per topic, in arrival order):
+ 4 getFile(file_id) → file_path; download https://api.telegram.org/file/bot<token>/<path>
+   - streamed, size-capped, time-capped, URL never logged (it contains the token)
+ 5 sniff the type from bytes, never trust mime_type or file_name; store under a uuid name
+ 6 ingest_room_document(room, user, bytes, safe_name, sniffed_mime)
    → upload quota, DocumentUpload(pending), process_document_task
- 6 reply "📎 report.pdf added to <room>"; if a caption is present:
-   wait (bounded, 30 s) for status=completed, then submit_user_message(caption)
-   so the turn's ContextManager includes the document
+ 7 reply "📎 report.pdf added"; if a caption is present: wait (bounded, 30 s) for
+   status=completed, then submit_user_message(caption) so the turn's ContextManager
+   includes the document
+ 8 mark media_done; on any failure mark media_failed and say so in the topic
+   ("couldn't fetch that file; nothing was run")
+ a restart finds media_pending rows and resumes them
 ```
+
+Messages in one topic stay in arrival order: a text sent after a file waits for that
+file's worker.
 
 [Inference] Document text enters the context prompt (`chatbot/context_manager.py:155-167`).
 I did not confirm that this path is marked untrusted, or tainted the way tool output is
 (`docs/plans/170-taint-flag.md:15-16` lists inbound tainting as a non-goal). Listed as
-gap G9.
+gap G9, and TB-G9 answers it before files ship.
 
-### 4.4 Pairing
+### 4.4 Pairing, topics and rooms
 
 ```
+ once, by the bot's owner: in @BotFather turn on Threaded mode for the bot, and leave
+         "Disallow users to create new threads" off (§2)
+
  laptop$ python Backend/manage.py telegram_pair --user alice
          → prints: "Send this to @YourBot within 10 minutes:  /pair K7QF-3MZD"
            (8 chars, Crockford base32, about 40 bits; stored as sha256 only;
            printed to stdout, not logged)
- phone:  opens a private chat with the bot, sends "/pair K7QF-3MZD"
+ phone:  opens the bot and sends "/pair K7QF-3MZD"
+         (with Threaded mode on, Telegram puts this message in a new topic)
  bridge: 1 chat.type must be "private" (codes are never accepted in groups)
          2 from.id must be in ALLOWED_TELEGRAM_USER_IDS if that is set
          3 attempts ≤ 5 per chat per hour and ≤ 20 per bot per hour (closed on cache error)
          4 compare in constant time against unexpired, unused codes; mark used
            (conditional UPDATE)
-         5 create TelegramChatLink(user, chat_id, telegram_user_id = from.id)
-         6 reply with a disclosure ("Telegram can read everything relayed here");
-           send an in-app notification "Telegram account <name> (id) paired"
-           so an unexpected pairing is visible
-         7 topics (one per room, D4): getMe.has_topics_enabled must be true, else reply
-           with the one-time BotFather step to turn topic mode on and stop here
-         8 for each of the user's rooms: createForumTopic(chat_id, name = room name)
-           → TelegramRoomBinding(thread_key = message_thread_id); a test sendMessage
-           into the topic; on "message thread not found" (#905) mark the binding
-           broken and say so in General; never fall back silently to General
-         9 General (the topic-less part of the chat) is the lobby: pairing, /status,
-           /help and notices that belong to no room. Text sent there runs nothing;
-           the bot replies "pick a room's topic, or create a new topic for a new task"
+         5 getMe.has_topics_enabled must be true; else reply with the one BotFather
+           step and stop (L8)
+         6 create TelegramChatLink(user, chat_id, telegram_user_id = from.id)
+         7 the topic the code arrived in becomes the system topic: rename it "Kazi"
+           (editForumTopic), store it as system_thread_key. Notices that belong to no
+           room go here: bridge back online, a broken topic, an unexpected pairing
+         8 reply there with the disclosure ("Telegram can read everything relayed
+           here") and send an in-app notification "Telegram account <name> (id)
+           paired", so an unexpected pairing is visible
+         9 for each of the user's rooms: createForumTopic(chat_id, name = room name)
+           → TelegramRoomBinding(thread_key, bookmark = the room's newest message);
+           a test sendMessage into the topic; on "message thread not found" (#905)
+           mark the binding broken and say so in the system topic
 
- later rooms (both directions, D23):
-   web → Telegram: a room created on the web gets its topic on the next poll cycle
-   Telegram → web: the user creates a topic (service message forum_topic_created,
-         allowed while getMe.allows_users_to_create_topics) → a new Kazi room with that
-         name, owned by the paired user, bound to the topic; the bot confirms in it
-   rename (forum_topic_edited): renames the binding's label only; the Kazi room keeps
+ a new task, from the phone (D23):
+         the user types in the bot's main view → Telegram creates a topic with an
+         implicit name → the bridge creates a Kazi room owned by the paired user, binds
+         it, renames the topic to the room's title, and submits the message to the room.
+         A replayed update creates no second room (the binding is unique per topic).
+         If the first message is a bridge command (/status, /help), it is answered in
+         the system topic and the empty new topic is deleted; no room is created
+ a new room, from the web:
+         the next mirror tick sees a room with no binding and creates its topic
+ rename (forum_topic_edited): renames the binding's label only; the Kazi room keeps
          its own name unless D23 says otherwise
-   closed (forum_topic_closed): the binding is paused; reopened resumes it
-   deleted by the user: no service message exists, so the next send fails "message
-         thread not found"; the binding is marked broken (the Kazi room is never deleted)
+ closed (forum_topic_closed): the binding is paused; reopened resumes it
+ deleted by the user: Telegram sends nothing (§2), so the next send fails "message
+         thread not found"; the binding is marked broken, the system topic says so and
+         offers /restore, which creates a fresh topic. The Kazi room is never deleted
+ commands inside a room's topic: /stop (an exact stop, #306), /status, /help, /unpair
 
- groups (mode C, later): user adds the bot to a private forum supergroup as admin with
-         can_manage_topics; from that group the paired user sends /bind <room id>
-         (from.id must equal the link's telegram_user_id) → createForumTopic → binding.
-         The group needs its own TelegramChatLink row, created only by that command
-         from an already-paired user, which the DM confirms.
+ groups (stage 4, optional): the user adds the bot to a private forum supergroup as
+         admin with can_manage_topics; from that group the paired user sends
+         /bind <room id> (from.id must equal the link's telegram_user_id) →
+         createForumTopic → binding. The group needs its own TelegramChatLink row,
+         created only by that command from an already-paired user, which the DM confirms.
 ```
+
+[Cannot verify] How the Android app behaves in each of these steps. The forum page
+says what clients "should" do. TB-0 checks every step on the real phone before any of
+this is built. If typing in the main view does not create a topic there, the fallback
+is the reverse setting: users may not create topics, General accepts messages, and a
+`/new <name>` command starts a room.
+
+### 4.5 "Thinking…", Stop, and knowing the bridge is alive
+
+**While a turn runs** (live layer; no table, no recovery)
+```
+ mirror tick, step 5, for a room with a running Turn:
+   WORKING_UI=draft:  sendMessageDraft(chat, topic, draft_id = one per turn, text = "",
+                                       can_stop = true)   → "Thinking…" with a Stop button
+                      repeat every 20 s (a draft lasts 30 s, §2)
+                      stage 3: the text becomes the current progress lines, at most
+                      one update per PROGRESS_MIN_SECONDS, skipped when unchanged
+   WORKING_UI=typing: sendChatAction("typing", topic) every 4 s
+   any error, including 429: stop decorating this turn. Never retry, never queue (L4)
+ stopped_message_generation update (the Stop button) or "/stop":
+   the gate → submit_user_message(room, user, "stop") → cancel_requested_at (#306)
+ the turn ends: the draft is left to expire; the reply arrives as a normal message
+```
+
+**Health** (L1, L5)
+- **The poll loop never exits.** Every error is retried with backoff (1 s doubling to
+  60 s): network errors, 5xx, 429 and 409. A 409 means another poller holds the token;
+  the bridge keeps retrying and raises an alert, and treats it as possible token theft
+  (§5).
+- **Stall watchdog.** No completed `getUpdates` for `STALL_SECONDS` → rebuild the HTTP
+  client and record it.
+- **Connected means a recent completed poll**, not "the process is running".
+  `last_poll_ok_at` older than 2 × the poll timeout shows as "Telegram: not connected"
+  on the web and in `./kazi status`, and sends an in-app notification after 5 minutes.
+- **`/status` in any topic** answers: connected since, last message delivered, pending
+  deliveries, broken topics.
+- **Coming back.** After an outage the bridge posts one line in the system topic:
+  "Back online. Offline 14:02–14:19. Messages you sent in that time were not run."
+  (older than `MAX_UPDATE_AGE`), then the mirror catches up.
+- **Shutdown.** Lifespan stop ends the poll, saves the offset, and stops before the
+  turn runner shuts down.
 
 ---
 
@@ -1089,19 +1362,23 @@ gap G9.
 | Threat | What an attacker gets | Mitigations |
 |---|---|---|
 | **Stolen bot token** | **Reading.** They can call getUpdates and consume or read incoming messages, which races our poller. **Sending.** They can send as the bot, for example fake approval cards. **Denial of service.** They can set a webhook, which stops our polling. [Inference] They cannot forge an update whose `from.id` is the paired user, because updates come from Telegram, and buttons they create carry tokens not in our database. **But they can tamper with a genuine card.** A holder who wins a getUpdates race sees the card's `chat_id`, `message_id` and callback data. With `editMessageText` or `editMessageReplyMarkup` they can change what the card says, or which button approves. They can also read the PIN message. | • Keep the token in env only. It is already excluded from the sandbox (`orchestration/shell_exec/backends.py:57-80`). Warn that the `open` shell profile runs on the host and can read `.env` (`docs/contracts/credential-scoping.md:84-90`). • The new `bot_api.py` never puts the URL in errors (TB-6). Never log file URLs. • Against card tampering: the callback's `message.message_id` must equal `card.message_id`, and the PIN or confirm step shows the action summary read from the database, not the card text. • Treat a 409 or a newly set webhook as possible compromise: disable every open card. • At startup call `getWebhookInfo`. If a webhook URL is set, refuse to poll, do not delete it, and send an in-app alert. • Pin `bot_id` from the first `getMe`; a changed id means the token was swapped, so stop. • Treat repeated 409 Conflict as "another poller holds this token": alert and back off. • Runbook: revoke in BotFather, rotate the env var, restart. |
-| **chat_id spoofing** | There is no inbound endpoint (polling only), so nothing on the network can be spoofed. Inside Telegram, anyone can message the bot, and anyone in a group can post in a bound topic. | • Accept only `chat.id` with an active link **and** `from.id == link.telegram_user_id`, on every update and callback. • Reject `sender_chat` (anonymous admins, channels), `from.is_bot`, `via_bot`, guest updates. • Pairing codes: about 40 bits, 10 minutes, single use, hashed, private chats only, rate-limited per chat and globally. • Unpaired chats get no reply, or one generic reply per day, so the bot's activity is not revealed. • An in-app notification on every pairing. `/unpair` from the phone; `telegram_unpair` locally. • Per-update `user_has_room_access`. |
+| **chat_id spoofing** | There is no inbound endpoint (polling only), so nothing on the network can be spoofed. Inside Telegram, anyone can message the bot, and anyone in a group can post in a bound topic. | • Accept only `chat.id` with an active link **and** `from.id == link.telegram_user_id`, on every update and callback. • Reject `sender_chat` (anonymous admins, channels), `from.is_bot`, `via_bot`, guest updates. • Pairing codes: about 40 bits, 10 minutes, single use, hashed, private chats only, rate-limited per chat and globally. • Unpaired chats get no reply at all; only a valid `/pair` code is answered, so the bot's activity is not revealed. • An in-app notification on every pairing. `/unpair` from the phone; `telegram_unpair` locally. • Per-update `user_has_room_access`. |
 | **Forwarded-message injection** | Text written by someone else arrives with the owner's authority. | • Reject `forward_origin` and `is_automatic_forward` messages by default, saying why (D6). • Read only `text` or `caption`. Ignore `external_reply`/`quote` content, or pass it as labelled quoted data, never as the instruction. • Downstream protections still apply because the text is the query: `should_block_action` on `raw_query` (`tool_executor.py:117-123`), capability gates, risk bucketing and human approval. Pasted text cannot be told apart from typed text, and that is accepted, as on the web. • File contents go to the document path, not the query. |
 | **Approval replay or mis-binding** | Re-using an old tap or callback; a stale card approving a newer action; a double tap; someone else in a group tapping. | • A random 96-bit token per card, stored hashed, single use through a conditional UPDATE. • Bound to approval pk + turn_id + short_id. All three must match the *current* pending row, because the row is reused (`agent_loop.py:839-851`). • `callback.from.id` must be the paired user; agent-loop approvals are requester-only already (`agent_loop.py:3983-3986`). • Cards are acted on only within `MAX_UPDATE_AGE`, and the row's own `expires_at` applies (`_claim_turn_for_resume` refuses expired pauses, `agent_loop.py:3861-3863`). • The decision goes through consent timing (`coordinator.py:127-175`). • Buttons are removed after any outcome, and lazily on a stale tap. |
-| **Telegram reads the content** | Telegram's servers see everything relayed: prompts, replies, file contents, approval text, the PIN. Room messages are encrypted at rest in Kazi (`chatbot/models.py:43,49-60`); binding a room undermines that for what is relayed. | • Explicit disclosure at pairing, and in `docs/telegram.md`. • `CONTENT_MODE` (D5): `summary` sends status and short replies; `notify_only` sends "Reply ready in `<room>`" plus approve and reject only. • Outbound text is re-run through `redact_sensitive_text`. Status messages carry phase only, never tool inputs. • `callback_data` carries only the random token, never parameters. • The PIN is described as protection against someone holding your unlocked phone or a hijacked Telegram session, **not** against Telegram. Advise a PIN not reused elsewhere. • Recommend binding only rooms you would put in a cloud chat. |
+| **Telegram reads the content** | Telegram's servers see everything relayed: prompts, replies, file contents, approval text, the PIN. Room messages are encrypted at rest in Kazi (`chatbot/models.py:43,49-60`); binding a room undermines that for what is relayed. | • Explicit disclosure at pairing, and in `docs/telegram.md`. • `CONTENT_MODE` (D5): `summary` sends status and short replies; `notify_only` sends "Reply ready in `<room>`" plus approve and reject only. • Outbound text is re-run through `redact_sensitive_text`. Progress lines carry the phase and tool names only, never tool inputs. • `callback_data` carries only the random token, never parameters. • The PIN is described as protection against someone holding your unlocked phone or a hijacked Telegram session, **not** against Telegram. Advise a PIN not reused elsewhere. • Recommend binding only rooms you would put in a cloud chat. |
 | **Telegram account takeover (SMS hijack, lost phone)** | The attacker becomes the paired user. | • PIN for high-risk approvals (`PIN_POLICY`), with lockout and an in-app alert. • `/unpair` and the web settings, plus `telegram_unpair` locally. • Tell the user to enable Telegram two-step verification ([Known]: Telegram offers a cloud password). |
 | **Stale backlog after downtime** | Telegram keeps updates for 24 h, so a message sent yesterday could run today. | • `MAX_UPDATE_AGE` (default 10 min). Older text is shown as "not run, resend". Older callbacks are refused. |
-| **Group exposure (mode C)** | Other members read everything and see the cards. | • Recommend a private group with only the user and the bot. • Inbound accepts only the paired `from.id`. • PIN challenges always go to the link's private chat, never the group (§4.2 step 5); no DM, no approval. • Show a warning if `getChatMemberCount` is above 2 ([Inference]: the method exists in the Bot API; I did not check its current wording). |
-| **Flooding and cost** | Many messages or files trigger turns and LLM spend. | • The existing queue cap, token quota and upload quota. • The bridge's own closed per-chat limiter. • Outbound pacing at one per second per chat; honour `retry_after`. |
+| **Group exposure (group mode, stage 4)** | Other members read everything and see the cards. | • Recommend a private group with only the user and the bot. • Inbound accepts only the paired `from.id`. • PIN challenges always go to the link's private chat, never the group (§4.2 step 5); no DM, no approval. • Show a warning if `getChatMemberCount` is above 2 ([Inference]: the method exists in the Bot API; I did not check its current wording). |
+| **Flooding and cost** | Many messages or files trigger turns and LLM spend. | • The existing queue cap, token quota and upload quota. • The bridge's own closed per-chat limiter. • One sender per chat; `retry_after` is always obeyed (L2). |
 | **Formatting injection** | MarkdownV2 or HTML in model output breaks sends or spoofs UI (fake buttons and links). | • Send plain text (no `parse_mode`), or HTML built with `html.escape`. Never pass model text as MarkdownV2. The connector's reminder path has this bug: `chatbot/tasks.py:555-559` uses the default MarkdownV2 without escaping (separate fix, §8). |
+| **A handler that skips the check** (L6a) | In another project, button taps reached a handler that the pairing check did not cover, so strangers could change session state. | • **One gate, in `gate.py`, runs before any handler for every update type:** message, callback query, widget query, the Stop update and topic service messages. • A static test lists every `allowed_updates` type and fails if one has no gate test. • An update type the bridge does not handle is dropped, not passed on. |
+| **Work done for strangers** (L6b) | Anyone who finds the bot can send it files. If the bridge downloads before checking, a stranger fills the disk or reaches the parser. | • Nothing is downloaded, transcribed or stored before the gate passes. • Unpaired chats get no reply, so they cannot even make the bot send. • With Threaded mode on, a stranger's message creates a topic in *their own* chat with the bot; the bridge ignores it. |
+| **The agent re-pairing the bridge** (L6d) | Injected text makes the agent add an attacker's chat. | • The bridge exposes no tools to the model, so there is nothing for the agent to call. • Pairing codes are issued only by a logged-in person (the local command or the web settings page), never from chat text. • Pairing, unpairing and allowlist changes each send an in-app notification. • The `open` shell profile runs on the host and can read `.env` (see the stolen-token row). That risk exists today and the bridge does not widen it. |
+| **Silent loss** (L1) | Not an attacker: the bridge itself drops a message and nobody notices. A missed approval card or reply while you are away is the failure that matters most. | • The delivery ledger: every room message is `sent`, `pending` or `failed`, never unknown. • `/status` and `./kazi status` show pending and failed counts. • A failed delivery raises an in-app notification. • The ending safety net (§4.1 step 7). |
 
-**Hooks the bridge must not skip.** Steps 3-7 of §4.1 and steps 1-7 of §4.2. Everything
-from the turn runner onward runs unchanged, because the bridge enters through the same
-seam as the WebSocket (§1.8).
+**Hooks the bridge must not skip.** The gate and steps 3-7 of §4.1, and steps 0-7 of
+§4.2. Everything from the turn runner onward runs unchanged, because the bridge enters
+through the same seam as the WebSocket (§1.8).
 
 ---
 
@@ -1112,54 +1389,70 @@ seam as the WebSocket (§1.8).
 | G1 | Inbound seam `submit_user_message` (extracted from the consumer) | Missing; logic exists inline (`consumers.py:861-1057`) | M |
 | G2 | Broadcast human messages to the room group, so web tabs see Telegram-sent text | Missing (`consumers.py:979`) | S |
 | G3 | Public read of the pending approval (pk, turn, short id, risk) | Partly there: `pending_approval_prompt` (`agent_loop.py:3774-3801`), private `_pending_approval_record`; risk derivable via `is_high_risk_action` (`action_catalog.py:695`) | S |
-| G4 | Structured approval event to clients | Missing; dropped at `coordinator.py:905`. Comes with v0.8 T-A2 (`approval.requested` / `approval.resolved`) | Part of T-A2 (+ TB-4 fields) |
-| G4b | Typed per-turn frames (`turn.started`, tool events, one terminal event, `seq`) and a non-consumer subscription hook | Missing. This is T-A2 (#217), not started | Part of T-A2 |
+| G4 | Typed per-turn frames, a structured approval event and a non-consumer subscription hook | Missing. This is T-A2 (#217), not started. **Needed only for progress lines (stage 3)** | Part of T-A2 |
 | G5 | Bot API client with safe error handling and 429 handling | Missing; the connector's client is not reusable (§1.1) | S |
-| G6 | Poller with lease, offset and webhook check | Missing; lease pattern reusable (`turn_leases.py`, `in_process_scheduler.py:209-258`) | M |
+| G6 | Poller with lease, offset, webhook check, retry-forever and watchdog | Missing; lease pattern reusable (`turn_leases.py`, `in_process_scheduler.py:209-258`) | M |
 | G7 | Pairing and allowlist models and commands | Missing | M |
 | G8 | Document ingest helper | Logic exists inline (`message_actions.py:221-346`) | S |
 | G9 | Confirm whether document text is treated as untrusted in the context | Unknown | S (investigate) |
-| G10 | Relay: status message, final reply, cards | Missing; the channel layer is reusable | M-L |
+| G10 | Mirror loop and delivery ledger | Missing. Room messages and turn notices already exist as rows (§3.1) | M |
 | G11 | PIN | Missing; Django `make_password`/`check_password` reusable | S |
-| G12 | One topic per room in the private chat (v1), topic lifecycle, #905 handling; groups (mode C) later | Missing | M |
+| G12 | One topic per room, new topic = new room, topic lifecycle, #905 handling | Missing | M |
 | G13 | Telegram notification channel | Missing; hard-coded branches (`notifications/services.py:116-142`) | M |
 | G14 | Bind the approval id into consent | Missing; the timing check covers most of it | M (contract minor) |
 | G15 | Docs (`docs/telegram.md`, `.env.example`, architecture `model.js` scenario) | `docs/telegram.md` is wrong today | S |
-| Reuse | Turn runner, coordinator, consent, resume, receipts, quotas, gates, redaction, `user_has_room_access`, `persist_kazi_message`, channel layer, `submit_execution_approval`, test harnesses | Reuse as-is | — |
+| G16 | Bridge health: status, watchdog, alerts | Missing; `kazi_status` exists to extend | S |
+| Reuse | Turn runner, coordinator, consent, resume, receipts, quotas, gates, redaction, `user_has_room_access`, `persist_kazi_message`, `submit_execution_approval`, test harnesses | Reuse as-is | — |
 
 ---
 
-## 7. Open decisions (each with my recommendation)
+## 7. Decisions
+
+**Decided by you**
+
+| # | Decision | Outcome |
+|---|---|---|
+| **D1** | When to build | **2026-11-08:** the connector freeze does not apply. Build from scratch on the v0.8 core. |
+| **D4** | How rooms map to Telegram | **2026-11-13:** one topic per room in the bot's private chat, from the first version, with no `/room` switching. |
+| **D15** | Voice architecture | Chained (ear → text agent → mouth), no native speech model (§3.5). |
+| **D21** | Depend on Telegram Premium | **2026-11-13:** no. |
+| **D24** | Lean or feature-rich | **2026-11-13:** feature-rich, with reliability and consistency first. This plan builds the rich set in stages on a delivery layer that cannot fail quietly. |
+
+**Recommended by me; yours to overrule**
 
 | # | Decision | Options | Recommendation |
 |---|---|---|---|
-| **D1** | When to build | **Decided (2026-11-08):** the freeze does not apply. Build from scratch on the v0.8 core | Order: seams inside T-A1/T-A2, then the bridge app once T-A2's frames exist (§0.1, §8). |
-| **D2** | How a button approves | (a) feed "yes"/"no" through the chat path; (b) call `resume_after_confirmation` directly; (c) a new approve-by-id API | **(a).** No core or contract change, and it keeps every existing guard. (b) skips consent and the runner. (c) touches protected `agent_loop.py` for no gain. **TB-16 is required before TB-11 ships**, because without it a pause that replaces the card's approval can absorb the tap (§4.2). |
+| **D2** | How a button approves | (a) feed "yes"/"no" through the chat path; (b) call `resume_after_confirmation` directly; (c) a new approve-by-id API | **(a).** It keeps every existing guard. (b) skips consent and the runner. (c) touches protected `agent_loop.py` for no gain. **TB-16 is required before TB-11 ships** (§4.2). |
 | **D3** | Where the poller runs | (a) lifespan task in the web process plus a database lease; (b) its own management command and compose service with its own `TurnRunner`; (c) Celery | **(a).** Works in lite and full, and inherits runner shutdown. (b) breaks in lite (in-memory layer, boot sweep at `turns.py:1176-1187`) and edits protected `docker-compose*.yml`. (c) is ruled out (§1.7). |
-| **D4** | How rooms map to Telegram | one chat with `/room` switching (A); one topic per room in the bot's private chat (B); a group with topics (C) | **Decided (2026-11-13): B from v1, no `/room` switching.** Each Kazi room is its own topic, so separate tasks look separate and a new user never has to learn a switching command. It needs topic mode turned on once in @BotFather (no Premium). Per-topic write failures (#905, open) are handled by marking the binding broken and saying so in General. C (groups) ships last, with the member-count warning. |
-| **D23** | Can a topic created in Telegram start a new Kazi room | yes; no (rooms only from the web) | **Yes.** Creating a topic is the natural "new task" gesture. The bridge creates the room, owned by the paired user, and binds it. Renaming a topic changes only the binding's label; renaming the Kazi room too is a later option. Deleting a topic never deletes the room. |
-| **D5** | Default content mode | full; summary; notify_only | **`full`, with a disclosure the user must confirm at pairing**, plus a per-binding override. The goal is remote control, and notify_only would make it useless. Because the disclosure is explicit, the default is an informed choice. |
+| **D26** | Where outbound messages come from | (a) the live stream; (b) the database, through a delivery ledger | **(b).** It is the only option that makes drops visible (L1), it survives restarts with no recovery code, and it does not wait for T-A2 (§3.1). The stream is used only for progress lines. |
+| **D23** | Can Telegram start a new Kazi room | yes; no (rooms only from the web) | **Yes: typing in the bot's main view starts a new topic and a new room.** This is how Telegram's own clients behave when users may create topics (§2). Renaming a topic changes only the binding's label. Deleting a topic never deletes the room. If TB-0 shows the phone behaves differently, fall back to a `/new <name>` command. |
+| **D10** | What shows while Kazi works | (a) a draft with a Stop button; (b) "typing…"; (c) one edited status message | **(a) in private chats, if TB-0 shows it renders on your phone; otherwise (b).** A draft expires by itself, so there is nothing to clean up after a crash, it has a native Stop button, and its rate limit is documented (§2). (c) is the fallback for group mode only, with the L4 rules. This reverses the earlier "drafts later" recommendation. |
+| **D25** | After downtime, how much to send | everything; a cap plus a summary | **A cap of 20 per topic plus "N earlier messages are on the web".** A flood of old messages hits rate limits and buries the newest one. |
+| **D5** | Default content mode | full; summary; notify_only | **`full`, with a disclosure the user must confirm at pairing**, plus a per-binding override. The goal is remote control, and notify_only would make it useless. |
 | **D6** | Forwarded messages | reject; accept as quoted data | **Reject**, with "forwarded messages aren't run; copy the text if you mean it". Simpler and closed. |
-| **D7** | Injection-check hit on inbound text | block; pass through (downstream blocks sensitive actions); pass plus taint the room | **Pass through, and show a warning chip in Telegram.** The owner wrote it. `should_block_action` already blocks sensitive actions on that query (`tool_executor.py:117-123`). Hard-blocking the owner's own text would differ from the web. Revisit when room taint for inbound messages lands (`docs/plans/170-taint-flag.md:15-16`). |
-| **D8** | PIN policy | off; high-risk only; every approval | **High-risk only**, where high-risk means catalog `risk_level=="high"`, or a shell tier of destructive or egress. Set the PIN locally (`telegram_pair --set-pin`) or in web settings, never over Telegram. |
-| **D9** | Mirror web-started runs to Telegram | yes; no | **Yes for status, and cards only for the bound user's own approvals.** Agent-loop approvals are requester-only anyway. |
-| **D10** | Use `sendMessageDraft` instead of status edits | now; later | **Later.** Edits are well understood and rate-limit-safe at 3 s. Drafts are newer (9.3/9.5/10.3) and stream reply text, which this design does not need for v1. |
+| **D7** | Injection-check hit on inbound text | block; pass through (downstream blocks sensitive actions); pass plus taint the room | **Pass through, and show a warning in Telegram.** The owner wrote it. `should_block_action` already blocks sensitive actions on that query (`tool_executor.py:117-123`). Revisit when room taint for inbound messages lands (`docs/plans/170-taint-flag.md:15-16`). |
+| **D8** | PIN policy | off; high-risk only; every approval | **High-risk only**, where high-risk means catalog `risk_level=="high"`, or a shell tier of destructive or egress. Set the PIN locally (`telegram_pair --set-pin`) or in web settings, never over Telegram. Until the PIN ticket ships, high-risk approvals are a link to the web. |
+| **D9** | Mirror web activity to Telegram | yes; no | **Yes:** web-typed messages are mirrored silently, and cards appear only for the bound user's own approvals. Agent-loop approvals are requester-only anyway. |
 | **D11** | Raise `send_telegram_*` risk to require confirmation | yes (separate PR, protected `action_catalog.py`); no | **Yes, separately.** It is unrelated to the bridge, but the low rating is inconsistent with outside-world doctrine. |
-| **D12** | Static allowlist env in addition to pairing | yes; no | **Yes, optional.** `ALLOWED_TELEGRAM_USER_IDS` empty means pairing alone. Cheap defence in depth. |
-| **D13** | What happens to the v0.4.2 Telegram connector | (a) leave it; (b) rebuild it on `telegram_bridge/bot_api.py`; (c) retire it | **(b), after the bridge ships.** Its sends go through the new client, so the connector's error-handling and MarkdownV2 problems go with it. One Bot API client, one bot. Until then, keep it. Retiring it removes agent-initiated sends to arbitrary chats; that is your product call. |
-| **D14** | Should T-A2's frames be in-process callbacks or channel-layer group messages | callbacks (sinks registered with the runner); group messages only | **Both: a sink registry in the runner that the consumer and the bridge both register with.** The channel layer stays the fan-out to browser sockets. In-process sinks avoid channels_redis capacity drops and expiry for the bridge, which runs in the same process (§1.5). This is T-A2 design input; decide it there. |
-| **D15** | Voice architecture for Telegram | native speech-to-speech agent; chained (ear → text agent → mouth) | **Chained** (§3.5). Native voice belongs to live calls later: GPT-Live with Kazi as the delegated backend. |
+| **D12** | Static allowlist env in addition to pairing | yes; no | **Yes, optional.** `ALLOWED_TELEGRAM_USER_IDS` empty means pairing alone. |
+| **D13** | What happens to the v0.4.2 Telegram connector | (a) leave it; (b) rebuild it on `telegram_bridge/bot_api.py`; (c) retire it | **(b), after the bridge ships.** One Bot API client, one bot. Retiring it removes agent-initiated sends to arbitrary chats; that is your product call. |
+| **D14** | How T-A2's frames reach in-process clients | callbacks (sinks registered with the runner); channel-layer group messages only | **A sink registry in the runner that the consumer and the bridge both register with.** This is T-A2 design input; decide it there. It now matters only for progress lines. |
 | **D16** | Can a spoken "yes" approve | yes; no | **No.** Transcripts are `consent_eligible=False` (TB-M0); approve with the buttons. |
 | **D17** | Default speech-to-text | OpenAI `gpt-transcribe`; local faster-whisper; Groq | **OpenAI by default, plus `openai_compatible`** so local or Groq is one setting. This adds a disclosure: audio goes to the STT provider as well as Telegram. |
-| **D18** | When to reply with voice | always; reply in kind; never | **Reply in kind, plus `/voice`.** Text is always sent as well. |
-| **D19** | How photos reach the agent | native image blocks; describe-first pre-pass | **Describe-first** (TB-M4). It works on all three providers with no protected-path change. Native blocks only if it proves insufficient. |
-| **D20** | Which voice model speaks after 2027-01-06 | an OpenAI Realtime or audio model; a third-party or local TTS through `openai_compatible` | **Decide before January.** The mouth adapter takes the model from config; test an option before OpenAI removes `tts-1` and `gpt-4o-mini-tts`. |
-| **D21** | Depend on Telegram Premium | yes; no | **Decided (2026-11-13): no.** Premium adds only cosmetic bot features (§3.6). |
-| **D22** | Default UI for approval cards and status in private chats | inline buttons and text status; widgets (10.4) | **Buttons by default; widgets opt-in per binding** (`/ui widgets`) once a test widget renders on your device. Groups always use buttons. Revisit the default once widget support across Telegram apps is known. |
+| **D19** | How photos reach the agent | native image blocks; describe-first pre-pass | **Describe-first** (TB-M4). It works on all three providers with no protected-path change. |
+| **D20** | Which voice model speaks after 2027-01-06 | an OpenAI Realtime or audio model; a third-party or local TTS through `openai_compatible` | **Decide before January**, and only if voice replies are wanted (D18). |
+| **D22** | Default UI for approval cards | inline buttons; widgets (10.4) | **Buttons by default; widgets opt-in per binding** (`/ui widgets`) once a test widget renders on your device. |
+
+**Open: I need your answer**
+
+| # | Question | Why it matters |
+|---|---|---|
+| **D18** | Do you want spoken replies (TB-M2)? | It is the only ticket that depends on OpenAI's speech models, which are being removed in January (D20). Voice notes *in* don't depend on this. |
+| **D27** | Will anyone but you use this bot (group mode, TB-14)? | Group mode is the largest block of extra risk: other people see the cards, and drafts and widgets don't work in groups. If it is only you, I would drop it. |
 
 ---
 
-## 8. Phased implementation plan (small, test-first tickets)
+## 8. Staged plan (small, test-first tickets)
 
 Every ticket follows `docs/golden-principles/tests-and-evals.md`:
 - show each new test failing for the right reason before the change;
@@ -1168,92 +1461,84 @@ Every ticket follows `docs/golden-principles/tests-and-evals.md`:
 - use the real runner, database and channel layer;
 - run CI's blocking commands (`:68-80`).
 
-**Approach.** The freeze does not apply, and the bridge is built from scratch on the v0.8
-core. There is no interim build on today's frames or on the v0.4.2 connector.
-
-**Three tracks.**
-- **Track 1** is core work. It belongs inside the v0.8 Phase A tickets you are on now.
-- **Track 2a** needs only TB-1. TB-1 can start now that 216b-3 (#306) has merged, and
-  2a starts once TB-1 merges.
-- **Track 2b** needs T-A2's frames.
+**Nothing here starts until this plan is approved.** After approval, stage 0 runs
+first, and each ticket that touches a protected path gets its own plan and human OK.
 
 **Protected paths and contracts touched:**
 - migrations (TB-5, TB-15);
-- `docs/contracts/approval.md` (TB-16, minor bump);
-- `docs/contracts/turn-stream.md`, which is T-A3's own deliverable;
+- the coordinator and `docs/contracts/approval.md` (TB-16, minor bump; TB-M0);
+- `docs/contracts/turn-stream.md`, which is T-A3's own deliverable (stage 3);
 - `.env.example` (TB-18).
 
-All of these need a plan and a human OK.
+**Ticket numbers.** Numbers from earlier revisions are kept so review comments still
+point at the right thing. TB-10 now means progress lines only; replies moved to TB-20.
+There is no TB-17.
 
-### Track 1: core strengthening (inside v0.8 Phase A)
+### Stage 0: device checks and plans (days, no Kazi code)
 
-| Ticket | Lands in | What | Tests (each shown failing first) | Size |
-|---|---|---|---|---|
-| **TB-1** | #216 (unblocked: 216b-3 merged in #306) | `chatbot/inbound.py::submit_user_message(room, user, text, *, via, within_txn=None)`, extracted from `ChatConsumer.new_message`; the consumer becomes transport only, as #216 asks. `within_txn` runs inside the same transaction as the `Message` and queued-`Turn` writes, and `runner.submit` happens after commit (used by TB-8 and TB-11 for crash-safe dedupe and card decisions) | (1) existing `test_turn_runner` WebSocket tests unchanged; (2) a message submitted through the seam, with no socket, runs a turn whose reply is saved; (3) a "yes" through the seam resumes a real paused turn (`_PauseHarness`, `CONSENT_SKEW_SECONDS=0`) and writes a `basis="human"` receipt; (4) a non-member is refused and **no** `Message` row is created (fixes the orphan row at `consumers.py:935` vs `:958`) | M |
-| **TB-4** | #217 T-A2 | (a) `approval.requested` carries `approval_pk`, `short_id`, `approval_kind` and a risk class; `approval.resolved` carries `approval_pk`, `decision` and `via` (today's `confirmation` event calls the short id `approval_id`, `agent_loop.py:3596`); (b) a frame-sink registry on the runner that the consumer registers with, and any in-process client can too (D14); (c) read helper `orchestration/approval_view.pending_agent_approval` | Every frame carries `turn_id` and a monotonic `seq`; a second registered sink receives the same frames as the consumer; a sink that raises never aborts the turn (T-A2's best-effort rule); the reused-row case returns the *new* turn_id and short_id; another user's row is invisible | M |
-| **TB-2** | #217 T-A2 | A user-message frame (for example `message.received {turn_id, message_id, via}`) so every client sees human messages from other surfaces | Two clients; B receives A's message with `via` | S |
-| **TB-16** | #217 T-A2, contract in #218 | A decision submitted for a specific `approval_id` (through `submit_user_message(..., decision_for=approval_id)`) is refused by the coordinator if the pending row's id or turn differs. Minor bump to `approval.md` | The §4.2 race, forced with an event at the seam: a stale decision is refused and the new pause stays pending | M |
-| **TB-A3** | #218 T-A3 | Write the client contract doc for *a client*, not the browser. The duplicate, reorder, reconnect and terminal fixtures run against a generic test sink, so the bridge plugs in later | Fixtures pass for the consumer and for the test sink | S (on top of T-A3) |
-| **TB-3** | independent | `chatbot/documents.py::ingest_room_document`, extracted from `upload_document_to_ai` | Quota, type and size limits; the view's existing tests still pass | S |
-| **TB-G9** | independent (investigation) | Does document text in `ContextManager` count as untrusted or tainted? Write the answer down and file an issue if not | — | S |
-
-### Track 2a: bridge foundation (needs TB-1 only; new app, plan first because of migrations)
-
-| Ticket | What | Tests | Size |
-|---|---|---|---|
-| **TB-5** | Models and migrations (§3.3) | A second active link for a chat is refused and a revoked one is allowed; conditional-UPDATE helpers have exactly one winner under a barrier race | M |
-| **TB-6** | `bot_api.py`, from scratch | A 429 with `retry_after` waits for it (fake clock); `ok:false` maps to a typed error; the token never appears in `str(error)` or in logs (`assertLogs`); per-chat pacing allows at most one send per second | S |
-| **TB-7** | Pairing: `telegram_pair` / `telegram_unpair` commands and the `/pair` handler | Expired, used, wrong, group-chat and over-limit codes are refused; a cache error refuses (closed); success binds `from.id` and emits the in-app notification | M |
-| **TB-8** | Poller and lifespan wiring | A webhook already set → no polling, plus an alert; two pollers → exactly one holds the lease (barrier); restart resumes from the stored offset with no duplicate `Message`; a failure injected inside step 7's transaction leaves neither the `TelegramInbound` row nor the `Message`, and the replay then produces exactly one `Message`; updates older than `MAX_UPDATE_AGE` do not enqueue; a `bot_id` change stops the poller; lifespan stop happens before runner shutdown | M |
-| **TB-9** | Inbound routing by topic (D4). After pairing, one topic per room (`has_topics_enabled` check, `createForumTopic`, test send). Routing by `message_thread_id`. General is the lobby: `/status`, `/help`; text there runs nothing. `/stop` inside a topic is recorded as a person's cancel through `cancel_requested_at` (216b-3, #306). "message thread not found" (#905) marks the binding broken and is reported in General, never posted to General | One test per filter, each failing when its guard line is removed: wrong `from.id`, `sender_chat`, `is_bot`, forwarded, guest, revoked link, no room access. Text in topic X reaches room X with `via=telegram`. Text in General runs no turn. Topic mode off → pairing stops with the BotFather instruction. A broken topic is reported and never falls back to General | M |
-| **TB-9b** | Topic lifecycle (D23): `forum_topic_created` → a new Kazi room bound to it; a web-created room gets its topic; `forum_topic_edited` → label; `forum_topic_closed` / `reopened` → pause / resume | A topic created in Telegram yields exactly one room owned by the paired user, even when the update is replayed. A room created on the web gets one topic. A closed topic runs nothing until reopened. Deleting a topic never deletes the room | S-M |
-| **TB-13** | Files: `getFile` → `ingest_room_document` (needs TB-3) | An oversized declared size never calls `getFile`; the type is sniffed (a PDF named `.jpg`); the token URL never appears in logs; a caption turn starts after the document completes (event-based wait) | M |
-
-At the end of 2a you can talk to Kazi from the phone. Replies come back only once the
-relay ships in 2b. A minimal "reply ready" fallback is possible by watching
-`Turn` terminal states in the database, but I don't recommend building it, since 2b
-replaces it.
-
-### Track 2b: relay and approvals (needs T-A2 merged)
-
-| Ticket | What | Tests | Size |
-|---|---|---|---|
-| **TB-10** | Relay registered as a frame sink (TB-4b): status message per `turn_id`, edits on tool events, terminal frame closes it, final reply read from the persisted message | Real runner and `_FakeLLM`: one status message per turn; edits at most every N seconds with identical text skipped; `turn.failed{partial}` renders as "Ended", never "Done"; duplicate or reordered `seq` is ignored; the reply is split at 4096, plain text; a fake `sk-…` key in model text never reaches the fake transport; restart resumes by `turn_id` + `seq`; the bridge stopped after "Thinking" while the turn completes → on restart the status closes with its ending and the reply is sent once; a crash injected after the fake transport accepts the send but before `reply_sent_at` is saved re-sends it once with the restart prefix, and once that resend is recorded a further restart sends nothing; a crash after the status edit but before the reply write leaves `closed_at` empty, so the reply is still sent on restart | M |
-| **TB-11** | Approval cards from `approval.requested`; decision through `submit_user_message(..., decision_for=…)` (TB-16) | Approve resumes and writes a receipt; reject cancels; a double tap gives exactly one decision (barrier); a stale card after row reuse is refused; another Telegram user is refused; an expired card is refused; `approval.resolved` from the web closes the card; `answerCallbackQuery` is always called; a failure injected between the card UPDATE and the decision `Message` rolls both back so a re-tap works; a reaped decision Turn with the approval still pending gets a fresh card on restart | M |
-| **TB-11b** | "Continue" buttons for budget and quota pauses. Uses the `paused_at` consent check from 216b-3 (#306) | A "continue" queued before the budget pause existed does not resume it (mirror `test_a_queued_yes_cannot_approve_a_prompt_it_never_saw`) | S |
-| **TB-12** | PIN for high-risk approvals, challenged only in the link's private chat | A high-risk card asks for the PIN in the DM even when the card is in a group topic; an unreachable DM refuses the approval; a PIN typed in the group is ignored and deleted; a wrong PIN ×5 locks the link and notifies; the PIN message is deleted; a low-risk card skips the PIN | S-M |
-
-### Track 3: after the bridge
-
-(There is no TB-17: it was the interim adapter for today's frames, dropped when the bridge
-moved to v2 frames only.)
-
-| Ticket | What | Size |
+| Ticket | What | Done when |
 |---|---|---|
-| **TB-14** | Mode C (groups): a private forum supergroup with one topic per room, set up with `/bind` from the paired user; approvals and PIN still in the private chat | M |
-| **TB-15** | Telegram notification channel and workflow approval cards through `submit_execution_approval`. Owner and status checks; the `ApprovalMismatch` 409 path (reuse `_submission_env`). Adds `delivered_telegram` (a migration) | M |
-| **TB-19** | D13: rebuild the v0.4.2 connector's sends on `bot_api.py`, or retire it | S |
-| **TB-18** | Docs and architecture: rewrite `docs/telegram.md` (setup, modes, disclosure, rotation runbook); add the variables to `docs/configuration.md` and `.env.example`; update `docs/architecture/model.js` (an external "Telegram Bot API" node, a bridge module in `web`, edges, a "Telegram approval" scenario); run `python scripts/check_architecture_model.py`; add the bridge to `kazi_status`. Ship this with TB-8/TB-10, not at the end | S |
+| **TB-0** | **Check Telegram's real behaviour on your Android phone and one desktop app**, with a throwaway bot and a throwaway script kept outside the repo. Checks: (1) Threaded mode on, `getMe.has_topics_enabled` true, no Premium; (2) typing in the main view creates a topic, what update arrives, `is_name_implicit`, the bot can rename it; (3) the same with user-created topics disallowed; (4) `createForumTopic` then a send, 20 times, counting #905 failures; (5) what a send into a deleted topic returns; (6) "typing…" appears inside the topic; (7) a draft with empty text and `can_stop` renders, survives its 30 s refresh, and Stop delivers `stopped_message_generation`; (8) button taps carry the topic; (9) an MP3 through `sendVoice` plays as a voice bubble; (10) a topic message notifies with the topic's name, and `disable_notification` is silent; (11) the topic link opens the topic; (12) 30 sends in 30 s to one topic: when 429 arrives and its `retry_after`; (13) a test widget renders | A results table is added to this document, and D10, D22 and D23 are confirmed or changed |
+| **Plans** | `docs/plans/` entries for TB-5 (migrations) and TB-16 (coordinator and contract) | Each has a human OK |
 
-### Track M: multimodal (§3.5)
+### Stage 1: the delivery layer (usable every day; does not wait for T-A2)
 
-| Ticket | Needs | What | Tests (each shown failing first) | Size |
+| Ticket | What | Tests (each shown failing first) | Size |
+|---|---|---|---|
+| **TB-1** (core, #216) | `chatbot/inbound.py::submit_user_message(room, user, text, *, via, within_txn=None)`, extracted from `ChatConsumer.new_message`; the consumer becomes transport only, as #216 asks. `within_txn` runs inside the same transaction as the `Message` and queued-`Turn` writes, and `runner.submit` happens after commit | (1) existing `test_turn_runner` WebSocket tests unchanged; (2) a message submitted through the seam, with no socket, runs a turn whose reply is saved; (3) a "yes" through the seam resumes a real paused turn (`_PauseHarness`, `CONSENT_SKEW_SECONDS=0`) and writes a `basis="human"` receipt; (4) a non-member is refused and **no** `Message` row is created (fixes the orphan row at `consumers.py:935` vs `:958`) | M |
+| **TB-2** (core, #216) | Broadcast human messages to the room group, so an open web tab shows a Telegram-typed message without a reload (G2). Today's frame shape now; renamed with T-A2 | Two clients; B receives A's message with `via`; the sender does not get it twice | S |
+| **TB-16** (core, plan) | A decision submitted for a specific approval (`submit_user_message(..., decision_for=(pk, turn_id))`) is refused by the coordinator if the pending row's id or turn differs. Minor bump to `approval.md` | The §4.2 race, forced with an event at the seam: a stale decision is refused and the new pause stays pending; a typed "yes" with no `decision_for` behaves as today | M |
+| **TB-4c** | Read helper `orchestration/approval_view.pending_agent_approval` (G3) | The reused-row case returns the *new* turn_id and short_id; another user's row is invisible; a database error raises (callers deny) | S |
+| **TB-5** (plan) | Models and migrations (§3.3) | A second active link for a chat is refused and a revoked one is allowed; conditional-UPDATE helpers have exactly one winner under a barrier race; the ledger's unique keys refuse a second row for the same message and part | M |
+| **TB-6** | `bot_api.py`, from scratch | A 429 with `retry_after` waits for it on every method (fake clock); `ok:false` maps to a typed error; the token never appears in `str(error)` or in logs (`assertLogs`); a timeout after the request was written is reported as "unknown", distinct from "not sent" | S |
+| **TB-8** | Poller and lifespan wiring (§4.1, §4.5) | A webhook already set → no polling, plus an alert; two pollers → exactly one holds the lease (barrier); restart resumes from the stored offset with no duplicate `Message`; a failure injected inside step 7's transaction leaves neither the `TelegramInbound` row nor the `Message`, and the replay then produces exactly one `Message`; updates older than `MAX_UPDATE_AGE` do not enqueue; a `bot_id` change stops the poller; **a network error, a 5xx and a 409 each leave the loop running** (L5); no completed poll for `STALL_SECONDS` rebuilds the client; lifespan stop happens before runner shutdown | M |
+| **TB-7** | The gate, pairing, `telegram_pair` / `telegram_unpair`, `/pair` (§4.4, §5) | Expired, used, wrong, group-chat and over-limit codes are refused; a cache error refuses (closed); success binds `from.id` and emits the in-app notification; **one gate test per update type, each failing when its guard line is removed** (L6a); a static test fails if an `allowed_updates` type has no gate test | M |
+| **TB-9** | Topics and routing (D4, D23): the system topic; one topic per room at pairing (`has_topics_enabled` check, `createForumTopic`, test send); routing by `message_thread_id`; a new topic becomes a new room; `/stop` is an exact stop (`cancel_requested_at`, #306); "message thread not found" marks the binding broken | One test per filter, each failing when its guard line is removed: wrong `from.id`, `sender_chat`, `is_bot`, forwarded, guest, revoked link, no room access. Text in topic X reaches room X with `via=telegram`. A new topic yields exactly one room owned by the paired user, even when the update is replayed. A command in a new topic creates no room. Topic mode off → pairing stops with the BotFather instruction. A broken topic is reported and nothing is posted to another topic | M |
+| **TB-20** | The mirror loop and delivery ledger (§4.1) | Real runner and `_FakeLLM`: a reply saved in the room is sent once to its topic; a web-typed message is sent with the web label and silently; a message that came from Telegram is not echoed back; **a row committed late with a lower id is still delivered** (two transactions, forced order); a crash injected after the fake transport accepts the send and before "sent" is saved re-sends once with the prefix, and a further restart sends nothing; a 429 delays and never drops; a reply over 4000 characters goes as ordered parts and a crash mid-way resumes at the right part; a fake `sk-…` key in a message never reaches the transport; lost room access pauses the binding and sends nothing; more than the cap waiting → the summary line plus the newest; a turn that ended with no message gets exactly one ending line | M-L |
+| **TB-21** | "Thinking…" and Stop (§4.5) | A running turn gets one draft, refreshed before 30 s; the Stop update records a person's cancel through the seam, and from an unpaired user does nothing; an error from the draft call stops decoration for that turn and **the reply is still sent** (L4); `WORKING_UI=typing` sends chat actions instead; a finished turn sends no further draft | S |
+| **TB-11** | Approve/Reject cards from the database (§4.2); high-risk approval is a link to the web | Approve resumes and writes a receipt; reject cancels; a double tap gives exactly one decision (barrier); a stale card after row reuse is refused; another Telegram user is refused; an expired card is refused; an approval decided on the web closes the card on the next tick; `answerCallbackQuery` is called first and a "too old" error does not undo a recorded decision; a failure injected between the card UPDATE and the decision `Message` rolls both back so a re-tap works; a reaped decision Turn with the approval still pending gets a fresh card; a high-risk card has no Approve callback button | M |
+| **TB-22** | Health (§4.5): `/status`, `kazi_status`, the web "Telegram: connected" line, alerts, the back-online line | A stale `last_poll_ok_at` reports not connected while the process is up; a failed delivery raises one notification; `/status` counts pending and failed rows | S |
+| **TB-18** | Docs and architecture: rewrite `docs/telegram.md` (setup, the BotFather step, disclosure, rotation runbook); add the variables to `docs/configuration.md` and `.env.example`; update `docs/architecture/model.js` (an external "Telegram Bot API" node, a bridge module in `web`, edges, a "Telegram approval" scenario); run `python scripts/check_architecture_model.py`. Ship with TB-8 and TB-20, not at the end | — | S |
+
+**At the end of stage 1** you can pair, see every room as a topic, send text, read
+every reply and notice, see "Thinking…", stop a run, and approve or reject
+low- and medium-risk actions from your phone.
+
+### Stage 2: rich features that need no stream
+
+| Ticket | Needs | What | Tests | Size |
 |---|---|---|---|---|
-| **TB-M0** (core, small) | TB-1 | `consent_eligible` flag on `submit_user_message`. When it is False, the coordinator does not treat the text as an approval, decline or continue reply (`coordinator.py:1218-1236,1346-1431`) | A transcribed "yes" leaves a real paused Turn paused and its approval pending; a typed "yes" still approves | S |
-| **TB-M1** | TB-M0, TB-9 | Voice in: download, OGG→WebM stream copy, ear adapter, transcript echo, `via="telegram_voice"`; the transcript is stored encrypted | The fake STT transport receives an allowed format, never raw `.ogg`; the stored message decrypts to the transcript and is not plaintext; over the duration cap → refused with no turn; STT error → honest reply with no turn | M |
-| **TB-M2** | TB-10 | Mouth adapter (one module replacing `generate_voice_response` and the `generate_speech` delivery gap); reply in kind plus `/voice`; the text is always sent; MP3 to `sendVoice`; a character cap | A text-only reply when the user typed; a voice plus text reply when the user sent voice; over the cap → text only; audio bytes never reach the model context (the connector result has no base64) | M |
-| **TB-M3** | TB-9, TB-3 | Photos stage 1: store, honest note, caption as text, album grouping by `media_group_id` | Three updates sharing one `media_group_id` become one room message and at most one turn; the note names the room's model | S |
-| **TB-M4** (core, plan) | TB-3 | Photos stage 2: describe-first vision pre-pass into `processed_text`, framed untrusted in the context prompt, cached by `file_unique_id`, `VISION_MODEL` config | The description reaches the context inside an untrusted frame; an image whose text says "ignore previous instructions" does not unlock a sensitive action; a second identical photo makes no second vision call | M |
-| **TB-M5** (core, later) | T-A2, plan | Photos stage 3: native image blocks. Only if TB-M4 proves insufficient | — | L |
+| **TB-12** | TB-11 | PIN for high-risk approvals, asked only in the private chat | A high-risk card asks for the PIN; the PIN message is deleted and never reaches the room; a wrong PIN ×5 locks the link and notifies; an unreachable private chat refuses the approval; a low-risk card skips the PIN; step 6 of §4.2 refuses when the approval changed during the PIN wait | S-M |
+| **TB-11b** | TB-11 | "Continue" buttons for budget and quota pauses, using the `paused_at` consent check from #306 | A "continue" queued before the budget pause existed does not resume it (mirror `test_a_queued_yes_cannot_approve_a_prompt_it_never_saw`) | S |
+| **TB-9b** | TB-9 | Topic lifecycle: a web-created room gets its topic; `forum_topic_edited` → label; closed / reopened → pause / resume; `/restore` for a broken topic | A room created on the web gets exactly one topic. A closed topic runs nothing until reopened. Deleting a topic never deletes the room. `/restore` binds a fresh topic and the bookmark is kept | S-M |
+| **TB-3**, **TB-G9** | — | `chatbot/documents.py::ingest_room_document`, extracted from `upload_document_to_ai`. Before it ships: is document text in `ContextManager` treated as untrusted? Write the answer down and file an issue if not | Quota, type and size limits; the view's existing tests still pass | S |
+| **TB-13** | TB-3 | Files (§4.3) | An unpaired sender never triggers `getFile` (L6b); an oversized declared size never calls `getFile`; the type is sniffed (a PDF named `.jpg`); the token URL never appears in logs; a stalled download does not delay another topic's text (L3); a text sent after a file in the same topic runs after it; a restart resumes a `media_pending` row | M |
+| **TB-M0** (core, plan) | TB-1 | `consent_eligible` flag on `submit_user_message`. When False, the coordinator does not treat the text as an approval, decline or continue reply (`coordinator.py:1218-1236,1346-1431`) | A transcribed "yes" leaves a real paused Turn paused and its approval pending; a typed "yes" still approves | S |
+| **TB-M1** | TB-M0, TB-13 | Voice notes in: download, OGG→WebM stream copy, ear adapter, transcript echo, `via="telegram_voice"`; the transcript is stored encrypted | The fake STT transport receives an allowed format, never raw `.ogg`; the stored message decrypts to the transcript and is not plaintext; over the duration cap → refused with no turn; STT error → honest reply with no turn | M |
+| **TB-M3** | TB-13 | Photos stage 1: store, an honest note, caption as text, album grouping by `media_group_id` | Three updates sharing one `media_group_id` become one room message and at most one turn; the note names the room's model | S |
+| **TB-15** (plan) | TB-11 | Telegram as a notification channel, and workflow approval cards through `submit_execution_approval`. Owner and status checks; the `ApprovalMismatch` 409 path (reuse `_submission_env`). Adds `delivered_telegram` (a migration) | A workflow card approves only for the workflow's owner and only while waiting; a stale approval id is refused | M |
+| **TB-W3** | TB-9 | "Open in Telegram" link on the web room page (`https://t.me/<bot>/<thread_id>`) | The link appears only for the bound user | S |
+| **TB-W4** | TB-11 | Ephemeral replies to button taps for throwaway notes (stale card, PIN lockout) | The note goes to the tapping user only; a static test proves cards and replies never use ephemeral parameters | S |
 
-### Track W: newer Bot API features (§3.6; after the matching 2b ticket)
+### Stage 3: live progress (needs T-A2, #217)
 
-| Ticket | Needs | What | Tests (each shown failing first) | Size |
+| Ticket | Lands in | What | Tests | Size |
 |---|---|---|---|---|
-| **TB-W1** | TB-11 | Approval widget. A static template in the repo; card state in `chat_data`; taps go through the same handler as buttons; `answerWidgetQuery` within 15 s; fallback to buttons | The template is ≤32 KB and ≤4 KB at zlib level 9 (CI test). The template uses `textContent` and never `innerHTML` on data. A widget tap and a button tap with the same token produce the same decision through one handler. A double tap gives one winner. A stale card is refused. A `sendWidget` error falls back to buttons. A mode C binding always gets buttons | M |
-| **TB-W2** | TB-10, TB-W1 | Status widget per run in private chats, replacing the edited text status where the binding uses widgets | One widget per turn; `chat_data` edits throttled; `turn.failed{partial}` renders "Ended", never "Done"; restart recovery follows the same `closed_at`/`reply_sent_at` rules; the final reply is still a normal message | M |
-| **TB-W3** | TB-9 | "Open in Telegram" link on the web room page for each bound room (`https://t.me/<bot>/<thread_id>`) | The link appears only for the bound user and only for topic bindings | S |
-| **TB-W4** | TB-11 | Ephemeral replies to button taps for throwaway notes (stale card, PIN lockout, not your card) | The note goes to the tapping user only; nothing durable is sent ephemerally (a static test that cards and replies never use ephemeral parameters) | S |
+| **TB-4** (core) | #217 | `approval.requested` carries `approval_pk`, `short_id`, `approval_kind` and a risk class; `approval.resolved` carries `approval_pk`, `decision` and `via`; a frame-sink registry on the runner that the consumer and any in-process client register with (D14) | Every frame carries `turn_id` and a monotonic `seq`; a second registered sink receives the same frames as the consumer; a sink that raises never aborts the turn | M |
+| **TB-A3** (core) | #218 | The client contract doc is written for *a client*, not the browser. The duplicate, reorder, reconnect and terminal fixtures run against a generic test sink | Fixtures pass for the consumer and for the test sink | S |
+| **TB-10** | after TB-4 | Progress lines in the "Thinking…" draft: the current phase and tool names, never tool inputs. Frames also wake the mirror at once, so replies and cards arrive without waiting for the tick | One update at most every `PROGRESS_MIN_SECONDS`, identical text skipped; duplicate or reordered `seq` ignored; a failed turn never shows "Done"; with the sink removed the reply still arrives on the tick (the delivery layer does not depend on frames) | M |
+
+### Stage 4: extras, each optional and each your call
+
+| Ticket | Needs | What | Size |
+|---|---|---|---|
+| **TB-M2** | TB-M1, D18, D20 | Spoken replies: one mouth adapter replacing `generate_voice_response` and the `generate_speech` delivery gap; reply in kind plus `/voice`; the text is always sent too | M |
+| **TB-M4** (core, plan) | TB-M3 | Photo understanding: a describe-first vision pre-pass into `processed_text`, framed as untrusted, cached by `file_unique_id` | M |
+| **TB-W1** | TB-11 | Approval widget: a static template, state in `chat_data`, taps through the same handler as buttons, fallback to buttons (§3.6) | M |
+| **TB-W2** | TB-10, TB-W1 | Status widget per run, where widgets are switched on | M |
+| **TB-14** | D27 | Group mode: a private forum supergroup with one topic per room; approvals and the PIN stay in the private chat; an edited status message instead of a draft, with the L4 rules | M |
+| **TB-19** | — | D13: rebuild the v0.4.2 connector's sends on `bot_api.py`, or retire it | S |
+| **TB-M5** (core, later) | T-A2, plan | Native image blocks. Only if TB-M4 proves insufficient | L |
 
 ### Separate PRs, not part of the bridge
 
@@ -1283,8 +1568,30 @@ moved to v2 frames only.)
 
 ## 9. What I could not verify
 
-- Whether private-chat topics display for users without Premium.
-- Telegram's real `editMessageText` limits.
+**Telegram behaviour, to be settled by TB-0 on the real phone**
+- Whether private-chat topics display for users without Premium. The official pages
+  name no Premium requirement; the terms say only that the user's app must support
+  topics.
+- What the Android app does when you type in the bot's main view (§4.4).
+- Whether drafts, the Stop button and "typing…" inside a topic render on Android. An
+  open Telegram bug report says "typing…" shows in the wrong place on macOS and iOS.
+- Whether an MP3 sent with `sendVoice` plays as a voice bubble.
+- How often #905 (a new topic refusing every write) happens.
+
+**Telegram facts with no official source**
+- Real `editMessageText` limits. grammY's guide cites a Telegram support-chat message
+  for "20 message edits in a minute per group chat"; that is not documentation.
+- Whether going over the draft and "typing…" limit also delays normal sends.
 - Whether Telegram states anywhere official that bot chats are not end-to-end encrypted.
 - The current state of tdlib #854. Only the search-result title was seen.
+
+**Other people's incidents I saw only as summaries**
+- The Claude Code Telegram plugin issues (L5): titles and summaries from a mirror
+  site. GitHub itself was not reachable for that repository from this session.
+- The OpenClaw username-allowlist advisory (L6c).
+- The phone-remote write-ups (P4) and the callback timing (P3).
+
+**Kazi**
+- Whether every turn ending saves a room message. I traced three call sites (§3.1);
+  the safety net in §4.1 step 7 covers the rest.
 - Whether existing CI would pass after TB-1. No code was changed or run.

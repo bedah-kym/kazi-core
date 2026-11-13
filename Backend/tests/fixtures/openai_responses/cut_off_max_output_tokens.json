@@ -1,72 +1,99 @@
 {
-  "source": "crafted",
+  "source": "recorded",
   "name": "cut_off_max_output_tokens",
   "http_status": 200,
   "body": {
-    "id": "resp_crafted_cutoff",
+    "id": "resp_0174cd0ca3131fd0016af5eafa007887d2af62aa2caa6ad102",
     "object": "response",
-    "created_at": 1720000003,
+    "created_at": 1794501370,
     "status": "incomplete",
+    "access_programs": {
+      "cyber": "standard"
+    },
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": null,
     "error": null,
+    "frequency_penalty": 0.0,
+    "image": {
+      "context_compression": "disabled"
+    },
     "incomplete_details": {
       "reason": "max_output_tokens"
     },
-    "instructions": "You are a connectivity probe.",
-    "max_output_tokens": 32,
+    "instructions": "You are a connectivity probe. Answer exactly once.",
+    "max_output_tokens": 16,
+    "max_tool_calls": null,
     "model": "gpt-6.1-sol",
+    "moderation": null,
     "output": [
       {
+        "id": "rs_0174cd0ca3131fd0016af5eafccf1c87d28458bff5786ba614",
         "type": "reasoning",
-        "id": "rs_crafted_cutoff",
-        "summary": [],
-        "encrypted_content": "encrypted-reasoning-cutoff",
-        "content": []
-      },
-      {
-        "type": "message",
-        "id": "msg_crafted_cutoff",
-        "status": "incomplete",
-        "role": "assistant",
-        "content": [
-          {
-            "type": "output_text",
-            "text": "I was about to",
-            "annotations": []
-          }
-        ],
-        "phase": "commentary"
-      },
-      {
-        "type": "function_call",
-        "id": "fc_crafted_cutoff",
-        "call_id": "call_crafted_cutoff",
-        "name": "set_reminder",
-        "arguments": "{\"text\": \"rem",
-        "status": "incomplete"
+        "content": [],
+        "encrypted_content": "gAAAAABq9er98neUsfWKQQRrF4qlqvzmwi4mX-3imT8V7FBfNMMojmxPicCg-FvwopzsgO5ak6qQlBFs-sV_5CzR4DpwB4U5jDmJkiVxhBng7EQ-Ho9fxccEaQhVUJ7oapC1lMbSvmgnywGLGU3sopWD-pyqvGd8l0ZsKVechD3U1JySRDASrZ5hRtx8I38by6EMPtv2o5VqjoEYy1n3UjfTTqRJ1J-g9Bo7wsGz2f1J1sP-yurJJWnF8INUaW3_xmtJGV24qIJZU2DBv0qolcH-5zz8lmuq9YsFaRmqoprv8AAFw7yavuP0D4XzfsmWaLTtIg99s4oPy8NupiIdx4bvASl21g2JK1rxP7lcfbv4jU1uaVtzTDjUpCEpwBXtzQ93-bRzmPbXpWBl6bS05g040vgQfZR3CHg34cF8eFfdEP5PTT_XnrGXACG9GNh1DSqns1P0A92OtwtV6hLe-hkDoDR5xLmphr2M1Gu0h09r5knR3R5rOjBQMd-KID1M7lYbht-64OkhsnPIU34wIPwwJc7vGHQE_1cUY95J_AzhhCcRAebb3l2x65CdslQxypxFFsyj7hhNqQEl-w2_TnVm7bYhuv2NqCV3alHl0jIRgVmoB1Dq-NZ4jr2Gqzpq0thfMiy3lUrqfiSIu6W9ArZwZE5ZEA6_E_EwIEBt88Jm3X-843Z595lehwLaEDCTteZAxK85o8UcIjPeNVOz8urLYZ4TWt1hN9K0Fjd55_eFB4Dbe8h4fnpx1sdcTR1m-vaCqDaVu9wlfDaAtK7oXKXWvkJvyEzwov4cPTiyG6c1GGIWsDjs9-EFmgFNIxYq0aekouqvmaGZ_yVpAZd0tPvHqWvxRWhuxLBc7w-mqmA8Wbh1UvNwibLbcf5KoPFTjyy-BPhx6EMaGHCLcUJ2tnjWHHbvxL1b9SfhDamz7WP-8RzXwwaUaelJjBpn437rcV2JMzNNlDddbCHxhj-VO63hAQJAsyeYM88Sk29V9fuEzc4vH9X70RhgOBQ5eAg4brK0wKKUpttAs1HXSnGJUfYIrc65A0jEEPjLZ3PeZDI16I0Ze77Jm_FeQmSKY-4mwaiQV0mmnSPGTesDrMp-1EqkFlrnBjlkHkovhKdBCu8rwwh1-ZOnnxvPV_mIpBxPE6A06DlVasJapc57HzjVbdjqn0rFxz7m3QSwV8R8UvD8fhNQ-aUJsMSp2dd_fqDrpARsfZpSADYJJq3aJretLXVwx2wHfXk7IEGH21qObBjgNrJM2RNcivbharTzmmcuq4AihWunR_-GHfTE16iSrd361ILdw5BIAGBVOXroerb3l3h7ko9kDCxVH1ouiYdKEOGLlGt6H4Zl15CRSBVrMXc_b3g0BF_Blq4eTwN85C7k_iF5b2d3GhuRrjcWcJuNFFFGqn_KrRRfqLWYmbkotdjXVnKNCWBdX5GCM4zL-6OGkuYuzV52WfNc5sH7uM63pIdGoKWb3_4K-gVKoeQSvZtnIHeNN-9cxglNq8cwv8BpCQKvMuGAs2hTyagRl7vNBdBXfsnOY2H7O-EuhpnogFzkI4QMKmHwDQOI2Gol9ylJ_6y7A804wp_YuRym24x7W8HuQvhGLUy5GqOlyGfJQt0eD3sbAUxh3gMaadKIZ651iCduDr0ZHBfDL6wFDGeTFDqo07g5OenQMgpkoHfTva6RbZ5yGv8hp0Mp6KBZBmCERjGB_LfbBEZWkfmBZ-8XLbqU4DNRvI9o0GYzrMiNicIP09NM_4o5BUSI4b2QOSYmUa3-k0fGaAMJY8zgQFdeEqT87tDZ9Q-7Sn9gUjm-jq6XVN-mD8bfuWwKkJpJJxWhEx5CD6cWPmrUjWdHqTwvFvjXiSQxzJFNKQKyBSnfVtoVxDHNWUTmYx9BQvLUBxNKKcci2xB-Wah6cx7VzhP3IiSGcmow871pM4Lu4LPPhgt6XfCalcAWR0LfV2PTkUT5ZbbT9Ov-np-v22x3Ip44gI2tDgd8qNMZ5pvDicKzs7FQORmqYVaQlypeAWIFbFp4Je4qs6_h4myLAldJZYJKaw-2w-3KKa7xgEVfm3xlGwr9KCpNLuKRQeguwAsVfY8-4AIP4BeTfpIPlu7R--W95KS_bttnSf0sG-Hohn7xidU4CaEsVDCB1vB53n9Sw_WZSooGwxWqBhKM8sA0fflGRDbQPm07zrgCss5skXio53ORPSsgeOTVKKKLelfT6uipy9O_5sDnAGiD2LIB82fd-YApB-gCPiIbflOY0kGj_KNilftaw7WmDmAnEgr44vLSVyiqmIcCI5GyMXb1T2TTScO8h_dDDRxN54ZdT-UAFpVpP0kIs9a4GQ==",
+        "summary": []
       }
     ],
     "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
     "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
     "reasoning": {
+      "context": "all_turns",
       "effort": "low",
+      "mode": "standard",
       "summary": null
     },
+    "safety_identifier": null,
+    "service_tier": "default",
     "store": false,
-    "temperature": 0.3,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tool_usage": {
+      "image_gen": {
+        "input_tokens": 0,
+        "input_tokens_details": {
+          "image_tokens": 0,
+          "text_tokens": 0
+        },
+        "output_tokens": 0,
+        "output_tokens_details": {
+          "image_tokens": 0,
+          "text_tokens": 0
+        },
+        "total_tokens": 0
+      },
+      "web_search": {
+        "num_requests": 0
+      }
+    },
     "tools": [],
-    "top_p": 1.0,
+    "top_logprobs": 0,
+    "top_p": 0.98,
     "truncation": "disabled",
     "usage": {
-      "input_tokens": 31,
+      "input_tokens": 29,
       "input_tokens_details": {
-        "cached_tokens": 0,
-        "cache_write_tokens": 0
+        "cache_write_tokens": 0,
+        "cached_tokens": 0
       },
-      "output_tokens": 32,
+      "output_tokens": 16,
       "output_tokens_details": {
-        "reasoning_tokens": 20
+        "reasoning_tokens": 16
       },
-      "total_tokens": 63
-    }
+      "total_tokens": 45
+    },
+    "user": null,
+    "metadata": {}
   }
 }

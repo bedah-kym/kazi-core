@@ -197,7 +197,9 @@ class Command(BaseCommand):
         result, capture = await self._call(
             client,
             "reasoning_replay",
-            replay_messages(prior, CASES["tool_call"]["prompt"]),
+            replay_messages(
+                prior, CASES["tool_call"]["prompt"], CASES["reasoning_replay"]["prompt"],
+            ),
         )
         summary = _summary(result)
         summary["request_input_items"] = len(capture["request"]["input"])

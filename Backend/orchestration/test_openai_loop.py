@@ -127,7 +127,7 @@ class _FakeEmailConnector:
     OPENAI_API_KEY="fake-openai-key",  # nosec B105 - test fixture
     ANTHROPIC_API_KEY="",
     DEEPSEEK_API_KEY="",
-    HF_API_TOKEN="",
+    HF_API_TOKEN="",  # nosec B106 - test fixture: an empty token, not a credential
     LLM_DEFAULT_PROVIDER="",
 )
 class OpenAITurnTests(TransactionTestCase):

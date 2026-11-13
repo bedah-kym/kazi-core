@@ -265,7 +265,7 @@ def _message(text, phase="final_answer"):
 class FixtureFormatTests(SimpleTestCase):
     def test_every_fixture_is_labelled_named_and_matches_a_spec(self):
         files = sorted(FIXTURE_DIR.glob("*.json"))
-        self.assertEqual(len(files), 10)
+        self.assertEqual(len(files), 11)
         names = {path.stem for path in files}
         self.assertEqual(names, set(CASES) | set(CRAFTED_ONLY))
         for path in files:
@@ -501,7 +501,9 @@ class ReplayOrderTests(SimpleTestCase):
     def test_recorded_replay_request_matches_the_probe_spec(self):
         prior = _fixture("tool_call")
         replay = _fixture("reasoning_replay")
-        messages = replay_messages(prior["body"], CASES["tool_call"]["prompt"])
+        messages = replay_messages(
+            prior["body"], CASES["tool_call"]["prompt"], CASES["reasoning_replay"]["prompt"],
+        )
         captured = {}
 
         def handler(request):
@@ -565,21 +567,59 @@ class ResponsesStreamTests(SimpleTestCase):
 
         return _run(_with_transport(httpx.MockTransport(handler), collect))
 
-    def test_stream_event_sequence_is_exact(self):
-        events = self._stream(_fixture("stream_answer_with_tool_call")["events"])
+    @staticmethod
+    def _expected(raw_events):
+        """What the parser must yield for a fixture, derived from its raw events.
 
+        Text deltas pass through as they arrive (or the terminal's text once,
+        if none streamed); each function call in the terminal output follows in
+        output order as start, its own argument deltas, end; then message_done.
+        Works the same for a crafted or a recorded stream.
+        """
+        terminal = next(
+            e["response"] for e in raw_events
+            if e.get("type") in ("response.completed", "response.incomplete", "response.failed")
+        )
+        deltas = [
+            e["delta"] for e in raw_events
+            if e.get("type") == "response.output_text.delta" and e.get("delta")
+        ]
+        text = "".join(deltas) or "".join(
+            part.get("text", "")
+            for item in terminal.get("output") or []
+            if item.get("type") == "message"
+            for part in item.get("content") or []
+            if part.get("type") == "output_text"
+        )
+        types = ["text"] * len(deltas) if deltas else (["text"] if text else [])
+        calls = []
+        for index, item in enumerate(terminal.get("output") or []):
+            if item.get("type") != "function_call":
+                continue
+            arg_deltas = [
+                e for e in raw_events
+                if e.get("type") == "response.function_call_arguments.delta"
+                and int(e.get("output_index") or 0) == index and e.get("delta")
+            ]
+            types += ["tool_use_start"] + ["tool_use_input"] * len(arg_deltas) + ["tool_use_end"]
+            calls.append((item["call_id"], json.loads(item.get("arguments") or "{}")))
+        types.append("message_done")
+        return types, text, calls
+
+    def test_stream_event_sequence_is_exact(self):
+        raw = _fixture("stream_answer_with_tool_call")["events"]
+        expected_types, expected_text, expected_calls = self._expected(raw)
+        self.assertTrue(expected_calls, "the fixture must contain a tool call")
+
+        events = self._stream(raw)
+
+        self.assertEqual([event["type"] for event in events], expected_types)
         self.assertEqual(
-            [event["type"] for event in events],
-            [
-                "text", "text",
-                "tool_use_start", "tool_use_input", "tool_use_input", "tool_use_end",
-                "message_done",
-            ],
+            "".join(e["text"] for e in events if e["type"] == "text"), expected_text,
         )
         ends = [event for event in events if event["type"] == "tool_use_end"]
-        self.assertEqual(len(ends), 1)
-        self.assertEqual(ends[0]["id"], "call_crafted_stream")
-        self.assertEqual(ends[0]["input"], {"city": "Nairobi"})
+        self.assertEqual([(e["id"], e["input"]) for e in ends], expected_calls)
+        self.assertEqual(events[-1]["stop_reason"], "tool_use")
 
     def test_cut_off_stream_yields_no_tool_events(self):
         partial = _function_call("fc_x", "call_x", name="set_reminder", args='{"text": "re')
@@ -669,14 +709,19 @@ class ResponsesStreamTests(SimpleTestCase):
 
     def test_stream_with_completed_before_deltas_still_ends(self):
         events = list(_fixture("stream_answer_with_tool_call")["events"])
+        expected_types, expected_text, expected_calls = self._expected(events)
         completed = next(e for e in events if e["type"] == "response.completed")
         events = [completed] + [e for e in events if e is not completed]
 
         parsed = self._stream(events)
 
-        text = "".join(e["text"] for e in parsed if e["type"] == "text")
-        self.assertEqual(text, "Let me check.")
-        self.assertTrue(any(e["type"] == "message_done" for e in parsed))
+        self.assertEqual([e["type"] for e in parsed], expected_types)
+        self.assertEqual("".join(e["text"] for e in parsed if e["type"] == "text"), expected_text)
+        self.assertEqual(
+            [(e["id"], e["input"]) for e in parsed if e["type"] == "tool_use_end"],
+            expected_calls,
+        )
+        self.assertEqual(parsed[-1]["stop_reason"], "tool_use")
 
 
 class EndingTests(SimpleTestCase):
@@ -763,7 +808,7 @@ class ProviderSelectionTests(SimpleTestCase):
         OPENAI_API_KEY="fake-openai-key",  # nosec B105 - test fixture
         ANTHROPIC_API_KEY="",
         DEEPSEEK_API_KEY="",
-        HF_API_TOKEN="",
+        HF_API_TOKEN="",  # nosec B106 - test fixture: an empty token, not a credential
         LLM_DEFAULT_PROVIDER="",
     )
     def test_openai_key_alone_never_becomes_the_chat_default(self):
@@ -775,7 +820,7 @@ class ProviderSelectionTests(SimpleTestCase):
         OPENAI_API_KEY="fake-openai-key",  # nosec B105 - test fixture
         DEEPSEEK_API_KEY="fake-deepseek-key",  # nosec B105 - test fixture
         ANTHROPIC_API_KEY="",
-        HF_API_TOKEN="",
+        HF_API_TOKEN="",  # nosec B106 - test fixture: an empty token, not a credential
         LLM_DEFAULT_PROVIDER="",
     )
     def test_openai_key_does_not_displace_an_unset_default(self):
@@ -786,7 +831,7 @@ class ProviderSelectionTests(SimpleTestCase):
         OPENAI_API_KEY="fake-openai-key",  # nosec B105 - test fixture
         ANTHROPIC_API_KEY="",
         DEEPSEEK_API_KEY="",
-        HF_API_TOKEN="",
+        HF_API_TOKEN="",  # nosec B106 - test fixture: an empty token, not a credential
         LLM_DEFAULT_PROVIDER="openai",
     )
     def test_openai_answers_when_named_as_default(self):
@@ -797,7 +842,7 @@ class ProviderSelectionTests(SimpleTestCase):
         OPENAI_API_KEY="",
         ANTHROPIC_API_KEY="",
         DEEPSEEK_API_KEY="fake-deepseek-key",  # nosec B105 - test fixture
-        HF_API_TOKEN="",
+        HF_API_TOKEN="",  # nosec B106 - test fixture: an empty token, not a credential
         LLM_DEFAULT_PROVIDER="openai",
     )
     def test_default_openai_without_a_key_falls_back(self):
@@ -835,7 +880,7 @@ class ProviderSelectionTests(SimpleTestCase):
         urls = []
 
         def handler(request):
-            urls.append(str(request.url))
+            urls.append(request.url.host)
             return httpx.Response(500, json={"error": {"type": "server_error", "code": "boom"}})
 
         with self.assertRaises(Exception):
@@ -846,7 +891,7 @@ class ProviderSelectionTests(SimpleTestCase):
                 ),
             ))
         self.assertTrue(urls)
-        self.assertFalse(any("api.openai.com" in url for url in urls))
+        self.assertNotIn("api.openai.com", urls)
 
     @override_settings(LLM_EXECUTOR_PROVIDER="deepseek")
     def test_a_named_role_never_reaches_openai(self):
@@ -858,7 +903,7 @@ class ProviderSelectionTests(SimpleTestCase):
     OPENAI_API_KEY="fake-openai-key",  # nosec B105 - test fixture
     ANTHROPIC_API_KEY="",
     DEEPSEEK_API_KEY="",
-    HF_API_TOKEN="",
+    HF_API_TOKEN="",  # nosec B106 - test fixture: an empty token, not a credential
 )
 class RoomOpenAIModelTests(TransactionTestCase):
     def test_room_can_choose_an_openai_model(self):
@@ -1119,7 +1164,7 @@ class CutOffNeverDispatchesTests(SimpleTestCase):
     def test_a_cut_off_offered_tool_is_not_run(self):
         from orchestration.tool_schemas import get_tool_definitions
 
-        fixture = _fixture("cut_off_max_output_tokens")
+        fixture = _fixture("cut_off_with_tool_call")
         parsed = parse_responses_body(fixture["body"])
         offered = {tool["name"] for tool in get_tool_definitions()}
         self.assertIn("set_reminder", offered)

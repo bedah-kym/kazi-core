@@ -76,6 +76,11 @@ CRAFTED_ONLY = {
         "Whether reasoning alone consumes the tiny output limit depends on the "
         "model, so this shape is crafted rather than recorded."
     ),
+    "cut_off_with_tool_call": (
+        "A cut-off that lands inside a tool call's arguments depends on where "
+        "the model is when the limit hits, so the never-dispatch test uses a "
+        "crafted body."
+    ),
     "unauthorized_401": "A real 401 needs an invalid key, which this probe must not use.",
     "rate_limit_429": "A real 429 depends on account limits and would be flaky.",
 }
@@ -85,12 +90,19 @@ def messages_for(case: Dict[str, Any]) -> List[Dict[str, Any]]:
     return [{"role": "user", "content": case["prompt"]}]
 
 
-def replay_messages(prior_body: Dict[str, Any], prior_prompt: str) -> List[Dict[str, Any]]:
-    """The second call after a tool step: prompt, OpenAI's reply, tool outputs."""
+def replay_messages(
+    prior_body: Dict[str, Any], prior_prompt: str, replay_prompt: str,
+) -> List[Dict[str, Any]]:
+    """The second call after a tool step: prompt, OpenAI's reply, tool outputs.
+
+    The replay prompt rides after the tool outputs in the same user message,
+    where the agent loop puts its own notes. Without it the model sees only the
+    first prompt ("…then stop") and may end with an empty answer.
+    """
     from orchestration.llm_openai import parse_responses_body
 
     prior = parse_responses_body(prior_body)
-    results = [
+    results: List[Dict[str, Any]] = [
         {
             "type": "tool_result",
             "tool_use_id": item.get("call_id") or item.get("id"),
@@ -99,6 +111,7 @@ def replay_messages(prior_body: Dict[str, Any], prior_prompt: str) -> List[Dict[
         for item in prior_body.get("output") or []
         if isinstance(item, dict) and item.get("type") == "function_call"
     ]
+    results.append({"type": "text", "text": replay_prompt})
     return [
         {"role": "user", "content": prior_prompt},
         {"role": "assistant", "content": prior["content"]},

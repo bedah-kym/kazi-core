@@ -1,64 +1,133 @@
 {
-  "source": "crafted",
+  "source": "recorded",
   "name": "parallel_tool_calls",
   "http_status": 200,
   "body": {
-    "id": "resp_crafted_parallel",
+    "id": "resp_072620fdfc43d569016af5eaf409fc87d2a65c809e2b60209f",
     "object": "response",
-    "created_at": 1720000002,
+    "created_at": 1794501364,
     "status": "completed",
+    "access_programs": {
+      "cyber": "standard"
+    },
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1794501367,
     "error": null,
+    "frequency_penalty": 0.0,
+    "image": {
+      "context_compression": "disabled"
+    },
     "incomplete_details": null,
-    "instructions": "You are a connectivity probe.",
-    "max_output_tokens": 512,
+    "instructions": "You are a connectivity probe. Answer exactly once.",
+    "max_output_tokens": 1024,
+    "max_tool_calls": null,
     "model": "gpt-6.1-sol",
+    "moderation": null,
     "output": [
       {
+        "id": "rs_072620fdfc43d569016af5eaf5401087d2a36b98b3aea41948",
         "type": "reasoning",
-        "id": "rs_crafted_parallel",
-        "summary": [],
-        "encrypted_content": "encrypted-reasoning-parallel",
-        "content": []
+        "content": [],
+        "encrypted_content": "gAAAAABq9er3SB4nNFF1q__-ZfIcg9iFDyb3vXI8BvjwkCgyl3RvmpnBlpr5eD02NOl2_I4AQ02shg-p4-ijgfY5sKFY-01PflyUmcxrfwZoPABCY_nVmQGnkyTsmSM5D6U3c7rBb8NsflHUWsX2u2W-kg7E0C4W1K533YXkYcDDw6dwg9lCbSmA4EkvRyTcAthcJx64Gt6qecNn98UG1rAFb5SMV6WWJlsNkOgTkZqW2GG2prXzH7_RpxV3GvWwn5XUg2JOe-PNfHIVrpybQI_rTFL40rTlWOyFuXvlF7gWTOI6q_fWM8lc-IjBCPniNRc2EhhE9-tIlh7YMYZoj7fxqNFF4niz-Ar1v7xyxUFLqZlJCw1CqpYZd1VsQYLRWxKfstt48tuxmo_ya2pB6N6Kf3nKQ0I-8uq96tuxJxv2OULa9h-FO7MQQ47YStw4t21L0sw_TBvQuN5AAsPOTJWVYm0XUvC94y42BVtdRQDk-1UfsSk1GmPhTzzt1QLNl0hmXaeRRfM_T0C2niEw_BXj2v7HMjHs3DjHGX64Uhok79xHMSTYvrRGldUDoi_kCFkpP-Em48FxoBkY1uWYSnmHHjWzHAbB4G1V0vItBaEHxs-GKV6TzlOvfuNZeDD3UCzkWNihmaPQNlIwvRdHEQMeOUUgmffZof8c-1D9rMOUh_zrdIVjHqtFHaK-lt89K4BCq3Mk1zoZJxeUtDP81fWV7TqAUiWSJNNyi5M_GJgX4_iY0pH6snmA-GlzDspS6jh6L-vCAvCQpn821z45iAR4SbUkBlt3zUhOYUehlxklWgL-WY9f7lvCfUXObmS1Y2kKE7937apXg59epkODjb6iv9VPvL9DjLrC8-gedbCyGxL6-LJ1ikdKi9vYu2rXcJGW7VPN_IiWtMrYqqK5JEBrSeanGN04mj0zB5YXyLNB3JH8nO4qcMQo3brppKlS_dhr_13vGpowLoljh3jITTH_AVK61IlglrYGV6gFKAqfwyLM6-vzVeLjp6dzWp4iNBsvsKMau1cE0T5yInVZm5VIbqjndFQD4NXC32K4DBRR3fFuLzp5mRxYhWaGWWx-BB68T8lw_o-O7RIjkMF32Gy58272jcdBJeeNeUG61YdlFBqKrFECrvxFz-bmVKc4A7AALEbDoRfRXI9slpblu2zLlhF6QtTriM1TWC0SrWmm5vsC4JBIBypeqzFL33MlIjb94Hw3wrkWKF08G0QytB85e98uIh5UfR5eBToSnY7yEy_WRXO1DMYtCG_tIkw_9vHgS9tBpvWENEqz7BI3XA8KV9OGjpwub-uGcZUbE69DoswI34FbbfznVFC6GsZTzBh8PkFneT13Ls3FC8CtJ6NTy_8SPpprm37EK6UkT3N_AaXIYtU3iQFHVDAl0LpqwAWTYLfvZw0jSFFltUieKuDGbpWvr43kzElAVfENZr4C1TjKiZFsdAnmWh42dLtPcJVPHKORvia3A5Cq8zVHNAjyNViWHcQrtNzmM2dMHraKWdt-14QQny6qU0pID6EObJZ4cCMkwPw-GDW7AP8zQvI9P0Z0IktudTmPzCm5QI-HA1RSaSgkmC8sR0a2lN5ITJKc5jUd0-GoG9Qx_OvpbLqUQjVd93ouKd0NB-3cNh5WivXdUIHEj9l1WFNIz-d6b4e6-HfdjYiXNbldAXdbGEBfyIk798tVSAA0DkYbEfaa6MCUOfzRK9SaYc5qV46SAroQjRSEYDlfxBCPA3BTcwarQB-olbFhEKN6JZI1e4EM25GyBjiaVti2VKxbyVVS_dAFLAnxqD8b3TktWOKZLAiMAYS9hv3nAclotNWnJLKSR7a9HYAOD_zLejRvk-cxpxfcssMtQhA54p2JYJ8ebFZfmeDSVVggPXNI4pi-HLRbHNKKg8I3sioVoJHnLKry9tnu-peLVpxXbcCRl5P1TK_G6jUbsnPzu3gwGj5eaV9cwugwTuBMha6cZq3uIiO6sf6Zj3rrmVJ-J7hzutXXLc6ey-iDhlmdwX_2K5C5H0DeUMu-PWZn-gAU-8Yj10kYJbe20M951NQoTCMBYyseAe__4izNckV86Jzzn0_fAJj03kLtlc6CPXl1GbKsRTbCylF1TP2d-KQmsX87WhMb6f19vi_XRMg-81ZMLRYUGLUDMb7kmicM9BlbNBTnjN4aoTmnUyu4Un0WKOFtKpXDFumivkMZ037RctENnnA9st3JM0M3I-LffIDZiGcx4kKWlqQOJBTDHtw3Z64JwKlFZ2Luuc0_o5sW2r3uZ4reeBPdinrcJY-6QUFUG9bqvKzJZkKc-F_JH7X8PKzbdMfJDhxBCP8DPE_NJ5-tG5FtIvO1JxPUmcP45iEIyQ9fbor0IJfB67ixqEj7y2G67muhQhV5esbB4YVLQorlo1DydSxEVCBZplyGr7kIdCfUdqm0vM_UzTo2oeK--LlnUsykvBqBKPUogYK0fuJunp7kOi-zt46qeKXzq4EJp44NqKdni5Qd3q1c59a4C5DtL2AlyGrWdMmOX1iuvFuj5nxUE6Q4T4odPRI-s0n_iTODEiU4hqHCrJp-RkIYrQmwSufVVImf5UZ5Y2XXGqNllk9U2bjoFK-cLDcWJd6wsdGfM-fMu0S_0v9egWk0Sic9t9ukT-MW1eOfj8x2-rrnB7zruEfO-csg3NQatFLi3sehV9rCrV24Tx1agUcaxl9INonyDbsE2fbBRU-ptQYkuA6MXm6NGDQUoYE2-FEEHnyHdOaxm2N78eGL5UPGXfQofy87uVrpSh_ojiSE14M3fYg8xNeoDi-LEb4YVIHFZHqS2rWD5olRDdhp83mB2E6S57Cn5GWYAtRYDd0uOGIcBTejxvXKUiKfSLsBfKFyPxp5FBAt2wY9X41NQ6PRxG-PER-1Fco_8NWT-DGHsFDB0MUJ14YbRI8SuPYvRwhSinFzc2dDz_RE3HbYNEeCm5unIXEwpqwe5Zk2xdzxPmorG_ns9j2Tyv1bEZd3Vl1iG2p7rhbXDmtw8DBJbCbR",
+        "summary": []
       },
       {
+        "id": "fc_072620fdfc43d569016af5eaf6d8d887d2af0374e0c151a201",
         "type": "function_call",
-        "id": "fc_crafted_parallel_1",
-        "call_id": "call_crafted_1",
-        "name": "get_weather",
-        "arguments": "{\"city\": \"Nairobi\"}",
-        "status": "completed"
+        "status": "completed",
+        "arguments": "{\"city\":\"Nairobi\"}",
+        "call_id": "call_ysmspAFmSyEZCGCJGm61iVAI",
+        "name": "get_weather"
       },
       {
+        "id": "fc_072620fdfc43d569016af5eaf6d8e487d2a925c47527b601d3",
         "type": "function_call",
-        "id": "fc_crafted_parallel_2",
-        "call_id": "call_crafted_2",
-        "name": "get_weather",
-        "arguments": "{\"city\": \"Mombasa\"}",
-        "status": "completed"
+        "status": "completed",
+        "arguments": "{\"city\":\"Mombasa\"}",
+        "call_id": "call_fCVBNZahYp3wSJOqJBVmwHnX",
+        "name": "get_weather"
       }
     ],
     "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
     "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
     "reasoning": {
-      "effort": "low",
+      "context": "all_turns",
+      "effort": "high",
+      "mode": "standard",
       "summary": null
     },
+    "safety_identifier": null,
+    "service_tier": "default",
     "store": false,
-    "temperature": 0.3,
-    "tools": [],
-    "top_p": 1.0,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tool_usage": {
+      "image_gen": {
+        "input_tokens": 0,
+        "input_tokens_details": {
+          "image_tokens": 0,
+          "text_tokens": 0
+        },
+        "output_tokens": 0,
+        "output_tokens_details": {
+          "image_tokens": 0,
+          "text_tokens": 0
+        },
+        "total_tokens": 0
+      },
+      "web_search": {
+        "num_requests": 0
+      }
+    },
+    "tools": [
+      {
+        "type": "function",
+        "description": "Get the current weather for a city.",
+        "name": "get_weather",
+        "output_schema": null,
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string",
+              "description": "City name."
+            }
+          },
+          "required": [
+            "city"
+          ]
+        },
+        "strict": false
+      }
+    ],
+    "top_logprobs": 0,
+    "top_p": 0.98,
     "truncation": "disabled",
     "usage": {
-      "input_tokens": 48,
+      "input_tokens": 81,
       "input_tokens_details": {
-        "cached_tokens": 16,
-        "cache_write_tokens": 8
+        "cache_write_tokens": 0,
+        "cached_tokens": 0
       },
-      "output_tokens": 24,
+      "output_tokens": 96,
       "output_tokens_details": {
-        "reasoning_tokens": 9
+        "reasoning_tokens": 43
       },
-      "total_tokens": 72
-    }
+      "total_tokens": 177
+    },
+    "user": null,
+    "metadata": {}
   }
 }

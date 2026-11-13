@@ -1,5 +1,5 @@
 {
-  "source": "crafted",
+  "source": "recorded",
   "name": "reasoning_replay",
   "http_status": 200,
   "request_input": [
@@ -13,66 +13,153 @@
       ]
     },
     {
-      "type": "reasoning",
-      "id": "rs_crafted_tool",
-      "summary": [],
-      "encrypted_content": "encrypted-reasoning-tool",
-      "content": []
-    },
-    {
+      "id": "fc_002280e46e115760016af5eaf3029087d290aa14d2bb23c8de",
       "type": "function_call",
-      "id": "fc_crafted_tool",
-      "call_id": "call_crafted_1",
-      "name": "get_weather",
-      "arguments": "{\"city\": \"Nairobi\"}",
-      "status": "completed"
+      "status": "completed",
+      "arguments": "{\"city\":\"Nairobi\"}",
+      "call_id": "call_fSfFRXMvLuyVgKIYyp1Z1qmk",
+      "name": "get_weather"
     },
     {
       "type": "function_call_output",
-      "call_id": "call_crafted_1",
+      "call_id": "call_fSfFRXMvLuyVgKIYyp1Z1qmk",
       "output": "23C"
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Use the weather results above and answer in one sentence."
+        }
+      ]
     }
   ],
   "body": {
-    "id": "resp_crafted_replay",
+    "id": "resp_002280e46e115760016af5eaf77fc087d286af04487769e274",
     "object": "response",
+    "created_at": 1794501367,
     "status": "completed",
+    "access_programs": {
+      "cyber": "standard"
+    },
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1794501369,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "image": {
+      "context_compression": "disabled"
+    },
     "incomplete_details": null,
+    "instructions": "You are a connectivity probe. Answer exactly once.",
+    "max_output_tokens": 512,
+    "max_tool_calls": null,
     "model": "gpt-6.1-sol",
+    "moderation": null,
     "output": [
       {
+        "id": "rs_002280e46e115760016af5eaf8b98c87d2bb8ee18ce3f3f8f4",
         "type": "reasoning",
-        "id": "rs_crafted_replay",
-        "summary": [],
         "content": [],
-        "encrypted_content": "encrypted-reasoning-replay"
+        "encrypted_content": "gAAAAABq9er5L3HtmPpT34HnqQtsfDH9Qd5ou0kLwgScOHpePLWL8ibIoyRAYGy254P2PwgXs1mJ1oJxkJcWVlG0M8QyMZw3WgEi6qMs_GY8CgbCvpTpAqt_p3ZywPw14D3pux32LlhzQpXDYbCkTSlaEBbE83KIFOyUQSYnChboj34hERiAMY1p9HOVJhOCD2KBQ6PITlad7ScYalIWWuy-yRWPif_QhIUbVdkVsDj6c31fS_6z-UE6bGXcx731_czTI1LRPtf3llOzx4EUzM3bmWBJrHnpgwiINK3RbKRX8Q6HX1lOoeJo53C5xFuNO4XcGm_pjssQfFuuB36Xx2MxKzJwrmsUK-tRaoADhmX5cseed8VmPQhHSHon-MyeG2yQPDZkwAEPuT6xfS0j6uNMtmSdpfiYuE-rpz2u42HiFhS410DBreUUVsOZEG9AnfqKEeN7H_MSKBdCvuO3YIARhm6acb_r2c3RybfAj_FgqkvGaReEW-LEkkl8-CFQzgkSpggw7ICEiq_TfrVSBzS0-eVvLh2OLTj93oExBZKZP3XC7Cooe1zDStIVRlrPX_W_bQe4Uf4AMvHFS8USzDLawabrSIoShSzEQkwo-Oc0dkTW6xsecVShnm2ukFvGvOKmIOHlmLLEzHfQ3zReN0RcuMYk6Gun5XyFbTpIMQosX9JCwOwO3qOwD91DrHE4GPUp5608BLV4lnAAs6im1e3UQSUIPeemDd3_Z4-iS-L9Xal6WMtn-Y6TnldAr2fsxqvdepCYpX9_COdW7Ye8xPc4B82X885Q9uwUfYxTKn-oOyLlgQ07OMmUW3r4eGErvDhSwscqTyepX5T0HZ9yOAWm-Hj18wkieqhsUmdmTWgPt9fGtNJ_SrxrNT4Ju-bhtN4wtq0Nsyh80fk9F9z0wPninStvAp4ytqSIbSMBfpbqz9hraiKgyh5pKtgsrawkhwfHHlMVqIdfPKjJv9gpat11iAm0xZeJnqUkHixVxQzG_rc6XYpv9P8k8cAHwIDKNM06-vn27WZhlBKc4QsAZ3CEExQGgVqG4qA811EoiNF5DL9C-fotk54ll9ktkKB0rZvGpXFFLX-1JZ3oFhesRIbnU7uirUJ1VzhlKoDLuAaX_p1j-bzVqKz_jIzMyWjmA5mt7IA3CZgvEx50s9ABpwWNIt1CpbN1l0UAFt3_wrYQ4IKH7KWRi04YsJ_d2SQxBGwa9ixgx5fgiiz8VE36B-0s2U1giCNtf5UL-N4lb355twfZnorzYrZKzPoJ96IsAkcmT13euvmA4ztJZHKlMhRYv4chLY8lF5LZF2YsSObevvMZ2V62uAF4aSDQA8AOvOFcagBnTvJwXZxGvvEmnkbc3a3cihCI6urYDWvdzzUQmB_2GkiZt-_GlnIRQAhqO34sdp6dPhmzRoZ9mCO565kzbpIVte_e6xBm5lcQ3GJzS-kDEOtDdPnVQwk_FFL3Nnjns-dTZ_EkSedMqHtzRUhRD_R1Bi6Y2PmXtHNxFMgNjcflcTOZ7atFgiWowVgSKFSH-uXCr58wKsfw7xMS24OcPr5Rce3ABJ22SVe1u_hbRfbT3KXtxU9XK8zNuh7WCElGgJY0fyBqwb1TWxhdnGB81asXxys-ERC9fmxq6aEsqXlzXevDXCwHr8X3mhu5M-qw2C3zCE1YEAcAel243KHRjq1f9mz1oTLbrMYGZjRljT28QvQTXlzKEpcUV75BDvwf2mHc8yuEJzNU2N6JoBDj6ngfeMA1gF-tSv-cSKpzlBSQrPTd7tQ5Bmt6qHalzS0H4nGQBG6dsqnoks9Kawpdm5SUMf2XWnO7cbWOjBQPsJiS-UJaycDV4kdzV8fv_bhLsZHj4BuSuMX6nAHYSq4ZeBraHLpq6kNVt2QXIOz2eacSK6Bi1mRu7vUXyQNinhcvbygvWHgUvsFfyYOZ6Gc-mpYWrHsK5qpBLIdFfRrxqBJF_Xnd2gxs4mwVMDIzvHKFJIG0fSMt0z3H9OMscBxV0nye6V_4Tce9ExrwlMUOoz_2KritkYQhH-k_L5aI9aTq4S4mU17AHQ8noOY0XRF0zb8txgTNDk4X6dLh8kLExAwWDz8ZPiOwoibbgtAp3fe9Dm-mQaU7N1dcSQ-W7SJqb1kCRX1VYZwsWS4Al6vyVrBMszpE82GsnIJFPkfk6ZMCxRjoGaQMlgzNwRTGvd1-Wlk9BSxVMlg46H3VRwQahVmthfYrBFok_5VcGQ6mzGExlurqXwcTl3zqhT41VHsie_IWRtUoiuINYxnUk6WRl8l7WVmuE672gtn5BGbodV_7buaW56nntHsWnXI2s9OU_mT4oZ1JeaaxWYp7JW1z0Eqov76RiOsOse3toNett7HXZtBCUq3fLbZfhQNN9dBOCZsud_pnBCO3OHyyKDhDZaqd8bDQzH3TaJ-PENv4NmG3MtMuWjnntIL7N_fHsO4GUqRqo-ZSAkIPkxBkwL27EmO2nizhYOlZh1Qd_YNp5qIoi7uUYzvMRWp789IJ8foT1gKRRTlASE-gR1om5FICUUMRR9Rcuxain6RG0b-JOQJSa_wxr0CsQZrTtkvlP6dMtBlYPexelCA3VtCpOuNwQipTqJeMMK76LV1lZuQqGwCyM7hsssshaPlgoSXLPfoDuP0Ttin88NHBd-L4yTAsjAVQl32m6wi9GfOks6sWSMrG5-TOOeNO9ZgNi_3vc2zQDc3HsGL5X91Sgsb1AjVMmGm9eXihThFu97gvMQksyXqROiUAoynWQKqU7tPbSPSspP2CYMTRTg4nma2Q9o101xkTyNVMzkX5h5hqXjwfyeZMIZnOVY-7YLyMad3d_HuLutRmf5dm8FHb2d2Nxtsm7w8ufesFX3v0SvCH7eV5qy7ADSsZgV4SCTph74jHaL1e6X-cNv7JdMePyZ1L6lsgrq30Df6Zty12hjS6AitUuqNbBs_t3HJ6FXRGBN0BwJCBvDLigXLxMHGn2Ft6r6QWBMnUqZji_zKSNsCnX8jNPrD6INBtL6jGPczaKJ8pTrb2DRwJ27l2jaouorrrvTSlXpw9Z_iz0U7WPh-x_tzCwsg-v5PeKm5YEb9y_dvQ5NuWb3q9BmzSXw==",
+        "summary": []
       },
       {
+        "id": "msg_002280e46e115760016af5eaf9655c87d296650ee9551cfc6b",
         "type": "message",
-        "id": "msg_crafted_replay",
-        "role": "assistant",
         "status": "completed",
-        "phase": "final_answer",
         "content": [
           {
             "type": "output_text",
-            "text": "Nairobi is 23C.",
-            "annotations": []
+            "annotations": [],
+            "logprobs": [],
+            "text": "The current temperature in Nairobi is 23\u00b0C."
           }
-        ]
+        ],
+        "phase": "final_answer",
+        "role": "assistant"
       }
     ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "all_turns",
+      "effort": "high",
+      "mode": "standard",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "store": false,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tool_usage": {
+      "image_gen": {
+        "input_tokens": 0,
+        "input_tokens_details": {
+          "image_tokens": 0,
+          "text_tokens": 0
+        },
+        "output_tokens": 0,
+        "output_tokens_details": {
+          "image_tokens": 0,
+          "text_tokens": 0
+        },
+        "total_tokens": 0
+      },
+      "web_search": {
+        "num_requests": 0
+      }
+    },
+    "tools": [
+      {
+        "type": "function",
+        "description": "Get the current weather for a city.",
+        "name": "get_weather",
+        "output_schema": null,
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string",
+              "description": "City name."
+            }
+          },
+          "required": [
+            "city"
+          ]
+        },
+        "strict": false
+      }
+    ],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
     "usage": {
-      "input_tokens": 80,
+      "input_tokens": 119,
       "input_tokens_details": {
-        "cached_tokens": 0,
-        "cache_write_tokens": 0
+        "cache_write_tokens": 0,
+        "cached_tokens": 0
       },
-      "output_tokens": 12,
+      "output_tokens": 51,
       "output_tokens_details": {
-        "reasoning_tokens": 5
+        "reasoning_tokens": 35
       },
-      "total_tokens": 92
-    }
+      "total_tokens": 170
+    },
+    "user": null,
+    "metadata": {}
   }
 }

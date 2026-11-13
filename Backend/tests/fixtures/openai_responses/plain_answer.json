@@ -1,67 +1,105 @@
 {
-  "source": "crafted",
+  "source": "recorded",
   "name": "plain_answer",
   "http_status": 200,
   "body": {
-    "id": "resp_crafted_plain",
+    "id": "resp_02314dd1d5b127ce016af5eaee5f8c87d2bd0b5a6a9f8114ef",
     "object": "response",
-    "created_at": 1720000000,
+    "created_at": 1794501358,
     "status": "completed",
+    "access_programs": {
+      "cyber": "standard"
+    },
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1794501360,
     "error": null,
+    "frequency_penalty": 0.0,
+    "image": {
+      "context_compression": "disabled"
+    },
     "incomplete_details": null,
     "instructions": "You are a connectivity probe. Answer exactly once.",
     "max_output_tokens": 256,
+    "max_tool_calls": null,
     "model": "gpt-6.1-sol",
+    "moderation": null,
     "output": [
       {
-        "type": "reasoning",
-        "id": "rs_crafted_plain",
-        "summary": [
-          {
-            "type": "summary_text",
-            "text": "The user wants one word."
-          }
-        ],
-        "encrypted_content": "encrypted-reasoning-plain",
-        "content": []
-      },
-      {
+        "id": "msg_02314dd1d5b127ce016af5eaf0c34c87d2aeeffe8e6e224ccc",
         "type": "message",
-        "id": "msg_crafted_plain",
         "status": "completed",
-        "role": "assistant",
         "content": [
           {
             "type": "output_text",
-            "text": "pong",
-            "annotations": []
+            "annotations": [],
+            "logprobs": [],
+            "text": "pong"
           }
         ],
-        "phase": "final_answer"
+        "phase": "final_answer",
+        "role": "assistant"
       }
     ],
     "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
     "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
     "reasoning": {
+      "context": "all_turns",
       "effort": "low",
+      "mode": "standard",
       "summary": null
     },
+    "safety_identifier": null,
+    "service_tier": "default",
     "store": false,
-    "temperature": 0.3,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tool_usage": {
+      "image_gen": {
+        "input_tokens": 0,
+        "input_tokens_details": {
+          "image_tokens": 0,
+          "text_tokens": 0
+        },
+        "output_tokens": 0,
+        "output_tokens_details": {
+          "image_tokens": 0,
+          "text_tokens": 0
+        },
+        "total_tokens": 0
+      },
+      "web_search": {
+        "num_requests": 0
+      }
+    },
     "tools": [],
-    "top_p": 1.0,
+    "top_logprobs": 0,
+    "top_p": 0.98,
     "truncation": "disabled",
     "usage": {
-      "input_tokens": 24,
+      "input_tokens": 28,
       "input_tokens_details": {
-        "cached_tokens": 0,
-        "cache_write_tokens": 0
+        "cache_write_tokens": 0,
+        "cached_tokens": 0
       },
-      "output_tokens": 12,
+      "output_tokens": 5,
       "output_tokens_details": {
-        "reasoning_tokens": 8
+        "reasoning_tokens": 0
       },
-      "total_tokens": 36
-    }
+      "total_tokens": 33
+    },
+    "user": null,
+    "metadata": {}
   }
 }

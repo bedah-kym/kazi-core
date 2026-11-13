@@ -18,9 +18,24 @@ from django.conf import settings
 from django.core.cache import cache
 from django.utils import timezone
 
+from orchestration.llm_openai import (
+    OPENAI_CONNECT_TIMEOUT_SECONDS,
+    OPENAI_READ_TIMEOUT_SECONDS,
+    OpenAITimeoutError,
+    build_responses_request,
+    error_from_body,
+    iter_responses_stream,
+    parse_responses_body,
+    strip_provider_state_blocks,
+    text_from_result,
+)
 from orchestration.model_catalog import find_model
 
 logger = logging.getLogger(__name__)
+
+_OPENAI_TIMEOUT = httpx.Timeout(
+    OPENAI_READ_TIMEOUT_SECONDS, connect=OPENAI_CONNECT_TIMEOUT_SECONDS,
+)
 
 _DATE_MARKER = "Current date and time:"
 
@@ -31,7 +46,12 @@ _PROVIDER_KEY_ATTR = {
     "anthropic": "anthropic_key",
     "deepseek": "deepseek_key",
     "huggingface": "hf_key",
+    "openai": "openai_key",
 }
+
+# OpenAI answers only when named: a room model choice or
+# LLM_DEFAULT_PROVIDER=openai. The same key also turns on voice transcription,
+# so having it alone must never make OpenAI a chat fallback (F2, open question 1).
 
 
 def _inject_current_datetime(system_prompt: str, now=None) -> str:
@@ -274,6 +294,7 @@ class LLMClient:
         self.anthropic_key = getattr(settings, 'ANTHROPIC_API_KEY', os.environ.get('ANTHROPIC_API_KEY'))
         self.hf_key = getattr(settings, 'HF_API_TOKEN', os.environ.get('HF_API_TOKEN'))
         self.deepseek_key = getattr(settings, 'DEEPSEEK_API_KEY', os.environ.get('DEEPSEEK_API_KEY'))
+        self.openai_key = getattr(settings, 'OPENAI_API_KEY', os.environ.get('OPENAI_API_KEY'))
         self._agent_name = getattr(settings, 'KAZI_AGENT_NAME', 'Kazi')
 
         # Models
@@ -283,14 +304,27 @@ class LLMClient:
             settings, 'DEEPSEEK_MODEL',
             os.environ.get('DEEPSEEK_MODEL', 'deepseek-chat'),
         )
+        self.openai_model = getattr(
+            settings, 'OPENAI_MODEL',
+            os.environ.get('OPENAI_MODEL', 'gpt-6.1-sol'),
+        )
 
         # Endpoints
         self.anthropic_url = "https://api.anthropic.com/v1/messages"
         self.hf_url = "https://router.huggingface.co/v1/chat/completions"
-        # DeepSeek is OpenAI-compatible, so it reuses the OpenAI call paths.
+        # DeepSeek is OpenAI-compatible, so it reuses the OpenAI-style call paths.
         self.deepseek_url = getattr(
             settings, 'DEEPSEEK_BASE_URL',
             os.environ.get('DEEPSEEK_BASE_URL', 'https://api.deepseek.com/v1/chat/completions'),
+        )
+        # OpenAI's Responses API, not the Chat Completions path DeepSeek/HF use.
+        self.openai_url = getattr(
+            settings, 'OPENAI_BASE_URL',
+            os.environ.get('OPENAI_BASE_URL', 'https://api.openai.com/v1/responses'),
+        )
+        self.openai_reasoning_effort = getattr(
+            settings, 'OPENAI_REASONING_EFFORT',
+            os.environ.get('OPENAI_REASONING_EFFORT', 'low'),
         )
 
     def _openai_config(self, provider: str, model_name: Optional[str] = None):
@@ -313,6 +347,14 @@ class LLMClient:
         """
         configured = self._configured_providers()
         preferred = str(getattr(settings, "LLM_DEFAULT_PROVIDER", "") or "").strip().lower()
+        if preferred == "openai":
+            if self.openai_key:
+                return "openai"
+            logger.warning(
+                "LLM_DEFAULT_PROVIDER='openai' has no configured API key; using %r instead.",
+                configured[0] if configured else None,
+            )
+            return configured[0] if configured else None
         if preferred:
             if preferred in configured:
                 return preferred
@@ -340,21 +382,32 @@ class LLMClient:
         role = (model_role or "default").lower()
         preference = (provider_preference or "").lower().strip()
         if preference:
-            ordered = [preference, "deepseek", "anthropic", "huggingface"]
+            primary = preference
+            ordered = [preference, "deepseek", "anthropic", "huggingface", "openai"]
         elif role == "planner":
-            ordered = [getattr(settings, "LLM_PLANNER_PROVIDER", "anthropic").lower(), "deepseek", "anthropic", "huggingface"]
+            primary = getattr(settings, "LLM_PLANNER_PROVIDER", "anthropic").lower()
+            ordered = [primary, "deepseek", "anthropic", "huggingface"]
         elif role == "executor":
-            ordered = [getattr(settings, "LLM_EXECUTOR_PROVIDER", "huggingface").lower(), "deepseek", "huggingface", "anthropic"]
+            primary = getattr(settings, "LLM_EXECUTOR_PROVIDER", "huggingface").lower()
+            ordered = [primary, "deepseek", "huggingface", "anthropic"]
         elif role == "reviewer":
-            ordered = [getattr(settings, "LLM_REVIEWER_PROVIDER", "anthropic").lower(), "deepseek", "anthropic", "huggingface"]
+            primary = getattr(settings, "LLM_REVIEWER_PROVIDER", "anthropic").lower()
+            ordered = [primary, "deepseek", "anthropic", "huggingface"]
         else:
-            default = self.default_provider()
-            ordered = [default, "anthropic", "deepseek", "huggingface"] if default else ["anthropic", "deepseek", "huggingface"]
-        # De-dup while preserving order
+            primary = self.default_provider()
+            ordered = (
+                [primary, "anthropic", "deepseek", "huggingface"]
+                if primary else ["anthropic", "deepseek", "huggingface"]
+            )
+        # OpenAI is only a candidate when this call named it (preference, role
+        # setting, or the operator's default), never a silent trailing fallback.
+        allowed = {"deepseek", "anthropic", "huggingface"}
+        if primary == "openai":
+            allowed.add("openai")
         seen = set()
         result: List[str] = []
         for item in ordered:
-            if item in ("deepseek", "anthropic", "huggingface") and item not in seen:
+            if item in allowed and item not in seen:
                 result.append(item)
                 seen.add(item)
         return result
@@ -377,6 +430,14 @@ class LLMClient:
             if role == "reviewer":
                 return getattr(settings, "LLM_REVIEWER_MODEL", self.deepseek_model)
             return self.deepseek_model
+        if provider == "openai":
+            if role == "planner":
+                return getattr(settings, "LLM_PLANNER_MODEL", self.openai_model)
+            if role == "executor":
+                return getattr(settings, "LLM_EXECUTOR_MODEL", self.openai_model)
+            if role == "reviewer":
+                return getattr(settings, "LLM_REVIEWER_MODEL", self.openai_model)
+            return self.openai_model
         if role == "planner":
             return getattr(settings, "LLM_PLANNER_MODEL", self.hf_model)
         if role == "executor":
@@ -417,6 +478,8 @@ class LLMClient:
                 parts.append(
                     f"[tool_use request] {name} {json.dumps(tool_input, default=str)}"
                 )
+            elif block_type == "provider_state":
+                continue
             else:
                 parts.append(str(block))
         return "\n".join(part for part in parts if part)
@@ -485,6 +548,7 @@ class LLMClient:
     #  the agent loop keeps working unchanged on a non-Anthropic model.   #
     # ------------------------------------------------------------------ #
     def _anthropic_to_openai_messages(self, system: str, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        messages = strip_provider_state_blocks(messages)
         out: List[Dict[str, Any]] = []
         if system:
             content = system if isinstance(system, str) else self._message_content_to_text(system)
@@ -645,6 +709,94 @@ class LLMClient:
 
         result = self._openai_response_to_anthropic(data)
         return result
+
+    async def _create_openai_responses(
+        self,
+        *,
+        messages: List[Dict[str, Any]],
+        system: str,
+        tools: Optional[List[Dict[str, Any]]],
+        temperature: float,
+        max_tokens: int,
+        model: Optional[str] = None,
+        capture: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """create_message via OpenAI's native Responses API."""
+        if not self.openai_key:
+            raise Exception("OpenAI API key is not configured.")
+        body = build_responses_request(
+            model=model or self._model_for("openai", "default"),
+            instructions=_static_first(system),
+            messages=messages,
+            tools=tools,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            reasoning_effort=self.openai_reasoning_effort,
+        )
+        if capture is not None:
+            capture["request"] = body
+        client = _get_http_client()
+        try:
+            response = await client.post(
+                self.openai_url,
+                headers={
+                    "Authorization": f"Bearer {self.openai_key}",
+                    "Content-Type": "application/json",
+                },
+                json=body,
+                timeout=_OPENAI_TIMEOUT,
+            )
+        except httpx.TimeoutException:
+            raise OpenAITimeoutError() from None
+        if response.status_code != 200:
+            raise error_from_body(response.status_code, response.text)
+        data = response.json()
+        if capture is not None:
+            capture["body"] = data
+        return parse_responses_body(data, body["model"])
+
+    async def _stream_openai_responses(
+        self,
+        *,
+        messages: List[Dict[str, Any]],
+        system: str,
+        tools: Optional[List[Dict[str, Any]]],
+        temperature: float,
+        max_tokens: int,
+        model: Optional[str] = None,
+    ):
+        """stream_message via OpenAI's native Responses API."""
+        if not self.openai_key:
+            raise Exception("OpenAI API key is not configured.")
+        body = build_responses_request(
+            model=model or self._model_for("openai", "default"),
+            instructions=_static_first(system),
+            messages=messages,
+            tools=tools,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            reasoning_effort=self.openai_reasoning_effort,
+        )
+        body["stream"] = True
+        client = _get_http_client()
+        try:
+            async with client.stream(
+                "POST",
+                self.openai_url,
+                headers={
+                    "Authorization": f"Bearer {self.openai_key}",
+                    "Content-Type": "application/json",
+                },
+                json=body,
+                timeout=_OPENAI_TIMEOUT,
+            ) as response:
+                if response.status_code != 200:
+                    error_body = await response.aread()
+                    raise error_from_body(response.status_code, error_body)
+                async for event in iter_responses_stream(response.aiter_lines(), body["model"]):
+                    yield event
+        except httpx.TimeoutException:
+            raise OpenAITimeoutError() from None
 
     async def _get_user_token_budget(
         self, user_id: Optional[int], now: Optional[float] = None,
@@ -870,6 +1022,41 @@ class LLMClient:
                 except Exception as e:
                     last_error = e
                     logger.warning(f"Claude API failed: {e}. Falling back.")
+            if provider == "openai" and self.openai_key:
+                try:
+                    user_content = user_prompt
+                    if json_mode:
+                        user_content += "\n\nRespond with valid JSON only."
+                    result = await self._create_openai_responses(
+                        messages=[{"role": "user", "content": user_content}],
+                        system=system_prompt,
+                        tools=None,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        model=self._model_for("openai", model_role),
+                    )
+                    response = text_from_result(result)
+                    usage = result.get("usage", {}) or {}
+                    used = (
+                        int(usage.get("input_tokens", 0) or 0)
+                        + int(usage.get("cache_read_input_tokens", 0) or 0)
+                        + int(usage.get("cache_creation_input_tokens", 0) or 0)
+                        + int(usage.get("output_tokens", 0) or 0)
+                    )
+                    if not used:
+                        used = estimated_tokens + self._estimate_tokens(response)
+                    # Charge what OpenAI billed even when the reply is rejected below.
+                    self._record_token_usage(used, user_id)
+                    stop_reason = result.get("stop_reason")
+                    if stop_reason == "max_tokens":
+                        raise Exception("OpenAI reply was cut off by the output limit.")
+                    if stop_reason == "refusal" and not response.strip():
+                        raise Exception("OpenAI declined to answer.")
+                    self._store_cache(cache_key, response)
+                    return response
+                except Exception as e:
+                    last_error = e
+                    logger.error(f"OpenAI API failed: {e}. Falling back.")
             if provider == "huggingface" and self.hf_key:
                 try:
                     model_name = self._model_for("huggingface", model_role)
@@ -969,6 +1156,33 @@ class LLMClient:
         provider_order = self._provider_order(model_role, provider_preference)
         last_error: Optional[Exception] = None
         for provider in provider_order:
+            if provider == "openai" and self.openai_key:
+                emitted = False
+                try:
+                    model_name = self._model_for("openai", model_role)
+                    async for event in self._stream_openai_responses(
+                        messages=[{"role": "user", "content": user_prompt}],
+                        system=system_prompt,
+                        tools=None,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        model=model_name,
+                    ):
+                        if event.get("type") == "text" and event.get("text"):
+                            emitted = True
+                            yield event["text"]
+                        elif event.get("type") == "message_done":
+                            stop_reason = event.get("stop_reason")
+                            if stop_reason == "max_tokens":
+                                raise Exception("OpenAI reply was cut off by the output limit.")
+                            if stop_reason == "refusal" and not emitted:
+                                raise Exception("OpenAI declined to answer.")
+                    return
+                except Exception as e:
+                    if emitted:
+                        raise
+                    last_error = e
+                    logger.error(f"OpenAI API failed: {e}. Falling back.")
             if provider == "deepseek" and self.deepseek_key:
                 emitted = False
                 try:
@@ -1037,6 +1251,7 @@ class LLMClient:
         use_prompt_cache: bool,
     ) -> Dict[str, Any]:
         """POST a single turn to the Anthropic Messages API and return the body."""
+        messages = strip_provider_state_blocks(messages)
         body: Dict[str, Any] = {
             "model": model,
             "max_tokens": max_tokens,
@@ -1107,8 +1322,8 @@ class LLMClient:
             stop_reason: "end_turn" | "tool_use" | "max_tokens"
             usage: {input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens}
         """
-        if not self.anthropic_key and not self.hf_key and not self.deepseek_key:
-            raise Exception("No valid API keys configured for DeepSeek, Anthropic, or Hugging Face.")
+        if not self.anthropic_key and not self.hf_key and not self.deepseek_key and not self.openai_key:
+            raise Exception("No valid API keys configured for DeepSeek, Anthropic, Hugging Face, or OpenAI.")
 
         system = _inject_current_datetime(system)
 
@@ -1122,6 +1337,8 @@ class LLMClient:
         if provider:
             if provider == "anthropic" and not self.anthropic_key:
                 raise Exception("Anthropic API key is not configured.")
+            if provider == "openai" and not self.openai_key:
+                raise Exception("OpenAI API key is not configured.")
             return await self._create_with_provider(
                 provider,
                 model=self._model_for_provider(provider, model),
@@ -1140,7 +1357,7 @@ class LLMClient:
         # so a Claude model name never reaches DeepSeek/Hugging Face.
         order = self._auto_provider_order()
         if not order:
-            raise Exception("No valid API keys configured for DeepSeek, Anthropic, or Hugging Face.")
+            raise Exception("No valid API keys configured for DeepSeek, Anthropic, Hugging Face, or OpenAI.")
         last_error: Optional[Exception] = None
         for candidate in order:
             try:
@@ -1219,6 +1436,15 @@ class LLMClient:
                 tools=tools,
                 provider="huggingface",
             )
+        if provider == "openai":
+            return await self._create_openai_responses(
+                messages=messages,
+                system=system,
+                tools=tools,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                model=model,
+            )
         raise Exception(f"Unknown LLM provider: {provider}")
 
     async def _stream_openai_fallback(
@@ -1289,9 +1515,20 @@ class LLMClient:
             {"type": "tool_use_end", "id": "...", "name": "...", "input": {...}}
             {"type": "message_done", "stop_reason": "...", "usage": {...}}
         """
-        if not self.anthropic_key and not self.hf_key and not self.deepseek_key:
-            raise Exception("No valid API keys configured for DeepSeek, Anthropic, or Hugging Face.")
+        if not self.anthropic_key and not self.hf_key and not self.deepseek_key and not self.openai_key:
+            raise Exception("No valid API keys configured for DeepSeek, Anthropic, Hugging Face, or OpenAI.")
 
+        if provider == "openai":
+            async for event in self._stream_openai_responses(
+                messages=messages,
+                system=system,
+                tools=tools,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                model=self._model_for_provider("openai", model),
+            ):
+                yield event
+            return
         if provider == "deepseek":
             async for event in self._stream_openai_fallback(
                 messages=messages,
@@ -1378,6 +1615,18 @@ class LLMClient:
                 yield event
             return
 
+        if default == "openai":
+            async for event in self._stream_openai_responses(
+                messages=messages,
+                system=system,
+                tools=tools,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                model=self._model_for_provider("openai", model),
+            ):
+                yield event
+            return
+
         if default in ("deepseek", "huggingface"):
             async for event in self._stream_openai_fallback(
                 messages=messages,
@@ -1392,7 +1641,7 @@ class LLMClient:
                 yield event
             return
 
-        raise Exception("No valid API keys configured for DeepSeek, Anthropic, or Hugging Face.")
+        raise Exception("No valid API keys configured for DeepSeek, Anthropic, Hugging Face, or OpenAI.")
 
     async def _stream_anthropic_events(
         self,
@@ -1414,6 +1663,7 @@ class LLMClient:
             {"type": "message_done", "stop_reason": "...", "usage": {...}}
         Raises on any transport/API error — fallback policy lives in stream_message.
         """
+        messages = strip_provider_state_blocks(messages)
         body: Dict[str, Any] = {
             "model": model or self.claude_model,
             "max_tokens": max_tokens,

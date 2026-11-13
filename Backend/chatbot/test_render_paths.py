@@ -102,3 +102,17 @@ class RenderPathWiringTests(SimpleTestCase):
         render = source.index("js/kazi-render.js")
         self.assertLess(render, source.index("js/main.js"))
         self.assertLess(render, source.index("js/ai-assistant.js"))
+
+    def test_render_module_wiring_keeps_list_numbers_and_task_markers(self):
+        source = _read(HERE / "static" / "js" / "kazi-render.js")
+        allowed_attr = re.search(r"ALLOWED_ATTR\s*=\s*\[(.*?)\];", source, re.DOTALL)
+        self.assertIsNotNone(allowed_attr)
+        self.assertIn("'start'", allowed_attr.group(1))
+        self.assertRegex(source, r"tag\s*===\s*'OL'")
+        self.assertIn("removeAttribute('start')", source)
+        self.assertRegex(source, r"checkbox\s*:\s*function")
+        self.assertIn(r"\u2611", source)
+        self.assertIn(r"\u2610", source)
+        forbid_tags = re.search(r"FORBID_TAGS\s*:\s*\[(.*?)\]", source, re.DOTALL)
+        self.assertIsNotNone(forbid_tags)
+        self.assertIn("'input'", forbid_tags.group(1))

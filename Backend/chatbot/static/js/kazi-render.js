@@ -6,7 +6,7 @@
         'ul', 'ol', 'li', 'a', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
         'table', 'thead', 'tbody', 'tr', 'th', 'td', 'img'
     ];
-    var ALLOWED_ATTR = ['href', 'src', 'alt', 'title', 'class'];
+    var ALLOWED_ATTR = ['href', 'src', 'alt', 'title', 'class', 'start'];
 
     var configured = false;
     var hooksInstalled = false;
@@ -19,7 +19,15 @@
         if (configured) return;
         if (typeof global.marked !== 'undefined' && global.marked &&
             typeof global.marked.use === 'function') {
-            global.marked.use({ breaks: true, gfm: true });
+            global.marked.use({
+                breaks: true,
+                gfm: true,
+                renderer: {
+                    checkbox: function (token) {
+                        return token && token.checked ? '\u2611' : '\u2610';
+                    }
+                }
+            });
         }
         configured = true;
     }
@@ -59,6 +67,10 @@
                 node.setAttribute('class', className);
             } else {
                 node.removeAttribute('class');
+            }
+            if (node.hasAttribute('start') &&
+                !(tag === 'OL' && /^\d{1,9}$/.test(node.getAttribute('start')))) {
+                node.removeAttribute('start');
             }
             if (tag === 'A') {
                 node.setAttribute('rel', 'noopener noreferrer');

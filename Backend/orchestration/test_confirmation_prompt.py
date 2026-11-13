@@ -67,6 +67,23 @@ def _parameter_blocks(card: str):
     return blocks
 
 
+def _visible_label_key(card: str) -> str:
+    """The key as a browser shows it once Marked renders the label's code span.
+
+    Models CommonMark 0.31.2 code-span normalisation (one space stripped from
+    each end when both ends are spaces) and HTML collapsing of whitespace runs
+    in inline text. The real-library check is in the PR's browser run.
+    """
+    label = card.split("\n")[1]
+    match = _INLINE.match(label)
+    if match is None:
+        raise AssertionError(f"no inline key in label: {label!r}")
+    content = match.group(2).replace("\n", " ")
+    if len(content) >= 2 and content.startswith(" ") and content.endswith(" ") and content.strip(" "):
+        content = content[1:-1]
+    return re.sub(r"[ \t]+", " ", content)
+
+
 def _display(value):
     if isinstance(value, str):
         return value
@@ -187,6 +204,30 @@ class ConfirmationPromptTests(SimpleTestCase):
         self.assertEqual(
             build_confirmation_prompt("run`cmd<b>", {"a`b<c>": "x"}), expected,
         )
+
+    def test_boundary_and_repeated_spaces_in_a_key_are_marked(self):
+        expected = (
+            "I'd like to `send email` with the following details:\n"
+            "`⟨U+0020⟩to⟨U+0020⟩` (text) — 1 character, 1 line:\n"
+            "```text\n"
+            "x\n"
+            "```\n\n"
+            "Should I go ahead? (yes / no)"
+        )
+        self.assertEqual(build_confirmation_prompt("send_email", {" to ": "x"}), expected)
+        card = build_confirmation_prompt("send_email", {"a  b": "x"})
+        self.assertEqual(
+            card.split("\n")[1].split(" (text)")[0],
+            "`a⟨U+0020⟩⟨U+0020⟩b`",
+        )
+
+    def test_keys_that_differ_only_in_spaces_stay_distinct_when_rendered(self):
+        keys = ["to", " to", "to ", " to ", "a b", "a  b", " ", "   "]
+        shown = [
+            _visible_label_key(build_confirmation_prompt("send_email", {key: "x"}))
+            for key in keys
+        ]
+        self.assertEqual(len(set(shown)), len(keys), shown)
 
     def test_a_key_with_a_line_break_stays_on_one_line(self):
         expected = (

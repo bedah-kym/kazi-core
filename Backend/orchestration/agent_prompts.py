@@ -391,6 +391,14 @@ def _shown_text(text: str, *, inline: bool = False) -> tuple[str, int]:
     trailing_start = len(text[:line_end].rstrip(" \t"))
     for index, char in enumerate(text):
         marked = char == _MARKER_OPEN or _is_hidden_character(char, inline=inline)
+        if inline and char == " ":
+            # Code spans drop boundary spaces and HTML collapses runs of spaces.
+            if (
+                index in (0, last_index)
+                or text[index - 1] == " "
+                or text[index + 1] == " "
+            ):
+                marked = True
         if not inline:
             if index == last_index and char == "\n":
                 marked = True

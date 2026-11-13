@@ -56,6 +56,9 @@ event reaches clients.
   connectors" line does not apply to this work.
 - **Built new.** The bridge is built from scratch on the v0.8 core. It does not reuse
   the v0.4.2 connector, and it does not use today's stream frames (§0.1).
+- **Each Kazi room is its own topic** in the bot's private chat (D4), with no `/room`
+  switching. Creating a topic in Telegram starts a new room (D23). General is the
+  lobby for pairing, `/status` and notices.
 
 ---
 
@@ -595,8 +598,9 @@ Backend/telegram_bridge/            (new Django app; not a connector, not offere
                   ok:false parsing, 429 retry_after, per-chat send pacing.
   poller.py       getUpdates long poll (timeout 50 s): lease, offset persistence,
                   webhook check, stale-update cut-off.
-  inbound.py      Update → filters → binding lookup → commands (/pair /room /rooms
-                  /unpair /status /stop) or chatbot.inbound.submit_user_message.
+  inbound.py      Update → filters → topic-binding lookup → commands (/pair /unpair
+                  /status /stop /help) or chatbot.inbound.submit_user_message.
+                  Topic service messages create, rename, pause or resume bindings.
   relay.py        Subscriber to stream protocol v2 frames (T-A2) per bound room:
                   status message (edit), final reply (send), approval cards.
                   No adapter for today's ai_step_event / ai_stream_chunk frames.
@@ -649,7 +653,7 @@ All rows are append-style. Revocation sets `revoked_at` and never deletes.
 | Model | Fields | Constraints |
 |---|---|---|
 | `TelegramChatLink` (the allowlist) | `user` FK, `chat_id` BigInt, `chat_type` (private/supergroup), `telegram_user_id` BigInt (must equal `from.id` on every update), `paired_at`, `revoked_at`, `revoked_reason`, `pin_hash` (Django `make_password`, nullable), `pin_failures`, `locked_until` | unique `(chat_id)` where `revoked_at IS NULL` |
-| `TelegramRoomBinding` | `link` FK, `room` FK `Chatroom`, `thread_key` BigInt (0 = no thread, else `message_thread_id`), `mode` (dm_switch / dm_topic / group_topic), `created_at`, `revoked_at` | unique `(link, thread_key)` where active |
+| `TelegramRoomBinding` | `link` FK, `room` FK `Chatroom`, `thread_key` BigInt (0 = no thread, else `message_thread_id`), `mode` (dm_topic / group_topic), `label` (topic name), `state` (active / paused / broken), `created_at`, `revoked_at` | unique `(link, thread_key)` where active |
 | `TelegramPairingCode` | `code_hash` (sha256), `user` FK, `issued_at`, `expires_at`, `used_at`, `used_by_chat_id` | single use |
 | `TelegramPollerState` (singleton) | `offset` BigInt, `bot_id` BigInt (pinned at first `getMe`), `lease_owner`, `lease_expires_at`, `last_ok_at`, `last_error` | one row |
 | `TelegramApprovalCard` | `token_hash`, `binding` FK, `approval` FK `WorkflowApprovalRecord`, `turn_id` UUID, `short_id`, `chat_id`, `message_id`, `risk`, `created_at`, `decided_at`, `decision`, `decided_by_telegram_user_id`, `outcome_message_id` FK `Message` | conditional UPDATE on `decided_at IS NULL` |
@@ -657,9 +661,9 @@ All rows are append-style. Revocation sets `revoked_at` and never deletes.
 | `TelegramInbound` | `update_id` unique, `chat_id`, `message_id`, `kind`, `received_at`, `result` (`accepted` / `rejected:<reason>`), `kazi_message_id` | dedupe and audit; holds no message text. An `accepted` row is written only in the same transaction as its `Message` (§4.1 Ordering) |
 
 **Notes**
-- **Mode A** (one DM, `/room` switching) is one `TelegramRoomBinding` with
-  `thread_key=0`. `/room <id>` revokes it and creates a new one. **Modes B and C** have
-  one binding per topic.
+- **One binding per topic.** Each Kazi room is one topic in the bot's private chat
+  (D4), and later in a group (mode C). `thread_key=0` means General, which is never
+  bound to a room. There is no `/room` switching.
 - **Why a 0 sentinel?** Postgres treats NULLs as distinct in unique constraints, so a
   NULL thread id would allow duplicates.
 - **No changes to `Chatroom`, `Message` or `WorkflowApprovalRecord`.**
@@ -839,7 +843,7 @@ method. Private-chat topics and Business bots don't need Premium.
 
 **Links straight to a room's topic (10.4).** [Verified] `https://t.me/<bot_username>/<message_thread_id>`
 opens that topic, but only for the user whose private chat holds it. The web room page
-can show "Open in Telegram" for bindings that use per-room topics (mode B).
+can show "Open in Telegram" for every bound room, since each room is a topic (D4).
 
 **Ephemeral replies to button taps (10.4).** [Verified] A message shown only to the
 user who tapped, in any chat except channel direct-message chats. These messages "may
@@ -876,7 +880,7 @@ Phone        Telegram          Bridge (poller task in web process)              
   |         |                   | 3 link = active TelegramChatLink(chat.id),
   |         |                   |   require from.id == link.telegram_user_id (else drop, silent)
   |         |                   | 4 binding = (link, thread_key) → room; none → reply
-  |         |                   |   "not linked, use /room"
+  |         |                   |   "pick a room's topic, or create a topic for a new task"
   |         |                   | 5 user_has_room_access(link.user, room)  [a DB error raises: catch it and deny]
   |         |                   | 6 bridge rate limit (cache.add, closed on error)
   |         |                   | 7 submit_user_message(room, user, text, via=telegram,  -->|
@@ -1047,16 +1051,31 @@ gap G9.
          4 compare in constant time against unexpired, unused codes; mark used
            (conditional UPDATE)
          5 create TelegramChatLink(user, chat_id, telegram_user_id = from.id)
-         6 reply with a disclosure ("Telegram can read everything relayed here") and the
-           rooms list; send an in-app notification "Telegram account <name> (id) paired"
+         6 reply with a disclosure ("Telegram can read everything relayed here");
+           send an in-app notification "Telegram account <name> (id) paired"
            so an unexpected pairing is visible
- mode A: /rooms lists the user's rooms; /room <id> binds thread_key=0
- mode B: /newtopic <room id> → bot checks getMe.has_topics_enabled → createForumTopic
-         (private chat) → binding(thread_key = returned message_thread_id); a test
-         sendMessage into the topic; on "message thread not found" (#905) mark the
-         binding broken and tell the user in the main chat; never fall back silently
-         to General
- mode C: user adds the bot to a private forum supergroup as admin with
+         7 topics (one per room, D4): getMe.has_topics_enabled must be true, else reply
+           with the one-time BotFather step to turn topic mode on and stop here
+         8 for each of the user's rooms: createForumTopic(chat_id, name = room name)
+           → TelegramRoomBinding(thread_key = message_thread_id); a test sendMessage
+           into the topic; on "message thread not found" (#905) mark the binding
+           broken and say so in General; never fall back silently to General
+         9 General (the topic-less part of the chat) is the lobby: pairing, /status,
+           /help and notices that belong to no room. Text sent there runs nothing;
+           the bot replies "pick a room's topic, or create a new topic for a new task"
+
+ later rooms (both directions, D23):
+   web → Telegram: a room created on the web gets its topic on the next poll cycle
+   Telegram → web: the user creates a topic (service message forum_topic_created,
+         allowed while getMe.allows_users_to_create_topics) → a new Kazi room with that
+         name, owned by the paired user, bound to the topic; the bot confirms in it
+   rename (forum_topic_edited): renames the binding's label only; the Kazi room keeps
+         its own name unless D23 says otherwise
+   closed (forum_topic_closed): the binding is paused; reopened resumes it
+   deleted by the user: no service message exists, so the next send fails "message
+         thread not found"; the binding is marked broken (the Kazi room is never deleted)
+
+ groups (mode C, later): user adds the bot to a private forum supergroup as admin with
          can_manage_topics; from that group the paired user sends /bind <room id>
          (from.id must equal the link's telegram_user_id) → createForumTopic → binding.
          The group needs its own TelegramChatLink row, created only by that command
@@ -1102,7 +1121,7 @@ seam as the WebSocket (§1.8).
 | G9 | Confirm whether document text is treated as untrusted in the context | Unknown | S (investigate) |
 | G10 | Relay: status message, final reply, cards | Missing; the channel layer is reusable | M-L |
 | G11 | PIN | Missing; Django `make_password`/`check_password` reusable | S |
-| G12 | Topic modes B/C, including #905 handling | Missing | M |
+| G12 | One topic per room in the private chat (v1), topic lifecycle, #905 handling; groups (mode C) later | Missing | M |
 | G13 | Telegram notification channel | Missing; hard-coded branches (`notifications/services.py:116-142`) | M |
 | G14 | Bind the approval id into consent | Missing; the timing check covers most of it | M (contract minor) |
 | G15 | Docs (`docs/telegram.md`, `.env.example`, architecture `model.js` scenario) | `docs/telegram.md` is wrong today | S |
@@ -1117,7 +1136,8 @@ seam as the WebSocket (§1.8).
 | **D1** | When to build | **Decided (2026-11-08):** the freeze does not apply. Build from scratch on the v0.8 core | Order: seams inside T-A1/T-A2, then the bridge app once T-A2's frames exist (§0.1, §8). |
 | **D2** | How a button approves | (a) feed "yes"/"no" through the chat path; (b) call `resume_after_confirmation` directly; (c) a new approve-by-id API | **(a).** No core or contract change, and it keeps every existing guard. (b) skips consent and the runner. (c) touches protected `agent_loop.py` for no gain. **TB-16 is required before TB-11 ships**, because without it a pause that replaces the card's approval can absorb the tap (§4.2). |
 | **D3** | Where the poller runs | (a) lifespan task in the web process plus a database lease; (b) its own management command and compose service with its own `TurnRunner`; (c) Celery | **(a).** Works in lite and full, and inherits runner shutdown. (b) breaks in lite (in-memory layer, boot sweep at `turns.py:1176-1187`) and edits protected `docker-compose*.yml`. (c) is ruled out (§1.7). |
-| **D4** | Which modes in v1 | A only; A+B; A+B+C | **A first, then B.** B depends on BotFather topic mode, and on Telegram fixing per-topic failures (#905, open). C adds group-exposure risk. Ship C last, with the member-count warning. |
+| **D4** | How rooms map to Telegram | one chat with `/room` switching (A); one topic per room in the bot's private chat (B); a group with topics (C) | **Decided (2026-11-13): B from v1, no `/room` switching.** Each Kazi room is its own topic, so separate tasks look separate and a new user never has to learn a switching command. It needs topic mode turned on once in @BotFather (no Premium). Per-topic write failures (#905, open) are handled by marking the binding broken and saying so in General. C (groups) ships last, with the member-count warning. |
+| **D23** | Can a topic created in Telegram start a new Kazi room | yes; no (rooms only from the web) | **Yes.** Creating a topic is the natural "new task" gesture. The bridge creates the room, owned by the paired user, and binds it. Renaming a topic changes only the binding's label; renaming the Kazi room too is a later option. Deleting a topic never deletes the room. |
 | **D5** | Default content mode | full; summary; notify_only | **`full`, with a disclosure the user must confirm at pairing**, plus a per-binding override. The goal is remote control, and notify_only would make it useless. Because the disclosure is explicit, the default is an informed choice. |
 | **D6** | Forwarded messages | reject; accept as quoted data | **Reject**, with "forwarded messages aren't run; copy the text if you mean it". Simpler and closed. |
 | **D7** | Injection-check hit on inbound text | block; pass through (downstream blocks sensitive actions); pass plus taint the room | **Pass through, and show a warning chip in Telegram.** The owner wrote it. `should_block_action` already blocks sensitive actions on that query (`tool_executor.py:117-123`). Hard-blocking the owner's own text would differ from the web. Revisit when room taint for inbound messages lands (`docs/plans/170-taint-flag.md:15-16`). |
@@ -1185,7 +1205,8 @@ All of these need a plan and a human OK.
 | **TB-6** | `bot_api.py`, from scratch | A 429 with `retry_after` waits for it (fake clock); `ok:false` maps to a typed error; the token never appears in `str(error)` or in logs (`assertLogs`); per-chat pacing allows at most one send per second | S |
 | **TB-7** | Pairing: `telegram_pair` / `telegram_unpair` commands and the `/pair` handler | Expired, used, wrong, group-chat and over-limit codes are refused; a cache error refuses (closed); success binds `from.id` and emits the in-app notification | M |
 | **TB-8** | Poller and lifespan wiring | A webhook already set → no polling, plus an alert; two pollers → exactly one holds the lease (barrier); restart resumes from the stored offset with no duplicate `Message`; a failure injected inside step 7's transaction leaves neither the `TelegramInbound` row nor the `Message`, and the replay then produces exactly one `Message`; updates older than `MAX_UPDATE_AGE` do not enqueue; a `bot_id` change stops the poller; lifespan stop happens before runner shutdown | M |
-| **TB-9** | Inbound routing, mode A (`/rooms`, `/room`, `/status`, `/stop` recorded as a person's cancel through `cancel_requested_at` (216b-3, #306)) | One test per filter, each failing when its guard line is removed: wrong `from.id`, `sender_chat`, `is_bot`, forwarded, guest, revoked link, no room access. Text reaches `submit_user_message` with `via=telegram` | M |
+| **TB-9** | Inbound routing by topic (D4). After pairing, one topic per room (`has_topics_enabled` check, `createForumTopic`, test send). Routing by `message_thread_id`. General is the lobby: `/status`, `/help`; text there runs nothing. `/stop` inside a topic is recorded as a person's cancel through `cancel_requested_at` (216b-3, #306). "message thread not found" (#905) marks the binding broken and is reported in General, never posted to General | One test per filter, each failing when its guard line is removed: wrong `from.id`, `sender_chat`, `is_bot`, forwarded, guest, revoked link, no room access. Text in topic X reaches room X with `via=telegram`. Text in General runs no turn. Topic mode off → pairing stops with the BotFather instruction. A broken topic is reported and never falls back to General | M |
+| **TB-9b** | Topic lifecycle (D23): `forum_topic_created` → a new Kazi room bound to it; a web-created room gets its topic; `forum_topic_edited` → label; `forum_topic_closed` / `reopened` → pause / resume | A topic created in Telegram yields exactly one room owned by the paired user, even when the update is replayed. A room created on the web gets one topic. A closed topic runs nothing until reopened. Deleting a topic never deletes the room | S-M |
 | **TB-13** | Files: `getFile` → `ingest_room_document` (needs TB-3) | An oversized declared size never calls `getFile`; the type is sniffed (a PDF named `.jpg`); the token URL never appears in logs; a caption turn starts after the document completes (event-based wait) | M |
 
 At the end of 2a you can talk to Kazi from the phone. Replies come back only once the
@@ -1209,7 +1230,7 @@ moved to v2 frames only.)
 
 | Ticket | What | Size |
 |---|---|---|
-| **TB-14** | Modes B and C: `/newtopic` and `/bind`, the `has_topics_enabled` check, and handling of "message thread not found" (#905): mark the binding broken and never post to General | M |
+| **TB-14** | Mode C (groups): a private forum supergroup with one topic per room, set up with `/bind` from the paired user; approvals and PIN still in the private chat | M |
 | **TB-15** | Telegram notification channel and workflow approval cards through `submit_execution_approval`. Owner and status checks; the `ApprovalMismatch` 409 path (reuse `_submission_env`). Adds `delivered_telegram` (a migration) | M |
 | **TB-19** | D13: rebuild the v0.4.2 connector's sends on `bot_api.py`, or retire it | S |
 | **TB-18** | Docs and architecture: rewrite `docs/telegram.md` (setup, modes, disclosure, rotation runbook); add the variables to `docs/configuration.md` and `.env.example`; update `docs/architecture/model.js` (an external "Telegram Bot API" node, a bridge module in `web`, edges, a "Telegram approval" scenario); run `python scripts/check_architecture_model.py`; add the bridge to `kazi_status`. Ship this with TB-8/TB-10, not at the end | S |
@@ -1231,7 +1252,7 @@ moved to v2 frames only.)
 |---|---|---|---|---|
 | **TB-W1** | TB-11 | Approval widget. A static template in the repo; card state in `chat_data`; taps go through the same handler as buttons; `answerWidgetQuery` within 15 s; fallback to buttons | The template is ≤32 KB and ≤4 KB at zlib level 9 (CI test). The template uses `textContent` and never `innerHTML` on data. A widget tap and a button tap with the same token produce the same decision through one handler. A double tap gives one winner. A stale card is refused. A `sendWidget` error falls back to buttons. A mode C binding always gets buttons | M |
 | **TB-W2** | TB-10, TB-W1 | Status widget per run in private chats, replacing the edited text status where the binding uses widgets | One widget per turn; `chat_data` edits throttled; `turn.failed{partial}` renders "Ended", never "Done"; restart recovery follows the same `closed_at`/`reply_sent_at` rules; the final reply is still a normal message | M |
-| **TB-W3** | TB-14 | "Open in Telegram" link on the web room page for mode B bindings (`https://t.me/<bot>/<thread_id>`) | The link appears only for the bound user and only for topic bindings | S |
+| **TB-W3** | TB-9 | "Open in Telegram" link on the web room page for each bound room (`https://t.me/<bot>/<thread_id>`) | The link appears only for the bound user and only for topic bindings | S |
 | **TB-W4** | TB-11 | Ephemeral replies to button taps for throwaway notes (stale card, PIN lockout, not your card) | The note goes to the tapping user only; nothing durable is sent ephemerally (a static test that cards and replies never use ephemeral parameters) | S |
 
 ### Separate PRs, not part of the bridge

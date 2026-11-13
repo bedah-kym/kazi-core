@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Kazi chats list, phone</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<style>
+body{margin:0}
+button{font:inherit;cursor:pointer}
+a{color:#8a3016}a:hover{color:#6f2611}
+.brick{background-image:url("Backend/chatbot/static/img/brick-wall.svg");background-size:96px 48px}
+</style>
+</helmet>
+<div class="brick" style="width: 390px; height: 844px; box-sizing: border-box; display: flex; flex-direction: column; font-family: Inter, system-ui, sans-serif; font-size: 15px; line-height: 1.5; color: #3d3929; background-color: #fcfbf8; overflow: hidden">
+
+  <header style="flex: none; display: flex; flex-direction: column; gap: 12px; padding: 16px 16px 12px">
+    <div style="display: flex; align-items: center; justify-content: space-between">
+      <div style="display: flex; align-items: center; gap: 12px">
+        <span style="width: 36px; height: 36px; border-radius: 11px; background: #a83c1e; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(168,60,30,.3)"><svg viewBox="5 3 23 26" width="18" height="18" aria-hidden="true"><polygon fill="#fff" points="5,3 11,3 11,29 5,29"/><polygon fill="#fff" points="11,16 18,16 27,29 20,29"/><polygon fill="#f6c9b6" points="15,12 22,12 28,3 21,3"/></svg></span>
+        <h1 style="margin: 0; font-size: 24px; font-weight: 700; letter-spacing: -0.02em">Chats</h1>
+      </div>
+      <button aria-label="New chat" style="width: 44px; height: 44px; border: 0; border-radius: 50%; background: rgba(168,60,30,.12); color: #8a3016; display: flex; align-items: center; justify-content: center">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+    </div>
+    <label style="display: flex; align-items: center; gap: 8px; height: 48px; padding: 0 16px; border-radius: 999px; background: #fff; border: 1px solid #e5e0d5; color: #6e6a5e">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M11 4a7 7 0 100 14 7 7 0 000-14zM16 16l4 4"/></svg>
+      <input type="search" placeholder="Search chats" aria-label="Search chats" style="border: 0; outline: 0; background: transparent; font: inherit; font-size: 16px; color: #3d3929; flex-grow: 1; min-width: 0">
+    </label>
+  </header>
+
+  <main style="flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; gap: 6px; padding: 4px 12px; overflow: hidden">
+    <a href="ChatPhone.dc.html" style="display: flex; align-items: center; gap: 12px; min-height: 68px; box-sizing: border-box; padding: 10px 12px; border-radius: 14px; background: #fff; border: 1px solid #e5e0d5; text-decoration: none; color: #3d3929">
+      <span style="width: 44px; height: 44px; flex: none; border-radius: 50%; background: #a83c1e; display: flex; align-items: center; justify-content: center"><svg viewBox="5 3 23 26" width="20" height="20" aria-hidden="true"><polygon fill="#fff" points="5,3 11,3 11,29 5,29"/><polygon fill="#fff" points="11,16 18,16 27,29 20,29"/><polygon fill="#f6c9b6" points="15,12 22,12 28,3 21,3"/></svg></span>
+      <span style="display: flex; flex-direction: column; min-width: 0; flex-grow: 1">
+        <span style="display: flex; justify-content: space-between; gap: 8px"><span style="font-weight: 600; font-size: 16px">General</span><span style="font-size: 12px; color: #6e6a5e">Now</span></span>
+        <span style="font-size: 14px; color: #8a3016; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Waiting for your approval</span>
+      </span>
+    </a>
+    <a href="ChatPhone.dc.html" style="display: flex; align-items: center; gap: 12px; min-height: 68px; box-sizing: border-box; padding: 10px 12px; border-radius: 14px; background: #fff; border: 1px solid #e5e0d5; text-decoration: none; color: #3d3929">
+      <span style="width: 44px; height: 44px; flex: none; border-radius: 50%; background: #e9e4d8; color: #57513f; font-weight: 600; display: flex; align-items: center; justify-content: center">CW</span>
+      <span style="display: flex; flex-direction: column; min-width: 0; flex-grow: 1">
+        <span style="display: flex; justify-content: space-between; gap: 8px"><span style="font-weight: 600; font-size: 16px">Client work</span><span style="font-size: 12px; color: #6e6a5e">Tue</span></span>
+        <span style="font-size: 14px; color: #6e6a5e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">You: Can you summarise the brief?</span>
+      </span>
+      <span style="min-width: 22px; height: 22px; padding: 0 6px; box-sizing: border-box; border-radius: 999px; background: #a83c1e; color: #fff; font-size: 12px; font-weight: 600; display: flex; align-items: center; justify-content: center">2</span>
+    </a>
+    <a href="ChatPhone.dc.html" style="display: flex; align-items: center; gap: 12px; min-height: 68px; box-sizing: border-box; padding: 10px 12px; border-radius: 14px; background: #fff; border: 1px solid #e5e0d5; text-decoration: none; color: #3d3929">
+      <span style="width: 44px; height: 44px; flex: none; border-radius: 50%; background: #e9e4d8; color: #57513f; font-weight: 600; display: flex; align-items: center; justify-content: center">TR</span>
+      <span style="display: flex; flex-direction: column; min-width: 0; flex-grow: 1">
+        <span style="display: flex; justify-content: space-between; gap: 8px"><span style="font-weight: 600; font-size: 16px">Trip planning</span><span style="font-size: 12px; color: #6e6a5e">Mon</span></span>
+        <span style="font-size: 14px; color: #6e6a5e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Kazi: Itinerary saved</span>
+      </span>
+    </a>
+  </main>
+
+  <!-- Bottom tab bar: primary navigation on phones -->
+  <nav aria-label="Primary" style="flex: none; display: flex; padding: 6px 8px 10px; background: rgba(252,251,248,.96); border-top: 1px solid #e5e0d5">
+    <sc-for list="{{tabs}}" as="tab" hint-placeholder-count="5">
+      <a href="{{tab.href}}" aria-current="{{tab.current}}" style="{{tab.style}}">
+        <span style="{{tab.pill}}"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="{{tab.d}}"/></svg></span>
+        <span>{{tab.label}}</span>
+      </a>
+    </sc-for>
+  </nav>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+renderVals() {
+var base = 'flex:1 1 0;min-height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;text-decoration:none;font-size:11px;';
+var pill = 'width:56px;height:30px;border-radius:999px;display:flex;align-items:center;justify-content:center;';
+var items = [
+['Home', 'M3 11l9-8 9 8M5 10v10h14V10', 'DashboardPhone.dc.html'],
+['Chats', 'M4 5h16v11H9l-5 4z', 'ChatsListPhone.dc.html'],
+['Automations', 'M5 4h5v5H5zM14 15h5v5h-5zM7.500 9v4.500a2 2 0 002 2H14', '#'],
+['Inbox', 'M4 13l2-8h12l2 8v6H4zM4 13h5a3 3 0 006 0h5', '#'],
+['More', 'M4 7h16M4 12h16M4 17h16', '#']
+];
+return {
+tabs: items.map(function (it) {
+var cur = it[0] === 'Chats';
+return {
+label: it[0], d: it[1], href: it[2], current: cur ? 'page' : null,
+style: base + (cur ? 'color:#8a3016;font-weight:600;' : 'color:#57513f;font-weight:500;'),
+pill: pill + (cur ? 'background:rgba(168,60,30,.14);' : '')
+};
+})
+};
+}
+}
+</script>
+</body>
+</html>

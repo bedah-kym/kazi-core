@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Kazi voice, conversation mode</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<style>
+body{margin:0}
+button{font:inherit;cursor:pointer}
+a{color:#f6a685}a:hover{color:#f8bfa6}
+</style>
+</helmet>
+<main style="width: 390px; height: 844px; box-sizing: border-box; display: flex; flex-direction: column; font-family: Inter, system-ui, sans-serif; font-size: 15px; line-height: 1.5; color: #edeae2; background: #262624; overflow: hidden">
+
+  <header style="height: 60px; flex: none; box-sizing: border-box; display: flex; align-items: center; gap: 10px; padding: 0 8px 0 16px">
+    <div style="display: flex; flex-direction: column; flex-grow: 1; min-width: 0">
+      <h1 style="margin: 0; font-size: 16px; font-weight: 600">Talking with Kazi</h1>
+      <span style="font-size: 12px; color: #a5a098">General · everything is saved to the chat</span>
+    </div>
+    <button aria-label="Back to the chat" style="height: 44px; padding: 0 14px; border: 1px solid #3e3d38; border-radius: 999px; background: transparent; color: #edeae2; font-size: 14px; font-weight: 500; display: flex; align-items: center; gap: 8px">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/></svg>Chat
+    </button>
+  </header>
+
+  <!-- Captions: everything spoken is also shown -->
+  <div aria-live="polite" style="flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; justify-content: flex-end; gap: 14px; padding: 12px 20px; overflow: hidden">
+    <div style="display: flex; flex-direction: column; gap: 2px; color: #a5a098">
+      <span style="font-size: 11px; font-weight: 600; letter-spacing: .1em">YOU</span>
+      <span style="font-size: 17px">Remind me on Friday to check if she has paid.</span>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 2px">
+      <span style="font-size: 11px; font-weight: 600; letter-spacing: .1em; color: #ef8460">KAZI</span>
+      <span style="font-size: 20px; line-height: 1.4">Done. I will remind you on Friday at nine. I can also send her a short follow-up <span style="color: #a5a098">now if you like.</span></span>
+    </div>
+
+    <!-- Actions still need a tap -->
+    <div style="display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 16px; background: #30302d; border: 1px solid #3e3d38">
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <span style="font-size: 11px; font-weight: 600; letter-spacing: .1em; color: #a5a098">SET REMINDER · DONE</span>
+        <span>Friday 9:00 AM: check whether Amina has paid</span>
+      </div>
+      <div style="height: 1px; background: #3e3d38"></div>
+      <div style="display: flex; flex-direction: column; gap: 8px">
+        <span style="font-size: 11px; font-weight: 600; letter-spacing: .1em; color: #ef8460">SEND EMAIL · NEEDS A TAP</span>
+        <span>Follow-up to amina@example.com</span>
+        <div style="display: flex; gap: 8px">
+          <button style="flex: 2 1 0; height: 48px; border: 0; border-radius: 999px; background: #a83c1e; color: #fff; font-weight: 600; font-size: 15px">Approve and send</button>
+          <button style="flex: 1 1 0; height: 48px; border: 1px solid #3e3d38; border-radius: 999px; background: transparent; color: #edeae2; font-weight: 500; font-size: 15px">Not now</button>
+        </div>
+        <span style="font-size: 12px; color: #a5a098">Saying "yes" will not approve this. Sending needs a tap.</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- State and controls -->
+  <div style="flex: none; display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 8px 20px 24px">
+    <div role="img" aria-label="Kazi is speaking" style="height: 56px; display: flex; align-items: center; justify-content: center; gap: 4px">
+      <sc-for list="{{bars}}" as="b" hint-placeholder-count="21"><span style="{{b}}"></span></sc-for>
+    </div>
+    <span style="font-size: 13px; color: #a5a098">Kazi is speaking. Start talking to interrupt.</span>
+    <div style="display: flex; align-items: center; gap: 20px">
+      <button aria-label="Mute your microphone" style="width: 56px; height: 56px; border: 1px solid #3e3d38; border-radius: 50%; background: #30302d; color: #edeae2; display: flex; align-items: center; justify-content: center"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a3 3 0 00-3 3v5a3 3 0 006 0V6a3 3 0 00-3-3zM6 11a6 6 0 0012 0M12 17v4"/></svg></button>
+      <button aria-label="Stop Kazi speaking" style="width: 72px; height: 72px; border: 0; border-radius: 50%; background: #a83c1e; color: #fff; display: flex; align-items: center; justify-content: center; box-shadow: 0 6px 20px rgba(168,60,30,.45)"><svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></button>
+      <button aria-label="End the conversation" style="width: 56px; height: 56px; border: 1px solid #3e3d38; border-radius: 50%; background: #30302d; color: #edeae2; display: flex; align-items: center; justify-content: center"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </div>
+  </div>
+</main>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+renderVals() {
+var hs = [10, 18, 30, 44, 26, 14, 36, 52, 40, 22, 56, 34, 18, 46, 30, 16, 38, 24, 12, 20, 10];
+return { bars: hs.map(function (h) { return 'width:5px;flex:none;border-radius:3px;height:' + h + 'px;background:#ef8460;'; }) };
+}
+}
+</script>
+</body>
+</html>

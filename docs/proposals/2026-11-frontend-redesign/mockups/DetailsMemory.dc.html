@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Kazi details panel, Memory tab</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<style>
+body{margin:0}
+button{font:inherit;cursor:pointer}
+a{color:#8a3016}a:hover{color:#6f2611}
+</style>
+</helmet>
+<aside aria-label="Chat details" style="width: 360px; height: 900px; box-sizing: border-box; background: #fcfbf8; display: flex; flex-direction: column; padding: 14px 16px; gap: 14px; overflow: hidden; font-family: Inter, system-ui, sans-serif; font-size: 15px; line-height: 1.5; color: #3d3929">
+  <div style="display: flex; align-items: center; gap: 10px">
+    <span style="width: 36px; height: 36px; flex: none; border-radius: 50%; background: #e7ead9; color: #4a5630; font-weight: 600; display: flex; align-items: center; justify-content: center">W</span>
+    <div style="display: flex; flex-direction: column; flex-grow: 1; min-width: 0">
+      <span style="font-weight: 600">Writer</span>
+      <span style="font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; color: #6e6a5e">claude · ask first</span>
+    </div>
+  </div>
+
+  <div role="tablist" aria-label="Details" style="display: flex; gap: 20px; border-bottom: 1px solid #e5e0d5">
+    <button role="tab" aria-selected="false" style="height: 40px; padding: 0; border: 0; border-bottom: 2px solid transparent; background: transparent; color: #57513f; font-weight: 500; font-size: 14px">Activity</button>
+    <button role="tab" aria-selected="false" style="height: 40px; padding: 0; border: 0; border-bottom: 2px solid transparent; background: transparent; color: #57513f; font-weight: 500; font-size: 14px">Notes</button>
+    <button role="tab" aria-selected="true" style="height: 40px; padding: 0; border: 0; border-bottom: 2px solid #a83c1e; background: transparent; color: #3d3929; font-weight: 600; font-size: 14px">Memory</button>
+  </div>
+
+  <p style="margin: 0; font-size: 13px; color: #57513f">What Kazi remembers in this chat. Edit anything that is wrong, or forget it.</p>
+
+  <section aria-label="Facts" style="display: flex; flex-direction: column; gap: 6px">
+    <h3 style="margin: 0; font-size: 11px; font-weight: 600; letter-spacing: .1em; color: #6e6a5e">FACTS</h3>
+    <div style="display: flex; align-items: flex-start; gap: 8px; padding: 10px 6px 10px 12px; border: 1px solid #e5e0d5; border-radius: 10px; background: #fff">
+      <span style="flex-grow: 1; font-size: 14px">The essay is due on Friday and has a 1,500-word limit.</span>
+      <button aria-label="Edit this fact" style="width: 36px; height: 36px; flex: none; border: 0; border-radius: 8px; background: transparent; color: #57513f; display: flex; align-items: center; justify-content: center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16zM13 7l4 4"/></svg></button>
+      <button aria-label="Forget this fact" style="width: 36px; height: 36px; flex: none; border: 0; border-radius: 8px; background: transparent; color: #57513f; display: flex; align-items: center; justify-content: center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </div>
+    <div style="display: flex; align-items: flex-start; gap: 8px; padding: 10px 6px 10px 12px; border: 1px solid #e5e0d5; border-radius: 10px; background: #fff">
+      <span style="flex-grow: 1; font-size: 14px">The draft lives in <span style="font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px">essay-draft.md</span> in the workspace.</span>
+      <button aria-label="Edit this fact" style="width: 36px; height: 36px; flex: none; border: 0; border-radius: 8px; background: transparent; color: #57513f; display: flex; align-items: center; justify-content: center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16zM13 7l4 4"/></svg></button>
+      <button aria-label="Forget this fact" style="width: 36px; height: 36px; flex: none; border: 0; border-radius: 8px; background: transparent; color: #57513f; display: flex; align-items: center; justify-content: center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </div>
+  </section>
+
+  <section aria-label="Preferences" style="display: flex; flex-direction: column; gap: 6px">
+    <h3 style="margin: 0; font-size: 11px; font-weight: 600; letter-spacing: .1em; color: #6e6a5e">PREFERENCES</h3>
+    <div style="display: flex; align-items: flex-start; gap: 8px; padding: 10px 6px 10px 12px; border: 1px solid #e5e0d5; border-radius: 10px; background: #fff">
+      <span style="flex-grow: 1; font-size: 14px">Use British spelling.</span>
+      <button aria-label="Edit this preference" style="width: 36px; height: 36px; flex: none; border: 0; border-radius: 8px; background: transparent; color: #57513f; display: flex; align-items: center; justify-content: center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16zM13 7l4 4"/></svg></button>
+      <button aria-label="Forget this preference" style="width: 36px; height: 36px; flex: none; border: 0; border-radius: 8px; background: transparent; color: #57513f; display: flex; align-items: center; justify-content: center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </div>
+    <div style="display: flex; align-items: flex-start; gap: 8px; padding: 10px 6px 10px 12px; border: 1px solid #e5e0d5; border-radius: 10px; background: #fff">
+      <span style="flex-grow: 1; font-size: 14px">Show changes as a before and after, not a full rewrite.</span>
+      <button aria-label="Edit this preference" style="width: 36px; height: 36px; flex: none; border: 0; border-radius: 8px; background: transparent; color: #57513f; display: flex; align-items: center; justify-content: center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16zM13 7l4 4"/></svg></button>
+      <button aria-label="Forget this preference" style="width: 36px; height: 36px; flex: none; border: 0; border-radius: 8px; background: transparent; color: #57513f; display: flex; align-items: center; justify-content: center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </div>
+  </section>
+
+  <section aria-label="Stale" style="display: flex; flex-direction: column; gap: 6px">
+    <div style="display: flex; align-items: baseline; justify-content: space-between">
+      <h3 style="margin: 0; font-size: 11px; font-weight: 600; letter-spacing: .1em; color: #6e6a5e">STALE</h3>
+      <span style="font-size: 12px; color: #6e6a5e">Not used in replies</span>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px dashed #cfc8b8; border-radius: 10px; background: #f6f3ec">
+      <span style="font-size: 14px; color: #57513f">Ask the teacher whether charts count toward the word limit.</span>
+      <div style="display: flex; align-items: center; gap: 8px">
+        <span style="font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; color: #6e6a5e; flex-grow: 1">action item · 5 weeks old</span>
+        <button style="height: 36px; padding: 0 14px; border: 1px solid #e5e0d5; border-radius: 999px; background: #fff; color: #3d3929; font-weight: 500; font-size: 13px">Still open</button>
+        <button style="height: 36px; padding: 0 14px; border: 1px solid #e5e0d5; border-radius: 999px; background: #fff; color: #3d3929; font-weight: 500; font-size: 13px">Done</button>
+        <button style="height: 36px; padding: 0 14px; border: 0; border-radius: 999px; background: transparent; color: #57513f; font-weight: 500; font-size: 13px">Drop</button>
+      </div>
+    </div>
+  </section>
+
+  <button style="align-self: flex-start; height: 40px; padding: 0 16px; border: 1px solid #e5e0d5; border-radius: 999px; background: #fff; color: #3d3929; font-weight: 500; font-size: 14px; display: flex; align-items: center; gap: 8px">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Add something to remember
+  </button>
+</aside>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":360,"height":900}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

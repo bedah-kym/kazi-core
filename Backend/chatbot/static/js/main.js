@@ -272,7 +272,7 @@ function connectToChat(roomId) {
             return;
         }
         // AI Integration
-        if (data.command === 'ai_stream' || data.command === 'ai_message' || data.command === 'ai_message_saved' || data.command === 'ai_voice_ready' || data.command === 'orchestration_step') {
+        if (data.command === 'ai_stream' || data.command === 'ai_message_saved' || data.command === 'ai_voice_ready' || data.command === 'orchestration_step') {
             if (window.kaziAssistant) {
                 window.kaziAssistant.handleMessage(data);
             }

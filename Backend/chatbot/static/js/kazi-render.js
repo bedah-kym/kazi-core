@@ -46,9 +46,7 @@
         } catch (error) {
             host = 'unknown';
         }
-        var span = global.document.createElement('span');
-        span.textContent = '[image from ' + host + ' not loaded]';
-        return span;
+        return global.document.createTextNode('[image from ' + host + ' not loaded]');
     }
 
     function installHooks(purify) {

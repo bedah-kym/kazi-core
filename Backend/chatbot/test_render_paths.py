@@ -50,11 +50,13 @@ class RenderPathWiringTests(SimpleTestCase):
                 offenders.append(str(path.relative_to(HERE)))
         self.assertEqual(offenders, [])
 
-    def test_render_module_falls_back_to_plain_text(self):
+    def test_render_module_wiring_has_a_text_content_fallback(self):
         path = HERE / "static" / "js" / "kazi-render.js"
         self.assertTrue(path.is_file(), "the shared render module is missing")
         source = _read(path)
         self.assertIn("textContent", source)
+        self.assertIn("createTextNode", source)
+        self.assertNotIn("createElement('span')", source)
         inner_html_lines = [
             line.strip() for line in source.splitlines() if "innerHTML" in line
         ]
@@ -73,6 +75,15 @@ class RenderPathWiringTests(SimpleTestCase):
         self.assertIn("style", forbid_tags.group(1))
         self.assertIn("ALLOW_DATA_ATTR: false", source)
 
+    def test_ai_assistant_has_no_raw_message_paths(self):
+        source = _read(HERE / "static" / "js" / "ai-assistant.js")
+        main = _read(HERE / "static" / "js" / "main.js")
+        self.assertNotIn("displayAIMessage", source)
+        self.assertNotIn("data.command === 'ai_message'", source)
+        self.assertNotIn("data.command === 'ai_message'", main)
+        self.assertNotIn("${label", source)
+        self.assertIn("kazi-step-label", source)
+
     def test_chatbase_pins_the_libraries_and_loads_the_renderer_first(self):
         source = _read(HERE / "templates" / "chatbot" / "chatbase.html")
         marked_tag = re.search(
@@ -84,6 +95,7 @@ class RenderPathWiringTests(SimpleTestCase):
         self.assertIsNotNone(marked_tag)
         self.assertIsNotNone(purify_tag)
         self.assertRegex(marked_tag.group(1), r"marked@\d+\.\d+\.\d+/marked\.min\.js")
+        self.assertRegex(purify_tag.group(1), r"/dompurify/3\.4\.17/purify\.min\.js")
         for tag in (marked_tag, purify_tag):
             self.assertIn("integrity=", tag.group(0))
             self.assertIn("crossorigin=", tag.group(0))

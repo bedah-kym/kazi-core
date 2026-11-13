@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Approval prompts show each parameter exactly as it will run; chat messages
   render through a narrower sanitiser.
+- Images from other sites in chat messages now show as a short note instead of
+  loading.
 
 ### Added — exact stop cancels the running turn (#216b-3)
 

@@ -12,6 +12,11 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 BOT_USERNAME = "kazi"
 _WAKE_WORD = re.compile(r"^@kazi(?=$|[\s,:;.!?])[\s,:;]*", re.IGNORECASE)
 _TRIMMED = "\n[... middle of this message trimmed for length ...]\n"
+_DID_NOT_RUN = frozenset({
+    "denied", "skipped", "declined", "expired", "superseded",
+    "budget_skipped", "policy_stopped",
+})
+_RAN_STATUS = frozenset({"ok", "error", "outcome_unknown", "success", "completed"})
 
 Row = Tuple
 
@@ -132,32 +137,59 @@ def _assistant_messages(
         return out
 
     tools = extra.get("tools") if isinstance(extra, dict) else None
+    rows = extra.get("tool_calls") if isinstance(extra, dict) else None
+    typed = isinstance(rows, list) and bool(rows)
+    records = rows if typed else tools
     replay = (
-        isinstance(tools, list) and bool(tools)
+        isinstance(records, list) and bool(records)
         and viewer_user_id is not None
         and extra.get("by") == viewer_user_id
     )
     if replay:
         use_blocks: List[Dict[str, Any]] = []
         result_blocks: List[Dict[str, Any]] = []
-        for index, record in enumerate(tools):
-            tool_id = f"hist-{message_id}-{index}"
-            tool_input = record.get("input") if isinstance(record, dict) else None
+        for index, record in enumerate(records):
+            if not isinstance(record, dict):
+                continue
+            status = record.get("status") or ""
+            ran = status in _RAN_STATUS
+            if typed:
+                # Namespace the replay id per row. A provider may omit its call
+                # id (the client falls back to call_<idx>), so two turns can
+                # share call_0; the replayed history must not.
+                seq = record.get("seq", index)
+                tool_id = f"{'hist' if ran else 'noexec'}-{message_id}-{seq}"
+            else:
+                tool_id = f"hist-{message_id}-{index}"
+            tool_input = record.get("input")
             use_blocks.append({
                 "type": "tool_use",
                 "id": tool_id,
-                "name": (record.get("name") if isinstance(record, dict) else "") or "",
+                "name": record.get("name") or "",
                 "input": tool_input if isinstance(tool_input, dict) else {},
             })
-            shown = (record.get("shown") if isinstance(record, dict) else "") or ""
-            note = record.get("note") if isinstance(record, dict) else None
+            shown = record.get("shown") or ""
+            if record.get("unreadable"):
+                shown = "[record unreadable]"
+            note = record.get("note")
             if note:
                 shown = f"{shown}\n{note}".strip()
-            result_blocks.append({
+            if status in _DID_NOT_RUN:
+                # The call did not run; say so plainly so the model can answer
+                # "why didn't you run it?" (live QA item 1).
+                body = shown
+                if body.startswith("not executed:"):
+                    body = body[len("not executed:"):].strip()
+                label = status.replace("_", " ")
+                shown = f"not executed ({label}): {body}".strip()
+            result = {
                 "type": "tool_result",
                 "tool_use_id": tool_id,
                 "content": shown,
-            })
+            }
+            if typed and status and status != "ok":
+                result["is_error"] = True
+            result_blocks.append(result)
         out.append(("assistant", use_blocks))
         out.append(("user", result_blocks))
 

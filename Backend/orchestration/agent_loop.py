@@ -1222,6 +1222,27 @@ def _extract_tool_calls(content_blocks: List[Dict[str, Any]]) -> List[Dict[str, 
     return calls
 
 
+def _non_run_event(
+    tc: Dict[str, Any],
+    status: str,
+    reason: str,
+    iteration: int,
+) -> AgentEvent:
+    """A ``tool_result``-shaped event for a call that did not run (P3-5).
+
+    The Turn records it so the next turn can answer "why didn't you run it?".
+    """
+    return AgentEvent("tool_result", {
+        "id": tc.get("id", ""),
+        "name": tc.get("name", ""),
+        "input": tc.get("input", {}),
+        "result": {"status": status, "message": reason, "not_run": True},
+        "shown": f"not executed: {reason}" if not reason.startswith("not executed") else reason,
+        "iteration": iteration,
+        "not_run": True,
+    })
+
+
 def _dedup_key(name: str, tool_input: Dict[str, Any]) -> str:
     """Hash a tool call for dedup within a single loop."""
     return f"{name}:{json.dumps(tool_input, sort_keys=True, default=str)}"
@@ -1598,8 +1619,35 @@ def _order_delegated_result(result: Dict[str, Any]) -> Dict[str, Any]:
     ordered: Dict[str, Any] = {
         key: result[key] for key in _DELEGATED_RESULT_LEADING_KEYS if key in result
     }
-    ordered.update({key: value for key, value in result.items() if key not in ordered})
+    ordered.update({
+        key: value for key, value in result.items()
+        if key not in ordered and not key.startswith("_")
+    })
     return ordered
+
+
+def _take_delegated_calls(
+    tool_name: str, result: Any,
+) -> Optional[List[Dict[str, Any]]]:
+    """Take the sub-agent's private call log off a delegated result.
+
+    The log is recorded on the Turn with ``provenance="delegated"`` and never
+    replayed to the model or stored in the reply payload.
+    """
+    if tool_name != "delegate_task" or not isinstance(result, dict):
+        return None
+    calls = result.pop("_delegated_calls", None)
+    return calls if isinstance(calls, list) else None
+
+
+def _take_server_tool_uses(tool_name: str, result: Any) -> int:
+    """Take the sub-agent's provider-search count off a delegated result."""
+    if tool_name != "delegate_task" or not isinstance(result, dict):
+        return 0
+    try:
+        return int(result.pop("_server_tool_uses", 0) or 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0
 
 
 def _serialize_delegated_result(result: Dict[str, Any]) -> str:
@@ -1844,12 +1892,13 @@ async def _record_receipt(
     result: Dict[str, Any],
     context: Dict[str, Any],
     basis: str = "",
-) -> None:
+) -> Optional[int]:
     """Record an action receipt for audit trail (best-effort).
 
     ``basis`` says why a shell command ran: ``human`` (confirmed), or the
     rule that let it auto-run (``sandbox``, ``allowlist``, ``armed_window``,
-    ``open_profile``).
+    ``open_profile``). Returns the receipt id so the Turn's call row can point
+    at it; None when no receipt was written.
     """
     try:
         from orchestration.action_receipts import record_action_receipt, should_record_receipt
@@ -1857,7 +1906,7 @@ async def _record_receipt(
         # The executor runs an alias as its canonical action; audit it as that.
         tool_name = resolve_action_alias(tool_name) or tool_name
         if not should_record_receipt(tool_name):
-            return
+            return None
         action_def = get_action_definition(tool_name) or {}
         status = "success" if result.get("status") == "success" else "error"
         reason = result.get("message") or result.get("error") or ""
@@ -1865,7 +1914,7 @@ async def _record_receipt(
         data_payload = dict(data_payload or {"message": reason})
         if basis:
             data_payload["approval_basis"] = basis
-        await record_action_receipt(
+        receipt = await record_action_receipt(
             user_id=context.get("user_id"),
             room_id=context.get("room_id"),
             action=tool_name,
@@ -1875,8 +1924,10 @@ async def _record_receipt(
             status=status,
             reason=reason,
         )
+        return getattr(receipt, "id", None)
     except Exception as exc:
         logger.warning("Action receipt not recorded for %s: %s", tool_name, exc)
+        return None
 
 
 # --------------------------------------------------------------------------- #
@@ -2223,9 +2274,11 @@ async def _execute_scoped_tool_calls(
             result = await _execute_with_timeout(tc["name"], tc["input"], context)
             executed = True
         sub_tool_log.append({
+            "call_id": tc["id"],
             "name": tc["name"],
             "input": tc["input"],
             "status": result.get("status"),
+            "shown": _serialize_tool_result(tc["name"], result),
         })
         if executed:
             await _record_receipt(
@@ -2276,6 +2329,7 @@ async def _run_sub_agent(
     sub_tool_log: List[Dict[str, Any]] = []
     iteration = 0
     tokens_used = 0
+    server_searches = 0
     stopped_reason: Optional[str] = None
     completed = False
     consecutive_pauses = 0
@@ -2369,6 +2423,7 @@ async def _run_sub_agent(
         if searches > 0:
             # A server-side search brings in untrusted text; the main loop taints on it too.
             _record_search_usage(context.get("user_id"), searches)
+            server_searches += searches
             preferences = _taint_preferences(preferences, True)
 
         text = _extract_text(content_blocks)
@@ -2453,6 +2508,11 @@ async def _run_sub_agent(
         "iterations": iteration,
         "tokens_used": tokens_used,
         "tool_calls": len(sub_tool_log),
+        # Private to the harness: the Turn records what the sub-agent did with
+        # provenance="delegated". Serialisation drops every ``_`` key, so the
+        # model only ever sees the summary (A11).
+        "_delegated_calls": list(sub_tool_log),
+        "_server_tool_uses": server_searches,
     })
     return result
 
@@ -2794,6 +2854,9 @@ async def run_agent_loop(
                     if _untrusted_source(pending["name"]):
                         _taint_run(state, room_id)
 
+            delegated_calls = _take_delegated_calls(pending["name"], result)
+            server_tool_uses = _take_server_tool_uses(pending["name"], result)
+            receipt_id = None
             if not persona_unavailable:
                 state.tool_call_count += 1
                 state.tool_call_log.append({
@@ -2802,15 +2865,20 @@ async def run_agent_loop(
                     "output": result,
                     "iteration": state.iteration,
                 })
-                await _record_receipt(
+                receipt_id = await _record_receipt(
                     pending["name"], pending["input"], result, context, basis="human",
                 )
 
             yield AgentEvent("tool_result", {
+                "id": pending["id"],
                 "name": pending["name"],
                 "result": result,
                 "input": pending["input"],
                 "shown": _serialize_tool_result(pending["name"], result),
+                "iteration": state.iteration,
+                "delegated_calls": delegated_calls,
+                "server_tool_uses": server_tool_uses,
+                "receipt_id": receipt_id,
             })
             gated_blocks[call_id] = {
                 "type": "tool_result",
@@ -3167,6 +3235,13 @@ async def run_agent_loop(
                 "remaining": get_remaining_searches(user_id),
             })
             _taint_run(state, room_id)
+            # The provider ran its own search: the harness never saw a call, so
+            # hand the count to the Turn record (P3-5, B1).
+            yield AgentEvent("server_tool_use", {
+                "count": search_count,
+                "name": "web_search",
+                "iteration": state.iteration,
+            })
 
         # Append the assistant message to the conversation
         state.messages.append({"role": "assistant", "content": content_blocks})
@@ -3206,6 +3281,14 @@ async def run_agent_loop(
                     state.token_budget >= _turn_token_budget(False)
                     or state.tokens_used >= _turn_token_budget(False)
                 )
+                for tc in tool_calls:
+                    if tc["name"] == REQUEST_MORE_BUDGET_TOOL:
+                        continue
+                    yield _non_run_event(
+                        tc, "budget_skipped",
+                        "the model asked for more budget first",
+                        state.iteration,
+                    )
                 state.messages.append({
                     "role": "user",
                     "content": [
@@ -3308,6 +3391,10 @@ async def run_agent_loop(
                 persona=persona,
                 tainted=run_tainted,
             )
+            for denied_tc, denial_reason in denied_calls:
+                yield _non_run_event(
+                    denied_tc, "denied", denial_reason, state.iteration,
+                )
 
             # Checked again immediately before dispatch: a reaper may have
             # fenced this owner while the batch was being decided (#216b-1).
@@ -3414,6 +3501,8 @@ async def run_agent_loop(
                         # Charge the sub-run's work tokens to the turn so the
                         # single bound reflects them (T-F3).
                         _apply_delegated_spend(state, result, granted)
+                    delegated_calls = _take_delegated_calls(tc["name"], result)
+                    server_tool_uses = _take_server_tool_uses(tc["name"], result)
                     tool_results.append((tc, result))
                     state.tool_call_count += 1
                     state.tool_call_log.append({
@@ -3424,19 +3513,22 @@ async def run_agent_loop(
                     })
                     if _untrusted_source(tc["name"]):
                         _taint_run(state, room_id)
+                    receipt_id = await _record_receipt(
+                        tc["name"], tc["input"], result, context,
+                        basis=_shell_approval_basis(tc, preferences, run_tainted),
+                    )
                     yield AgentEvent("tool_start", {"name": tc["name"], "input": tc["input"]})
                     yield AgentEvent("tool_result", {
+                        "id": tc["id"],
                         "name": tc["name"],
                         "result": result,
                         "input": tc["input"],
                         "shown": _serialize_tool_result(tc["name"], result),
+                        "iteration": state.iteration,
+                        "delegated_calls": delegated_calls,
+                        "server_tool_uses": server_tool_uses,
+                        "receipt_id": receipt_id,
                     })
-
-                    # Receipt (fire-and-forget)
-                    await _record_receipt(
-                        tc["name"], tc["input"], result, context,
-                        basis=_shell_approval_basis(tc, preferences, run_tainted),
-                    )
 
             # ---- Build tool_result blocks (auto + refused) ------------ #
             tool_result_blocks = []
@@ -4046,6 +4138,10 @@ async def resume_after_expiry(
     state.pending_tools = list(
         state.pending_tools or ([state.pending_tool] if state.pending_tool else [])
     )
+    for held_call in state.pending_tools:
+        yield _non_run_event(
+            held_call, "expired", "the approval expired", state.iteration,
+        )
     noun = "approval" if turn.pause_kind == "approval" else "pause"
     yield AgentEvent("harness", {
         "text": f"{_expiry_text(turn.pause_expires_at, noun=noun)}; nothing ran.\n\n",
@@ -4099,6 +4195,10 @@ async def decline_after_expiry(
             state.pending_tools
             or ([state.pending_tool] if state.pending_tool else [])
         )
+        for held_call in state.pending_tools:
+            yield _non_run_event(
+                held_call, "expired", "the approval expired", state.iteration,
+            )
         _append_terminal_results(state, "approval expired")
     noun = "approval" if turn.pause_kind == "approval" else "pause"
     yield AgentEvent("harness", {

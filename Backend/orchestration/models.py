@@ -62,6 +62,9 @@ class Turn(models.Model):
     budget = models.JSONField(default=dict, blank=True)
     tainted = models.BooleanField(default=False)
     model = models.CharField(max_length=100, blank=True, default="")
+    # Retrieval calls the provider ran server-side (Anthropic web search) for
+    # this turn. Phase 4 queries "was there no retrieval this turn?" from it.
+    server_tool_uses = models.IntegerField(default=0)
     # P3-3 fills the encrypted pause body; it stays empty in this PR.
     paused_state_enc = models.TextField(null=True, blank=True)
     pause_expires_at = models.DateTimeField(null=True, blank=True)
@@ -88,6 +91,92 @@ class Turn(models.Model):
 
     def __str__(self):
         return f"Turn({self.id}, {self.state})"
+
+
+class TurnToolCall(models.Model):
+    """One tool call a Turn attempted, including the calls that never ran.
+
+    The row is written once its outcome is known: a held call gets its row
+    when it resolves. Rows are append-only; the bodies (``input`` and the text
+    the model was shown) are encrypted with the room key, like chat messages.
+    ``seq`` is the turn-local order and ``iteration`` the loop iteration, so
+    the replay can keep the true order without replaying narration (D11).
+    """
+
+    STATUS_CHOICES = [
+        ("ok", "Ok"),
+        ("error", "Error"),
+        ("denied", "Denied"),
+        ("skipped", "Skipped"),
+        ("declined", "Declined"),
+        ("expired", "Expired"),
+        ("superseded", "Superseded"),
+        ("budget_skipped", "Budget skipped"),
+        ("policy_stopped", "Policy stopped"),
+        ("outcome_unknown", "Outcome unknown"),
+    ]
+    PROVENANCE_CHOICES = [
+        ("main", "Main"),
+        ("delegated", "Delegated"),
+        # A provider-side search (Anthropic web search) the harness never saw as
+        # a client call. Recorded for Phase 4, never replayed: the request also
+        # declares the server tool of that name.
+        ("provider", "Provider"),
+    ]
+    DID_NOT_RUN = frozenset({
+        "denied", "skipped", "declined", "expired", "superseded",
+        "budget_skipped", "policy_stopped",
+    })
+
+    turn = models.ForeignKey(
+        "orchestration.Turn", on_delete=models.CASCADE, related_name="tool_calls",
+    )
+    seq = models.PositiveIntegerField()
+    iteration = models.PositiveIntegerField(default=0)
+    call_id = models.CharField(max_length=128)
+    name = models.CharField(max_length=100)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="ok")
+    untrusted = models.BooleanField(default=False)
+    retrieval = models.BooleanField(default=False)
+    provenance = models.CharField(
+        max_length=12, choices=PROVENANCE_CHOICES, default="main",
+    )
+    parent_call_id = models.CharField(max_length=128, blank=True, default="")
+    # The reply message of the segment in which this call resolved. Set once
+    # when that reply is saved, so a Turn that paused replays each row exactly
+    # once, on the message it belongs to.
+    message = models.ForeignKey(
+        "chatbot.Message", null=True, blank=True,
+        on_delete=models.SET_NULL, related_name="tool_calls",
+    )
+    input_enc = models.TextField(null=True, blank=True)
+    shown_enc = models.TextField(null=True, blank=True)
+    truncated = models.BooleanField(default=False)
+    receipt = models.ForeignKey(
+        "orchestration.ActionReceipt", null=True, blank=True,
+        on_delete=models.SET_NULL, related_name="tool_calls",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["turn_id", "seq"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["turn", "seq"], name="uniq_turn_tool_call_seq",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["turn", "provenance"]),
+            models.Index(fields=["message", "provenance", "seq"], name="ttc_message_prov_seq"),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None:
+            raise ValueError("TurnToolCall rows are append-only")
+        return super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"TurnToolCall({self.turn_id}, {self.seq}, {self.name}, {self.status})"
 
 
 class ActionReceipt(models.Model):

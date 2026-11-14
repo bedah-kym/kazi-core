@@ -13,15 +13,27 @@ from orchestration.security_policy import redact_sensitive_text, sanitize_parame
 RECORD_STRING_LIMIT = 160
 RECORD_STRING_MAX = RECORD_STRING_LIMIT + 80
 _MAX_RECORD_LIST_ITEMS = 10
-_SHORTENED = "... [record shortened: the call sent {length} characters]"
+_SHORTENED = (
+    " ... [record shortened: the call sent {length} characters; "
+    "{omitted:,} omitted] ... "
+)
 
 
 def _record_string(value: str) -> str:
-    original_length = len(value)
     text = redact_sensitive_text(value)
-    if len(text) <= RECORD_STRING_LIMIT:
+    length = len(text)
+    if length <= RECORD_STRING_MAX:
         return text
-    return text[:RECORD_STRING_LIMIT].rstrip() + _SHORTENED.format(length=original_length)
+    # Keep at least RECORD_STRING_LIMIT real characters (head and tail) and let
+    # the marker spend the rest of RECORD_STRING_MAX. The marker length is
+    # bounded by the worst-case digit count, and omitted counts the redacted
+    # text, not the pre-redaction value.
+    marker_bound = len(_SHORTENED.format(length=length, omitted=length))
+    keep = max(RECORD_STRING_LIMIT, RECORD_STRING_MAX - marker_bound)
+    head = keep // 2
+    tail = keep - head
+    marker = _SHORTENED.format(length=length, omitted=length - keep)
+    return text[:head] + marker + text[-tail:]
 
 
 def _record_item(value: Any) -> Any:

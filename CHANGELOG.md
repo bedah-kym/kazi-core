@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Approval prompts show each parameter exactly as it will run; chat messages
   render through a narrower sanitiser.
+- Raw HTML in a chat message shows as literal text. New upload messages are
+  stored as markdown links, and upload links already stored in the old HTML
+  shape still render as clickable file names.
 - Images from other sites in chat messages now show as a short note instead of
   loading.
 

@@ -449,7 +449,7 @@ function createMessage(data, roomId, prepend = false) {
         msgTextTag.className = 'message other-message';
     }
 
-    if ((hasContent && data.content.includes('<img')) || (safeHtml && safeHtml.includes('<img'))) {
+    if (safeHtml && safeHtml.includes('<img')) {
         msgTextTag.classList.add('sentimage');
     }
 

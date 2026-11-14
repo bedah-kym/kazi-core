@@ -8,11 +8,38 @@
     ];
     var ALLOWED_ATTR = ['href', 'src', 'alt', 'title', 'class', 'start'];
 
+    var LEGACY_UPLOAD = /^<a href='([^'<>\n]+)' target='_blank'>([^<>\n]+)<\/a>$/;
+
     var configured = false;
     var hooksInstalled = false;
 
     function plainText(container, text) {
         container.textContent = text == null ? '' : String(text);
+    }
+
+    function escapeHtml(text) {
+        return String(text == null ? '' : text).replace(/[&<>"']/g, function (char) {
+            return {
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            }[char];
+        });
+    }
+
+    function escapeMarkdown(text) {
+        return String(text).replace(/([\\`*_{}\[\]()#+\-.!|~<>])/g, '\\$1');
+    }
+
+    function safeUploadDestination(url) {
+        if (!/^(?:https?:\/\/|\/)/i.test(url)) return null;
+        return url.replace(/\\/g, '\\\\').replace(/</g, '\\<').replace(/>/g, '\\>');
+    }
+
+    function legacyUploadMarkdown(text) {
+        var match = LEGACY_UPLOAD.exec(text);
+        if (!match) return null;
+        var destination = safeUploadDestination(match[1]);
+        if (!destination) return null;
+        return '[' + escapeMarkdown(match[2]) + '](<' + destination + '>)';
     }
 
     function configureParser() {
@@ -25,6 +52,9 @@
                 renderer: {
                     checkbox: function (token) {
                         return token && token.checked ? '\u2611' : '\u2610';
+                    },
+                    html: function (token) {
+                        return escapeHtml(token && token.text);
                     }
                 }
             });
@@ -92,6 +122,8 @@
     function renderInto(container, text) {
         if (!container) return;
         var raw = text == null ? '' : String(text);
+        var legacyUpload = legacyUploadMarkdown(raw);
+        if (legacyUpload !== null) raw = legacyUpload;
         var marked = global.marked;
         var purify = global.DOMPurify;
         if (!marked || typeof marked.parse !== 'function' ||

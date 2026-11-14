@@ -73,6 +73,24 @@ ADMIN_PERSONA_REQUEST_RE = re.compile(
 
 DECRYPT_FAILED = "Error: Could not decrypt message."
 
+_MARKDOWN_SPECIAL_RE = re.compile(r'([\\`*_{}\[\]()#+\-.!|~<>])')
+
+
+def _escape_markdown_text(text) -> str:
+    return _MARKDOWN_SPECIAL_RE.sub(r'\\\1', str(text))
+
+
+def _markdown_file_link(url, name) -> str:
+    destination = (
+        str(url)
+        .replace('\\', '\\\\')
+        .replace('<', '\\<')
+        .replace('>', '\\>')
+        .replace('\r', '%0D')
+        .replace('\n', '%0A')
+    )
+    return f'[{_escape_markdown_text(name)}](<{destination}>)'
+
 
 class ChatConsumer(AsyncWebsocketConsumer):
     # Define constants for key rotation
@@ -1181,7 +1199,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
             # Encrypt the file message content
             encrypted_message = await self.encrypt_message({
-                'content': f"<a href='{file_url}' target='_blank'>{safe_name}</a>",
+                'content': _markdown_file_link(file_url, safe_name),
                 'timestamp': str(timezone.now())
             })
 

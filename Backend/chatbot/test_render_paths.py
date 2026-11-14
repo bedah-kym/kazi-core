@@ -103,6 +103,32 @@ class RenderPathWiringTests(SimpleTestCase):
         self.assertLess(render, source.index("js/main.js"))
         self.assertLess(render, source.index("js/ai-assistant.js"))
 
+    def test_render_module_shows_raw_html_as_literal_text(self):
+        source = _read(HERE / "static" / "js" / "kazi-render.js")
+        self.assertIn("function escapeHtml", source)
+        html_renderer = re.search(
+            r"html\s*:\s*function\s*\(token\)\s*\{(.*?)\}", source, re.DOTALL,
+        )
+        self.assertIsNotNone(html_renderer)
+        self.assertRegex(html_renderer.group(1), r"return\s+escapeHtml\(")
+        self.assertNotIn("return token.text;", source)
+
+    def test_render_module_recognises_only_the_legacy_upload_shape(self):
+        source = _read(HERE / "static" / "js" / "kazi-render.js")
+        self.assertIn(
+            "var LEGACY_UPLOAD = /^<a href='([^'<>\\n]+)' "
+            "target='_blank'>([^<>\\n]+)<\\/a>$/;",
+            source,
+        )
+        self.assertIn("legacyUploadMarkdown(raw)", source)
+        self.assertIn("function legacyUploadMarkdown", source)
+        self.assertIn("function escapeMarkdown", source)
+        self.assertIn(
+            "if (!/^(?:https?:\\/\\/|\\/)/i.test(url)) return null;",
+            source,
+        )
+        self.assertIn("container.innerHTML = clean;", source)
+
     def test_render_module_wiring_keeps_list_numbers_and_task_markers(self):
         source = _read(HERE / "static" / "js" / "kazi-render.js")
         allowed_attr = re.search(r"ALLOWED_ATTR\s*=\s*\[(.*?)\];", source, re.DOTALL)

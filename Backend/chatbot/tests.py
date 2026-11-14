@@ -9,6 +9,7 @@ The TransactionTestCase class locks the handoff boundary: a routed `@Kazi`
 message must delegate to the coordinator and persist the returned response.
 """
 import asyncio
+import base64
 import json
 import os
 import shutil
@@ -1005,6 +1006,60 @@ class UploadSecurityTests(TestCase):
         with self.settings(MEDIA_ROOT=self.tmp):
             result = transcribe_voice_note(message.id)
         self.assertEqual(result, "Invalid audio path")
+
+
+class FileMessageUploadTests(TestCase):
+    """Upload messages store a markdown link, never raw HTML."""
+
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username="file-uploader", password="pw")  # nosec B106 - test fixture - fake credential
+        self.member = Member.objects.select_related("User").get(User=self.user)
+        self.chatroom = Chatroom.objects.get(participants=self.member)
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def _consumer(self):
+        consumer = ChatConsumer()
+        consumer.scope = {"user": self.user}
+        consumer.room_name = str(self.chatroom.id)
+        consumer.room_group_name = f"chat_{self.chatroom.id}"
+        consumer.aes_gcm = _get_room_cipher(self.chatroom)
+        consumer.channel_layer = MagicMock()
+        consumer.channel_layer.group_send = AsyncMock()
+        consumer.send_chat_message = AsyncMock()
+        return consumer
+
+    def _upload(self, file_name):
+        consumer = self._consumer()
+        data = {
+            "from": self.user.username,
+            "chatid": str(self.chatroom.id),
+            "file_name": file_name,
+            "file_data": base64.b64encode(b"%PDF-1.4 test").decode("ascii"),
+        }
+        with self.settings(MEDIA_ROOT=self.tmp):
+            with patch("notifications.services.NotificationService.notify_room_message"):
+                async_to_sync(consumer.file_message)(data)
+        message = Message.objects.filter(member=self.member).order_by("-id").first()
+        self.assertIsNotNone(message)
+        content, _payload = async_to_sync(consumer._decrypt_stored)(message)
+        return content
+
+    def test_upload_message_is_a_markdown_link(self):
+        content = self._upload("report.pdf")
+        self.assertRegex(
+            content,
+            r"^\[report\\\.pdf\]\(<[^<>]*/chat_uploads/[0-9a-f]{32}\.pdf>\)$",
+        )
+        self.assertNotIn("<a ", content)
+
+    def test_upload_file_name_is_markdown_escaped(self):
+        content = self._upload("a_b[c](d)`e.pdf")
+        self.assertRegex(
+            content,
+            r"^\[a\\_bcde\\\.pdf\]\(<[^<>]*/chat_uploads/[0-9a-f]{32}\.pdf>\)$",
+        )
 
 
 class LogRedactionTests(SimpleTestCase):

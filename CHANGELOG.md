@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — Content-Security-Policy header
+
+- Every response now sends the configured `Content-Security-Policy` header.
+  The policy is enforced (not report-only) and its directives are built from
+  the hosts the templates and first-party scripts actually load. A CDN or image
+  host is allowed only when a page uses it, and the media origin follows
+  `MEDIA_URL`.
+- `form-action` allows the allauth authorize origins so social sign-in keeps
+  working, and `connect-src` allows only emoji-mart's data path on the CDN.
+- The header is written after the axes lockout and WhiteNoise middleware, so
+  lockout pages and static files carry it too.
+- The old `CSP_*` settings are replaced by the django-csp 4.0
+  `CONTENT_SECURITY_POLICY` format; `manage.py check` no longer reports the
+  outdated-settings warning.
+
 ### Changed — approval parameters and chat rendering
 
 - Approval prompts show each parameter exactly as it will run; chat messages

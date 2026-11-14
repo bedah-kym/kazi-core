@@ -288,6 +288,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'csp.middleware.CSPMiddleware',   # Content Security Policy
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -300,7 +301,6 @@ MIDDLEWARE = [
 
     # Security Middleware
     'axes.middleware.AxesMiddleware',  # Brute force protection
-    'csp.middleware.CSPMiddleware',   # Content Security Policy
 
     # Allauth Account Middleware
     'allauth.account.middleware.AccountMiddleware',
@@ -928,14 +928,104 @@ AXES_VERBOSE = True
 AXES_ENABLE_ADMIN = True
 
 
-# --- CSP (Content Security Policy) ---
-# --- CSP (Content Security Policy) ---
-CSP_DEFAULT_SRC = ("'self'",)
-CSP_STYLE_SRC = ("'self'", "'unsafe-inline'", "https://fonts.googleapis.com", "https://cdnjs.cloudflare.com", "https://cdn.jsdelivr.net")
-CSP_SCRIPT_SRC = ("'self'", "https://js.stripe.com", "https://cdn.tailwindcss.com", "https://cdn.jsdelivr.net", "https://assets.calendly.com", "https://code.jquery.com", "https://cdnjs.cloudflare.com")
-CSP_IMG_SRC = ("'self'", "data:", "https://*")
-CSP_FONT_SRC = ("'self'", "https://fonts.gstatic.com", "https://cdnjs.cloudflare.com")
-CSP_FRAME_SRC = ("'self'", "https://js.stripe.com")
+# --- Content Security Policy (django-csp 4.0) ---
+# Hosts below come from an inventory of Backend/**/templates and first-party
+# static JS. Add a host only when a page actually loads a resource from it.
+def _absolute_origin(url):
+    parsed = _urlparse(str(url or ''))
+    if parsed.scheme in ('http', 'https') and parsed.netloc:
+        return f"{parsed.scheme}://{parsed.netloc}"
+    return None
+
+
+def _websocket_origins(trusted_origins):
+    origins = set()
+    for origin in trusted_origins:
+        parsed = _urlparse(str(origin or ''))
+        scheme = {'https': 'wss', 'http': 'ws'}.get(parsed.scheme)
+        if scheme and parsed.netloc:
+            origins.add(f"{scheme}://{parsed.netloc}")
+    return sorted(origins)
+
+
+# allauth authorize origins, checked against the installed provider sources:
+# google -> accounts.google.com, github -> github.com,
+# linkedin_oauth2 -> www.linkedin.com, twitter -> api.x.com.
+SOCIAL_LOGIN_AUTHORIZE_ORIGINS = [
+    'https://accounts.google.com',
+    'https://github.com',
+    'https://www.linkedin.com',
+    'https://api.x.com',
+]
+
+
+def build_content_security_policy(media_url=None, trusted_origins=None, allowed_hosts=None):
+    if media_url is None:
+        from django.conf import settings as conf_settings
+        media_url = conf_settings.MEDIA_URL
+    if trusted_origins is None:
+        from django.conf import settings as conf_settings
+        trusted_origins = conf_settings.CSRF_TRUSTED_ORIGINS
+
+    media_origin = _absolute_origin(media_url)
+    img_src = [
+        "'self'",
+        'data:',
+        'blob:',
+        'https://ui-avatars.com',
+        'https://a.tile.openstreetmap.org',
+        'https://b.tile.openstreetmap.org',
+        'https://c.tile.openstreetmap.org',
+    ]
+    media_src = ["'self'", 'blob:']
+    connect_src = ["'self'"] + _websocket_origins(trusted_origins)
+    if media_origin:
+        img_src.append(media_origin)
+        media_src.append(media_origin)
+        connect_src.append(media_origin)
+    # emoji-mart fetches its data from this path on the same CDN as its script.
+    connect_src.append('https://cdn.jsdelivr.net/npm/@emoji-mart/')
+
+    return {
+        'default-src': ["'self'"],
+        'script-src': [
+            "'self'",
+            "'unsafe-inline'",
+            'https://cdnjs.cloudflare.com',
+            'https://cdn.jsdelivr.net',
+            'https://unpkg.com',
+            'https://code.jquery.com',
+            'https://assets.calendly.com',
+        ],
+        'style-src': [
+            "'self'",
+            "'unsafe-inline'",
+            'https://fonts.googleapis.com',
+            'https://cdnjs.cloudflare.com',
+            'https://cdn.jsdelivr.net',
+            'https://unpkg.com',
+            'https://assets.calendly.com',
+        ],
+        'font-src': [
+            "'self'",
+            'data:',
+            'https://fonts.gstatic.com',
+            'https://cdnjs.cloudflare.com',
+        ],
+        'img-src': img_src,
+        'media-src': media_src,
+        'connect-src': connect_src,
+        'frame-src': ["'self'", 'https://calendly.com'],
+        'object-src': ["'none'"],
+        'base-uri': ["'self'"],
+        'form-action': ["'self'"] + SOCIAL_LOGIN_AUTHORIZE_ORIGINS,
+        'frame-ancestors': ["'none'"],
+    }
+
+
+CONTENT_SECURITY_POLICY = {
+    'DIRECTIVES': build_content_security_policy(MEDIA_URL, CSRF_TRUSTED_ORIGINS, ALLOWED_HOSTS),
+}
 
 # --- HSTS (HTTP Strict Transport Security) ---
 # Enabled only when DEBUG is False to avoid local dev issues

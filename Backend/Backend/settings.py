@@ -928,14 +928,107 @@ AXES_VERBOSE = True
 AXES_ENABLE_ADMIN = True
 
 
-# --- CSP (Content Security Policy) ---
-# --- CSP (Content Security Policy) ---
-CSP_DEFAULT_SRC = ("'self'",)
-CSP_STYLE_SRC = ("'self'", "'unsafe-inline'", "https://fonts.googleapis.com", "https://cdnjs.cloudflare.com", "https://cdn.jsdelivr.net")
-CSP_SCRIPT_SRC = ("'self'", "https://js.stripe.com", "https://cdn.tailwindcss.com", "https://cdn.jsdelivr.net", "https://assets.calendly.com", "https://code.jquery.com", "https://cdnjs.cloudflare.com")
-CSP_IMG_SRC = ("'self'", "data:", "https://*")
-CSP_FONT_SRC = ("'self'", "https://fonts.gstatic.com", "https://cdnjs.cloudflare.com")
-CSP_FRAME_SRC = ("'self'", "https://js.stripe.com")
+# --- Content Security Policy (django-csp 4.0) ---
+# Hosts below come from an inventory of Backend/**/templates and first-party
+# static JS. Add a host only when a page actually loads a resource from it.
+def _absolute_origin(url):
+    parsed = _urlparse(str(url or ''))
+    if parsed.scheme in ('http', 'https') and parsed.netloc:
+        return f"{parsed.scheme}://{parsed.netloc}"
+    return None
+
+
+def _websocket_origins(trusted_origins, allowed_hosts):
+    origins = set()
+    for origin in trusted_origins:
+        parsed = _urlparse(str(origin or ''))
+        scheme = {'https': 'wss', 'http': 'ws'}.get(parsed.scheme)
+        if scheme and parsed.netloc:
+            origins.add(f"{scheme}://{parsed.netloc}")
+    if not origins:
+        for host in allowed_hosts:
+            if host == '*':
+                continue
+            origins.add(f"ws://{host}")
+            origins.add(f"wss://{host}")
+    return sorted(origins)
+
+
+def build_content_security_policy(media_url=None, trusted_origins=None, allowed_hosts=None):
+    if media_url is None:
+        from django.conf import settings as conf_settings
+        media_url = conf_settings.MEDIA_URL
+    if trusted_origins is None:
+        from django.conf import settings as conf_settings
+        trusted_origins = conf_settings.CSRF_TRUSTED_ORIGINS
+    if allowed_hosts is None:
+        from django.conf import settings as conf_settings
+        allowed_hosts = conf_settings.ALLOWED_HOSTS
+
+    media_origin = _absolute_origin(media_url)
+    img_src = [
+        "'self'",
+        'data:',
+        'blob:',
+        'https://ui-avatars.com',
+        'https://a.tile.openstreetmap.org',
+        'https://b.tile.openstreetmap.org',
+        'https://c.tile.openstreetmap.org',
+    ]
+    media_src = ["'self'", 'blob:']
+    if media_origin:
+        img_src.append(media_origin)
+        media_src.append(media_origin)
+
+    return {
+        'default-src': ["'self'"],
+        'script-src': [
+            "'self'",
+            "'unsafe-inline'",
+            'https://cdnjs.cloudflare.com',
+            'https://cdn.jsdelivr.net',
+            'https://unpkg.com',
+            'https://code.jquery.com',
+            'https://assets.calendly.com',
+        ],
+        'style-src': [
+            "'self'",
+            "'unsafe-inline'",
+            'https://fonts.googleapis.com',
+            'https://cdnjs.cloudflare.com',
+            'https://cdn.jsdelivr.net',
+            'https://unpkg.com',
+            'https://assets.calendly.com',
+        ],
+        'font-src': [
+            "'self'",
+            'data:',
+            'https://fonts.gstatic.com',
+            'https://cdnjs.cloudflare.com',
+        ],
+        'img-src': img_src,
+        'media-src': media_src,
+        'connect-src': ["'self'"] + _websocket_origins(trusted_origins, allowed_hosts),
+        'frame-src': ["'self'", 'https://calendly.com'],
+        'object-src': ["'none'"],
+        'base-uri': ["'self'"],
+        'form-action': ["'self'"],
+        'frame-ancestors': ["'none'"],
+    }
+
+
+class _ContentSecurityPolicyConfig(dict):
+    # django-csp reads this on every response. Rebuilding the directives keeps
+    # MEDIA_URL (and a later S3/R2 switch) reflected without re-importing settings.
+    def get(self, key, default=None):
+        if key == 'DIRECTIVES':
+            return build_content_security_policy()
+        return super().get(key, default)
+
+
+CONTENT_SECURITY_POLICY = _ContentSecurityPolicyConfig(
+    {'DIRECTIVES': build_content_security_policy(MEDIA_URL, CSRF_TRUSTED_ORIGINS, ALLOWED_HOSTS)}
+)
 
 # --- HSTS (HTTP Strict Transport Security) ---
 # Enabled only when DEBUG is False to avoid local dev issues

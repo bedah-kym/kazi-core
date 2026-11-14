@@ -95,6 +95,34 @@ store live in Redis. With `KAZI_LITE_PROFILE=1`:
 The full profile keeps the existing behaviour: `MODERATION_ENABLED` defaults to
 on when `HF_API_TOKEN` is set.
 
+## Content Security Policy
+
+Every response (HTML and JSON) carries an enforced
+`Content-Security-Policy` header — there is no report-only policy. The
+directives live in `CONTENT_SECURITY_POLICY` in `Backend/Backend/settings.py`
+and are built by `build_content_security_policy()`.
+
+The policy starts from `default-src 'self'`. Scripts and styles come from the
+app itself plus the CDNs the templates actually use (cdnjs, jsdelivr, unpkg,
+jQuery, Google Fonts, and Calendly's asset host); fonts come from
+`fonts.gstatic.com` and cdnjs; images come from the app, `data:`, `blob:`, the
+named avatar and OpenStreetMap tile hosts, and the media origin. `object-src`,
+`base-uri`, `form-action` and `frame-ancestors` are locked down. There is no
+`upgrade-insecure-requests`, so the plain-HTTP lite profile keeps working.
+
+- **Media origin.** When `MEDIA_URL` is absolute (R2/S3 or a custom domain), its
+  origin is added to `img-src` and `media-src`; a relative `MEDIA_URL` adds
+  nothing because the files are same-origin.
+- **WebSockets.** `connect-src` allows the app origin plus the WebSocket form of
+  each `DJANGO_CSRF_TRUSTED_ORIGINS` entry (`https`→`wss`, `http`→`ws`). With no
+  trusted origins configured, it falls back to `ws://`/`wss://` for each
+  `DJANGO_ALLOWED_HOSTS` entry. This keeps Channels working without allowing an
+  arbitrary host.
+- **Adding a host.** Add the origin only when a page really loads a resource
+  from it. `Backend/tests/test_csp.py` inventories the templates and first-party
+  static JS and fails when a loaded host is missing from the matching directive,
+  so a new CDN tag comes with a policy change.
+
 ## LLM providers & routing
 
 | Variable | Default | Purpose |

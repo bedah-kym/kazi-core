@@ -373,3 +373,133 @@ class ToolRecordReplayTests(SimpleTestCase):
             messages,
             [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}],
         )
+
+
+def _typed_reply(by, calls, model="Done.", harness=""):
+    """A reply whose calls live in the Turn's typed rows, not the payload."""
+    return {
+        "tools": [],
+        "tool_calls": calls,
+        "by": by,
+        "model": model,
+        "harness": harness,
+        "origin": "turn",
+    }
+
+
+class TypedToolCallReplayTests(SimpleTestCase):
+    def test_a_typed_row_replays_with_its_call_id_and_status(self):
+        rows = [
+            (1, "admin", "run it"),
+            (2, "kazi", "Done.", _typed_reply(1, [
+                {"call_id": "toolu_1", "seq": 1, "name": "run_command",
+                 "input": {"command": "ls"}, "status": "ok", "shown": "listed"},
+            ])),
+        ]
+
+        messages = build_history_messages(rows, viewer_user_id=1)
+
+        uses = messages[1]["content"]
+        results = messages[2]["content"]
+        self.assertEqual(uses[0]["id"], "toolu_1")
+        self.assertEqual(results[0]["tool_use_id"], "toolu_1")
+        self.assertEqual(results[0]["content"], "listed")
+        self.assertNotIn("is_error", results[0])
+
+    def test_a_declined_call_replays_as_a_result_that_says_it_did_not_run(self):
+        rows = [
+            (1, "admin", "run it"),
+            (2, "kazi", "Okay.", _typed_reply(1, [
+                {"call_id": "toolu_2", "seq": 1, "name": "run_command",
+                 "input": {"command": "rm it"}, "status": "declined",
+                 "shown": "not executed: you declined"},
+            ])),
+        ]
+
+        messages = build_history_messages(rows, viewer_user_id=1)
+
+        result = messages[2]["content"][0]
+        self.assertEqual(result["tool_use_id"], "toolu_2")
+        self.assertTrue(result["is_error"])
+        self.assertIn("declined", result["content"])
+
+    def test_policy_denied_and_budget_skipped_calls_keep_their_status(self):
+        rows = [
+            (1, "admin", "go"),
+            (2, "kazi", "Done.", _typed_reply(1, [
+                {"call_id": "a", "seq": 1, "name": "run_command",
+                 "input": {}, "status": "denied", "shown": "Refused: not allowed."},
+                {"call_id": "b", "seq": 2, "name": "send_email",
+                 "input": {}, "status": "budget_skipped", "shown": "asked for more budget"},
+            ])),
+        ]
+
+        messages = build_history_messages(rows, viewer_user_id=1)
+
+        results = messages[2]["content"]
+        self.assertEqual([r["tool_use_id"] for r in results], ["a", "b"])
+        self.assertIn("denied", results[0]["content"])
+        self.assertIn("budget", results[1]["content"])
+
+    def test_another_users_typed_rows_are_not_replayed(self):
+        rows = [
+            (1, "bob", "run it"),
+            (2, "kazi", "Done.", _typed_reply(2, [
+                {"call_id": "toolu_3", "seq": 1, "name": "run_command",
+                 "input": {"command": "ls"}, "status": "ok", "shown": "listed"},
+            ])),
+            (3, "admin", "what next?"),
+        ]
+
+        messages = build_history_messages(rows, viewer_user_id=1)
+
+        self.assertEqual(messages[1], {"role": "assistant", "content": "Done."})
+        self.assertEqual(_tool_ids(messages), (set(), set()))
+
+    def test_typed_untrusted_rows_are_detected_for_the_taint_check(self):
+        from orchestration.coordinator import _history_replays_untrusted
+
+        rows = [
+            (1, "admin", "run it"),
+            (2, "kazi", "Done.", _typed_reply(1, [
+                {"call_id": "toolu_4", "seq": 1, "name": "run_command",
+                 "input": {"command": "ls"}, "status": "ok", "shown": "listed"},
+            ])),
+        ]
+
+        messages = build_history_messages(rows, viewer_user_id=1)
+
+        self.assertTrue(_history_replays_untrusted(messages))
+
+    def test_typed_tool_exchanges_are_trimmed_whole(self):
+        rows = [
+            (1, "admin", "go"),
+            (2, "kazi", "done", _typed_reply(1, [
+                {"call_id": f"c{n}", "seq": n, "name": "run_command",
+                 "input": {"command": "ls"}, "status": "ok", "shown": "x" * 400}
+                for n in range(1, 4)
+            ], model="done")),
+            (3, "admin", "next"),
+            (4, "kazi", "fine"),
+        ]
+
+        messages = build_history_messages(rows, max_chars=50, viewer_user_id=1)
+
+        self.assertEqual(_tool_ids(messages), (set(), set()))
+        self.assertEqual([m["content"] for m in messages], ["next", "fine"])
+
+    def test_an_old_reply_with_payload_tools_still_replays(self):
+        """Messages saved before the typed rows keep their payload path."""
+        rows = [
+            (1, "admin", "run it"),
+            (2, "kazi", "Done.", _reply(1, model="Done.", tools=[
+                {"name": "run_command", "input": {"command": "ls"},
+                 "status": "success", "shown": "listed"},
+            ])),
+        ]
+
+        messages = build_history_messages(rows, viewer_user_id=1)
+
+        uses, results = _tool_ids(messages)
+        self.assertEqual(len(uses), 1)
+        self.assertEqual(uses, results)

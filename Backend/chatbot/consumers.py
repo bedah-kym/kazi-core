@@ -1601,44 +1601,20 @@ class ChatConsumer(AsyncWebsocketConsumer):
             }
 
     async def get_history_rows(self, room_id, limit=5, room=None):
-        "Last N messages, oldest first, as (message_id, username, content, extra)."
+        """Last N messages, oldest first, as (message_id, username, content, extra).
+
+        The read decrypts each message once and loads a Turn's typed tool-call
+        records in one query, then hands the rows to the shared transcript
+        builder. The turn runner uses the same sync helper (E12).
+        """
         try:
+            from .history import get_history_rows
             from .models import Chatroom
+
             if room is None:
                 get_room = sync_to_async(Chatroom.objects.get)
                 room = await get_room(id=room_id)
-
-            def _get_msgs():
-                return list(
-                    room.chats.select_related("member__User").order_by("-timestamp")[:limit]
-                )
-
-            messages = await sync_to_async(_get_msgs)()
-            messages.reverse()
-
-            rows = []
-            for msg in messages:
-                msg_json = await self.message_to_json(msg)
-                content = msg_json.get('content', '')
-                member = msg_json.get('member', 'Unknown')
-                if not content or content == DECRYPT_FAILED or member == 'system':
-                    continue
-                _content, payload = await self._decrypt_stored(msg)
-                extra = None
-                if isinstance(payload, dict):
-                    origin = payload.get('origin') or ''
-                    tools = payload.get('tools')
-                    if origin or isinstance(tools, list):
-                        extra = {
-                            'tools': tools if isinstance(tools, list) else [],
-                            'by': payload.get('by'),
-                            'model': payload.get('model'),
-                            'harness': payload.get('harness') or '',
-                            'origin': origin,
-                        }
-                rows.append((msg.id, member, content, extra))
-
-            return rows
+            return await sync_to_async(get_history_rows)(room, limit=limit)
         except Exception as e:
             logger.error(f'Error getting history: {e}')
             return []

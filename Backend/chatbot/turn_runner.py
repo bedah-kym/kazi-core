@@ -956,7 +956,7 @@ class TurnRunner:
                     turn=result.turn_id or None,
                     model_text=result.model_text,
                     harness_text=result.harness,
-                    tools=result.tools,
+                    tools=None if result.tool_calls_recorded else result.tools,
                     by=turn.user_id,
                 )
             except KaziMessageError:

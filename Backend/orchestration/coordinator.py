@@ -58,6 +58,11 @@ from orchestration.adaptive_task import (
     is_cancel_request,
 )
 from orchestration.memory_state import load_memory_summary, clear_memory
+from orchestration.tool_calls import (
+    did_not_run_reason,
+    record_from_event,
+    record_tool_calls,
+)
 from orchestration.tool_record import tool_record_input
 from orchestration.shell.chat_intents import (
     is_approval_reply,
@@ -493,6 +498,9 @@ class OrchestrationResult:
     # The reply in two parts: what the model wrote and what the harness wrote.
     model_text: str = ""
     harness: str = ""
+    # True when the Turn's typed rows hold this turn's calls, so the reply
+    # payload must not also carry the legacy ``tools`` list (D11).
+    tool_calls_recorded: bool = False
     # The durable turn this message belongs to; the consumer links the saved
     # reply to it. Empty only when no turn could be recorded.
     turn_id: str = ""
@@ -539,7 +547,7 @@ class OrchestrationCoordinator:
         a fresh agent run ends the turn with one error message and nothing
         further runs; errors during confirmation resume propagate.
         """
-        stream_state = {"buffer": [], "last_send": 0, "first_token_sent": False, "full_response": [], "model": [], "harness": [], "tools": [], "chunks": 0, "chars": 0}  # nosec B105 — state keys, not a credential
+        stream_state = {"buffer": [], "last_send": 0, "first_token_sent": False, "full_response": [], "model": [], "harness": [], "tools": [], "chunks": 0, "chars": 0, "tool_calls_recorded": False}  # nosec B105 — state keys, not a credential
         turn_box = {
             "ref": None, "settled": False, "hold": False, "agent_ran": False,
             "claim_status": "",
@@ -1108,6 +1116,95 @@ class OrchestrationCoordinator:
                 return ""
             return _AUTOPILOT_HINT_TAINTED if await _room_is_tainted() else _AUTOPILOT_HINT
 
+        async def _record_room():
+            """The room once, for encrypting the Turn's tool-call bodies."""
+            room = turn_box.get("record_room")
+            if room is not None:
+                return room
+            from chatbot.models import Chatroom
+
+            try:
+                room = await sync_to_async(Chatroom.objects.filter(pk=room_id).first)()
+            except Exception:
+                room = None
+            turn_box["record_room"] = room
+            return room
+
+        async def _persist_tool_event(data: Dict) -> bool:
+            """Append one tool_result event to the Turn's typed record."""
+            turn_id = _turn_id()
+            if not turn_id:
+                return False
+            room = await _record_room()
+            if room is None:
+                return False
+            try:
+                await sync_to_async(record_from_event)(turn_id, room, data)
+            except Exception as exc:
+                logger.warning(
+                    "Tool call record not saved: %s", exc.__class__.__name__,
+                )
+                return False
+            stream_state["tool_calls_recorded"] = True
+            return True
+
+        async def _record_not_run(
+            held: List[Dict], status: str, reason: str, iteration: int,
+        ) -> None:
+            """Write the rows of held calls that resolved without running."""
+            turn_id = _turn_id()
+            if not turn_id or not held:
+                return
+            room = await _record_room()
+            if room is None:
+                return
+            records = [
+                {
+                    "call_id": call.get("id"),
+                    "name": call.get("name"),
+                    "input": call.get("input") or {},
+                    "result": {"status": status, "message": reason},
+                    "shown": did_not_run_reason(status),
+                    "iteration": iteration,
+                    "provenance": "main",
+                }
+                for call in held if isinstance(call, dict)
+            ]
+            try:
+                await sync_to_async(record_tool_calls)(turn_id, room, records)
+            except Exception as exc:
+                logger.warning(
+                    "Tool call record not saved: %s", exc.__class__.__name__,
+                )
+                return
+            stream_state["tool_calls_recorded"] = True
+
+        async def _refresh_turn_memory(turn_id: str) -> None:
+            """Let last_actions follow the Turn's rows after a pause resolves."""
+            if not turn_id:
+                return
+            from orchestration.memory_state import update_memory_state_batch
+
+            try:
+                await update_memory_state_batch(
+                    {"user_id": user_id, "room_id": room_id, "turn_id": turn_id},
+                    [],
+                )
+            except Exception as exc:
+                logger.debug("Turn memory refresh skipped: %s", exc)
+
+        async def _bump_server_tool_uses(turn_id: str, count: int) -> None:
+            from django.db.models import F
+
+            from orchestration.models import Turn
+
+            try:
+                await sync_to_async(Turn.objects.filter(pk=turn_id).update)(
+                    server_tool_uses=F("server_tool_uses") + count,
+                )
+            except Exception as exc:
+                logger.debug("server_tool_uses not recorded: %s", exc)
+
         async def _relay_agent_events(events):
             """Map AgentEvents to WebSocket frames, shared by every agent run."""
             async for event in events:
@@ -1135,10 +1232,29 @@ class OrchestrationCoordinator:
                     await emit_progress("executing", "started", f"Running {tool.replace('_', ' ')}…")
                 elif event.kind == "tool_result":
                     stream_state["tools"].append(_tool_record(event.data))
+                    await _persist_tool_event(event.data)
                     tool = event.data.get("name", "action")
                     result = event.data.get("result", {})
                     status = result.get("status", "")
                     await emit_progress("executing", "completed", f"{tool.replace('_', ' ')}: {status}")
+                elif event.kind == "server_tool_use":
+                    count = int(event.data.get("count") or 0)
+                    turn_id = _turn_id()
+                    if count > 0 and turn_id:
+                        await _bump_server_tool_uses(turn_id, count)
+                        name = event.data.get("name") or "web_search"
+                        await _persist_tool_event({
+                            "id": f"server-{uuid.uuid4().hex[:12]}",
+                            "name": name,
+                            "input": {},
+                            "result": {"status": "ok"},
+                            "shown": (
+                                f"{name} ran on the provider ({count} request(s)); "
+                                "its results are part of the assistant's reply."
+                            ),
+                            "iteration": event.data.get("iteration"),
+                            "retrieval": True,
+                        })
                 elif event.kind == "paused":
                     if turn_box.get("settled"):
                         continue
@@ -1641,8 +1757,18 @@ class OrchestrationCoordinator:
                             harness=True,
                         )
                     else:
+                        held_state = await load_pending_state(room_id, user_id)
                         cancel_msg = await cancel_pending_action(room_id, user_id)
                         await _advance_turn("cancelled", end_reason="cancelled")
+                        held = list(
+                            getattr(held_state, "pending_tools", None)
+                            or ([held_state.pending_tool] if held_state and held_state.pending_tool else [])
+                        )
+                        await _record_not_run(
+                            held, "declined", "you declined",
+                            int(getattr(held_state, "iteration", 0) or 0),
+                        )
+                        await _refresh_turn_memory(_turn_id())
                         await broadcast_chunk(
                             cancel_msg or "Okay, cancelled.", harness=True,
                         )
@@ -1744,6 +1870,7 @@ class OrchestrationCoordinator:
                 else:
                     clear_loop_state(room_id, user_id)
                     await _advance_turn("cancelled", end_reason="cancelled")
+                    await _refresh_turn_memory(_turn_id())
                     await broadcast_chunk(
                         "Okay, I've stopped there and dropped the paused work.\n\n",
                         harness=True,
@@ -1837,6 +1964,7 @@ class OrchestrationCoordinator:
             tools=_cap_tool_records(stream_state["tools"]),
             model_text="".join(stream_state["model"]),
             harness="".join(stream_state["harness"]),
+            tool_calls_recorded=bool(stream_state.get("tool_calls_recorded")),
             turn_id=_turn_id(),
             turn_version=turn_box["ref"].version if turn_box.get("ref") else 0,
             turn_state=turn_box["ref"].state if turn_box.get("ref") else "",

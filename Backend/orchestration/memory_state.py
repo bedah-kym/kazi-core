@@ -219,7 +219,28 @@ async def update_memory_state_batch(
     still feeds RoomContext, but no summary is written: tool results are
     untrusted, so the next turn must not inherit them as remembered facts.
     T-D3's replay is the record of what ran and how it ended.
+
+    When the context names a Turn, the Turn's typed rows are the source: they
+    survive a cancelled pause and never double-count a budget resume (P3-5).
     """
+    turn_id = context.get("turn_id")
+
+    def _turn_rows() -> Optional[List[Dict[str, Any]]]:
+        from chatbot.models import Chatroom
+        from orchestration.tool_calls import calls_that_ran
+
+        room = Chatroom.objects.filter(pk=context.get("room_id")).first()
+        if room is None:
+            return None
+        return calls_that_ran(room, turn_id)
+
+    if turn_id:
+        try:
+            rows = await sync_to_async(_turn_rows)()
+        except Exception:
+            rows = None
+        if rows is not None:
+            records = rows
     state = await load_memory_state(context) or {}
     for record in records or []:
         if not isinstance(record, dict):

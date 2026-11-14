@@ -110,8 +110,20 @@ def get_history_rows(
         )
     if exclude_message_id is not None:
         query = query.exclude(id=exclude_message_id)
-    messages = list(query.order_by("-timestamp")[:limit])
+    # Message ids break a timestamp tie so the newest row of one instant is the
+    # last one after the reverse, never the first.
+    messages = list(query.order_by("-timestamp", "-id")[:limit])
     messages.reverse()
+
+    # The typed tool-call record of every Turn in this window, decrypted once,
+    # in one query (P3-5). Old messages have no Turn or no rows and keep using
+    # their reply payload below.
+    from orchestration.tool_calls import load_tool_calls_for_turns
+
+    turn_ids = [msg.turn_id for msg in messages if msg.turn_id]
+    tool_calls_by_turn = (
+        load_tool_calls_for_turns(room, turn_ids) if turn_ids else {}
+    )
 
     rows: List[Tuple] = []
     for msg in messages:
@@ -119,17 +131,19 @@ def get_history_rows(
         member = msg.member.User.username if msg.member else "Unknown"
         if not content or content == DECRYPT_FAILED or member == "system":
             continue
+        payload = payload if isinstance(payload, dict) else {}
+        origin = payload.get("origin") or ""
+        tools = payload.get("tools")
+        tool_calls = tool_calls_by_turn.get(msg.turn_id) or []
         extra = None
-        if isinstance(payload, dict):
-            origin = payload.get("origin") or ""
-            tools = payload.get("tools")
-            if origin or isinstance(tools, list):
-                extra = {
-                    "tools": tools if isinstance(tools, list) else [],
-                    "by": payload.get("by"),
-                    "model": payload.get("model"),
-                    "harness": payload.get("harness") or "",
-                    "origin": origin,
-                }
+        if origin or isinstance(tools, list) or tool_calls:
+            extra = {
+                "tools": tools if isinstance(tools, list) else [],
+                "tool_calls": tool_calls,
+                "by": payload.get("by"),
+                "model": payload.get("model"),
+                "harness": payload.get("harness") or "",
+                "origin": origin,
+            }
         rows.append((msg.id, member, content, extra))
     return rows

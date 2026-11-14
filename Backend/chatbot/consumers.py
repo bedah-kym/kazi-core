@@ -73,7 +73,7 @@ ADMIN_PERSONA_REQUEST_RE = re.compile(
 
 DECRYPT_FAILED = "Error: Could not decrypt message."
 
-_MARKDOWN_SPECIAL_RE = re.compile(r'([\\`*_{}\[\]()#+\-.!|~<>])')
+_MARKDOWN_SPECIAL_RE = re.compile(r'([\\`*_{}\[\]()#+\-.!|~<>&])')
 
 
 def _escape_markdown_text(text) -> str:

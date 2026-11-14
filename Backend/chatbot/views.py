@@ -16,6 +16,7 @@ from datetime import datetime, time
 
 from django.conf import settings
 import os
+import re
 from django.views.decorators.http import require_GET, require_POST, require_http_methods
 from .notification_utils import get_unread_room_count
 
@@ -200,6 +201,20 @@ _CANONICAL_EXTENSIONS = {
     '.mp3': '.mp3', '.wav': '.wav',
 }
 IMAGE_FILE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif'}
+MAX_UPLOAD_DISPLAY_NAME = 120
+
+
+def _upload_display_name(name) -> str:
+    base = str(name or '').replace('\\', '/').split('/')[-1]
+    base = re.sub(r'[\x00-\x1f\x7f-\x9f\u2028\u2029]', ' ', base)
+    base = re.sub(r'\s+', ' ', base).strip()
+    if len(base) > MAX_UPLOAD_DISPLAY_NAME:
+        stem, ext = os.path.splitext(base)
+        if len(ext) > 20:
+            ext = ''
+        keep = max(MAX_UPLOAD_DISPLAY_NAME - len(ext), 1)
+        base = (stem[:keep] + ext).strip()
+    return base or 'file'
 
 
 @login_required
@@ -268,10 +283,11 @@ def upload_file(request):
         file_url = f"{settings.MEDIA_URL.rstrip('/')}/documents/{safe_filename}"
 
         from .consumers import _markdown_file_link, _markdown_image
+        display_name = _upload_display_name(original_filename)
         if ext in IMAGE_FILE_EXTENSIONS:
-            content = _markdown_image(file_url, original_filename)
+            content = _markdown_image(file_url, display_name)
         else:
-            content = _markdown_file_link(file_url, original_filename)
+            content = _markdown_file_link(file_url, display_name)
 
         return JsonResponse({'fileUrl': file_url, 'content': content}, status=200)
 

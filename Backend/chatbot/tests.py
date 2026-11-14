@@ -1027,6 +1027,23 @@ class UploadSecurityTests(TestCase):
             f"[a\\[b\\]\\(c\\)\\`d\\*e\\.txt](<{data['fileUrl']}>)",
         )
 
+    def test_upload_response_normalises_the_display_name(self):
+        from chatbot.views import upload_file
+
+        upload = SimpleUploadedFile(
+            "bad\nname&#91;.txt", b"text", content_type="text/plain",
+        )
+        request = SimpleNamespace(method="POST", FILES={"file": upload}, user=self.user)
+        with self.settings(MEDIA_ROOT=self.tmp):
+            response = upload_file(request)
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.content)
+        self.assertIn("content", data)
+        self.assertEqual(
+            data["content"],
+            f"[bad name\\&\\#91;\\.txt](<{data['fileUrl']}>)",
+        )
+
     def test_voice_transcription_rejects_path_outside_media_root(self):
         member = Member.objects.create(User=self.user)
         message = Message.objects.create(

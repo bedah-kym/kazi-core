@@ -112,8 +112,7 @@ class RenderPathWiringTests(SimpleTestCase):
         self.assertIsNotNone(html_renderer)
         self.assertRegex(html_renderer.group(1), r"return\s+escapeHtml\(")
         self.assertNotIn("return token.text;", source)
-        self.assertIn("function protectRawHtmlIndent", source)
-        self.assertIn("protectRawHtmlIndent(raw)", source)
+        self.assertNotIn("protectRawHtmlIndent", source)
 
     def test_render_module_wiring_allows_the_configured_media_origin(self):
         source = _read(HERE / "static" / "js" / "kazi-render.js")

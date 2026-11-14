@@ -29,58 +29,7 @@
     }
 
     function escapeMarkdown(text) {
-        return String(text).replace(/([\\`*_{}\[\]()#+\-.!|~<>])/g, '\\$1');
-    }
-
-    function nbspRun(match) {
-        return new Array(match.length + 1).join('\u00a0');
-    }
-
-    function protectRawHtmlIndent(text) {
-        if (text.indexOf('<') === -1) return text;
-        var lines = text.split('\n');
-        var voidTags = {
-            area: true, base: true, br: true, col: true, embed: true, hr: true,
-            img: true, input: true, link: true, meta: true, param: true,
-            source: true, track: true, wbr: true
-        };
-        var index = 0;
-        while (index < lines.length) {
-            var start = /^ {0,3}<([A-Za-z][\w:-]*)(?:\s|\/?>|$)/.exec(lines[index]);
-            var comment = /^ {0,3}<!--/.test(lines[index]);
-            if (!start && !comment) {
-                index++;
-                continue;
-            }
-            var tag = start ? start[1].toLowerCase() : '';
-            var end = index;
-            if (comment) {
-                while (end < lines.length && lines[end].indexOf('-->') === -1) end++;
-            } else if (tag === 'script' || tag === 'pre' || tag === 'style' || tag === 'textarea') {
-                var rawClose = new RegExp('</' + tag + '\\b', 'i');
-                while (end < lines.length && !rawClose.test(lines[end])) end++;
-                if (end >= lines.length) end = lines.length - 1;
-            } else if (!voidTags[tag]) {
-                var close = new RegExp('</' + tag + '\\s*>', 'i');
-                var found = -1;
-                for (var probe = index; probe < lines.length; probe++) {
-                    if (close.test(lines[probe])) {
-                        found = probe;
-                        break;
-                    }
-                }
-                if (found !== -1) {
-                    end = found;
-                } else {
-                    while (end + 1 < lines.length && lines[end + 1].trim() !== '') end++;
-                }
-            }
-            for (var line = index; line <= end; line++) {
-                lines[line] = lines[line].replace(/^[ \t]+/, nbspRun);
-            }
-            index = end + 1;
-        }
-        return lines.join('\n');
+        return String(text).replace(/([\\`*_{}\[\]()#+\-.!|~<>&])/g, '\\$1');
     }
 
     function mediaBase() {
@@ -251,7 +200,6 @@
         var raw = original;
         var legacyUpload = legacyUploadMarkdown(raw);
         if (legacyUpload !== null) raw = legacyUpload;
-        raw = protectRawHtmlIndent(raw);
         var marked = global.marked;
         var purify = global.DOMPurify;
         if (!marked || typeof marked.parse !== 'function' ||

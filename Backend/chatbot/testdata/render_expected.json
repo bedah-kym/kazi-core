@@ -12,7 +12,7 @@
   {
     "id": "block_four_space",
     "input": "<div>\n    one\n\n    two\n</div>",
-    "html": "<p>&lt;div&gt;<br>&nbsp;&nbsp;&nbsp;&nbsp;one</p>\n<p>&nbsp;&nbsp;&nbsp;&nbsp;two</p>\n<p>&lt;/div&gt;</p>\n"
+    "html": "<p>&lt;div&gt;<br>&nbsp;&nbsp;&nbsp;&nbsp;one</p>\n<pre><code>two\n</code></pre>\n<p>&lt;/div&gt;</p>\n"
   },
   {
     "id": "rawblock_kbd_link",
@@ -98,5 +98,25 @@
     "id": "table_break",
     "input": "| a<br>b |\n|---|\n| c |",
     "html": "<table>\n<thead>\n<tr>\n<th>a&lt;br&gt;b</th>\n</tr>\n</thead>\n<tbody><tr>\n<td>c</td>\n</tr>\n</tbody></table>\n"
+  },
+  {
+    "id": "approval_div_value",
+    "input": "I'd like to `run command` with the following details:\n`command` (text) — 42 characters, 4 lines:\n```text\n<div>\n  <p>x</p>\n    <span>y</span>\n</div>\n```\n\nShould I go ahead? (yes / no)",
+    "html": "<p>I'd like to <code>run command</code> with the following details:<br><code>command</code> (text) — 42 characters, 4 lines:</p>\n<pre><code class=\"language-text\">&lt;div&gt;\n  &lt;p&gt;x&lt;/p&gt;\n    &lt;span&gt;y&lt;/span&gt;\n&lt;/div&gt;\n</code></pre>\n<p>Should I go ahead? (yes / no)</p>\n"
+  },
+  {
+    "id": "approval_comment_value",
+    "input": "I'd like to `run command` with the following details:\n`command` (text) — 15 characters, 3 lines:\n```text\n<!--\n  note\n-->\n```\n\nShould I go ahead? (yes / no)",
+    "html": "<p>I'd like to <code>run command</code> with the following details:<br><code>command</code> (text) — 15 characters, 3 lines:</p>\n<pre><code class=\"language-text\">&lt;!--\n  note\n--&gt;\n</code></pre>\n<p>Should I go ahead? (yes / no)</p>\n"
+  },
+  {
+    "id": "approval_script_value",
+    "input": "I'd like to `run command` with the following details:\n`command` (text) — 29 characters, 3 lines:\n```text\n<script>\n  alert(1)\n</script>\n```\n\nShould I go ahead? (yes / no)",
+    "html": "<p>I'd like to <code>run command</code> with the following details:<br><code>command</code> (text) — 29 characters, 3 lines:</p>\n<pre><code class=\"language-text\">&lt;script&gt;\n  alert(1)\n&lt;/script&gt;\n</code></pre>\n<p>Should I go ahead? (yes / no)</p>\n"
+  },
+  {
+    "id": "markdown_html_fence_indented",
+    "input": "```html\n<div>\n  <p>x</p>\n    <span>y</span>\n</div>\n```",
+    "html": "<pre><code class=\"language-html\">&lt;div&gt;\n  &lt;p&gt;x&lt;/p&gt;\n    &lt;span&gt;y&lt;/span&gt;\n&lt;/div&gt;\n</code></pre>\n"
   }
 ]

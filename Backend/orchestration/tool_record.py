@@ -17,11 +17,11 @@ _MAX_RECORD_LIST_ITEMS = 10
 # (the email/phone patterns backtrack). Above this length only a redacted head
 # is kept; the rest is omitted and never shown.
 _REDACT_WHOLE_MAX = 100_000
-# The head is redacted in a window this much wider than the kept text, so a
-# secret value that starts in the kept text has its whole minimum length inside
-# the window. A match that runs past the window still ends at its edge: the
-# window end satisfies ``\b`` and ends ``\S+``.
+# The head is redacted in a window this much wider than the kept text, and the
+# window grows by this much until the kept head stops changing.
 _HUGE_MARGIN = 4096
+# Bound on the growth: a head still changing after this many steps is dropped.
+_HUGE_WIDEN_STEPS = 8
 _SHORTENED = (
     " ... [record shortened: the call sent {length} characters; "
     "{omitted:,} omitted] ... "
@@ -43,23 +43,45 @@ def _shorten_redacted(text: str) -> str:
     return text[:head] + marker + text[-tail:]
 
 
+def _stable_redacted_head(value: str, head: int) -> str:
+    """The first ``head`` characters of the redacted text, without redacting all of it.
+
+    The window starts at the text start, so every pattern's key or scheme before
+    a kept value is inside it. Redaction can shrink the text (a long
+    ``password=...`` becomes one short token), so the kept head can reach text
+    near the window end, where a secret may be cut and only half-matched. The
+    window therefore grows by ``_HUGE_MARGIN`` until the kept head is the same
+    for two windows in a row: a secret cut by the smaller window is then inside
+    the larger one and has been redacted. A head that never settles is dropped.
+
+    Known bound: a match whose deciding part lies more than ``_HUGE_MARGIN``
+    past both windows (an email "local part" over 4096 characters) is not seen.
+    """
+    length = len(value)
+    window = min(length, head + _HUGE_MARGIN)
+    current = redact_sensitive_text(value[:window])[:head]
+    for _ in range(_HUGE_WIDEN_STEPS):
+        if window >= length:
+            return current
+        window = min(length, window + _HUGE_MARGIN)
+        wider = redact_sensitive_text(value[:window])[:head]
+        if wider == current:
+            return current
+        current = wider
+    return ""
+
+
 def _shorten_huge(value: str) -> str:
     """Keep only a redacted head of a value too long to redact whole.
 
-    The head window starts at the text start, so every pattern's key or scheme
-    before a kept value is inside it. A secret value that starts in the kept
-    head has at least ``_HUGE_MARGIN`` characters of window after it, more than
-    any pattern's minimum, and a match that runs past the window ends at its
-    edge. A tail has no such guarantee: ``Bearer``, ``key = `` and the
-    email local part reach arbitrarily far to the left of the kept text, so no
-    finite window around a tail proves it safe. It is dropped instead.
+    A tail has no safe window: ``Bearer``, ``key = `` and the email local part
+    reach arbitrarily far to the left of any kept tail, so it is dropped.
     """
     length = len(value)
     marker_bound = len(_SHORTENED.format(length=length, omitted=length))
     head = max(0, RECORD_STRING_MAX - marker_bound)
     marker = _SHORTENED.format(length=length, omitted=length - head)
-    head_text = redact_sensitive_text(value[: head + _HUGE_MARGIN])[:head]
-    return head_text + marker.rstrip()
+    return _stable_redacted_head(value, head) + marker.rstrip()
 
 
 def _record_string(value: str) -> str:

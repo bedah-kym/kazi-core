@@ -47,7 +47,6 @@ _STATUS_ALIASES = {
     "expired": "expired",
     "superseded": "superseded",
     "budget_skipped": "budget_skipped",
-    "policy_stopped": "policy_stopped",
     "outcome_unknown": "outcome_unknown",
 }
 _DID_NOT_RUN_REASON = {
@@ -94,8 +93,10 @@ def status_for_result(result: Any, *, not_run: bool = False) -> str:
     the event, never from the tool's result). For a call that ran, a tool's
     self-reported ``skipped``/``denied``/... status is just a status string and
     maps to ran-ok; otherwise a tool could mark its own output as not run and
-    escape taint. Only an explicit failure is ``error``. ``policy_stopped`` is
-    kept for display but is still a ran call for taint.
+    escape taint. Only an explicit failure is ``error``. ``policy_stopped`` comes
+    only from the executor's refusal shape (an ``error`` status with the safety
+    policy message), never from a raw status a tool reports; it is kept for
+    display but is still a ran call for taint.
     """
     if not isinstance(result, dict):
         return "error"
@@ -108,7 +109,7 @@ def status_for_result(result: Any, *, not_run: bool = False) -> str:
     mapped = _STATUS_ALIASES.get(status)
     if mapped == "error" and "safety policy" in str(result.get("message") or ""):
         return "policy_stopped"
-    if mapped in ("error", "outcome_unknown", "policy_stopped"):
+    if mapped in ("error", "outcome_unknown"):
         return mapped
     if result.get("error") and not status:
         return "error"

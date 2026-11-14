@@ -742,6 +742,31 @@ class HugeInputRedactionTests(SimpleTestCase):
                     recorded = tool_record_input({"content": value})["content"]
                     self._assert_hidden(recorded, secret)
 
+    def test_a_redaction_that_shrinks_the_head_pulls_in_no_cut_secret(self):
+        # A long early match shrinks to one short token, so text from far past
+        # the kept head slides into it. A secret crossing the redaction window
+        # there must not come along half-matched. The sweep places it at every
+        # start past the shrinking match, across any window end the record
+        # could use (head <= RECORD_STRING_MAX, margin 4096).
+        from orchestration.security_policy import redact_sensitive_text
+
+        shrinking = "x password=" + "A" * 4_100 + " "
+        secrets = [
+            "sk-" + "Q7x9Lm2Pz4Rt8Vw3Ky6N",
+            "Bearer " + "Q7x9Lm2Pz4Rt8Vw3Ky6N",
+            "jane.wanjiru.private@corp.example",
+        ]
+        tail = "z " * (self.N // 2)
+        for secret in secrets:
+            # Whole-text redaction hides each secret (checked once, short text).
+            self.assertNotIn(secret[-10:], redact_sensitive_text(f"a {secret} b"))
+            for start in range(len(shrinking) + 1, 4_096 + RECORD_STRING_MAX + 48):
+                value = shrinking + "B" * (start - len(shrinking) - 1) + " " + secret + " "
+                value += tail[: self.N - len(value)]
+                with self.subTest(secret=secret[:8], start=start):
+                    recorded = tool_record_input({"content": value})["content"]
+                    self._assert_hidden(recorded, secret)
+
     def test_the_leads_bearer_probe_keeps_no_token_prefix(self):
         token = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature"  # nosec B105 - fake test token
         value = "a " * 29 + " Bearer " + token + " " + "z " * 100_000
@@ -764,7 +789,9 @@ class StatusMappingTests(SimpleTestCase):
             "error": "error", "failed": "error", "failure": "error",
             "FAILED": "error", "rejected": "error",
             "timed_out": "outcome_unknown",
-            "policy_stopped": "policy_stopped",
+            # A tool reporting the harness's own stop status ran: it must not
+            # leave memory or replay as "not executed".
+            "policy_stopped": "ok",
         }
         for status, expected in ran_cases.items():
             with self.subTest(status=status):

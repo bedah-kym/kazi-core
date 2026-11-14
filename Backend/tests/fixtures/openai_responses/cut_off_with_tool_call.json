@@ -1,0 +1,72 @@
+{
+  "source": "crafted",
+  "name": "cut_off_with_tool_call",
+  "http_status": 200,
+  "body": {
+    "id": "resp_crafted_cutoff",
+    "object": "response",
+    "created_at": 1720000003,
+    "status": "incomplete",
+    "error": null,
+    "incomplete_details": {
+      "reason": "max_output_tokens"
+    },
+    "instructions": "You are a connectivity probe.",
+    "max_output_tokens": 32,
+    "model": "gpt-6.1-sol",
+    "output": [
+      {
+        "type": "reasoning",
+        "id": "rs_crafted_cutoff",
+        "summary": [],
+        "encrypted_content": "encrypted-reasoning-cutoff",
+        "content": []
+      },
+      {
+        "type": "message",
+        "id": "msg_crafted_cutoff",
+        "status": "incomplete",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "I was about to",
+            "annotations": []
+          }
+        ],
+        "phase": "commentary"
+      },
+      {
+        "type": "function_call",
+        "id": "fc_crafted_cutoff",
+        "call_id": "call_crafted_cutoff",
+        "name": "set_reminder",
+        "arguments": "{\"text\": \"rem",
+        "status": "incomplete"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "previous_response_id": null,
+    "reasoning": {
+      "effort": "low",
+      "summary": null
+    },
+    "store": false,
+    "temperature": 0.3,
+    "tools": [],
+    "top_p": 1.0,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 31,
+      "input_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0
+      },
+      "output_tokens": 32,
+      "output_tokens_details": {
+        "reasoning_tokens": 20
+      },
+      "total_tokens": 63
+    }
+  }
+}

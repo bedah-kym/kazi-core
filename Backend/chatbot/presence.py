@@ -16,8 +16,6 @@ from asgiref.sync import sync_to_async
 from django.conf import settings
 from django_redis import get_redis_connection
 
-from orchestration.model_catalog import available_models
-
 logger = logging.getLogger(__name__)
 
 # Following chatbot/dispatch.py: after a store error, stop touching the store
@@ -33,14 +31,19 @@ _local_lock = threading.Lock()
 
 
 def agent_status() -> str:
-    """``"online"`` when a message sent now would reach a model, else ``"offline"``.
+    """``"online"`` when an Auto room would actually reach a chat model.
 
     The bot never opens a socket, so the web process declares its status rather
-    than inferring it from a connection. A model is reachable when at least one
-    catalog provider has its key configured — the same set the model picker and
-    the agent loop use.
+    than inferring it from a connection. A key alone is not enough: an OpenAI
+    key used only for voice must not claim chat is reachable, so this asks the
+    same default-provider decision the agent loop makes.
     """
-    return "online" if available_models() else "offline"
+    try:
+        from orchestration.llm_client import LLMClient
+
+        return "online" if LLMClient().default_provider() else "offline"
+    except Exception:
+        return "offline"
 
 
 def _now() -> float:

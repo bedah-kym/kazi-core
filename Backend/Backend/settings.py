@@ -699,6 +699,13 @@ ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
 DEEPSEEK_API_KEY = os.environ.get('DEEPSEEK_API_KEY', '')
 DEEPSEEK_MODEL = os.environ.get('DEEPSEEK_MODEL', 'deepseek-chat')
 DEEPSEEK_BASE_URL = os.environ.get('DEEPSEEK_BASE_URL', 'https://api.deepseek.com/v1/chat/completions')
+# OpenAI uses the native Responses API. The key is also read by voice-note
+# transcription, so it answers chat only when named (a room model or
+# LLM_DEFAULT_PROVIDER=openai), never as a silent fallback.
+OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
+OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-6.1-sol')
+OPENAI_BASE_URL = os.environ.get('OPENAI_BASE_URL', 'https://api.openai.com/v1/responses')
+OPENAI_REASONING_EFFORT = os.environ.get('OPENAI_REASONING_EFFORT', 'low')
 LLM_PLANNER_PROVIDER = os.environ.get('LLM_PLANNER_PROVIDER', 'anthropic')
 LLM_EXECUTOR_PROVIDER = os.environ.get('LLM_EXECUTOR_PROVIDER', 'huggingface')
 LLM_PLANNER_MODEL = os.environ.get('LLM_PLANNER_MODEL', '')

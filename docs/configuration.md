@@ -104,6 +104,10 @@ on when `HF_API_TOKEN` is set.
 | `DEEPSEEK_API_KEY` | — | DeepSeek API key (OpenAI-compatible, full tool-calling). |
 | `DEEPSEEK_MODEL` | `deepseek-chat` | Model name for DeepSeek. |
 | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com/v1/chat/completions` | DeepSeek endpoint. |
+| `OPENAI_API_KEY` | — | OpenAI API key. Also used for voice-note transcription and voice-mode speech. |
+| `OPENAI_MODEL` | `gpt-6.1-sol` | Default OpenAI model. |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1/responses` | OpenAI Responses endpoint (native adapter, not Chat Completions). |
+| `OPENAI_REASONING_EFFORT` | `low` | Reasoning effort sent to OpenAI (`low` leaves room in the output limit and keeps cost down). |
 | `LLM_DEFAULT_PROVIDER` | empty | Provider that answers a chat turn when the room has no model override. |
 | `LLM_EXECUTOR_PROVIDER` | `huggingface` | Provider for tool execution. |
 | `LLM_EXECUTOR_MODEL` | empty | Override the model used for tool execution. |
@@ -116,13 +120,34 @@ on when `HF_API_TOKEN` is set.
 | `LLM_CACHE_MIN_TEMP` | `0.3` | Don't cache calls below this temperature. |
 
 A chat turn is answered by the **operator's default provider**: set
-`LLM_DEFAULT_PROVIDER=deepseek` (or `anthropic` / `huggingface`) and adding a
-second provider's key later does not change which provider answers — the extra
-key only adds fallbacks and the models the per-room picker can offer. With
+`LLM_DEFAULT_PROVIDER=deepseek` (or `anthropic` / `huggingface` / `openai`) and
+adding a second provider's key later does not change which provider answers — the
+extra key only adds fallbacks and the models the per-room picker can offer. With
 `LLM_DEFAULT_PROVIDER` unset, the first configured provider in the order
 anthropic, deepseek, huggingface answers, and the boot log states which one. The
 harness never picks a model from the message shape; the provider resolves its own
 default model unless the room chose one.
+
+**OpenAI is used only when named**: a room's model choice (`openai/...`) or
+`LLM_DEFAULT_PROVIDER=openai`. Adding `OPENAI_API_KEY` alone never makes OpenAI
+a chat fallback, because that key is also the credential for voice. It does,
+however, send voice notes to OpenAI for transcription (`whisper-1`) and enable
+OpenAI speech in voice mode (`tts-1`); the existing providers are unchanged.
+Once a room (or the default) names OpenAI, that turn's prompt, tool results and
+reply are processed on OpenAI's servers (V-4).
+
+OpenAI uses the native **Responses API** because its current reasoning models
+need it for tool calling. Each OpenAI reply's full output is kept in an opaque
+`provider_state` content block: OpenAI's reasoning items (encrypted by OpenAI),
+plus the reply's own message text and tool-call arguments in plain form, so a
+later call can send them back in their original order. The block is kept in the
+paused state so a resumed turn can continue. On the durable Turn the whole
+paused state is encrypted at rest. The legacy cache fallback stores the paused
+state as plain JSON, as it already does for the rest of the conversation (user
+text, tool results), so the block adds no new kind of data there. It is never
+sent to Anthropic, DeepSeek or Hugging Face, never shown to users, and never
+written to telemetry or receipts. Switching a room away from OpenAI
+mid-conversation loses only the reasoning.
 
 The **model catalog** (`orchestration/model_catalog.py`) is a fixed list of
 models the chatroom picker offers; which ones are available is gated purely by

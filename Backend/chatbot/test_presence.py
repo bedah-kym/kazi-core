@@ -35,17 +35,53 @@ def _reset_store():
 
 
 class AgentStatusTests(SimpleTestCase):
+    @override_settings(
+        ANTHROPIC_API_KEY="",
+        DEEPSEEK_API_KEY="",
+        HF_API_TOKEN="",  # nosec B106 - test fixture: an empty token, not a credential
+        OPENAI_API_KEY="",
+        LLM_DEFAULT_PROVIDER="",
+    )
     def test_offline_when_no_provider_is_configured(self):
         from chatbot.presence import agent_status
 
-        with patch("orchestration.model_catalog.provider_configured", return_value=False):
-            self.assertEqual(agent_status(), "offline")
+        self.assertEqual(agent_status(), "offline")
 
+    @override_settings(
+        ANTHROPIC_API_KEY="",
+        DEEPSEEK_API_KEY="fake-deepseek-key",  # nosec B105 - test fixture
+        HF_API_TOKEN="",  # nosec B106 - test fixture: an empty token, not a credential
+        OPENAI_API_KEY="",
+        LLM_DEFAULT_PROVIDER="",
+    )
     def test_online_when_a_provider_is_configured(self):
         from chatbot.presence import agent_status
 
-        with patch("orchestration.model_catalog.provider_configured", return_value=True):
-            self.assertEqual(agent_status(), "online")
+        self.assertEqual(agent_status(), "online")
+
+    @override_settings(
+        ANTHROPIC_API_KEY="",
+        DEEPSEEK_API_KEY="",
+        HF_API_TOKEN="",  # nosec B106 - test fixture: an empty token, not a credential
+        OPENAI_API_KEY="fake-openai-key",  # nosec B105 - test fixture
+        LLM_DEFAULT_PROVIDER="",
+    )
+    def test_openai_key_alone_is_not_online(self):
+        from chatbot.presence import agent_status
+
+        self.assertEqual(agent_status(), "offline")
+
+    @override_settings(
+        ANTHROPIC_API_KEY="",
+        DEEPSEEK_API_KEY="",
+        HF_API_TOKEN="",  # nosec B106 - test fixture: an empty token, not a credential
+        OPENAI_API_KEY="fake-openai-key",  # nosec B105 - test fixture
+        LLM_DEFAULT_PROVIDER="openai",
+    )
+    def test_openai_named_as_default_is_online(self):
+        from chatbot.presence import agent_status
+
+        self.assertEqual(agent_status(), "online")
 
 
 class PresenceStoreTests(SimpleTestCase):

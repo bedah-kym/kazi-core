@@ -1,0 +1,54 @@
+{
+  "source": "crafted",
+  "name": "refusal",
+  "http_status": 200,
+  "body": {
+    "id": "resp_crafted_refusal",
+    "object": "response",
+    "created_at": 1720000005,
+    "status": "completed",
+    "error": null,
+    "incomplete_details": null,
+    "instructions": "You are a connectivity probe.",
+    "max_output_tokens": 256,
+    "model": "gpt-6.1-sol",
+    "output": [
+      {
+        "type": "message",
+        "id": "msg_crafted_refusal",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "refusal",
+            "refusal": "I can't help with that request."
+          }
+        ],
+        "phase": "final_answer"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "previous_response_id": null,
+    "reasoning": {
+      "effort": "low",
+      "summary": null
+    },
+    "store": false,
+    "temperature": 0.3,
+    "tools": [],
+    "top_p": 1.0,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 19,
+      "input_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0
+      },
+      "output_tokens": 9,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 28
+    }
+  }
+}

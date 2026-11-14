@@ -889,7 +889,7 @@
             }
 
             function providerColor(provider) {
-                var map = { deepseek: '#A83C1E', anthropic: '#C08A5E', huggingface: '#8FA471' };
+                var map = { deepseek: '#A83C1E', anthropic: '#C08A5E', huggingface: '#8FA471', openai: '#1B1613' };
                 return map[provider] || '#A83C1E';
             }
 
@@ -917,7 +917,8 @@
                 var map = {
                     deepseek: 'DeepSeek',
                     anthropic: 'Anthropic',
-                    huggingface: 'Hugging Face'
+                    huggingface: 'Hugging Face',
+                    openai: 'OpenAI'
                 };
                 return map[provider] || provider;
             }

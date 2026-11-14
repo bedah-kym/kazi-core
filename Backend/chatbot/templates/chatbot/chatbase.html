@@ -827,6 +827,7 @@
         // NOTE: room_name and username are already JSON-encoded in views.py
         window.roomName = {{ room_name }};
         window.usernameGlobal = {{ username }};
+        window.KAZI_MEDIA_URL = "{{ media_base_url|escapejs }}";
         window.currentRoomId = window.roomName || null;
         window.otherUser = '{{ room_member|default:"" }}';
         window.isAiOnlyRoom = {{ is_ai_room|yesno:"true,false" }};

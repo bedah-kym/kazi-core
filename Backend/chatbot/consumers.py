@@ -80,8 +80,8 @@ def _escape_markdown_text(text) -> str:
     return _MARKDOWN_SPECIAL_RE.sub(r'\\\1', str(text))
 
 
-def _markdown_file_link(url, name) -> str:
-    destination = (
+def _markdown_destination(url) -> str:
+    return (
         str(url)
         .replace('\\', '\\\\')
         .replace('<', '\\<')
@@ -89,7 +89,14 @@ def _markdown_file_link(url, name) -> str:
         .replace('\r', '%0D')
         .replace('\n', '%0A')
     )
-    return f'[{_escape_markdown_text(name)}](<{destination}>)'
+
+
+def _markdown_file_link(url, name) -> str:
+    return f'[{_escape_markdown_text(name)}](<{_markdown_destination(url)}>)'
+
+
+def _markdown_image(url, alt) -> str:
+    return f'![{_escape_markdown_text(alt)}](<{_markdown_destination(url)}>)'
 
 
 class ChatConsumer(AsyncWebsocketConsumer):

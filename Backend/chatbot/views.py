@@ -178,6 +178,7 @@ def home(request, room_name):
             "is_ai_room": is_ai_room,
             "can_invite": can_invite,
             "room_avatar": current_room_avatar,
+            "media_base_url": settings.MEDIA_URL,
         }
     )
 
@@ -198,6 +199,7 @@ _CANONICAL_EXTENSIONS = {
     '.jpg': '.jpg', '.jpeg': '.jpeg', '.png': '.png', '.gif': '.gif',
     '.mp3': '.mp3', '.wav': '.wav',
 }
+IMAGE_FILE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif'}
 
 
 @login_required
@@ -263,9 +265,15 @@ def upload_file(request):
         logger.info(f"File uploaded successfully: user={request.user.id}, size={uploaded_file.size}, type={ext}")
 
         # Construct file URL
-        file_url = os.path.join(settings.MEDIA_URL, 'documents', safe_filename)
+        file_url = f"{settings.MEDIA_URL.rstrip('/')}/documents/{safe_filename}"
 
-        return JsonResponse({'fileUrl': file_url}, status=200)
+        from .consumers import _markdown_file_link, _markdown_image
+        if ext in IMAGE_FILE_EXTENSIONS:
+            content = _markdown_image(file_url, original_filename)
+        else:
+            content = _markdown_file_link(file_url, original_filename)
+
+        return JsonResponse({'fileUrl': file_url, 'content': content}, status=200)
 
     except Exception as e:
         logger.error(f"File upload error: user={request.user.id}, error={str(e)}")

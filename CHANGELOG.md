@@ -12,10 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Approval prompts show each parameter exactly as it will run; chat messages
   render through a narrower sanitiser.
 - Raw HTML in a chat message shows as literal text. New upload messages are
-  stored as markdown links, and upload links already stored in the old HTML
-  shape still render as clickable file names.
-- Images from other sites in chat messages now show as a short note instead of
-  loading.
+  stored as markdown links or images, and uploads already stored in the old
+  HTML shapes still render as links or images.
+- Tags such as `<sup>`, `<sub>`, `<kbd>` and `<details>` in replies now show as
+  text, and `<br>` inside a table cell is text too.
+- Images from the configured media origin load on S3 and custom-domain
+  installs; images from other sites show as a short note instead.
 
 ### Added — OpenAI as a chat provider (T-P4)
 

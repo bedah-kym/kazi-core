@@ -32,7 +32,6 @@ from orchestration.tool_calls import (
     status_for_result,
 )
 from orchestration.tool_record import (
-    _SHORTENED,
     RECORD_STRING_LIMIT,
     RECORD_STRING_MAX,
     tool_record_input,
@@ -664,20 +663,27 @@ class TurnToolCallRecordTests(TestCase):
         self.assertLessEqual(len(recorded), RECORD_STRING_MAX)
         self.assertIn("the call sent 10000000 characters", recorded)
         self.assertIn("record shortened", recorded)
-        # One 10M non-whitespace token cannot be proven not to be an unbounded
-        # secret value, so the fallback keeps the head and drops the tail.
-        self.assertTrue(recorded.startswith("a"))
+        # A value too long to redact whole keeps only a redacted head: no finite
+        # window around a tail proves it free of a secret's end.
+        kept, _, marker = recorded.partition(" ... [record shortened")
+        self.assertEqual(set(kept), {"a"})
+        # At 10M characters the marker needs a few characters of the 160 floor;
+        # RECORD_STRING_MAX still wins.
+        self.assertGreaterEqual(len(kept), RECORD_STRING_LIMIT - 5)
+        self.assertTrue(marker.endswith("omitted] ..."))
 
 
 class HugeInputRedactionTests(SimpleTestCase):
     N = 100_100
     TOKEN = "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6"  # nosec B105 - fake test fixture
 
-    def _cuts(self):
-        marker_bound = len(_SHORTENED.format(length=self.N, omitted=self.N))
-        keep = max(0, RECORD_STRING_MAX - marker_bound)
-        head = keep // 2
-        return head, self.N - (keep - head)
+    def _starts(self, size):
+        # Every start whose match can touch a kept character, wherever the
+        # record places its cuts: the first RECORD_STRING_MAX characters and the
+        # last RECORD_STRING_MAX. The table does not assume where the cut is.
+        head = range(0, RECORD_STRING_MAX + 1)
+        tail = range(self.N - RECORD_STRING_MAX - size, self.N - size + 1)
+        return (("head", head), ("tail", tail))
 
     def _value_with(self, pattern_text, start):
         value = ["x", " "] * (self.N // 2)
@@ -711,19 +717,30 @@ class HugeInputRedactionTests(SimpleTestCase):
              "zeta.omega+tag@example-unique.test"),
             ("phone", "+15551234567", "+15551234567"),
         ]
-        head_cut, tail_cut = self._cuts()
         for name, pattern_text, sensitive in cases:
-            for cut_name, cut in (("head", head_cut), ("tail", tail_cut)):
-                for offset in range(len(pattern_text) + 1):
-                    start = cut - offset
-                    if start < 0 or start + len(pattern_text) > self.N:
-                        continue
+            for side, starts in self._starts(len(pattern_text)):
+                for start in starts:
                     value = self._value_with(pattern_text, start)
                     recorded = tool_record_input({"content": value})["content"]
-                    with self.subTest(
-                        pattern=name, cut=cut_name, offset=offset,
-                    ):
+                    with self.subTest(pattern=name, side=side, start=start):
                         self._assert_hidden(recorded, sensitive)
+
+    def test_a_long_secret_value_at_the_end_keeps_no_fragment(self):
+        # The value's key sits thousands of characters before the end, outside
+        # any finite window around the kept tail. Whole-text redaction hides
+        # the value; the record must not keep its last characters either.
+        from orchestration.security_policy import redact_sensitive_text
+
+        piece = "Q7x9Lm2Pz4Rt8Vw1Ks6Hd3Nf5Bj0Yc"
+        filler = "z " * 50_100
+        for prefix in ("Bearer ", "password: ", "api_key = ", "client_secret = "):
+            for size in (4_200, 4_500, 5_000, 8_000):
+                secret = (piece * (size // len(piece) + 1))[:size]
+                value = filler + prefix + secret
+                with self.subTest(prefix=prefix, size=size):
+                    self.assertNotIn(secret[-12:], redact_sensitive_text(value))
+                    recorded = tool_record_input({"content": value})["content"]
+                    self._assert_hidden(recorded, secret)
 
     def test_the_leads_bearer_probe_keeps_no_token_prefix(self):
         token = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature"  # nosec B105 - fake test token

@@ -6,7 +6,7 @@ reads it as the content the call actually sent and may try to repair something
 that was never broken (C1). Restricted keys and secret patterns are still
 removed without a marker; only the length cut is announced.
 """
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from orchestration.security_policy import redact_sensitive_text, sanitize_parameters
 
@@ -14,15 +14,14 @@ RECORD_STRING_LIMIT = 160
 RECORD_STRING_MAX = RECORD_STRING_LIMIT + 80
 _MAX_RECORD_LIST_ITEMS = 10
 # Running the secret/PII regexes over a multi-megabyte value is pathological
-# (the email/phone patterns backtrack). Above this length only the kept head
-# and tail are redacted; the middle is omitted and never shown.
+# (the email/phone patterns backtrack). Above this length only a redacted head
+# is kept; the rest is omitted and never shown.
 _REDACT_WHOLE_MAX = 100_000
-# A window wider than the kept text: any finite pattern (the phone form is the
-# longest at about 20 characters) and any key/scheme token is fully inside it.
+# The head is redacted in a window this much wider than the kept text, so a
+# secret value that starts in the kept text has its whole minimum length inside
+# the window. A match that runs past the window still ends at its edge: the
+# window end satisfies ``\b`` and ends ``\S+``.
 _HUGE_MARGIN = 4096
-# A non-whitespace token longer than this at the window start cannot be proven
-# not to be an unbounded secret value, so the kept tail is dropped.
-_HUGE_TOKEN_LIMIT = 4096
 _SHORTENED = (
     " ... [record shortened: the call sent {length} characters; "
     "{omitted:,} omitted] ... "
@@ -44,74 +43,23 @@ def _shorten_redacted(text: str) -> str:
     return text[:head] + marker + text[-tail:]
 
 
-def _tail_window_start(value: str, start: int, limit: int) -> Optional[int]:
-    """Move a tail window start left to include the key/scheme before a value.
-
-    If the window starts inside a token, its key may be immediately before it;
-    walk to that token's start and then over the whitespace to the previous
-    token. A token longer than ``limit`` cannot be proven not to be an
-    unbounded secret value, so return None and let the caller drop the tail.
-    """
-    steps = 0
-    if start > 0 and not value[start].isspace() and not value[start - 1].isspace():
-        while start > 0 and not value[start - 1].isspace():
-            start -= 1
-            steps += 1
-            if steps > limit:
-                return None
-    else:
-        while start > 0 and value[start - 1].isspace():
-            start -= 1
-            steps += 1
-            if steps > limit:
-                return None
-    if start > 0:
-        steps = 0
-        while start > 0 and not value[start - 1].isspace():
-            start -= 1
-            steps += 1
-            if steps > limit:
-                return None
-    return start
-
-
 def _shorten_huge(value: str) -> str:
+    """Keep only a redacted head of a value too long to redact whole.
+
+    The head window starts at the text start, so every pattern's key or scheme
+    before a kept value is inside it. A secret value that starts in the kept
+    head has at least ``_HUGE_MARGIN`` characters of window after it, more than
+    any pattern's minimum, and a match that runs past the window ends at its
+    edge. A tail has no such guarantee: ``Bearer``, ``key = `` and the
+    email local part reach arbitrarily far to the left of the kept text, so no
+    finite window around a tail proves it safe. It is dropped instead.
+    """
     length = len(value)
     marker_bound = len(_SHORTENED.format(length=length, omitted=length))
-    keep = max(0, RECORD_STRING_MAX - marker_bound)
-    head = keep // 2
-    tail = keep - head
-    marker = _SHORTENED.format(length=length, omitted=length - keep)
-
-    # Head: redact a window wider than the kept text, with a sentinel whitespace
-    # that closes any unbounded match crossing the cut, then cut the result.
-    head_window = value[: head + _HUGE_MARGIN]
-    head_text = redact_sensitive_text(head_window + " ")[:head]
-
-    # Tail: the window ends at the text end, so an unbounded match is closed by
-    # the text itself. The window start is moved left to include the key/scheme;
-    # a token too long to prove safe drops the tail (fail closed).
-    tail_text = ""
-    if tail:
-        start = max(0, length - (tail + _HUGE_MARGIN))
-        if start == 0:
-            tail_text = redact_sensitive_text(value)[-tail:]
-        else:
-            start = _tail_window_start(value, start, _HUGE_TOKEN_LIMIT)
-            if start is not None:
-                tail_text = redact_sensitive_text(value[start:])[-tail:]
-
-    result = head_text + marker + tail_text
-    if len(result) > RECORD_STRING_MAX:
-        overflow = len(result) - RECORD_STRING_MAX
-        if tail_text:
-            tail_text = tail_text[: max(0, len(tail_text) - overflow)]
-            result = head_text + marker + tail_text
-            overflow = len(result) - RECORD_STRING_MAX
-        if overflow > 0 and head_text:
-            head_text = head_text[: max(0, len(head_text) - overflow)]
-            result = head_text + marker + tail_text
-    return result
+    head = max(0, RECORD_STRING_MAX - marker_bound)
+    marker = _SHORTENED.format(length=length, omitted=length - head)
+    head_text = redact_sensitive_text(value[: head + _HUGE_MARGIN])[:head]
+    return head_text + marker.rstrip()
 
 
 def _record_string(value: str) -> str:

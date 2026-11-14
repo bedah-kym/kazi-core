@@ -272,7 +272,7 @@ function connectToChat(roomId) {
             return;
         }
         // AI Integration
-        if (data.command === 'ai_stream' || data.command === 'ai_message' || data.command === 'ai_message_saved' || data.command === 'ai_voice_ready' || data.command === 'orchestration_step') {
+        if (data.command === 'ai_stream' || data.command === 'ai_message_saved' || data.command === 'ai_voice_ready' || data.command === 'orchestration_step') {
             if (window.kaziAssistant) {
                 window.kaziAssistant.handleMessage(data);
             }
@@ -375,14 +375,6 @@ window.addEventListener('popstate', function (event) {
     });
 })();
 
-// Configure Marked options
-if (typeof marked !== 'undefined') {
-    marked.use({
-        breaks: true,
-        gfm: true
-    });
-}
-
 // FIX: createMessage now accepts roomId parameter and prepend flag
 function createMessage(data, roomId, prepend = false) {
     const hasAudio = data && data.audio_url && data.audio_url !== "null";
@@ -438,26 +430,15 @@ function createMessage(data, roomId, prepend = false) {
             member: data.member
         });
     } else {
-        // MARKDOWN & SECURITY PROCESSING
-        let rawContent = data.content;
-        safeHtml = rawContent;
-
-        if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
-            try {
-                const parsedHtml = marked.parse(rawContent);
-                safeHtml = DOMPurify.sanitize(parsedHtml, {
-                    ADD_TAGS: ['img', 'code', 'pre'],
-                    ADD_ATTR: ['src', 'alt', 'class', 'style', 'target']
-                });
-            } catch (e) {
-                console.error('Markdown processing error:', e);
-                safeHtml = rawContent.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-            }
+        const rawContent = data.content == null ? '' : String(data.content);
+        if (window.KaziRender && typeof window.KaziRender.renderInto === 'function') {
+            window.KaziRender.renderInto(msgTextTag, rawContent);
+        } else {
+            msgTextTag.textContent = rawContent;
         }
-
-        msgTextTag.innerHTML = safeHtml;
+        safeHtml = msgTextTag.innerHTML;
     }
-    msgdivtag.innerHTML = data.member;
+    msgdivtag.textContent = data.member;
     msgpTag.innerHTML = time;
 
     if (data.member === username) {

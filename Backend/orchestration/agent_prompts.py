@@ -6,7 +6,10 @@ how to behave, and injects user-specific context (preferences, memory, history).
 """
 from __future__ import annotations
 
+import json
 import logging
+import re
+import unicodedata
 from typing import Any, Dict, List, Optional
 
 from orchestration.user_preferences import format_style_prompt
@@ -335,6 +338,144 @@ def build_system_prompt(
     return "\n\n".join(sections)
 
 
+_MARKER_OPEN = "\u27e8"
+_MARKER_CLOSE = "\u27e9"
+
+# Unicode 15.0 Default_Ignorable_Code_Point (DerivedCoreProperties.txt).
+_DEFAULT_IGNORABLE_RANGES = (
+    (0x00AD, 0x00AD),
+    (0x034F, 0x034F),
+    (0x061C, 0x061C),
+    (0x115F, 0x1160),
+    (0x17B4, 0x17B5),
+    (0x180B, 0x180F),
+    (0x200B, 0x200F),
+    (0x202A, 0x202E),
+    (0x2060, 0x206F),
+    (0x3164, 0x3164),
+    (0xFE00, 0xFE0F),
+    (0xFEFF, 0xFEFF),
+    (0xFFA0, 0xFFA0),
+    (0xFFF0, 0xFFF8),
+    (0x1BCA0, 0x1BCA3),
+    (0x1D173, 0x1D17A),
+    (0xE0000, 0xE0FFF),
+)
+
+
+def _is_default_ignorable(char: str) -> bool:
+    codepoint = ord(char)
+    return any(start <= codepoint <= end for start, end in _DEFAULT_IGNORABLE_RANGES)
+
+
+def _is_hidden_character(char: str, *, inline: bool) -> bool:
+    category = unicodedata.category(char)
+    if inline:
+        if category == "Cc":
+            return True
+    elif category == "Cc" and char not in ("\n", "\t"):
+        return True
+    if category in ("Cf", "Zl", "Zp"):
+        return True
+    if category == "Zs" and char != " ":
+        return True
+    return _is_default_ignorable(char)
+
+
+def _shown_text(text: str, *, inline: bool = False) -> tuple[str, int]:
+    """Replace characters that could hide or reorder the display with markers."""
+    shown: List[str] = []
+    hidden = 0
+    last_index = len(text) - 1
+    line_end = last_index if text.endswith("\n") else len(text)
+    trailing_start = len(text[:line_end].rstrip(" \t"))
+    for index, char in enumerate(text):
+        marked = char == _MARKER_OPEN or _is_hidden_character(char, inline=inline)
+        if inline and char == " ":
+            # Code spans drop boundary spaces and HTML collapses runs of spaces.
+            if (
+                index in (0, last_index)
+                or text[index - 1] == " "
+                or text[index + 1] == " "
+            ):
+                marked = True
+        if not inline:
+            if index == last_index and char == "\n":
+                marked = True
+            if trailing_start <= index < line_end and char in (" ", "\t"):
+                marked = True
+        if marked:
+            shown.append(f"{_MARKER_OPEN}U+{ord(char):04X}{_MARKER_CLOSE}")
+            hidden += 1
+        else:
+            shown.append(char)
+    return "".join(shown), hidden
+
+
+def _longest_backtick_run(text: str) -> int:
+    return max((len(match.group(0)) for match in re.finditer(r"`+", text)), default=0)
+
+
+def _fence_for(text: str) -> str:
+    return "`" * max(3, _longest_backtick_run(text) + 1)
+
+
+def _inline_code(text: Any) -> str:
+    shown, _hidden = _shown_text(str(text), inline=True)
+    delimiter = "`" * max(1, _longest_backtick_run(shown) + 1)
+    pad = " " if shown.startswith("`") or shown.endswith("`") else ""
+    return f"{delimiter}{pad}{shown}{pad}{delimiter}"
+
+
+def _plural(count: int, singular: str, plural: str) -> str:
+    return singular if count == 1 else plural
+
+
+def _parameter_label(
+    key: str, kind: str, characters: int, lines: int, hidden: int, empty: bool,
+) -> str:
+    parts = []
+    if empty:
+        parts.append("(empty)")
+    parts.append(
+        f"{characters} {_plural(characters, 'character', 'characters')}, "
+        f"{lines} {_plural(lines, 'line', 'lines')}"
+    )
+    label = f"{_inline_code(key)} ({kind}) \u2014 " + ", ".join(parts)
+    if hidden:
+        label += (
+            f"; contains {hidden} "
+            f"{_plural(hidden, 'hidden character', 'hidden characters')}, "
+            f"shown as {_MARKER_OPEN}U+\u2026{_MARKER_CLOSE}"
+        )
+    return label + ":"
+
+
+def _parameter_block(key: Any, value: Any) -> str:
+    key = str(key)
+    if isinstance(value, str):
+        raw = value
+        kind = "text"
+    else:
+        try:
+            raw = json.dumps(value, ensure_ascii=False, indent=2)
+            kind = "JSON"
+        except (TypeError, ValueError, OverflowError, RecursionError):
+            raw = str(value)
+            kind = "fallback text"
+    shown, hidden = _shown_text(raw)
+    label = _parameter_label(
+        key,
+        kind,
+        characters=len(raw),
+        lines=raw.count("\n") + 1,
+        hidden=hidden,
+        empty=raw == "",
+    )
+    fence = _fence_for(shown)
+    return f"{label}\n{fence}text\n{shown}\n{fence}"
+
+
 def build_confirmation_prompt(
     tool_name: str,
     tool_input: Dict[str, Any],
@@ -344,11 +485,12 @@ def build_confirmation_prompt(
 
     Returns a natural-language string asking the user to confirm.
     """
+    tool_input = tool_input if isinstance(tool_input, dict) else {}
     readable = tool_name.replace("_", " ")
-    param_lines = []
-    for key, value in tool_input.items():
-        param_lines.append(f"  - **{key}**: {value}")
-    params_text = "\n".join(param_lines) if param_lines else "  (no parameters)"
+    param_blocks = [
+        _parameter_block(key, value) for key, value in tool_input.items()
+    ]
+    params_text = "\n\n".join(param_blocks) if param_blocks else "(no parameters)"
 
     reason_line = ""
     if tool_name in ("run_command", "run_shell", "shell_command"):
@@ -361,7 +503,7 @@ def build_confirmation_prompt(
             reason_line = ""
 
     return (
-        f"I'd like to **{readable}** with the following details:\n"
+        f"I'd like to {_inline_code(readable)} with the following details:\n"
         f"{params_text}\n\n"
         f"{reason_line}"
         f"Should I go ahead? (yes / no)"
@@ -382,12 +524,19 @@ def build_confirmation_prompt_many(
 
     lines = [f"I'd like to run **{len(calls)} actions** together, in this order:"]
     for index, call in enumerate(calls, start=1):
-        readable = call["name"].replace("_", " ")
+        readable = str(call.get("name") or "").replace("_", " ")
         params = call.get("input") if isinstance(call.get("input"), dict) else {}
-        detail = ", ".join(f"**{key}**: {value}" for key, value in params.items())
-        lines.append(f"  {index}. **{readable}**" + (f" — {detail}" if detail else ""))
+        detail_blocks = [
+            _parameter_block(key, value) for key, value in params.items()
+        ]
+        detail = "\n\n".join(detail_blocks) if detail_blocks else "(no parameters)"
+        lines.append("")
+        lines.append(f"### {index}. {_inline_code(readable)}")
+        lines.append("")
+        lines.append(detail)
     lines.append("")
     lines.append("Should I go ahead with all of them? (yes / no)")
     if short_id:
-        lines.append(f"\n(approval id {short_id})")
+        lines.append("")
+        lines.append(f"(approval id {short_id})")
     return "\n".join(lines)

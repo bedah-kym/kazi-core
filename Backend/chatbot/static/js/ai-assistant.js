@@ -422,13 +422,6 @@ class KaziAssistant {
             }
             return;
         }
-
-        // Handle complete AI message (legacy/fallback)
-        if (data.command === 'ai_message') {
-            this.hideAIThinking();
-            this.displayAIMessage(data.message);
-            return;
-        }
     }
     handleOrchestrationStep(event) {
         if (!event) return;
@@ -517,10 +510,12 @@ class KaziAssistant {
                 ${this._getStepIcon(status)}
             </div>
             <div class="kazi-step-body">
-                <div class="kazi-step-label">${label || 'Processing'}</div>
+                <div class="kazi-step-label"></div>
                 <div class="kazi-step-detail">${status === 'running' ? 'In progress…' : status === 'thinking' ? 'Analyzing…' : ''}</div>
             </div>
         `;
+        const labelEl = step.querySelector('.kazi-step-label');
+        if (labelEl) labelEl.textContent = label || 'Processing';
 
         timeline.appendChild(step);
         this._scrollToBottom();
@@ -630,16 +625,14 @@ class KaziAssistant {
             if (!contentDiv) return;
             const raw = streamContainer._rawText || '';
             const lastLen = streamContainer._lastRenderedLen || 0;
-            // Skip render if less than 40 new chars (reduces marked.parse calls for long responses)
+            // Skip render if less than 40 new chars (reduces parser calls for long responses)
             if (!force && raw.length - lastLen < 40) return;
             streamContainer._lastRenderedLen = raw.length;
-            // Render markdown if marked is available, otherwise plain text
-            if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
-                contentDiv.innerHTML = DOMPurify.sanitize(marked.parse(raw));
-            } else if (typeof marked !== 'undefined') {
-                contentDiv.innerHTML = marked.parse(raw);
+            // Render markdown through the shared renderer, otherwise plain text
+            if (window.KaziRender && typeof window.KaziRender.renderInto === 'function') {
+                window.KaziRender.renderInto(contentDiv, raw);
             } else {
-                contentDiv.innerText = raw;
+                contentDiv.textContent = raw;
             }
             if (this._isNearBottom()) this._scrollToBottom();
         };
@@ -656,47 +649,21 @@ class KaziAssistant {
         }
     }
 
-    displayAIMessage(messageData) {
-        const chatList = this.getCurrentMessageList();
-        if (!chatList) return;
-
-        const formattedTime = new Date(messageData.timestamp).toLocaleTimeString();
-
-        const msgListTag = document.createElement('li');
-        msgListTag.className = 'clearfix kazi-message-item';
-
-        msgListTag.innerHTML = `
-            <div class="message-data">
-                <div class="time-label">${formattedTime}</div>
-            </div>
-            <div class="message other-message kazi-message">
-                ${window.kaziBadgeHtml ? window.kaziBadgeHtml() : '<div class="kazi-badge">' + kaziIconHtml() + '<span>Kazi</span></div>'}
-                <div class="kazi-content">${messageData.content}</div>
-            </div>
-        `;
-
-        chatList.appendChild(msgListTag);
-        chatList.scrollTop = chatList.scrollHeight;
-
-        // Animate entrance
-        setTimeout(() => {
-            msgListTag.classList.add('slide-in');
-        }, 10);
-    }
-
     // ============================================
     // ERROR HANDLING
     // ============================================
     showAIError(errorMessage = "I'm having trouble right now. Please try again!") {
         this.hideAIThinking();
-
-        const errorMsg = {
+        if (typeof createMessage !== 'function') {
+            console.error(errorMessage);
+            return;
+        }
+        const roomId = window.currentRoomId || (typeof roomName !== 'undefined' ? roomName : null);
+        createMessage({
             member: 'kazi',
-            content: `<div class="ai-error"><i class="fas fa-exclamation-triangle"></i> ${errorMessage}</div>`,
+            content: errorMessage,
             timestamp: new Date().toISOString()
-        };
-
-        this.displayAIMessage(errorMsg);
+        }, roomId);
     }
 }
 

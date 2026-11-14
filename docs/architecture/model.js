@@ -8,9 +8,9 @@ window.KAZI_ARCH = {
       "subtitle": "Processes and the services they talk to",
       "parent": null,
       "nodes": [
-        {"id": "browser", "x": 110, "y": 360, "kind": "client", "label": "Browser", "sub": "chatbase.html + main.js",
+        {"id": "browser", "x": 110, "y": 360, "kind": "client", "label": "Browser", "sub": "chatbase.html + main.js + kazi-render.js",
          "role": "Renders rooms, sends chat frames over a ReconnectingWebSocket, renders streamed replies and harness lines.",
-         "refs": [{"file": "Backend/chatbot/static/js/main.js", "symbol": "ReconnectingWebSocket"}],
+         "refs": [{"file": "Backend/chatbot/static/js/main.js", "symbol": "ReconnectingWebSocket"}, {"file": "Backend/chatbot/static/js/kazi-render.js", "symbol": "KaziRender"}],
          "facts": ["Socket URL /ws/chat/<room_id>/", "Commands in: new_message, typing, fetch_messages, file_message, voice_message", "Commands out: messages, new_message, ai_stream, ai_message_saved, orchestration_step, presence"]},
         {"id": "web", "x": 470, "y": 360, "kind": "process", "label": "Web", "sub": "ASGI: Django + Channels", "zoom": "web",
          "mem": "161 MB idle, 171 MB after 5 turns", "cpu": "0.15-0.7 CPU-s per turn; 9.6 s to serve",

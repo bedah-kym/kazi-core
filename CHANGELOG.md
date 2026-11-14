@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — approval parameters and chat rendering
+
+- Approval prompts show each parameter exactly as it will run; chat messages
+  render through a narrower sanitiser.
+- Images from other sites in chat messages now show as a short note instead of
+  loading.
+
 ### Added — OpenAI as a chat provider (T-P4)
 
 - New provider `openai` on the native Responses API (a separate

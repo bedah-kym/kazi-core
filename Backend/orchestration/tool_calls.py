@@ -105,9 +105,9 @@ def status_for_result(result: Any, *, not_run: bool = False) -> str:
     if result.get("outcome_unknown"):
         return "outcome_unknown"
     status = str(result.get("status") or "").strip().lower()
-    if "safety policy" in str(result.get("message") or ""):
-        return "policy_stopped"
     mapped = _STATUS_ALIASES.get(status)
+    if mapped == "error" and "safety policy" in str(result.get("message") or ""):
+        return "policy_stopped"
     if mapped in ("error", "outcome_unknown", "policy_stopped"):
         return mapped
     if result.get("error") and not status:

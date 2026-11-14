@@ -32,6 +32,7 @@ from orchestration.tool_calls import (
     status_for_result,
 )
 from orchestration.tool_record import (
+    _SHORTENED,
     RECORD_STRING_LIMIT,
     RECORD_STRING_MAX,
     tool_record_input,
@@ -663,8 +664,76 @@ class TurnToolCallRecordTests(TestCase):
         self.assertLessEqual(len(recorded), RECORD_STRING_MAX)
         self.assertIn("the call sent 10000000 characters", recorded)
         self.assertIn("record shortened", recorded)
+        # One 10M non-whitespace token cannot be proven not to be an unbounded
+        # secret value, so the fallback keeps the head and drops the tail.
         self.assertTrue(recorded.startswith("a"))
-        self.assertTrue(recorded.endswith("a"))
+
+
+class HugeInputRedactionTests(SimpleTestCase):
+    N = 100_100
+    TOKEN = "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6"  # nosec B105 - fake test fixture
+
+    def _cuts(self):
+        marker_bound = len(_SHORTENED.format(length=self.N, omitted=self.N))
+        keep = max(0, RECORD_STRING_MAX - marker_bound)
+        head = keep // 2
+        return head, self.N - (keep - head)
+
+    def _value_with(self, pattern_text, start):
+        value = ["x", " "] * (self.N // 2)
+        value[start:start + len(pattern_text)] = list(pattern_text)
+        # Give every pattern the word boundary it needs, as real text does.
+        if start > 0:
+            value[start - 1] = " "
+        end = start + len(pattern_text)
+        if end < len(value):
+            value[end] = " "
+        return "".join(value)
+
+    def _assert_hidden(self, recorded, sensitive):
+        for index in range(max(0, len(sensitive) - 5)):
+            piece = sensitive[index:index + 6]
+            self.assertNotIn(
+                piece, recorded,
+                f"secret fragment {piece!r} survived the record",
+            )
+
+    def test_every_secret_and_pii_pattern_is_hidden_at_each_cut(self):
+        token = self.TOKEN
+        cases = [
+            ("sk", "sk-" + token, "sk-" + token),
+            ("bearer", "Bearer " + token, token),
+            ("api key", "api_key=" + token, token),
+            ("access token", "access_token=" + token, token),
+            ("password", "password=" + token, token),
+            ("client secret", "client_secret=" + token, token),
+            ("email", "zeta.omega+tag@example-unique.test",
+             "zeta.omega+tag@example-unique.test"),
+            ("phone", "+15551234567", "+15551234567"),
+        ]
+        head_cut, tail_cut = self._cuts()
+        for name, pattern_text, sensitive in cases:
+            for cut_name, cut in (("head", head_cut), ("tail", tail_cut)):
+                for offset in range(len(pattern_text) + 1):
+                    start = cut - offset
+                    if start < 0 or start + len(pattern_text) > self.N:
+                        continue
+                    value = self._value_with(pattern_text, start)
+                    recorded = tool_record_input({"content": value})["content"]
+                    with self.subTest(
+                        pattern=name, cut=cut_name, offset=offset,
+                    ):
+                        self._assert_hidden(recorded, sensitive)
+
+    def test_the_leads_bearer_probe_keeps_no_token_prefix(self):
+        token = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature"  # nosec B105 - fake test token
+        value = "a " * 29 + " Bearer " + token + " " + "z " * 100_000
+
+        recorded = tool_record_input({"content": value})["content"]
+
+        self.assertNotIn("Bearer eyJhbGciOiJ", recorded)
+        self.assertNotIn(token[:12], recorded)
+        self._assert_hidden(recorded, token)
 
 
 class StatusMappingTests(SimpleTestCase):
@@ -719,6 +788,13 @@ class StatusMappingTests(SimpleTestCase):
                 {"status": "error", "message": "Blocked by the safety policy."},
             ),
             "policy_stopped",
+        )
+        # A successful connector that merely quotes the phrase is not a stop.
+        self.assertEqual(
+            status_for_result(
+                {"status": "sent", "message": "Blocked by the safety policy."},
+            ),
+            "ok",
         )
 
 

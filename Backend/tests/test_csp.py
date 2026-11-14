@@ -2,20 +2,31 @@
 
 Every HTTP response goes through the real ``CSPMiddleware``; nothing above the
 response is mocked. The inventory test reads the shipped templates and static
-JS so a new CDN tag cannot drift away from the policy.
+JS so a new CDN tag cannot drift away from the policy, and the pinned policy
+test fails on any removal or widening.
 """
 import re
 from pathlib import Path
 
+from axes.models import AccessAttempt, AccessLog
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
+from Backend.settings import build_content_security_policy
 from chatbot.models import Chatroom, Member
 
 BACKEND = Path(__file__).resolve().parents[1]
 HEADER = 'Content-Security-Policy'
+
+SOCIAL_AUTHORIZE_ORIGINS = [
+    'https://accounts.google.com',
+    'https://github.com',
+    'https://www.linkedin.com',
+    'https://api.x.com',
+]
 
 
 def _parse_policy(value):
@@ -126,7 +137,16 @@ class CSPPolicyStrictnessTests(TestCase):
             self.assertTrue(values, f'{name} is missing from the policy')
             for value in values:
                 self.assertNotIn('*', value, f'{name} allows a wildcard source: {value}')
-                self.assertNotEqual(value, 'https:', f'{name} allows any https host')
+
+    def test_no_scheme_only_sources(self):
+        for name in ('img-src', 'connect-src', 'media-src', 'font-src', 'frame-src'):
+            for value in self.policy.get(name, []):
+                if value in ('data:', 'blob:'):
+                    continue
+                self.assertIsNone(
+                    re.match(r'^[a-z][a-z0-9+.-]*:$', value),
+                    f'{name} allows a scheme-only source: {value}',
+                )
 
     def test_object_src_is_none(self):
         self.assertEqual(self.policy.get('object-src'), ["'none'"])
@@ -137,25 +157,160 @@ class CSPPolicyStrictnessTests(TestCase):
     def test_base_uri_is_self(self):
         self.assertEqual(self.policy.get('base-uri'), ["'self'"])
 
+    def test_form_action_lists_the_social_authorize_origins(self):
+        self.assertEqual(
+            self.policy.get('form-action'),
+            ["'self'"] + SOCIAL_AUTHORIZE_ORIGINS,
+        )
+
+
+class CSPIndirectLoadsTests(TestCase):
+    def setUp(self):
+        response = self.client.get(reverse('users:login'))
+        self.assertIn(HEADER, response.headers, 'response has no Content-Security-Policy header')
+        self.policy = _policy_from(response)
+
+    def test_indirect_loads_are_covered(self):
+        rows = [
+            ('Google Fonts CSS loads its webfonts from gstatic', 'font-src', 'https://fonts.gstatic.com'),
+            ('Font Awesome webfonts come from cdnjs', 'font-src', 'https://cdnjs.cloudflare.com'),
+            ('the Calendly widget creates an iframe', 'frame-src', 'https://calendly.com'),
+            ('emoji-mart fetches its data', 'connect-src', 'https://cdn.jsdelivr.net/npm/@emoji-mart/'),
+            ('the OAuth form targets Google', 'form-action', 'https://accounts.google.com'),
+            ('the OAuth form targets GitHub', 'form-action', 'https://github.com'),
+            ('the OAuth form targets LinkedIn', 'form-action', 'https://www.linkedin.com'),
+            ('the OAuth form targets X', 'form-action', 'https://api.x.com'),
+            ('main.js previews use blob:', 'img-src', 'blob:'),
+            ('onboarding uses createObjectURL', 'img-src', 'blob:'),
+            ('avatar-upload cropper uses blob:', 'img-src', 'blob:'),
+            ('inline avatars use data:', 'img-src', 'data:'),
+        ]
+        for reason, directive, source in rows:
+            with self.subTest(reason):
+                self.assertIn(source, self.policy.get(directive, []), reason)
+
+
+class CSPPinnedPolicyTests(TestCase):
+    def test_full_policy_is_pinned(self):
+        self.assertEqual(
+            build_content_security_policy(
+                '/uploads/', ['https://app.example.test'], ['app.example.test'],
+            ),
+            {
+                'default-src': ["'self'"],
+                'script-src': [
+                    "'self'",
+                    "'unsafe-inline'",
+                    'https://cdnjs.cloudflare.com',
+                    'https://cdn.jsdelivr.net',
+                    'https://unpkg.com',
+                    'https://code.jquery.com',
+                    'https://assets.calendly.com',
+                ],
+                'style-src': [
+                    "'self'",
+                    "'unsafe-inline'",
+                    'https://fonts.googleapis.com',
+                    'https://cdnjs.cloudflare.com',
+                    'https://cdn.jsdelivr.net',
+                    'https://unpkg.com',
+                    'https://assets.calendly.com',
+                ],
+                'font-src': [
+                    "'self'",
+                    'data:',
+                    'https://fonts.gstatic.com',
+                    'https://cdnjs.cloudflare.com',
+                ],
+                'img-src': [
+                    "'self'",
+                    'data:',
+                    'blob:',
+                    'https://ui-avatars.com',
+                    'https://a.tile.openstreetmap.org',
+                    'https://b.tile.openstreetmap.org',
+                    'https://c.tile.openstreetmap.org',
+                ],
+                'media-src': ["'self'", 'blob:'],
+                'connect-src': [
+                    "'self'",
+                    'wss://app.example.test',
+                    'https://cdn.jsdelivr.net/npm/@emoji-mart/',
+                ],
+                'frame-src': ["'self'", 'https://calendly.com'],
+                'object-src': ["'none'"],
+                'base-uri': ["'self'"],
+                'form-action': ["'self'"] + SOCIAL_AUTHORIZE_ORIGINS,
+                'frame-ancestors': ["'none'"],
+            },
+        )
+
+
+class CSPWebSocketOriginTests(TestCase):
+    def test_lite_http_origin_becomes_ws(self):
+        directives = build_content_security_policy(
+            '/uploads/', ['http://127.0.0.1:8000'], ['127.0.0.1'],
+        )
+        self.assertIn('ws://127.0.0.1:8000', directives['connect-src'])
+
+    def test_production_https_origin_becomes_wss(self):
+        directives = build_content_security_policy(
+            '/uploads/', ['https://app.example.test'], ['app.example.test'],
+        )
+        self.assertIn('wss://app.example.test', directives['connect-src'])
+
+    def test_empty_trusted_origins_add_no_websocket_source(self):
+        directives = build_content_security_policy('/uploads/', [], [])
+        websocket_sources = [
+            value for value in directives['connect-src']
+            if value.startswith(('ws://', 'wss://'))
+        ]
+        self.assertEqual(websocket_sources, [])
+
+    def test_allowed_hosts_do_not_add_portless_websocket_sources(self):
+        directives = build_content_security_policy(
+            '/uploads/', [], ['app.example.test', '.example.com'],
+        )
+        self.assertNotIn('ws://app.example.test', directives['connect-src'])
+        self.assertNotIn('wss://app.example.test', directives['connect-src'])
+        self.assertNotIn('ws://.example.com', directives['connect-src'])
+        self.assertNotIn('wss://.example.com', directives['connect-src'])
+
 
 class CSPMediaOriginTests(TestCase):
-    def _directives(self):
-        policy = getattr(settings, 'CONTENT_SECURITY_POLICY', {})
-        return policy.get('DIRECTIVES', {})
-
-    @override_settings(MEDIA_URL='/uploads/')
     def test_relative_media_url_adds_no_origin(self):
-        directives = self._directives()
-        self.assertTrue(directives, 'CONTENT_SECURITY_POLICY.DIRECTIVES is missing')
+        directives = build_content_security_policy('/uploads/', [], [])
+        self.assertEqual(
+            directives['img-src'],
+            [
+                "'self'",
+                'data:',
+                'blob:',
+                'https://ui-avatars.com',
+                'https://a.tile.openstreetmap.org',
+                'https://b.tile.openstreetmap.org',
+                'https://c.tile.openstreetmap.org',
+            ],
+        )
         self.assertEqual(directives['media-src'], ["'self'", 'blob:'])
-        self.assertNotIn('/uploads/', directives['img-src'])
 
-    @override_settings(MEDIA_URL='https://media.example.test/uploads/')
-    def test_absolute_media_url_is_allowed(self):
-        directives = self._directives()
-        self.assertTrue(directives, 'CONTENT_SECURITY_POLICY.DIRECTIVES is missing')
-        self.assertIn('https://media.example.test', directives['img-src'])
-        self.assertIn('https://media.example.test', directives['media-src'])
+    def test_absolute_media_url_is_allowed_for_media_and_connect(self):
+        directives = build_content_security_policy(
+            'https://media.example.test/uploads/', [], [],
+        )
+        for name in ('img-src', 'media-src', 'connect-src'):
+            self.assertIn('https://media.example.test', directives[name])
+
+    def test_header_uses_the_overridden_policy(self):
+        directives = build_content_security_policy(
+            'https://media.example.test/uploads/', [], [],
+        )
+        with override_settings(CONTENT_SECURITY_POLICY={'DIRECTIVES': directives}):
+            response = self.client.get(reverse('users:login'))
+        self.assertEqual(response.status_code, 200)
+        policy = _policy_from(response)
+        self.assertIn('https://media.example.test', policy['img-src'])
+        self.assertIn('https://media.example.test', policy['connect-src'])
 
 
 class CSPInventoryTests(TestCase):
@@ -178,3 +333,25 @@ class CSPInventoryTests(TestCase):
                 host, self.policy.get(directive, []),
                 f'{path.relative_to(BACKEND)} loads {host} but {directive} does not allow it',
             )
+
+
+class CSPLockoutTests(TestCase):
+    def setUp(self):
+        AccessAttempt.objects.all().delete()
+        AccessLog.objects.all().delete()
+        cache.clear()
+        self.addCleanup(AccessAttempt.objects.all().delete)
+        self.addCleanup(AccessLog.objects.all().delete)
+        self.addCleanup(cache.clear)
+        self.user = get_user_model().objects.create_user(
+            username='csp-locked', email='example@example.com',
+            password='fake-password',  # nosec B106 — test fixture, not a real credential
+        )
+
+    def test_locked_out_login_response_carries_csp(self):
+        url = reverse('users:login')
+        for _ in range(settings.AXES_FAILURE_LIMIT):
+            self.client.post(url, {'username': 'csp-locked', 'password': 'wrong'})  # nosec B105
+        response = self.client.post(url, {'username': 'csp-locked', 'password': 'wrong'})  # nosec B105
+        self.assertEqual(response.status_code, settings.AXES_HTTP_RESPONSE_CODE)
+        self.assertIn(HEADER, response.headers)

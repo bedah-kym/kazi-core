@@ -288,6 +288,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'csp.middleware.CSPMiddleware',   # Content Security Policy
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -300,7 +301,6 @@ MIDDLEWARE = [
 
     # Security Middleware
     'axes.middleware.AxesMiddleware',  # Brute force protection
-    'csp.middleware.CSPMiddleware',   # Content Security Policy
 
     # Allauth Account Middleware
     'allauth.account.middleware.AccountMiddleware',
@@ -938,20 +938,25 @@ def _absolute_origin(url):
     return None
 
 
-def _websocket_origins(trusted_origins, allowed_hosts):
+def _websocket_origins(trusted_origins):
     origins = set()
     for origin in trusted_origins:
         parsed = _urlparse(str(origin or ''))
         scheme = {'https': 'wss', 'http': 'ws'}.get(parsed.scheme)
         if scheme and parsed.netloc:
             origins.add(f"{scheme}://{parsed.netloc}")
-    if not origins:
-        for host in allowed_hosts:
-            if host == '*':
-                continue
-            origins.add(f"ws://{host}")
-            origins.add(f"wss://{host}")
     return sorted(origins)
+
+
+# allauth authorize origins, checked against the installed provider sources:
+# google -> accounts.google.com, github -> github.com,
+# linkedin_oauth2 -> www.linkedin.com, twitter -> api.x.com.
+SOCIAL_LOGIN_AUTHORIZE_ORIGINS = [
+    'https://accounts.google.com',
+    'https://github.com',
+    'https://www.linkedin.com',
+    'https://api.x.com',
+]
 
 
 def build_content_security_policy(media_url=None, trusted_origins=None, allowed_hosts=None):
@@ -961,9 +966,6 @@ def build_content_security_policy(media_url=None, trusted_origins=None, allowed_
     if trusted_origins is None:
         from django.conf import settings as conf_settings
         trusted_origins = conf_settings.CSRF_TRUSTED_ORIGINS
-    if allowed_hosts is None:
-        from django.conf import settings as conf_settings
-        allowed_hosts = conf_settings.ALLOWED_HOSTS
 
     media_origin = _absolute_origin(media_url)
     img_src = [
@@ -976,9 +978,13 @@ def build_content_security_policy(media_url=None, trusted_origins=None, allowed_
         'https://c.tile.openstreetmap.org',
     ]
     media_src = ["'self'", 'blob:']
+    connect_src = ["'self'"] + _websocket_origins(trusted_origins)
     if media_origin:
         img_src.append(media_origin)
         media_src.append(media_origin)
+        connect_src.append(media_origin)
+    # emoji-mart fetches its data from this path on the same CDN as its script.
+    connect_src.append('https://cdn.jsdelivr.net/npm/@emoji-mart/')
 
     return {
         'default-src': ["'self'"],
@@ -1008,27 +1014,18 @@ def build_content_security_policy(media_url=None, trusted_origins=None, allowed_
         ],
         'img-src': img_src,
         'media-src': media_src,
-        'connect-src': ["'self'"] + _websocket_origins(trusted_origins, allowed_hosts),
+        'connect-src': connect_src,
         'frame-src': ["'self'", 'https://calendly.com'],
         'object-src': ["'none'"],
         'base-uri': ["'self'"],
-        'form-action': ["'self'"],
+        'form-action': ["'self'"] + SOCIAL_LOGIN_AUTHORIZE_ORIGINS,
         'frame-ancestors': ["'none'"],
     }
 
 
-class _ContentSecurityPolicyConfig(dict):
-    # django-csp reads this on every response. Rebuilding the directives keeps
-    # MEDIA_URL (and a later S3/R2 switch) reflected without re-importing settings.
-    def get(self, key, default=None):
-        if key == 'DIRECTIVES':
-            return build_content_security_policy()
-        return super().get(key, default)
-
-
-CONTENT_SECURITY_POLICY = _ContentSecurityPolicyConfig(
-    {'DIRECTIVES': build_content_security_policy(MEDIA_URL, CSRF_TRUSTED_ORIGINS, ALLOWED_HOSTS)}
-)
+CONTENT_SECURITY_POLICY = {
+    'DIRECTIVES': build_content_security_policy(MEDIA_URL, CSRF_TRUSTED_ORIGINS, ALLOWED_HOSTS),
+}
 
 # --- HSTS (HTTP Strict Transport Security) ---
 # Enabled only when DEBUG is False to avoid local dev issues

@@ -6,11 +6,13 @@ result, including the calls that did not run.
 """
 from __future__ import annotations
 
+import threading
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
-from django.test import SimpleTestCase, TestCase
+from django.db import connection
+from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from django.utils import timezone
 
 from chatbot.history import get_history_rows
@@ -120,7 +122,8 @@ class TurnToolCallRecordTests(TestCase):
         for call in calls:
             call.setdefault("iteration", 1)
             call.setdefault("provenance", "main")
-        record_tool_calls(self.turn.id, self.room, list(calls))
+        created = record_tool_calls(self.turn.id, self.room, list(calls))
+        seqs = [row.seq for row in created]
         result = OrchestrationResult(
             full_response=model,
             persist=True,
@@ -128,22 +131,11 @@ class TurnToolCallRecordTests(TestCase):
             model_text=model,
             harness="",
             tool_calls_recorded=True,
+            tool_seq_first=min(seqs) if seqs else None,
+            tool_seq_last=max(seqs) if seqs else None,
             turn_id=str(self.turn.id),
         )
         return save_turn_reply(self.room, result, user_id=self.user.id)
-
-    def test_seq_allocation_locks_the_turn_row_first(self):
-        from unittest.mock import MagicMock
-
-        lock = MagicMock()
-        with patch.object(Turn.objects, "select_for_update", return_value=lock):
-            record_tool_calls(self.turn.id, self.room, [
-                {"call_id": "c1", "name": "get_weather",
-                 "input": {"city": "Nairobi"}, "result": {"status": "success"},
-                 "shown": "sunny"},
-            ])
-
-        lock.filter.assert_called_once_with(pk=self.turn.id)
 
     def test_rows_survive_a_cache_flush(self):
         self._reply(
@@ -225,7 +217,7 @@ class TurnToolCallRecordTests(TestCase):
     def test_the_next_turn_replays_a_declined_call_with_its_status(self):
         self._reply(
             {"call_id": "c1", "name": "run_command", "input": {"command": "rm x"},
-             "result": {"status": "declined"},
+             "result": {"status": "declined"}, "not_run": True,
              "shown": "not executed: you declined", "status": "declined"},
         )
 
@@ -321,9 +313,13 @@ class TurnToolCallRecordTests(TestCase):
              "shown": f"sunny-{n}"}
             for n in range(1, 26)
         ]
-        record_tool_calls(self.turn.id, self.room, records)
+        created = record_tool_calls(self.turn.id, self.room, records)
         message = self._reply()
-        link_turn_calls_to_message(self.turn.id, message.id)
+        linked = link_turn_calls_to_message(
+            self.turn.id, message.id,
+            first_seq=created[0].seq, last_seq=created[-1].seq,
+        )
+        self.assertEqual(linked, len(records))
         calls = []
         real = decrypt_body
 
@@ -341,7 +337,17 @@ class TurnToolCallRecordTests(TestCase):
             "the latest ten calls are kept, not the earliest",
         )
         self.assertIn("15 earlier tool calls", reply[3]["tool_calls"][0]["note"])
-        self.assertLessEqual(len(calls), 2 * MAX_REPLAYED_CALLS)
+        self.assertEqual(len(calls), 2 * MAX_REPLAYED_CALLS)
+        messages = build_history_messages(rows, viewer_user_id=self.user.id)
+        results = [
+            block for item in messages
+            if isinstance(item.get("content"), list)
+            for block in item["content"]
+            if block.get("type") == "tool_result"
+        ]
+        self.assertTrue(any(
+            "15 earlier tool calls" in block["content"] for block in results
+        ))
 
     def test_a_body_copied_to_another_row_fails_to_decrypt(self):
         record_tool_calls(self.turn.id, self.room, [
@@ -395,12 +401,15 @@ class TurnToolCallRecordTests(TestCase):
         self.assertTrue(row.truncated)
 
     def test_an_unreadable_body_replays_an_honest_record_not_an_ok_result(self):
-        record_tool_calls(self.turn.id, self.room, [
+        created = record_tool_calls(self.turn.id, self.room, [
             {"call_id": "c1", "name": "get_weather", "input": {"city": "A"},
              "result": {"status": "success"}, "shown": "sunny"},
         ])
         message = self._reply()
-        link_turn_calls_to_message(self.turn.id, message.id)
+        link_turn_calls_to_message(
+            self.turn.id, message.id,
+            first_seq=created[0].seq, last_seq=created[-1].seq,
+        )
         TurnToolCall.objects.filter(turn=self.turn).update(shown_enc="not-a-blob")
 
         rows = get_history_rows(self.room, limit=8)
@@ -435,14 +444,16 @@ class TurnToolCallRecordTests(TestCase):
             room=self.room, user=self.user, state="completed",
         )
         for turn in (self.turn, second):
-            record_tool_calls(turn.id, self.room, [
+            created = record_tool_calls(turn.id, self.room, [
                 {"call_id": "call_0", "name": "get_weather",
                  "input": {"city": "Nairobi"}, "result": {"status": "success"},
                  "shown": "sunny"},
             ])
             result = OrchestrationResult(
                 full_response="Done.", persist=True, tools=[], model_text="Done.",
-                harness="", tool_calls_recorded=True, turn_id=str(turn.id),
+                harness="", tool_calls_recorded=True,
+                tool_seq_first=created[0].seq, tool_seq_last=created[-1].seq,
+                turn_id=str(turn.id),
             )
             save_turn_reply(self.room, result, user_id=self.user.id)
 
@@ -497,17 +508,18 @@ class TurnToolCallRecordTests(TestCase):
         other_turn = Turn.objects.create(
             room=self.room, user=other, state="completed",
         )
-        record_tool_calls(other_turn.id, self.room, [
+        created = record_tool_calls(other_turn.id, self.room, [
             {"call_id": "secret", "name": "run_command",
              "input": {"command": "cat secret"}, "result": {"status": "success"},
              "shown": "secret"},
         ])
         result = OrchestrationResult(
             full_response="Done.", persist=True, tools=[], model_text="Done.",
-            harness="", tool_calls_recorded=True, turn_id=str(other_turn.id),
+            harness="", tool_calls_recorded=True,
+            tool_seq_first=created[0].seq, tool_seq_last=created[-1].seq,
+            turn_id=str(other_turn.id),
         )
-        other_message = save_turn_reply(self.room, result, user_id=other.id)
-        link_turn_calls_to_message(other_turn.id, other_message.id)
+        save_turn_reply(self.room, result, user_id=other.id)
 
         rows = read_rows(self.room, limit=8)
         messages = build_history_messages(rows, viewer_user_id=self.user.id)
@@ -519,26 +531,174 @@ class TurnToolCallRecordTests(TestCase):
         ]
         self.assertEqual(uses, [])
 
+    def test_a_segment_links_only_its_own_seq_range(self):
+        first = record_tool_calls(self.turn.id, self.room, [
+            {"call_id": "c1", "name": "get_weather", "input": {"city": "A"},
+             "result": {"status": "success"}, "shown": "first"},
+        ])[0]
+        prompt = OrchestrationResult(
+            full_response="Prompt.", persist=True, tools=[], model_text="",
+            harness="Prompt.", tool_calls_recorded=True,
+            tool_seq_first=first.seq, tool_seq_last=first.seq,
+            turn_id=str(self.turn.id),
+        )
+        # Another writer adds a row after the prompt was built but before it is
+        # saved. It must not be pulled into the prompt message.
+        later = record_tool_calls(self.turn.id, self.room, [
+            {"call_id": "c2", "name": "get_weather", "input": {"city": "B"},
+             "result": {"status": "success"}, "shown": "second"},
+        ])[0]
+        message = save_turn_reply(self.room, prompt, user_id=self.user.id)
+        first.refresh_from_db()
+        later.refresh_from_db()
+        self.assertEqual(first.message_id, message.id)
+        self.assertIsNone(later.message_id)
+
+        reply = OrchestrationResult(
+            full_response="Done.", persist=True, tools=[], model_text="Done.",
+            harness="", tool_calls_recorded=True,
+            tool_seq_first=later.seq, tool_seq_last=later.seq,
+            turn_id=str(self.turn.id),
+        )
+        second = save_turn_reply(self.room, reply, user_id=self.user.id)
+        later.refresh_from_db()
+        self.assertEqual(later.message_id, second.id)
+
+    def test_a_deleted_prompt_message_is_never_relinked(self):
+        rows = record_tool_calls(self.turn.id, self.room, [
+            {"call_id": "c1", "name": "get_weather", "input": {"city": "A"},
+             "result": {"status": "success"}, "shown": "first"},
+            {"call_id": "c2", "name": "get_weather", "input": {"city": "B"},
+             "result": {"status": "success"}, "shown": "second"},
+        ])
+        prompt = OrchestrationResult(
+            full_response="Prompt.", persist=True, tools=[], model_text="",
+            harness="Prompt.", tool_calls_recorded=True,
+            tool_seq_first=rows[0].seq, tool_seq_last=rows[-1].seq,
+            turn_id=str(self.turn.id),
+        )
+        message = save_turn_reply(self.room, prompt, user_id=self.user.id)
+        message.delete()
+
+        later = record_tool_calls(self.turn.id, self.room, [
+            {"call_id": "c3", "name": "get_weather", "input": {"city": "C"},
+             "result": {"status": "success"}, "shown": "third"},
+        ])[0]
+        reply = OrchestrationResult(
+            full_response="Done.", persist=True, tools=[], model_text="Done.",
+            harness="", tool_calls_recorded=True,
+            tool_seq_first=later.seq, tool_seq_last=later.seq,
+            turn_id=str(self.turn.id),
+        )
+        save_turn_reply(self.room, reply, user_id=self.user.id)
+
+        for row in rows:
+            row.refresh_from_db()
+            self.assertIsNone(row.message_id)
+
+    def test_a_failed_link_falls_back_to_the_legacy_record(self):
+        created = record_tool_calls(self.turn.id, self.room, [
+            {"call_id": "c1", "name": "get_weather", "input": {"city": "A"},
+             "result": {"status": "success"}, "shown": "sunny"},
+        ])[0]
+        result = OrchestrationResult(
+            full_response="Done.", persist=True,
+            tools=[{"name": "get_weather", "input": {"city": "A"},
+                    "status": "success", "shown": "sunny"}],
+            model_text="Done.", harness="", tool_calls_recorded=True,
+            tool_seq_first=created.seq, tool_seq_last=created.seq,
+            turn_id=str(self.turn.id),
+        )
+        with patch(
+            "orchestration.tool_calls.link_turn_calls_to_message",
+            side_effect=RuntimeError("link down"),
+        ):
+            message = save_turn_reply(self.room, result, user_id=self.user.id)
+
+        self.assertIsNotNone(message)
+        self.assertEqual(
+            Message.objects.filter(turn=self.turn).count(), 1,
+        )
+        from chatbot.history import decrypt_stored
+
+        _content, payload = decrypt_stored(self.room, message)
+        self.assertIn("tools", payload)
+        self.assertEqual(payload["tools"][0]["name"], "get_weather")
+
+    def test_a_body_missing_at_write_time_replays_unreadable(self):
+        original_key = self.room.encryption_key
+        Chatroom.objects.filter(pk=self.room.pk).update(encryption_key="bad-key")
+        self.room.refresh_from_db()
+        created = record_tool_calls(self.turn.id, self.room, [
+            {"call_id": "c1", "name": "get_weather", "input": {"city": "A"},
+             "result": {"status": "success"}, "shown": "sunny"},
+        ])[0]
+        Chatroom.objects.filter(pk=self.room.pk).update(encryption_key=original_key)
+        self.room.refresh_from_db()
+        self.assertIsNone(created.shown_enc)
+
+        result = OrchestrationResult(
+            full_response="Done.", persist=True, tools=[], model_text="Done.",
+            harness="", tool_calls_recorded=True,
+            tool_seq_first=created.seq, tool_seq_last=created.seq,
+            turn_id=str(self.turn.id),
+        )
+        message = save_turn_reply(self.room, result, user_id=self.user.id)
+        self.assertIsNotNone(message)
+        rows = get_history_rows(self.room, limit=8)
+        messages = build_history_messages(rows, viewer_user_id=self.user.id)
+        results = [
+            block for item in messages
+            if isinstance(item.get("content"), list)
+            for block in item["content"]
+            if block.get("type") == "tool_result"
+        ]
+        self.assertIn("[record unreadable]", results[0]["content"])
+
+    def test_a_ten_million_character_input_stays_under_the_max(self):
+        value = "a" * 10_000_000
+
+        recorded = tool_record_input({"content": value})["content"]
+
+        self.assertLessEqual(len(recorded), RECORD_STRING_MAX)
+        self.assertIn("the call sent 10000000 characters", recorded)
+        self.assertIn("record shortened", recorded)
+        self.assertTrue(recorded.startswith("a"))
+        self.assertTrue(recorded.endswith("a"))
+
 
 class StatusMappingTests(SimpleTestCase):
     def test_the_status_table_separates_successes_from_failures(self):
-        cases = {
+        ran_cases = {
             "success": "ok", "ok": "ok", "completed": "ok",
             "sent": "ok", "delivered": "ok", "healthy": "ok",
             "deleted": "ok", "edited": "ok", "restored": "ok",
             "pending": "ok", "planned": "ok", "active": "ok",
             "booked": "ok",
             "error": "error", "failed": "error", "failure": "error",
-            "FAILED": "error",
+            "FAILED": "error", "rejected": "error",
+            "timed_out": "outcome_unknown",
+            "policy_stopped": "policy_stopped",
+        }
+        for status, expected in ran_cases.items():
+            with self.subTest(status=status):
+                self.assertEqual(status_for_result({"status": status}), expected)
+
+        not_run_cases = {
             "denied": "denied", "skipped": "skipped",
             "declined": "declined", "expired": "expired",
             "superseded": "superseded",
             "budget_skipped": "budget_skipped",
-            "policy_stopped": "policy_stopped",
         }
-        for status, expected in cases.items():
-            with self.subTest(status=status):
-                self.assertEqual(status_for_result({"status": status}), expected)
+        for status, expected in not_run_cases.items():
+            with self.subTest(status=status, not_run=True):
+                self.assertEqual(
+                    status_for_result({"status": status}, not_run=True),
+                    expected,
+                )
+            # The same raw status without the harness flag is a ran call.
+            with self.subTest(status=status, not_run=False):
+                self.assertEqual(status_for_result({"status": status}), "ok")
 
     def test_an_error_key_without_a_success_status_is_a_failure(self):
         self.assertEqual(status_for_result({"error": "boom"}), "error")
@@ -560,3 +720,55 @@ class StatusMappingTests(SimpleTestCase):
             ),
             "policy_stopped",
         )
+
+
+class SeqAllocationConcurrencyTests(TransactionTestCase):
+    def setUp(self):
+        cache.clear()
+        self.addCleanup(cache.clear)
+        User = get_user_model()
+        self.user = User.objects.create_user(username="seq-race", password="pw")  # nosec B106
+        self.member = Member.objects.select_related("User").get(User=self.user)
+        self.room = Chatroom.objects.get(participants=self.member)
+        self.turn = Turn.objects.create(
+            room=self.room, user=self.user, state="completed",
+        )
+
+    def test_two_writers_serialise_on_the_turn_row(self):
+        if connection.vendor == "sqlite":
+            self.skipTest(
+                "SELECT ... FOR UPDATE is a no-op on SQLite; the Postgres lane "
+                "runs this race",
+            )
+        barrier = threading.Barrier(2)
+        errors = []
+
+        def writer():
+            from django.db import connection as thread_connection
+
+            try:
+                room = Chatroom.objects.get(pk=self.room.pk)
+                barrier.wait(timeout=5)
+                record_tool_calls(self.turn.id, room, [{
+                    "call_id": f"w{threading.get_ident()}",
+                    "name": "get_weather", "input": {"city": "Nairobi"},
+                    "result": {"status": "success"}, "shown": "sunny",
+                }])
+            except Exception as exc:  # pragma: no cover - asserted below
+                errors.append(exc)
+            finally:
+                thread_connection.close()
+
+        threads = [threading.Thread(target=writer) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+
+        self.assertEqual(errors, [])
+        self.assertFalse(any(thread.is_alive() for thread in threads))
+        rows = list(
+            TurnToolCall.objects.filter(turn=self.turn).order_by("seq")
+        )
+        self.assertEqual([row.seq for row in rows], [1, 2])
+        self.assertEqual(len({row.call_id for row in rows}), 2)

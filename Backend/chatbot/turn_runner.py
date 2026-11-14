@@ -44,6 +44,7 @@ from .kazi_messages import (
     ORIGIN_TURN,
     ORIGIN_TURN_NOTICE,
     KaziMessageError,
+    broadcast_kazi_message,
     persist_kazi_message,
 )
 from .models import Chatroom, Message
@@ -89,29 +90,79 @@ def save_turn_reply(room, result, *, user_id):
     """
     if not (result.persist and (result.full_response or "").strip()):
         return None
+    recorded = result.tool_calls_recorded
+    has_range = (
+        result.tool_seq_first is not None and result.tool_seq_last is not None
+    )
+    if not recorded or not result.turn_id or not has_range:
+        # No typed rows to link (or no range): keep the legacy payload only when
+        # there is nothing typed to replay.
+        try:
+            return persist_kazi_message(
+                room,
+                content=result.full_response,
+                origin=ORIGIN_TURN,
+                turn=result.turn_id or None,
+                model_text=result.model_text,
+                harness_text=result.harness,
+                tools=result.tools,
+                by=user_id,
+            )
+        except KaziMessageError:
+            logger.warning("AI reply not saved: room key unavailable")
+            return None
+
+    # One transaction: either the reply and its segment's rows are linked, or
+    # neither is saved. A failed link falls back to the legacy tools payload so
+    # the segment still replays something.
+    from orchestration.tool_calls import link_turn_calls_to_message
+
+    class _LinkFailed(Exception):
+        pass
+
     try:
-        message = persist_kazi_message(
-            room,
-            content=result.full_response,
-            origin=ORIGIN_TURN,
-            turn=result.turn_id or None,
-            model_text=result.model_text,
-            harness_text=result.harness,
-            tools=None if result.tool_calls_recorded else result.tools,
-            by=user_id,
-        )
+        with transaction.atomic():
+            message = persist_kazi_message(
+                room,
+                content=result.full_response,
+                origin=ORIGIN_TURN,
+                turn=result.turn_id,
+                model_text=result.model_text,
+                harness_text=result.harness,
+                tools=None,
+                by=user_id,
+                broadcast=False,
+            )
+            linked = link_turn_calls_to_message(
+                result.turn_id, message.id,
+                first_seq=result.tool_seq_first, last_seq=result.tool_seq_last,
+            )
+            if linked <= 0:
+                raise _LinkFailed("no rows linked")
     except KaziMessageError:
         logger.warning("AI reply not saved: room key unavailable")
         return None
-    if message is not None and result.turn_id:
-        from orchestration.tool_calls import link_turn_calls_to_message
-
+    except Exception:
+        logger.warning(
+            "Tool-call rows not linked to the saved reply; using the legacy "
+            "record instead",
+            exc_info=True,
+        )
         try:
-            link_turn_calls_to_message(result.turn_id, message.id)
-        except Exception:
-            logger.warning(
-                "Tool-call rows not linked to the saved reply", exc_info=True,
+            return persist_kazi_message(
+                room,
+                content=result.full_response,
+                origin=ORIGIN_TURN,
+                turn=result.turn_id,
+                model_text=result.model_text,
+                harness_text=result.harness,
+                tools=result.tools,
+                by=user_id,
             )
+        except KaziMessageError:
+            logger.warning("AI reply not saved: room key unavailable")
+            return None
+    broadcast_kazi_message(room, message, result.full_response)
     return message
 
 

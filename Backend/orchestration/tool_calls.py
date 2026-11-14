@@ -28,11 +28,10 @@ SHOWN_LIMIT = 2000
 MAX_REPLAYED_CALLS = 10
 RETRIEVAL_TOOL_NAMES = frozenset({"web_search", "search_info"})
 RAN_STATUSES = frozenset({"ok", "error", "outcome_unknown"})
-NON_RUN_STATUSES = frozenset({
+HARNESS_NOT_RUN_STATUSES = frozenset({
     "denied", "skipped", "declined", "expired", "superseded",
-    "budget_skipped", "policy_stopped",
+    "budget_skipped",
 })
-_FAILURE_STATUSES = frozenset({"error", "failed", "failure"})
 _STATUS_ALIASES = {
     "success": "ok",
     "completed": "ok",
@@ -40,6 +39,8 @@ _STATUS_ALIASES = {
     "error": "error",
     "failed": "error",
     "failure": "error",
+    "rejected": "error",
+    "timed_out": "outcome_unknown",
     "denied": "denied",
     "skipped": "skipped",
     "declined": "declined",
@@ -86,25 +87,29 @@ def shorten_for_record(text: str, limit: int = SHOWN_LIMIT) -> Tuple[str, bool]:
     return text[:head] + marker + text[-tail:], True
 
 
-def status_for_result(result: Any) -> str:
+def status_for_result(result: Any, *, not_run: bool = False) -> str:
     """Map a tool result's status to one of the row's status values.
 
-    Only an explicit failure is ``error``. Connectors return success statuses
-    such as ``sent`` or ``delivered``; treating an unknown status as an error
-    makes a delivered message replay as failed, and the model may send it again.
+    A row is did-not-run only when the harness says so (``not_run`` comes from
+    the event, never from the tool's result). For a call that ran, a tool's
+    self-reported ``skipped``/``denied``/... status is just a status string and
+    maps to ran-ok; otherwise a tool could mark its own output as not run and
+    escape taint. Only an explicit failure is ``error``. ``policy_stopped`` is
+    kept for display but is still a ran call for taint.
     """
     if not isinstance(result, dict):
         return "error"
+    if not_run:
+        status = str(result.get("status") or "").strip().lower()
+        return status if status in HARNESS_NOT_RUN_STATUSES else "skipped"
     if result.get("outcome_unknown"):
         return "outcome_unknown"
     status = str(result.get("status") or "").strip().lower()
-    if status in _STATUS_ALIASES:
-        mapped = _STATUS_ALIASES[status]
-        if mapped == "error" and "safety policy" in str(result.get("message") or ""):
-            return "policy_stopped"
+    if "safety policy" in str(result.get("message") or ""):
+        return "policy_stopped"
+    mapped = _STATUS_ALIASES.get(status)
+    if mapped in ("error", "outcome_unknown", "policy_stopped"):
         return mapped
-    if status in NON_RUN_STATUSES:
-        return status
     if result.get("error") and not status:
         return "error"
     return "ok"
@@ -200,7 +205,9 @@ def record_tool_calls(
         for record in records:
             current += 1
             seq = current
-            status = status_for_result(record.get("result"))
+            status = status_for_result(
+                record.get("result"), not_run=record.get("not_run") is True,
+            )
             name = str(record.get("name") or "")
             input_value = tool_record_input(record.get("input"))
             shown, truncated = _row_body({**record, "status": status})
@@ -251,6 +258,7 @@ def record_from_event(
                 "iteration": event_data.get("iteration"),
                 "provenance": "delegated",
                 "parent_call_id": parent_id,
+                "not_run": False,
             })
     records.append({
         "call_id": event_data.get("id"),
@@ -263,22 +271,30 @@ def record_from_event(
         "parent_call_id": event_data.get("parent_call_id") or "",
         "retrieval": event_data.get("retrieval"),
         "receipt_id": event_data.get("receipt_id") or receipt_id,
+        # Harness intent only: never trust a not_run flag inside the result.
+        "not_run": event_data.get("not_run") is True,
     })
     return record_tool_calls(turn_id, room, records)
 
 
-def link_turn_calls_to_message(turn_id: Any, message_id: Any) -> int:
-    """Attach the Turn's not-yet-linked rows to the reply just saved.
+def link_turn_calls_to_message(
+    turn_id: Any, message_id: Any,
+    *, first_seq: Optional[int] = None, last_seq: Optional[int] = None,
+) -> int:
+    """Attach only this segment's rows to the reply just saved.
 
-    A row's message is the segment's reply: rows resolved before a pause belong
-    to the prompt message, rows resolved after the user's reply belong to the
-    reply saved next. Linking only unlinked rows keeps each row belonging to
-    exactly one message. The call's outcome fields are never touched.
+    The segment knows the ``seq`` range it wrote, so a row another writer added
+    while the prompt was being built is not pulled into this message. A row
+    whose message was deleted keeps ``message=NULL`` and is never re-linked by
+    a later segment. The call's outcome fields are never touched.
     """
     if not turn_id or not message_id:
         return 0
+    if first_seq is None or last_seq is None:
+        return 0
     return TurnToolCall.objects.filter(
         turn_id=turn_id, message__isnull=True,
+        seq__gte=first_seq, seq__lte=last_seq,
     ).update(message_id=message_id)
 
 
@@ -301,7 +317,11 @@ def _load_row_bodies(room: Any, row: TurnToolCall) -> Dict[str, Any]:
         "retrieval": row.retrieval,
         "input": input_value if isinstance(input_value, dict) else {},
         "shown": shown if isinstance(shown, str) else "",
-        "unreadable": bool(row.shown_enc) and shown is None,
+        # A body missing at write time (unusable room key) is just as unreadable
+        # as a body that fails to decrypt. Never replay an empty ok result.
+        "unreadable": row.shown_enc is None or (
+            bool(row.shown_enc) and shown is None
+        ),
         "truncated": row.truncated,
     }
 
@@ -359,7 +379,7 @@ def load_tool_calls_for_messages(
             if row is None:
                 continue
             calls.append(_load_row_bodies(room, row))
-        if omitted.get(message_id):
+        if omitted.get(message_id) and calls:
             calls[0]["note"] = (
                 f"{omitted[message_id]} earlier tool call"
                 f"{'s were' if omitted[message_id] != 1 else ' was'} not replayed."

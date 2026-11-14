@@ -16,7 +16,9 @@ _DID_NOT_RUN = frozenset({
     "denied", "skipped", "declined", "expired", "superseded",
     "budget_skipped", "policy_stopped",
 })
-_RAN_STATUS = frozenset({"ok", "error", "outcome_unknown", "success", "completed"})
+_RAN_STATUS = frozenset({
+    "ok", "error", "outcome_unknown", "policy_stopped", "success", "completed",
+})
 
 Row = Tuple
 

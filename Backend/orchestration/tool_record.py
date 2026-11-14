@@ -13,27 +13,54 @@ from orchestration.security_policy import redact_sensitive_text, sanitize_parame
 RECORD_STRING_LIMIT = 160
 RECORD_STRING_MAX = RECORD_STRING_LIMIT + 80
 _MAX_RECORD_LIST_ITEMS = 10
+# Running the secret/PII regexes over a multi-megabyte value is pathological
+# (the email/phone patterns backtrack). Above this length only the kept head
+# and tail are redacted; the middle is omitted and never shown.
+_REDACT_WHOLE_MAX = 100_000
 _SHORTENED = (
     " ... [record shortened: the call sent {length} characters; "
     "{omitted:,} omitted] ... "
 )
 
 
-def _record_string(value: str) -> str:
-    text = redact_sensitive_text(value)
+def _shorten_redacted(text: str) -> str:
     length = len(text)
     if length <= RECORD_STRING_MAX:
         return text
-    # Keep at least RECORD_STRING_LIMIT real characters (head and tail) and let
-    # the marker spend the rest of RECORD_STRING_MAX. The marker length is
-    # bounded by the worst-case digit count, and omitted counts the redacted
-    # text, not the pre-redaction value.
+    # Size the kept text from the real marker so the whole result is never over
+    # RECORD_STRING_MAX. Normal values still keep RECORD_STRING_LIMIT real
+    # characters; at extreme lengths the marker itself needs the room.
     marker_bound = len(_SHORTENED.format(length=length, omitted=length))
-    keep = max(RECORD_STRING_LIMIT, RECORD_STRING_MAX - marker_bound)
+    keep = max(0, RECORD_STRING_MAX - marker_bound)
     head = keep // 2
     tail = keep - head
     marker = _SHORTENED.format(length=length, omitted=length - keep)
     return text[:head] + marker + text[-tail:]
+
+
+def _shorten_huge(value: str) -> str:
+    length = len(value)
+    marker_bound = len(_SHORTENED.format(length=length, omitted=length))
+    keep = max(0, RECORD_STRING_MAX - marker_bound)
+    while keep > 0:
+        head = keep // 2
+        tail = keep - head
+        marker = _SHORTENED.format(length=length, omitted=length - keep)
+        head_text = redact_sensitive_text(value[:head])
+        tail_text = redact_sensitive_text(value[-tail:]) if tail else ""
+        result = head_text + marker + tail_text
+        if len(result) <= RECORD_STRING_MAX:
+            return result
+        keep -= max(1, len(result) - RECORD_STRING_MAX)
+    return _SHORTENED.format(length=length, omitted=length).strip()[
+        :RECORD_STRING_MAX
+    ]
+
+
+def _record_string(value: str) -> str:
+    if len(value) > _REDACT_WHOLE_MAX:
+        return _shorten_huge(value)
+    return _shorten_redacted(redact_sensitive_text(value))
 
 
 def _record_item(value: Any) -> Any:

@@ -122,6 +122,21 @@ def _default_frame(message: Message, content: str) -> Dict[str, Any]:
     }
 
 
+def broadcast_kazi_message(
+    room: Chatroom, message: Message, content: str, *, channel_layer: Any = None,
+) -> None:
+    """Push one already-persisted Kazi message to the room's sockets."""
+    try:
+        layer = channel_layer if channel_layer is not None else get_channel_layer()
+        if layer is not None:
+            async_to_sync(layer.group_send)(
+                f"chat_{room.id}",
+                {"type": "ai_message_saved", "message": _default_frame(message, content)},
+            )
+    except Exception as exc:
+        logger.warning("Kazi message realtime push failed: %s", exc)
+
+
 def persist_kazi_message(
     room: Chatroom,
     *,
@@ -177,13 +192,7 @@ def persist_kazi_message(
     room.chats.add(message)
 
     if broadcast:
-        try:
-            layer = channel_layer if channel_layer is not None else get_channel_layer()
-            if layer is not None:
-                async_to_sync(layer.group_send)(
-                    f"chat_{room.id}",
-                    {"type": "ai_message_saved", "message": _default_frame(message, content)},
-                )
-        except Exception as exc:
-            logger.warning("Kazi message realtime push failed: %s", exc)
+        broadcast_kazi_message(
+            room, message, content, channel_layer=channel_layer,
+        )
     return message

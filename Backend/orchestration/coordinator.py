@@ -502,6 +502,10 @@ class OrchestrationResult:
     # True when the Turn's typed rows hold this turn's calls, so the reply
     # payload must not also carry the legacy ``tools`` list (D11).
     tool_calls_recorded: bool = False
+    # The seq range this segment wrote. The reply links only rows in this
+    # range, never an earlier segment's rows or a later writer's rows.
+    tool_seq_first: Optional[int] = None
+    tool_seq_last: Optional[int] = None
     # The durable turn this message belongs to; the consumer links the saved
     # reply to it. Empty only when no turn could be recorded.
     turn_id: str = ""
@@ -548,7 +552,7 @@ class OrchestrationCoordinator:
         a fresh agent run ends the turn with one error message and nothing
         further runs; errors during confirmation resume propagate.
         """
-        stream_state = {"buffer": [], "last_send": 0, "first_token_sent": False, "full_response": [], "model": [], "harness": [], "tools": [], "chunks": 0, "chars": 0, "tool_calls_recorded": False}  # nosec B105 — state keys, not a credential
+        stream_state = {"buffer": [], "last_send": 0, "first_token_sent": False, "full_response": [], "model": [], "harness": [], "tools": [], "chunks": 0, "chars": 0, "tool_calls_recorded": False, "tool_seq_first": None, "tool_seq_last": None}  # nosec B105 — state keys, not a credential
         turn_box = {
             "ref": None, "settled": False, "hold": False, "agent_ran": False,
             "claim_status": "",
@@ -1148,6 +1152,23 @@ class OrchestrationCoordinator:
             turn_box["record_room"] = room
             return room
 
+        def _note_tool_seqs(rows) -> None:
+            seqs = [
+                row.seq for row in rows or []
+                if getattr(row, "seq", None) is not None
+            ]
+            if not seqs:
+                return
+            first, last = min(seqs), max(seqs)
+            current_first = stream_state.get("tool_seq_first")
+            current_last = stream_state.get("tool_seq_last")
+            stream_state["tool_seq_first"] = (
+                first if current_first is None else min(current_first, first)
+            )
+            stream_state["tool_seq_last"] = (
+                last if current_last is None else max(current_last, last)
+            )
+
         async def _persist_tool_event(data: Dict) -> bool:
             """Append one tool_result event to the Turn's typed record."""
             turn_id = _turn_id()
@@ -1157,12 +1178,13 @@ class OrchestrationCoordinator:
             if room is None:
                 return False
             try:
-                await sync_to_async(record_from_event)(turn_id, room, data)
+                created = await sync_to_async(record_from_event)(turn_id, room, data)
             except Exception as exc:
                 logger.warning(
                     "Tool call record not saved: %s", exc.__class__.__name__,
                 )
                 return False
+            _note_tool_seqs(created)
             stream_state["tool_calls_recorded"] = True
             return True
 
@@ -1186,16 +1208,20 @@ class OrchestrationCoordinator:
                     "shown": did_not_run_reason(status),
                     "iteration": iteration,
                     "provenance": "main",
+                    "not_run": True,
                 }
                 for call in held if isinstance(call, dict)
             ]
             try:
-                await sync_to_async(record_tool_calls)(turn_id, room, records)
+                created = await sync_to_async(record_tool_calls)(
+                    turn_id, room, records,
+                )
             except Exception as exc:
                 logger.warning(
                     "Tool call record not saved: %s", exc.__class__.__name__,
                 )
                 return
+            _note_tool_seqs(created)
             stream_state["tool_calls_recorded"] = True
 
         async def _refresh_turn_memory(turn_id: str) -> None:
@@ -1237,7 +1263,7 @@ class OrchestrationCoordinator:
             if room is None:
                 return
             try:
-                await sync_to_async(record_tool_calls)(turn_id, room, [{
+                created = await sync_to_async(record_tool_calls)(turn_id, room, [{
                     "call_id": f"server-{uuid.uuid4().hex[:12]}",
                     "name": name,
                     "input": {},
@@ -1250,12 +1276,14 @@ class OrchestrationCoordinator:
                     "provenance": "provider",
                     "retrieval": True,
                     "parent_call_id": parent_call_id,
+                    "not_run": False,
                 }])
             except Exception as exc:
                 logger.warning(
                     "Provider search not recorded: %s", exc.__class__.__name__,
                 )
                 return
+            _note_tool_seqs(created)
             stream_state["tool_calls_recorded"] = True
 
         async def _relay_agent_events(events):
@@ -1804,6 +1832,12 @@ class OrchestrationCoordinator:
 
                 # Cancel is checked first: a refusal must never be read as consent.
                 if is_cancel_request(query) or is_decline_reply(query):
+                    # Read the held calls before the swap moves the Turn to
+                    # running and it no longer looks like a pause.
+                    held_state = await load_pending_state(
+                        room_id, user_id,
+                        turn_id=str(paused_turn.pk) if paused_turn is not None else None,
+                    )
                     if not await _adopt_paused_turn():
                         await broadcast_chunk(
                             "This turn was already resumed elsewhere. "
@@ -1811,7 +1845,6 @@ class OrchestrationCoordinator:
                             harness=True,
                         )
                     else:
-                        held_state = await load_pending_state(room_id, user_id)
                         cancel_msg = await cancel_pending_action(room_id, user_id)
                         await _advance_turn("cancelled", end_reason="cancelled")
                         held = list(
@@ -1873,21 +1906,21 @@ class OrchestrationCoordinator:
                         # No approval row backs this paused Turn, so it cannot
                         # be confirmed. Do not tell the user an action waits.
                         held_state = await load_pending_state(room_id, user_id)
-                        paused_id = (
-                            str(paused_turn.pk) if paused_turn is not None
-                            else _turn_id()
-                        )
+                        current_id = _turn_id()
                         await cancel_pending_action(room_id, user_id)
                         held = list(
                             getattr(held_state, "pending_tools", None)
                             or ([held_state.pending_tool] if held_state and held_state.pending_tool else [])
                         )
+                        # Record on the current Turn, like the expiry paths: the
+                        # old paused Turn has no later reply to link to, so rows
+                        # there would never replay.
                         await _record_not_run(
                             held, "skipped", "no approval record could be loaded",
                             int(getattr(held_state, "iteration", 0) or 0),
-                            turn_id=paused_id,
+                            turn_id=current_id,
                         )
-                        await _refresh_turn_memory(paused_id)
+                        await _refresh_turn_memory(current_id)
                         turn_box["pending_note"] = (
                             "[Harness: the earlier approval record could not be "
                             "loaded, so nothing is waiting and nothing ran.]"
@@ -2034,6 +2067,8 @@ class OrchestrationCoordinator:
             model_text="".join(stream_state["model"]),
             harness="".join(stream_state["harness"]),
             tool_calls_recorded=bool(stream_state.get("tool_calls_recorded")),
+            tool_seq_first=stream_state.get("tool_seq_first"),
+            tool_seq_last=stream_state.get("tool_seq_last"),
             turn_id=_turn_id(),
             turn_version=turn_box["ref"].version if turn_box.get("ref") else 0,
             turn_state=turn_box["ref"].state if turn_box.get("ref") else "",

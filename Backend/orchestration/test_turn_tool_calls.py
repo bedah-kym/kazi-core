@@ -29,7 +29,7 @@ from orchestration.coordinator import OrchestrationCoordinator
 from orchestration.models import ActionReceipt, Turn, TurnToolCall
 from orchestration.personas import PERSONA_LOOKUP_FAILED
 from orchestration.shell.profiles import PROFILES
-from orchestration.turns import CLAIMED, ClaimResult
+from orchestration.turns import CLAIMED, ClaimResult, PauseContinuationLost
 
 _UNSET = object()
 
@@ -66,7 +66,7 @@ class TurnToolCallCoordinatorTests(TestCase):
         self, query, events, *, claimed=_UNSET, claim_turn=_UNSET,
         persona=None, execute=None, expired_pause=False, patch_receipt=True,
         before_call=None, send_chunk=None, send_step_event=None,
-        message_id=None,
+        message_id=None, continue_pause=None,
     ):
         self.llm.queue(*events)
         self.llm.before_call = before_call
@@ -125,6 +125,7 @@ class TurnToolCallCoordinatorTests(TestCase):
                 bump_signals=MagicMock(),
                 history_messages=None,
                 claimed_turn=self.turn if claimed is _UNSET else claimed,
+                continue_pause=continue_pause,
             )
             return result["value"]
 
@@ -149,6 +150,25 @@ class TurnToolCallCoordinatorTests(TestCase):
         )
         self.room.chats.add(message)
         return message
+
+    def _placeholder(self):
+        # The drainer claims a fresh placeholder before the pause swap.
+        return Turn.objects.create(
+            room=self.room, user=self.user, state="running",
+        )
+
+    def _continue_cb(self, placeholder):
+        async def continue_pause(paused_turn, message_id):
+            ref = await sync_to_async(turns_mod.continue_pause)(
+                placeholder, paused_turn, message_id=message_id,
+            )
+            if ref is None:
+                raise PauseContinuationLost("paused")
+            turn_leases.unregister_live_turn(str(placeholder.id))
+            turn_leases.register_live_turn(ref.id)
+            return ref
+
+        return continue_pause
 
     def _assert_one_result_per_use(self):
         messages = self._replayed_messages()
@@ -276,11 +296,17 @@ class TurnToolCallCoordinatorTests(TestCase):
         self._save_reply(first)
         yes = self._user_message("yes")
 
+        placeholder = self._placeholder()
         second = self._run(
             "yes", [_response([_text("Sent.")])],
-            claimed=None, message_id=yes.id,
+            claimed=placeholder, claim_turn=placeholder,
+            continue_pause=self._continue_cb(placeholder),
+            message_id=yes.id,
         )
         self._save_reply(second)
+        self.assertEqual(second.turn_id, first.turn_id)
+        placeholder.refresh_from_db()
+        self.assertEqual(placeholder.state, "superseded")
 
         messages = self._assert_one_result_per_use()
         safe_at = self._tool_positions(messages, "get_weather")[0]
@@ -299,8 +325,15 @@ class TurnToolCallCoordinatorTests(TestCase):
         self._save_reply(first)
         no = self._user_message("no")
 
-        second = self._run("no", [], claimed=None, message_id=no.id)
+        placeholder = self._placeholder()
+        second = self._run(
+            "no", [], claimed=placeholder, claim_turn=placeholder,
+            continue_pause=self._continue_cb(placeholder), message_id=no.id,
+        )
         self._save_reply(second)
+        self.assertEqual(second.turn_id, first.turn_id)
+        placeholder.refresh_from_db()
+        self.assertEqual(placeholder.state, "superseded")
 
         messages = self._assert_one_result_per_use()
         safe_at = self._tool_positions(messages, "get_weather")[0]
@@ -326,6 +359,7 @@ class TurnToolCallCoordinatorTests(TestCase):
         self._save_reply(first)
         yes1 = self._user_message("yes")
 
+        placeholder = self._placeholder()
         second = self._run(
             "yes", [
                 _response(
@@ -333,17 +367,24 @@ class TurnToolCallCoordinatorTests(TestCase):
                     stop_reason="tool_use",
                 ),
             ],
-            claimed=None, message_id=yes1.id,
+            claimed=placeholder, claim_turn=placeholder,
+            continue_pause=self._continue_cb(placeholder),
+            message_id=yes1.id,
         )
         self.assertEqual(second.turn_state, "paused")
         self._save_reply(second)
+        self.assertEqual(second.turn_id, first.turn_id)
         yes2 = self._user_message("yes")
 
+        placeholder2 = self._placeholder()
         third = self._run(
             "yes", [_response([_text("Both sent.")])],
-            claimed=None, message_id=yes2.id,
+            claimed=placeholder2, claim_turn=placeholder2,
+            continue_pause=self._continue_cb(placeholder2),
+            message_id=yes2.id,
         )
         self._save_reply(third)
+        self.assertEqual(third.turn_id, first.turn_id)
 
         messages = self._assert_one_result_per_use()
         call_positions = self._tool_positions(messages, "send_message")
@@ -392,10 +433,15 @@ class TurnToolCallCoordinatorTests(TestCase):
         self.turn.refresh_from_db()
         self.assertFalse(self.turn.partial)
         self.assertEqual(result.tools, [])
-        self.assertTrue(any(step.get("state") == "skipped" for step in steps))
+        denied_steps = [
+            step for step in steps if "run command" in step.get("message", "")
+        ]
+        self.assertTrue(denied_steps)
+        self.assertTrue(any(
+            step.get("state") == "skipped" for step in denied_steps
+        ))
         self.assertFalse(any(
-            step.get("state") == "completed" and "not run" in step.get("message", "")
-            for step in steps
+            step.get("state") == "completed" for step in denied_steps
         ))
 
     def test_a_retrieval_call_is_marked_for_phase_four(self):
@@ -525,6 +571,48 @@ class TurnToolCallCoordinatorTests(TestCase):
         self.assertEqual(len(results), 1)
         self.assertNotIn("is_error", results[0])
 
+    def test_a_ran_tool_reporting_skipped_still_taints_and_counts(self):
+        result = self._run("@kazi fetch", [
+            _response(
+                [_tool("r1", "run_command", {"command": "fetch"})],
+                stop_reason="tool_use",
+            ),
+            _response([_text("Fetched.")]),
+        ], execute={"status": "skipped", "output": "untrusted text"})
+        self._save_reply(result)
+
+        row = TurnToolCall.objects.get(turn=self.turn, call_id="r1")
+        self.assertEqual(row.status, "ok")
+        from asgiref.sync import async_to_sync
+
+        from orchestration.coordinator import _history_replays_untrusted
+        from orchestration.memory_state import load_memory_state
+
+        state = async_to_sync(load_memory_state)({
+            "user_id": self.user.id, "room_id": self.room.id,
+        })
+        actions = [entry["action"] for entry in state.get("last_actions") or []]
+        self.assertIn("run_command", actions)
+        self.assertTrue(_history_replays_untrusted(self._replayed_messages()))
+
+    def test_a_tool_cannot_escape_taint_with_not_run_in_its_result(self):
+        result = self._run("@kazi fetch", [
+            _response(
+                [_tool("r1", "run_command", {"command": "fetch"})],
+                stop_reason="tool_use",
+            ),
+            _response([_text("Fetched.")]),
+        ], execute={
+            "status": "skipped", "not_run": True, "output": "untrusted text",
+        })
+        self._save_reply(result)
+
+        row = TurnToolCall.objects.get(turn=self.turn, call_id="r1")
+        self.assertEqual(row.status, "ok")
+        from orchestration.coordinator import _history_replays_untrusted
+
+        self.assertTrue(_history_replays_untrusted(self._replayed_messages()))
+
     def test_a_policy_stopped_result_is_recorded_and_replayed(self):
         result = self._run("@kazi run", [
             _response(
@@ -540,6 +628,10 @@ class TurnToolCallCoordinatorTests(TestCase):
         results = self._replayed_results()
         self.assertIn("policy stopped", results[0]["content"])
         self.assertTrue(results[0]["is_error"])
+        self.assertTrue(results[0]["tool_use_id"].startswith("hist-"))
+        from orchestration.coordinator import _history_replays_untrusted
+
+        self.assertTrue(_history_replays_untrusted(self._replayed_messages()))
 
     def test_a_budget_skipped_call_is_recorded_and_replayed(self):
         budget = {
@@ -587,25 +679,48 @@ class TurnToolCallCoordinatorTests(TestCase):
         self.assertEqual(row.status, "skipped")
         self.turn.refresh_from_db()
         self.assertEqual(self.turn.state, "cancelled")
+        results = self._replayed_results()
+        self.assertEqual(len(results), 1)
+        self.assertTrue(results[0]["tool_use_id"].startswith("noexec-"))
+        self.assertIn("not executed", results[0]["content"])
 
-    def test_the_no_approval_row_cancel_writes_skipped_rows(self):
-        self._run("@kazi send", [
+    def test_the_no_approval_row_cancel_replays_on_the_current_turn(self):
+        first = self._run("@kazi send", [
             _response(
                 [_tool("c1", "send_message", {"to": "a", "message": "hi"})],
                 stop_reason="tool_use",
             ),
         ])
+        self._save_reply(first)
+        question = self._user_message("what is happening")
+        placeholder = self._placeholder()
 
         # The paused Turn holds the call, but the prompt lookup finds no row to
-        # show. The cancel must still record what was held.
+        # show. The cancel must record the held call on this turn's reply.
         with patch(
             "orchestration.coordinator.pending_approval_prompt",
             AsyncMock(return_value={}),
         ):
-            self._run("what is happening", [], claimed=None)
+            second = self._run(
+                "what is happening", [_response([_text("Okay.")])],
+                claimed=placeholder, claim_turn=placeholder,
+                message_id=question.id,
+            )
+        self.assertNotEqual(second.turn_id, first.turn_id)
+        self._save_reply(second)
 
-        row = TurnToolCall.objects.get(turn=self.turn, call_id="c1")
+        row = TurnToolCall.objects.get(turn=placeholder, call_id="c1")
         self.assertEqual(row.status, "skipped")
+        messages = self._assert_one_result_per_use()
+        question_at = self._position_of(messages, "what is happening", role="user")
+        skipped_at = self._tool_positions(messages, "send_message")[0]
+        self.assertGreater(skipped_at, question_at)
+        self.assertTrue(any(
+            "not executed" in json.dumps(block)
+            for message in messages if isinstance(message.get("content"), list)
+            for block in message["content"]
+            if block.get("type") == "tool_result"
+        ))
 
     def test_a_receipt_is_linked_to_its_row(self):
         result = self._run("@kazi list", [

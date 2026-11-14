@@ -1,0 +1,122 @@
+[
+  {
+    "id": "inline_b",
+    "input": "how do I make text <b>bold</b>?",
+    "html": "<p>how do I make text &lt;b&gt;bold&lt;/b&gt;?</p>\n"
+  },
+  {
+    "id": "block_multiline",
+    "input": "<div>hello\n  indented\n</div>",
+    "html": "<p>&lt;div&gt;hello<br>&nbsp;&nbsp;indented</p>\n<p>&lt;/div&gt;</p>\n"
+  },
+  {
+    "id": "block_four_space",
+    "input": "<div>\n    one\n\n    two\n</div>",
+    "html": "<p>&lt;div&gt;<br>&nbsp;&nbsp;&nbsp;&nbsp;one</p>\n<pre><code>two\n</code></pre>\n<p>&lt;/div&gt;</p>\n"
+  },
+  {
+    "id": "rawblock_kbd_link",
+    "input": "x <kbd> <a href=\"//evil.example/x\" @y>Click</a>",
+    "html": "<p>x &lt;kbd&gt; &lt;a href=\"//evil.example/x\" @y&gt;Click&lt;/a&gt;</p>\n"
+  },
+  {
+    "id": "rawblock_code_heading",
+    "input": "x <code> <h1 @y>BIG</h1>",
+    "html": "<p>x &lt;code&gt; &lt;h1 @y&gt;BIG&lt;/h1&gt;</p>\n"
+  },
+  {
+    "id": "image_alt_markup",
+    "input": "![x\"><h1>BIG</h1>](/a.png)",
+    "html": "<p><img src=\"/a.png\" alt=\"x&quot;&gt;&lt;h1&gt;BIG&lt;/h1&gt;\"></p>\n"
+  },
+  {
+    "id": "html_comment",
+    "input": "<!-- hidden note -->",
+    "html": "<p>&lt;!-- hidden note --&gt;</p>\n"
+  },
+  {
+    "id": "script_block",
+    "input": "<script>alert(1)</script>",
+    "html": "<p>&lt;script&gt;alert(1)&lt;/script&gt;</p>\n"
+  },
+  {
+    "id": "markdown_mix",
+    "input": "**bold** [x](http://x)\n\n3. three\n4. four\n\n- [x] done\n\n| a | b |\n|---|---|\n| 1 | 2 |",
+    "html": "<p><strong>bold</strong> <a href=\"http://x\" rel=\"noopener noreferrer\" target=\"_blank\">x</a></p>\n<ol start=\"3\">\n<li>three</li>\n<li>four</li>\n</ol>\n<ul>\n<li>☑ done</li>\n</ul>\n<table>\n<thead>\n<tr>\n<th>a</th>\n<th>b</th>\n</tr>\n</thead>\n<tbody><tr>\n<td>1</td>\n<td>2</td>\n</tr>\n</tbody></table>\n"
+  },
+  {
+    "id": "legacy_file_single",
+    "input": "<a href='/uploads/chat_uploads/abc.pdf' target='_blank'>a[b](c)`d`.pdf</a>",
+    "html": "<p><a href=\"/uploads/chat_uploads/abc.pdf\" rel=\"noopener noreferrer\" target=\"_blank\">a[b](c)`d`.pdf</a></p>\n"
+  },
+  {
+    "id": "legacy_file_double",
+    "input": "<a href=\"/uploads/documents/abc.pdf\" target=\"_blank\">report.pdf</a>",
+    "html": "<p><a href=\"/uploads/documents/abc.pdf\" rel=\"noopener noreferrer\" target=\"_blank\">report.pdf</a></p>\n"
+  },
+  {
+    "id": "legacy_image_double",
+    "input": "<img src=\"/uploads/documents/abc.png\" alt=\"uploaded image\" />",
+    "html": "<p><img src=\"/uploads/documents/abc.png\" alt=\"uploaded image\"></p>\n"
+  },
+  {
+    "id": "upload_other_origin_stays_text",
+    "input": "<a href=\"//evil.example/x\" target=\"_blank\">report.pdf</a>",
+    "html": "<p>&lt;a href=\"//evil.example/x\" target=\"_blank\"&gt;report.pdf&lt;/a&gt;</p>\n"
+  },
+  {
+    "id": "upload_other_dir_stays_text",
+    "input": "<a href=\"/uploads/other/report.pdf\" target=\"_blank\">report.pdf</a>",
+    "html": "<p>&lt;a href=\"/uploads/other/report.pdf\" target=\"_blank\"&gt;report.pdf&lt;/a&gt;</p>\n"
+  },
+  {
+    "id": "legacy_image_other_alt_stays_text",
+    "input": "<img src=\"/uploads/documents/abc.png\" alt=\"other\" />",
+    "html": "<p>&lt;img src=\"/uploads/documents/abc.png\" alt=\"other\" /&gt;</p>\n"
+  },
+  {
+    "id": "legacy_image_single_stays_text",
+    "input": "<img src='/uploads/documents/abc.png' alt='uploaded image' />",
+    "html": "<p>&lt;img src='/uploads/documents/abc.png' alt='uploaded image' /&gt;</p>\n"
+  },
+  {
+    "id": "same_origin_image",
+    "input": "![x](/uploads/documents/a.png)",
+    "html": "<p><img src=\"/uploads/documents/a.png\" alt=\"x\"></p>\n"
+  },
+  {
+    "id": "other_origin_image",
+    "input": "![x](https://evil.example/a.png)",
+    "html": "<p>[image from evil.example not loaded]</p>\n"
+  },
+  {
+    "id": "sup_sub_kbd_details",
+    "input": "<sup>2</sup> <sub>x</sub> <kbd>Ctrl</kbd> <details><summary>s</summary>d</details>",
+    "html": "<p>&lt;sup&gt;2&lt;/sup&gt; &lt;sub&gt;x&lt;/sub&gt; &lt;kbd&gt;Ctrl&lt;/kbd&gt; &lt;details&gt;&lt;summary&gt;s&lt;/summary&gt;d&lt;/details&gt;</p>\n"
+  },
+  {
+    "id": "table_break",
+    "input": "| a<br>b |\n|---|\n| c |",
+    "html": "<table>\n<thead>\n<tr>\n<th>a&lt;br&gt;b</th>\n</tr>\n</thead>\n<tbody><tr>\n<td>c</td>\n</tr>\n</tbody></table>\n"
+  },
+  {
+    "id": "approval_div_value",
+    "input": "I'd like to `run command` with the following details:\n`command` (text) — 42 characters, 4 lines:\n```text\n<div>\n  <p>x</p>\n    <span>y</span>\n</div>\n```\n\nShould I go ahead? (yes / no)",
+    "html": "<p>I'd like to <code>run command</code> with the following details:<br><code>command</code> (text) — 42 characters, 4 lines:</p>\n<pre><code class=\"language-text\">&lt;div&gt;\n  &lt;p&gt;x&lt;/p&gt;\n    &lt;span&gt;y&lt;/span&gt;\n&lt;/div&gt;\n</code></pre>\n<p>Should I go ahead? (yes / no)</p>\n"
+  },
+  {
+    "id": "approval_comment_value",
+    "input": "I'd like to `run command` with the following details:\n`command` (text) — 15 characters, 3 lines:\n```text\n<!--\n  note\n-->\n```\n\nShould I go ahead? (yes / no)",
+    "html": "<p>I'd like to <code>run command</code> with the following details:<br><code>command</code> (text) — 15 characters, 3 lines:</p>\n<pre><code class=\"language-text\">&lt;!--\n  note\n--&gt;\n</code></pre>\n<p>Should I go ahead? (yes / no)</p>\n"
+  },
+  {
+    "id": "approval_script_value",
+    "input": "I'd like to `run command` with the following details:\n`command` (text) — 29 characters, 3 lines:\n```text\n<script>\n  alert(1)\n</script>\n```\n\nShould I go ahead? (yes / no)",
+    "html": "<p>I'd like to <code>run command</code> with the following details:<br><code>command</code> (text) — 29 characters, 3 lines:</p>\n<pre><code class=\"language-text\">&lt;script&gt;\n  alert(1)\n&lt;/script&gt;\n</code></pre>\n<p>Should I go ahead? (yes / no)</p>\n"
+  },
+  {
+    "id": "markdown_html_fence_indented",
+    "input": "```html\n<div>\n  <p>x</p>\n    <span>y</span>\n</div>\n```",
+    "html": "<pre><code class=\"language-html\">&lt;div&gt;\n  &lt;p&gt;x&lt;/p&gt;\n    &lt;span&gt;y&lt;/span&gt;\n&lt;/div&gt;\n</code></pre>\n"
+  }
+]

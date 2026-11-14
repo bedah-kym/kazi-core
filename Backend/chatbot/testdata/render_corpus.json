@@ -19,6 +19,13 @@
     {"id": "json_null", "input": null},
     {"id": "json_list", "input": ["a", 1, false]},
     {"id": "unicode_text", "input": "h\u00e9llo \u4e16\u754c \ud83d\ude00"},
+    {"id": "inline_html_b", "input": "how do I make text <b>bold</b>?"},
+    {"id": "block_html_div", "input": "before\n\n<div>block</div>\n\nafter"},
+    {"id": "script_html", "input": "<script>alert('x')</script>"},
+    {"id": "html_comment", "input": "<!-- hidden note -->"},
+    {"id": "legacy_upload", "input": "<a href='/media/chat_uploads/abc123.pdf' target='_blank'>report.pdf</a>"},
+    {"id": "upload_like_not_legacy", "input": "<a href=\"/media/chat_uploads/abc123.pdf\" target=\"_blank\">report.pdf</a>"},
+    {"id": "legacy_upload_markdown_name", "input": "<a href='/media/chat_uploads/abc123.pdf' target='_blank'>a[b](c)`d`.pdf</a>"},
     {"id": "long_value", "input": "The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog."}
   ]
 }

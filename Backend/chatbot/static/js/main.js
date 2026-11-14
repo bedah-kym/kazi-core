@@ -449,7 +449,7 @@ function createMessage(data, roomId, prepend = false) {
         msgTextTag.className = 'message other-message';
     }
 
-    if ((hasContent && data.content.includes('<img')) || (safeHtml && safeHtml.includes('<img'))) {
+    if (safeHtml && safeHtml.includes('<img')) {
         msgTextTag.classList.add('sentimage');
     }
 
@@ -1049,9 +1049,11 @@ function initFileHandlers() {
         })
             .then(response => response.json())
             .then(data => {
-                const messageHtml = file.type.startsWith('image/')
-                    ? `<img src="${data.fileUrl}" alt="uploaded image" />`
-                    : `<a href="${data.fileUrl}" target="_blank">${file.name}</a>`;
+                const content = data && typeof data.content === 'string' ? data.content : '';
+                if (!content) {
+                    console.error('Upload response did not include message content');
+                    return;
+                }
 
                 const socket = getCurrentSocket();
                 if (socket && socket.readyState === WebSocket.OPEN) {
@@ -1059,7 +1061,7 @@ function initFileHandlers() {
                     const currentRid = window.currentRoomId || (typeof roomName !== 'undefined' ? roomName : null);
 
                     socket.send(JSON.stringify({
-                        message: messageHtml,
+                        message: content,
                         from: currentUname,
                         command: 'new_message',
                         chatid: currentRid,

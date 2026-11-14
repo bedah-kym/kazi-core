@@ -20,6 +20,12 @@ CORPUS = (
     / "testdata"
     / "render_corpus.json"
 )
+RENDER_EXPECTED = (
+    Path(__file__).resolve().parent.parent
+    / "chatbot"
+    / "testdata"
+    / "render_expected.json"
+)
 _FENCE_LINE = re.compile(r"^(`{3,})text$")
 _INLINE = re.compile(r"^(`+)(.*?)\1")
 _MARKER_RE = re.compile("\u27e8U\\+([0-9A-F]{4,6})\u27e9")
@@ -382,6 +388,24 @@ class ConfirmationPromptTests(SimpleTestCase):
         ]
         card = build_confirmation_prompt_many(calls, short_id="abc12345")
         self.assertTrue(card.endswith("\n\n(approval id abc12345)"))
+
+    def test_rendered_cards_match_the_builder(self):
+        values = {
+            "approval_div_value": "<div>\n  <p>x</p>\n    <span>y</span>\n</div>",
+            "approval_comment_value": "<!--\n  note\n-->",
+            "approval_script_value": "<script>\n  alert(1)\n</script>",
+        }
+        cases = {
+            case["id"]: case
+            for case in json.loads(RENDER_EXPECTED.read_text(encoding="utf-8"))
+        }
+        for case_id, value in values.items():
+            with self.subTest(case=case_id):
+                self.assertEqual(
+                    cases[case_id]["input"],
+                    build_confirmation_prompt("run_command", {"command": value}),
+                )
+                self.assertNotIn("&nbsp;", cases[case_id]["html"])
 
     def test_round_trip_over_the_corpus(self):
         cases = json.loads(CORPUS.read_text(encoding="utf-8"))["cases"]

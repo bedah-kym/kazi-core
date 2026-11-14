@@ -21,17 +21,25 @@ from django.db.models import Max
 from users.encryption import TokenEncryption
 
 from .agent_loop import _untrusted_source
-from .models import TurnToolCall
+from .models import Turn, TurnToolCall
 from .tool_record import tool_record_input
 
 SHOWN_LIMIT = 2000
+MAX_REPLAYED_CALLS = 10
 RETRIEVAL_TOOL_NAMES = frozenset({"web_search", "search_info"})
-_RAN_STATUSES = frozenset({"ok", "error", "outcome_unknown"})
+RAN_STATUSES = frozenset({"ok", "error", "outcome_unknown"})
+NON_RUN_STATUSES = frozenset({
+    "denied", "skipped", "declined", "expired", "superseded",
+    "budget_skipped", "policy_stopped",
+})
+_FAILURE_STATUSES = frozenset({"error", "failed", "failure"})
 _STATUS_ALIASES = {
     "success": "ok",
     "completed": "ok",
     "ok": "ok",
     "error": "error",
+    "failed": "error",
+    "failure": "error",
     "denied": "denied",
     "skipped": "skipped",
     "declined": "declined",
@@ -79,7 +87,12 @@ def shorten_for_record(text: str, limit: int = SHOWN_LIMIT) -> Tuple[str, bool]:
 
 
 def status_for_result(result: Any) -> str:
-    """Map a tool result's status to one of the row's status values."""
+    """Map a tool result's status to one of the row's status values.
+
+    Only an explicit failure is ``error``. Connectors return success statuses
+    such as ``sent`` or ``delivered``; treating an unknown status as an error
+    makes a delivered message replay as failed, and the model may send it again.
+    """
     if not isinstance(result, dict):
         return "error"
     if result.get("outcome_unknown"):
@@ -90,7 +103,11 @@ def status_for_result(result: Any) -> str:
         if mapped == "error" and "safety policy" in str(result.get("message") or ""):
             return "policy_stopped"
         return mapped
-    return "error" if result else "ok"
+    if status in NON_RUN_STATUSES:
+        return status
+    if result.get("error") and not status:
+        return "error"
+    return "ok"
 
 
 def did_not_run_reason(status: str) -> str:
@@ -172,6 +189,9 @@ def record_tool_calls(
         return []
     created: List[TurnToolCall] = []
     with transaction.atomic():
+        # Serialise seq allocation per Turn: two writers must not read the same
+        # maximum and lose a batch to the unique (turn, seq) constraint.
+        Turn.objects.select_for_update().filter(pk=turn_id).first()
         current = (
             TurnToolCall.objects.filter(turn_id=turn_id)
             .aggregate(latest=Max("seq"))["latest"]
@@ -247,36 +267,104 @@ def record_from_event(
     return record_tool_calls(turn_id, room, records)
 
 
+def link_turn_calls_to_message(turn_id: Any, message_id: Any) -> int:
+    """Attach the Turn's not-yet-linked rows to the reply just saved.
+
+    A row's message is the segment's reply: rows resolved before a pause belong
+    to the prompt message, rows resolved after the user's reply belong to the
+    reply saved next. Linking only unlinked rows keeps each row belonging to
+    exactly one message. The call's outcome fields are never touched.
+    """
+    if not turn_id or not message_id:
+        return 0
+    return TurnToolCall.objects.filter(
+        turn_id=turn_id, message__isnull=True,
+    ).update(message_id=message_id)
+
+
+def _load_row_bodies(room: Any, row: TurnToolCall) -> Dict[str, Any]:
+    input_value = (
+        decrypt_body(room, row.input_enc, turn_id=row.turn_id, seq=row.seq)
+        if row.input_enc else {}
+    )
+    shown = (
+        decrypt_body(room, row.shown_enc, turn_id=row.turn_id, seq=row.seq)
+        if row.shown_enc else ""
+    )
+    return {
+        "call_id": row.call_id,
+        "seq": row.seq,
+        "iteration": row.iteration,
+        "name": row.name,
+        "status": row.status,
+        "untrusted": row.untrusted,
+        "retrieval": row.retrieval,
+        "input": input_value if isinstance(input_value, dict) else {},
+        "shown": shown if isinstance(shown, str) else "",
+        "unreadable": bool(row.shown_enc) and shown is None,
+        "truncated": row.truncated,
+    }
+
+
 def load_tool_calls_for_turn(room: Any, turn_id: Any) -> List[Dict[str, Any]]:
-    """The main replayable calls of one turn, oldest first."""
-    return load_tool_calls_for_turns(room, [turn_id]).get(turn_id, [])
+    """The main replayable calls of one turn, oldest first (tests and audits)."""
+    if not turn_id:
+        return []
+    rows = (
+        TurnToolCall.objects.filter(turn_id=turn_id, provenance="main")
+        .order_by("seq")
+    )
+    return [_load_row_bodies(room, row) for row in rows]
 
 
-def load_tool_calls_for_turns(
-    room: Any, turn_ids: Iterable[Any],
+def load_tool_calls_for_messages(
+    room: Any, message_ids: Iterable[Any],
 ) -> Dict[Any, List[Dict[str, Any]]]:
-    """Decrypt each main-provenance call once, grouped by Turn id, in ``seq`` order."""
-    ids = [turn_id for turn_id in turn_ids if turn_id is not None]
+    """The last ``MAX_REPLAYED_CALLS`` main calls of each message, decrypted once.
+
+    A row belongs to the reply message of the segment it resolved in, so a Turn
+    that paused replays each row exactly once. Messages with more than the cap
+    keep their latest pairs and carry a note naming how many earlier calls were
+    left out; only the kept rows are decrypted.
+    """
+    ids = [message_id for message_id in message_ids if message_id is not None]
     if not ids:
         return {}
-    grouped: Dict[Any, List[Dict[str, Any]]] = {}
-    rows = (
-        TurnToolCall.objects.filter(turn_id__in=ids, provenance="main")
-        .order_by("turn_id", "seq")
+    # Read the order and counts first; bodies for dropped rows are never touched.
+    meta: List[Tuple[Any, Any, int]] = list(
+        TurnToolCall.objects.filter(message_id__in=ids, provenance="main")
+        .values_list("id", "message_id", "seq")
+        .order_by("message_id", "seq")
     )
-    for row in rows:
-        grouped.setdefault(row.turn_id, []).append({
-            "call_id": row.call_id,
-            "seq": row.seq,
-            "iteration": row.iteration,
-            "name": row.name,
-            "status": row.status,
-            "untrusted": row.untrusted,
-            "retrieval": row.retrieval,
-            "input": decrypt_body(room, row.input_enc, turn_id=row.turn_id, seq=row.seq) or {},
-            "shown": decrypt_body(room, row.shown_enc, turn_id=row.turn_id, seq=row.seq) or "",
-            "truncated": row.truncated,
-        })
+    ids_by_message: Dict[Any, List[Tuple[Any, int]]] = {}
+    for row_id, message_id, seq in meta:
+        ids_by_message.setdefault(message_id, []).append((row_id, seq))
+    keep_ids: Dict[Any, List[Any]] = {}
+    omitted: Dict[Any, int] = {}
+    for message_id, rows in ids_by_message.items():
+        kept = rows[-MAX_REPLAYED_CALLS:]
+        keep_ids[message_id] = [row_id for row_id, _seq in kept]
+        omitted[message_id] = len(rows) - len(kept)
+    wanted = [row_id for row_ids in keep_ids.values() for row_id in row_ids]
+    if not wanted:
+        return {}
+    by_id = {
+        row.id: row for row in TurnToolCall.objects.filter(id__in=wanted)
+    }
+    grouped: Dict[Any, List[Dict[str, Any]]] = {}
+    for message_id, row_ids in keep_ids.items():
+        calls = []
+        for row_id in row_ids:
+            row = by_id.get(row_id)
+            if row is None:
+                continue
+            calls.append(_load_row_bodies(room, row))
+        if omitted.get(message_id):
+            calls[0]["note"] = (
+                f"{omitted[message_id]} earlier tool call"
+                f"{'s were' if omitted[message_id] != 1 else ' was'} not replayed."
+            )
+        grouped[message_id] = calls
     return grouped
 
 
@@ -288,7 +376,7 @@ def calls_that_ran(room: Any, turn_id: Any) -> List[Dict[str, Any]]:
     )
     out: List[Dict[str, Any]] = []
     for row in rows:
-        if row.status not in _RAN_STATUSES:
+        if row.status not in RAN_STATUSES:
             continue
         out.append({
             "name": row.name,

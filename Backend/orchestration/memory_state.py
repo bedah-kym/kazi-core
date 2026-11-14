@@ -227,8 +227,11 @@ async def update_memory_state_batch(
 
     def _turn_rows() -> Optional[List[Dict[str, Any]]]:
         from chatbot.models import Chatroom
+        from orchestration.models import TurnToolCall
         from orchestration.tool_calls import calls_that_ran
 
+        if not TurnToolCall.objects.filter(turn_id=turn_id).exists():
+            return None
         room = Chatroom.objects.filter(pk=context.get("room_id")).first()
         if room is None:
             return None

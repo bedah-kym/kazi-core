@@ -7,6 +7,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
+        ('chatbot', '0020_chatroom_model_pref'),
         ('orchestration', '0005_turn_cancel_paused'),
     ]
 
@@ -22,7 +23,7 @@ class Migration(migrations.Migration):
                 ('status', models.CharField(choices=[('ok', 'Ok'), ('error', 'Error'), ('denied', 'Denied'), ('skipped', 'Skipped'), ('declined', 'Declined'), ('expired', 'Expired'), ('superseded', 'Superseded'), ('budget_skipped', 'Budget skipped'), ('policy_stopped', 'Policy stopped'), ('outcome_unknown', 'Outcome unknown')], default='ok', max_length=20)),
                 ('untrusted', models.BooleanField(default=False)),
                 ('retrieval', models.BooleanField(default=False)),
-                ('provenance', models.CharField(choices=[('main', 'Main'), ('delegated', 'Delegated')], default='main', max_length=12)),
+                ('provenance', models.CharField(choices=[('main', 'Main'), ('delegated', 'Delegated'), ('provider', 'Provider')], default='main', max_length=12)),
                 ('parent_call_id', models.CharField(blank=True, default='', max_length=128)),
                 ('input_enc', models.TextField(blank=True, null=True)),
                 ('shown_enc', models.TextField(blank=True, null=True)),
@@ -45,12 +46,21 @@ class Migration(migrations.Migration):
         ),
         migrations.AddField(
             model_name='turntoolcall',
+            name='message',
+            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='tool_calls', to='chatbot.message'),
+        ),
+        migrations.AddField(
+            model_name='turntoolcall',
             name='turn',
             field=models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='tool_calls', to='orchestration.turn'),
         ),
         migrations.AddIndex(
             model_name='turntoolcall',
             index=models.Index(fields=['turn', 'provenance'], name='orchestrati_turn_id_623469_idx'),
+        ),
+        migrations.AddIndex(
+            model_name='turntoolcall',
+            index=models.Index(fields=['message', 'provenance', 'seq'], name='ttc_message_prov_seq'),
         ),
         migrations.AddConstraint(
             model_name='turntoolcall',

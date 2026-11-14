@@ -80,6 +80,41 @@ STOP_FAILED_NOTICE = (
 CLAIM_RETRY_BASE_SECONDS = 2
 CLAIM_RETRY_MAX_SECONDS = 60
 
+
+def save_turn_reply(room, result, *, user_id):
+    """Persist the reply and attach the Turn's rows to this message segment.
+
+    This is the one save path: the runner and the tests both call it, so a test
+    cannot re-implement the arguments and miss a change to them.
+    """
+    if not (result.persist and (result.full_response or "").strip()):
+        return None
+    try:
+        message = persist_kazi_message(
+            room,
+            content=result.full_response,
+            origin=ORIGIN_TURN,
+            turn=result.turn_id or None,
+            model_text=result.model_text,
+            harness_text=result.harness,
+            tools=None if result.tool_calls_recorded else result.tools,
+            by=user_id,
+        )
+    except KaziMessageError:
+        logger.warning("AI reply not saved: room key unavailable")
+        return None
+    if message is not None and result.turn_id:
+        from orchestration.tool_calls import link_turn_calls_to_message
+
+        try:
+            link_turn_calls_to_message(result.turn_id, message.id)
+        except Exception:
+            logger.warning(
+                "Tool-call rows not linked to the saved reply", exc_info=True,
+            )
+    return message
+
+
 # One process-wide lock per key so two tabs in one worker cannot both pass the
 # cap check together. Cross-worker serialisation is the room row's
 # SELECT ... FOR UPDATE inside enqueue_turn (#216b-2 r2, item 4).
@@ -946,33 +981,20 @@ class TurnRunner:
             )
 
         reply_saved = not (result.persist and result.full_response.strip())
-        full_response_text = result.full_response
-        if result.persist and full_response_text.strip():
+        ai_message = await sync_to_async(save_turn_reply)(
+            room, result, user_id=turn.user_id,
+        )
+        if ai_message is not None:
+            reply_saved = True
+            await self._maybe_voice(ai_message, turn.user_id)
             try:
-                ai_message = await sync_to_async(persist_kazi_message)(
-                    room,
-                    content=full_response_text,
-                    origin=ORIGIN_TURN,
-                    turn=result.turn_id or None,
-                    model_text=result.model_text,
-                    harness_text=result.harness,
-                    tools=None if result.tool_calls_recorded else result.tools,
-                    by=turn.user_id,
-                )
-            except KaziMessageError:
-                ai_message = None
-                logger.warning("AI reply not saved: room key unavailable")
-            if ai_message is not None:
-                reply_saved = True
-                await self._maybe_voice(ai_message, turn.user_id)
-                try:
-                    from .context_summary import schedule_context_summary
+                from .context_summary import schedule_context_summary
 
-                    await sync_to_async(schedule_context_summary)(
-                        room.id, ai_message.id,
-                    )
-                except Exception as exc:
-                    logger.warning("Context summary refresh skipped: %s", exc)
+                await sync_to_async(schedule_context_summary)(
+                    room.id, ai_message.id,
+                )
+            except Exception as exc:
+                logger.warning("Context summary refresh skipped: %s", exc)
 
         if result.turn_state == "committing":
             await coordinator.finalize_turn(result, reply_saved=reply_saved)

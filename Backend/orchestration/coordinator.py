@@ -482,6 +482,7 @@ def _history_replays_untrusted(history_msgs: Optional[List[dict]]) -> bool:
             if (
                 isinstance(block, dict)
                 and block.get("type") == "tool_use"
+                and not str(block.get("id") or "").startswith("noexec-")
                 and _untrusted_source(block.get("name"))
             ):
                 return True
@@ -752,6 +753,15 @@ class OrchestrationCoordinator:
                 or row.state not in ("running", "paused")
             ):
                 return False
+            # Read the held calls while the Turn still carries its pause state;
+            # cancelling clears it.
+            held_state = await load_pending_state(
+                room_id, user_id, turn_id=str(row.pk),
+            )
+            held = list(
+                getattr(held_state, "pending_tools", None)
+                or ([held_state.pending_tool] if held_state and held_state.pending_tool else [])
+            )
             partial = bool(stream_state["tools"] or stream_state["model"])
             moved = await atransition(
                 str(row.pk), row.version, "cancelled",
@@ -773,6 +783,14 @@ class OrchestrationCoordinator:
                 logger.warning(
                     "Stopped pause approval row not resolved", exc_info=True,
                 )
+            if not turn_box.get("stop_rows_written"):
+                turn_box["stop_rows_written"] = True
+                await _record_not_run(
+                    held, "skipped", "you stopped the turn",
+                    int(getattr(held_state, "iteration", 0) or 0),
+                    turn_id=str(row.pk),
+                )
+                await _refresh_turn_memory(str(row.pk))
             clear_loop_state(room_id, user_id)
             if moved:
                 # Only a cancel this owner really wrote earns the stop line; a
@@ -1150,9 +1168,10 @@ class OrchestrationCoordinator:
 
         async def _record_not_run(
             held: List[Dict], status: str, reason: str, iteration: int,
+            *, turn_id: Optional[str] = None,
         ) -> None:
             """Write the rows of held calls that resolved without running."""
-            turn_id = _turn_id()
+            turn_id = turn_id or _turn_id()
             if not turn_id or not held:
                 return
             room = await _record_room()
@@ -1205,6 +1224,40 @@ class OrchestrationCoordinator:
             except Exception as exc:
                 logger.debug("server_tool_uses not recorded: %s", exc)
 
+        async def _record_provider_search(
+            count: int, *, name: str = "web_search", iteration: Any = None,
+            parent_call_id: str = "",
+        ) -> None:
+            """Record a provider-side search for Phase 4; it is never replayed."""
+            turn_id = _turn_id()
+            if count <= 0 or not turn_id:
+                return
+            await _bump_server_tool_uses(turn_id, count)
+            room = await _record_room()
+            if room is None:
+                return
+            try:
+                await sync_to_async(record_tool_calls)(turn_id, room, [{
+                    "call_id": f"server-{uuid.uuid4().hex[:12]}",
+                    "name": name,
+                    "input": {},
+                    "result": {"status": "ok"},
+                    "shown": (
+                        f"{name} ran on the provider ({count} request(s)); "
+                        "its results are part of the assistant's reply."
+                    ),
+                    "iteration": iteration,
+                    "provenance": "provider",
+                    "retrieval": True,
+                    "parent_call_id": parent_call_id,
+                }])
+            except Exception as exc:
+                logger.warning(
+                    "Provider search not recorded: %s", exc.__class__.__name__,
+                )
+                return
+            stream_state["tool_calls_recorded"] = True
+
         async def _relay_agent_events(events):
             """Map AgentEvents to WebSocket frames, shared by every agent run."""
             async for event in events:
@@ -1231,30 +1284,31 @@ class OrchestrationCoordinator:
                     tool = event.data.get("name", "action")
                     await emit_progress("executing", "started", f"Running {tool.replace('_', ' ')}…")
                 elif event.kind == "tool_result":
-                    stream_state["tools"].append(_tool_record(event.data))
+                    not_run = bool(event.data.get("not_run"))
+                    if not not_run:
+                        # A call that did not run is not work done: never make
+                        # the turn partial or the payload's legacy record.
+                        stream_state["tools"].append(_tool_record(event.data))
                     await _persist_tool_event(event.data)
+                    await _record_provider_search(
+                        int(event.data.get("server_tool_uses") or 0),
+                        iteration=event.data.get("iteration"),
+                        parent_call_id=str(event.data.get("id") or ""),
+                    )
                     tool = event.data.get("name", "action")
                     result = event.data.get("result", {})
                     status = result.get("status", "")
-                    await emit_progress("executing", "completed", f"{tool.replace('_', ' ')}: {status}")
+                    label = f"{tool.replace('_', ' ')}: {status}"
+                    if not_run:
+                        await emit_progress("executing", "skipped", f"{label} (not run)")
+                    else:
+                        await emit_progress("executing", "completed", label)
                 elif event.kind == "server_tool_use":
-                    count = int(event.data.get("count") or 0)
-                    turn_id = _turn_id()
-                    if count > 0 and turn_id:
-                        await _bump_server_tool_uses(turn_id, count)
-                        name = event.data.get("name") or "web_search"
-                        await _persist_tool_event({
-                            "id": f"server-{uuid.uuid4().hex[:12]}",
-                            "name": name,
-                            "input": {},
-                            "result": {"status": "ok"},
-                            "shown": (
-                                f"{name} ran on the provider ({count} request(s)); "
-                                "its results are part of the assistant's reply."
-                            ),
-                            "iteration": event.data.get("iteration"),
-                            "retrieval": True,
-                        })
+                    await _record_provider_search(
+                        int(event.data.get("count") or 0),
+                        name=event.data.get("name") or "web_search",
+                        iteration=event.data.get("iteration"),
+                    )
                 elif event.kind == "paused":
                     if turn_box.get("settled"):
                         continue
@@ -1818,7 +1872,22 @@ class OrchestrationCoordinator:
                     else:
                         # No approval row backs this paused Turn, so it cannot
                         # be confirmed. Do not tell the user an action waits.
+                        held_state = await load_pending_state(room_id, user_id)
+                        paused_id = (
+                            str(paused_turn.pk) if paused_turn is not None
+                            else _turn_id()
+                        )
                         await cancel_pending_action(room_id, user_id)
+                        held = list(
+                            getattr(held_state, "pending_tools", None)
+                            or ([held_state.pending_tool] if held_state and held_state.pending_tool else [])
+                        )
+                        await _record_not_run(
+                            held, "skipped", "no approval record could be loaded",
+                            int(getattr(held_state, "iteration", 0) or 0),
+                            turn_id=paused_id,
+                        )
+                        await _refresh_turn_memory(paused_id)
                         turn_box["pending_note"] = (
                             "[Harness: the earlier approval record could not be "
                             "loaded, so nothing is waiting and nothing ran.]"

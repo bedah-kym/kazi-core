@@ -20,21 +20,19 @@ _SHORTENED = (
 
 
 def _record_string(value: str) -> str:
-    original_length = len(value)
     text = redact_sensitive_text(value)
-    if len(text) <= RECORD_STRING_LIMIT:
+    length = len(text)
+    if length <= RECORD_STRING_MAX:
         return text
-    marker = _SHORTENED.format(
-        length=original_length,
-        omitted=max(0, original_length - RECORD_STRING_LIMIT),
-    )
-    room = max(RECORD_STRING_LIMIT - len(marker), 2)
-    head = room // 2
-    tail = room - head
-    marker = _SHORTENED.format(
-        length=original_length,
-        omitted=max(0, original_length - head - tail),
-    )
+    # Keep at least RECORD_STRING_LIMIT real characters (head and tail) and let
+    # the marker spend the rest of RECORD_STRING_MAX. The marker length is
+    # bounded by the worst-case digit count, and omitted counts the redacted
+    # text, not the pre-redaction value.
+    marker_bound = len(_SHORTENED.format(length=length, omitted=length))
+    keep = max(RECORD_STRING_LIMIT, RECORD_STRING_MAX - marker_bound)
+    head = keep // 2
+    tail = keep - head
+    marker = _SHORTENED.format(length=length, omitted=length - keep)
     return text[:head] + marker + text[-tail:]
 
 

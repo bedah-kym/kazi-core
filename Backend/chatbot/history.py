@@ -115,14 +115,16 @@ def get_history_rows(
     messages = list(query.order_by("-timestamp", "-id")[:limit])
     messages.reverse()
 
-    # The typed tool-call record of every Turn in this window, decrypted once,
-    # in one query (P3-5). Old messages have no Turn or no rows and keep using
-    # their reply payload below.
-    from orchestration.tool_calls import load_tool_calls_for_turns
+    # Each message carries only the rows of its own segment, decrypted once, in
+    # one metadata query and one kept-row query (P3-5). A Turn that paused has
+    # several messages; attaching all of its rows to each would duplicate the
+    # tool_use ids. Old messages have no rows and keep their reply payload.
+    from orchestration.tool_calls import load_tool_calls_for_messages
 
-    turn_ids = [msg.turn_id for msg in messages if msg.turn_id]
-    tool_calls_by_turn = (
-        load_tool_calls_for_turns(room, turn_ids) if turn_ids else {}
+    tool_calls_by_message = (
+        load_tool_calls_for_messages(room, [msg.id for msg in messages])
+        if any(msg.turn_id for msg in messages)
+        else {}
     )
 
     rows: List[Tuple] = []
@@ -134,7 +136,7 @@ def get_history_rows(
         payload = payload if isinstance(payload, dict) else {}
         origin = payload.get("origin") or ""
         tools = payload.get("tools")
-        tool_calls = tool_calls_by_turn.get(msg.turn_id) or []
+        tool_calls = tool_calls_by_message.get(msg.id) or []
         extra = None
         if origin or isinstance(tools, list) or tool_calls:
             extra = {

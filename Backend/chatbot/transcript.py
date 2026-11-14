@@ -16,6 +16,7 @@ _DID_NOT_RUN = frozenset({
     "denied", "skipped", "declined", "expired", "superseded",
     "budget_skipped", "policy_stopped",
 })
+_RAN_STATUS = frozenset({"ok", "error", "outcome_unknown", "success", "completed"})
 
 Row = Tuple
 
@@ -150,7 +151,16 @@ def _assistant_messages(
         for index, record in enumerate(records):
             if not isinstance(record, dict):
                 continue
-            tool_id = record.get("call_id") or f"hist-{message_id}-{index}"
+            status = record.get("status") or ""
+            ran = status in _RAN_STATUS
+            if typed:
+                # Namespace the replay id per row. A provider may omit its call
+                # id (the client falls back to call_<idx>), so two turns can
+                # share call_0; the replayed history must not.
+                seq = record.get("seq", index)
+                tool_id = f"{'hist' if ran else 'noexec'}-{message_id}-{seq}"
+            else:
+                tool_id = f"hist-{message_id}-{index}"
             tool_input = record.get("input")
             use_blocks.append({
                 "type": "tool_use",
@@ -159,7 +169,8 @@ def _assistant_messages(
                 "input": tool_input if isinstance(tool_input, dict) else {},
             })
             shown = record.get("shown") or ""
-            status = record.get("status") or ""
+            if record.get("unreadable"):
+                shown = "[record unreadable]"
             note = record.get("note")
             if note:
                 shown = f"{shown}\n{note}".strip()

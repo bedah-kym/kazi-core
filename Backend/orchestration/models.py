@@ -118,6 +118,10 @@ class TurnToolCall(models.Model):
     PROVENANCE_CHOICES = [
         ("main", "Main"),
         ("delegated", "Delegated"),
+        # A provider-side search (Anthropic web search) the harness never saw as
+        # a client call. Recorded for Phase 4, never replayed: the request also
+        # declares the server tool of that name.
+        ("provider", "Provider"),
     ]
     DID_NOT_RUN = frozenset({
         "denied", "skipped", "declined", "expired", "superseded",
@@ -138,6 +142,13 @@ class TurnToolCall(models.Model):
         max_length=12, choices=PROVENANCE_CHOICES, default="main",
     )
     parent_call_id = models.CharField(max_length=128, blank=True, default="")
+    # The reply message of the segment in which this call resolved. Set once
+    # when that reply is saved, so a Turn that paused replays each row exactly
+    # once, on the message it belongs to.
+    message = models.ForeignKey(
+        "chatbot.Message", null=True, blank=True,
+        on_delete=models.SET_NULL, related_name="tool_calls",
+    )
     input_enc = models.TextField(null=True, blank=True)
     shown_enc = models.TextField(null=True, blank=True)
     truncated = models.BooleanField(default=False)
@@ -154,7 +165,10 @@ class TurnToolCall(models.Model):
                 fields=["turn", "seq"], name="uniq_turn_tool_call_seq",
             ),
         ]
-        indexes = [models.Index(fields=["turn", "provenance"])]
+        indexes = [
+            models.Index(fields=["turn", "provenance"]),
+            models.Index(fields=["message", "provenance", "seq"], name="ttc_message_prov_seq"),
+        ]
 
     def save(self, *args, **kwargs):
         if self.pk is not None:

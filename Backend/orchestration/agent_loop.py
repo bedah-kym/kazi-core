@@ -1640,6 +1640,16 @@ def _take_delegated_calls(
     return calls if isinstance(calls, list) else None
 
 
+def _take_server_tool_uses(tool_name: str, result: Any) -> int:
+    """Take the sub-agent's provider-search count off a delegated result."""
+    if tool_name != "delegate_task" or not isinstance(result, dict):
+        return 0
+    try:
+        return int(result.pop("_server_tool_uses", 0) or 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
 def _serialize_delegated_result(result: Dict[str, Any]) -> str:
     """Serialise a delegated result, keeping its stop fields within the cap.
 
@@ -2319,6 +2329,7 @@ async def _run_sub_agent(
     sub_tool_log: List[Dict[str, Any]] = []
     iteration = 0
     tokens_used = 0
+    server_searches = 0
     stopped_reason: Optional[str] = None
     completed = False
     consecutive_pauses = 0
@@ -2412,6 +2423,7 @@ async def _run_sub_agent(
         if searches > 0:
             # A server-side search brings in untrusted text; the main loop taints on it too.
             _record_search_usage(context.get("user_id"), searches)
+            server_searches += searches
             preferences = _taint_preferences(preferences, True)
 
         text = _extract_text(content_blocks)
@@ -2500,6 +2512,7 @@ async def _run_sub_agent(
         # provenance="delegated". Serialisation drops every ``_`` key, so the
         # model only ever sees the summary (A11).
         "_delegated_calls": list(sub_tool_log),
+        "_server_tool_uses": server_searches,
     })
     return result
 
@@ -2842,6 +2855,7 @@ async def run_agent_loop(
                         _taint_run(state, room_id)
 
             delegated_calls = _take_delegated_calls(pending["name"], result)
+            server_tool_uses = _take_server_tool_uses(pending["name"], result)
             receipt_id = None
             if not persona_unavailable:
                 state.tool_call_count += 1
@@ -2863,6 +2877,7 @@ async def run_agent_loop(
                 "shown": _serialize_tool_result(pending["name"], result),
                 "iteration": state.iteration,
                 "delegated_calls": delegated_calls,
+                "server_tool_uses": server_tool_uses,
                 "receipt_id": receipt_id,
             })
             gated_blocks[call_id] = {
@@ -3487,6 +3502,7 @@ async def run_agent_loop(
                         # single bound reflects them (T-F3).
                         _apply_delegated_spend(state, result, granted)
                     delegated_calls = _take_delegated_calls(tc["name"], result)
+                    server_tool_uses = _take_server_tool_uses(tc["name"], result)
                     tool_results.append((tc, result))
                     state.tool_call_count += 1
                     state.tool_call_log.append({
@@ -3510,6 +3526,7 @@ async def run_agent_loop(
                         "shown": _serialize_tool_result(tc["name"], result),
                         "iteration": state.iteration,
                         "delegated_calls": delegated_calls,
+                        "server_tool_uses": server_tool_uses,
                         "receipt_id": receipt_id,
                     })
 

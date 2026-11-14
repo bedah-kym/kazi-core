@@ -51,6 +51,10 @@ class HistoryQueryCountTests(TransactionTestCase):
 
     def test_the_typed_record_query_count_is_flat_too(self):
         from orchestration.models import Turn
+        from orchestration.tool_calls import (
+            link_turn_calls_to_message,
+            record_tool_calls,
+        )
 
         def _room_with_turns(count):
             User = get_user_model()
@@ -67,6 +71,12 @@ class HistoryQueryCountTests(TransactionTestCase):
                     turn=turn,
                 )
                 room.chats.add(message)
+                record_tool_calls(turn.id, room, [{
+                    "call_id": f"c{index}", "name": "get_weather",
+                    "input": {"city": "Nairobi"}, "result": {"status": "success"},
+                    "shown": "sunny",
+                }])
+                link_turn_calls_to_message(turn.id, message.id)
             return user, room
 
         small_user, small_room = _room_with_turns(2)
@@ -78,4 +88,4 @@ class HistoryQueryCountTests(TransactionTestCase):
         self.assertEqual(len(small_rows), 2)
         self.assertEqual(len(large_rows), 8)
         self.assertEqual(small, large)
-        self.assertLessEqual(large, 3)
+        self.assertLessEqual(large, 4)

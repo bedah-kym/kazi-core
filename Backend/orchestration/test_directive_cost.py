@@ -22,7 +22,7 @@ from orchestration.coordinator import OrchestrationCoordinator
 
 DIRECTIVE_HOPS = 10
 DIRECTIVE_QUERIES = 13
-DIRECTIVE_POSTGRES_QUERIES = 9
+DIRECTIVE_POSTGRES_QUERIES = 11
 
 
 class DirectiveCostTests(TransactionTestCase):

@@ -18,8 +18,9 @@ from asgiref.sync import async_to_sync
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
-from django.db import DatabaseError
+from django.db import DatabaseError, connection
 from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from chatbot import tasks as chatbot_tasks
@@ -224,6 +225,169 @@ class InProcessSchedulerTests(TestCase):
                 "interval": interval,
             },
         )
+
+    def _seed_named(self, name, last_run_at):
+        interval, _ = IntervalSchedule.objects.get_or_create(
+            every=60, period=IntervalSchedule.SECONDS
+        )
+        PeriodicTask.objects.update_or_create(
+            name=name,
+            defaults={
+                "task": "tests.test_process_weight.noop",
+                "enabled": True,
+                "last_run_at": last_run_at,
+                "interval": interval,
+            },
+        )
+
+    def test_a_tick_reads_all_schedule_rows_in_one_query(self):
+        """N idle entries cost one SELECT, not one per entry (the N+1)."""
+        from orchestration.in_process_scheduler import InProcessScheduler
+
+        schedules = {
+            f"idle-{index}": {
+                "task": "tests.test_process_weight.noop",
+                "schedule": 60.0,
+            }
+            for index in range(12)
+        }
+        for name in schedules:
+            self._seed_named(name, self.now)
+        scheduler = InProcessScheduler(
+            schedules=schedules,
+            runner=lambda entry: self.ran.append(entry["task"]),
+            now=lambda: self.now,
+        )
+        with CaptureQueriesContext(connection) as queries:
+            ran = scheduler.run_due(self.now)
+        self.assertEqual(ran, [])
+        self.assertEqual(len(queries.captured_queries), 1)
+        self.assertEqual(self.ran, [])
+
+    def test_a_runner_reenabling_another_entry_runs_it_in_the_same_tick(self):
+        """A stale prefetched row must not delay an entry A re-enables."""
+        from orchestration.in_process_scheduler import InProcessScheduler
+
+        entries = {
+            "entry-a": {
+                "task": "tests.test_process_weight.noop",
+                "schedule": 60.0,
+                "label": "a",
+            },
+            "entry-b": {
+                "task": "tests.test_process_weight.noop",
+                "schedule": 60.0,
+                "label": "b",
+            },
+        }
+        for name in entries:
+            self._seed_named(name, self.now - timedelta(seconds=120))
+        PeriodicTask.objects.filter(name="entry-b").update(enabled=False)
+        ran = []
+
+        def runner(entry):
+            ran.append(entry["label"])
+            if entry["label"] == "a":
+                PeriodicTask.objects.filter(name="entry-b").update(enabled=True)
+
+        scheduler = InProcessScheduler(
+            schedules=entries, runner=runner, now=lambda: self.now,
+        )
+        result = scheduler.run_due(self.now)
+        self.assertEqual(result, ["entry-a", "entry-b"])
+        self.assertEqual(ran, ["a", "b"])
+        row_b = PeriodicTask.objects.get(name="entry-b")
+        self.assertEqual(row_b.last_run_at, self.now)
+
+    def test_a_runner_disabling_another_entry_in_the_same_tick_blocks_it(self):
+        """The real widened window: A's run disables B after the one read."""
+        from orchestration.in_process_scheduler import InProcessScheduler
+
+        entries = {
+            "entry-a": {
+                "task": "tests.test_process_weight.noop",
+                "schedule": 60.0,
+                "label": "a",
+            },
+            "entry-b": {
+                "task": "tests.test_process_weight.noop",
+                "schedule": 60.0,
+                "label": "b",
+            },
+        }
+        for name in entries:
+            self._seed_named(name, self.now - timedelta(seconds=120))
+        ran = []
+
+        def runner(entry):
+            ran.append(entry["label"])
+            if entry["label"] == "a":
+                PeriodicTask.objects.filter(name="entry-b").update(enabled=False)
+
+        scheduler = InProcessScheduler(
+            schedules=entries, runner=runner, now=lambda: self.now,
+        )
+        result = scheduler.run_due(self.now)
+        self.assertEqual(result, ["entry-a"])
+        self.assertEqual(ran, ["a"])
+
+    def test_a_disable_after_the_tick_read_blocks_the_claim(self):
+        """The CAS re-checks enabled, so a row disabled mid-tick does not run."""
+        from orchestration.in_process_scheduler import InProcessScheduler
+
+        self._seed_named("due-mid-tick", self.now - timedelta(seconds=120))
+        scheduler = InProcessScheduler(
+            schedules={
+                "due-mid-tick": {
+                    "task": "tests.test_process_weight.noop",
+                    "schedule": 60.0,
+                },
+            },
+            runner=lambda entry: self.ran.append(entry["task"]),
+            now=lambda: self.now,
+        )
+        stale = PeriodicTask.objects.get(name="due-mid-tick")
+        PeriodicTask.objects.filter(pk=stale.pk).update(enabled=False)
+
+        claimed = scheduler._claim(
+            "due-mid-tick", scheduler._schedules["due-mid-tick"],
+            self.now, row=stale,
+        )
+        self.assertFalse(claimed)
+        self.assertEqual(self.ran, [])
+        stale.refresh_from_db()
+        self.assertFalse(stale.enabled)
+        self.assertEqual(
+            stale.last_run_at, self.now - timedelta(seconds=120),
+        )
+
+    def test_a_non_idle_tick_costs_what_main_costs(self):
+        """Once A runs, later entries re-read per entry exactly as main did."""
+        from orchestration.in_process_scheduler import InProcessScheduler
+
+        schedules = {
+            f"mix-{index}": {
+                "task": "tests.test_process_weight.noop",
+                "schedule": 60.0,
+            }
+            for index in range(12)
+        }
+        for index, name in enumerate(schedules):
+            last_run = (
+                self.now - timedelta(seconds=120) if index < 2 else self.now
+            )
+            self._seed_named(name, last_run)
+        scheduler = InProcessScheduler(
+            schedules=schedules,
+            runner=lambda entry: self.ran.append(entry["task"]),
+            now=lambda: self.now,
+        )
+        with CaptureQueriesContext(connection) as queries:
+            ran = scheduler.run_due(self.now)
+        self.assertEqual(sorted(ran), ["mix-0", "mix-1"])
+        # 1 prefetched read + A's update + B's per-entry read/update + the ten
+        # idle entries' per-entry reads = main's 12 reads + 2 updates.
+        self.assertEqual(len(queries.captured_queries), 14)
 
     def test_two_schedulers_ticking_together_run_the_job_once(self):
         from orchestration.in_process_scheduler import InProcessScheduler

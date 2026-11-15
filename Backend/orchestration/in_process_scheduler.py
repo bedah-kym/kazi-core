@@ -33,6 +33,7 @@ DEFAULT_TICK_SECONDS = 5.0
 DEFAULT_STOP_TIMEOUT_SECONDS = 30.0
 _RUNNER = Callable[[Mapping[str, Any]], Any]
 _NOW = Callable[[], Any]
+_ROW_UNSET = object()
 
 
 def is_due(schedule: Any, last_run_at: Any, now: Any) -> bool:
@@ -196,8 +197,36 @@ class InProcessScheduler:
         """
         now = now or self._now()
         ran: List[str] = []
+        names = list(self._schedules)
+        rows = None
+        if names:
+            # One read for every schedule row this tick, however many entries
+            # there are. `_claim` gets the row it already has instead of
+            # running its own `.first()` per name (the old N+1).
+            try:
+                rows = {
+                    row.name: row
+                    for row in PeriodicTask.objects.filter(
+                        name__in=names,
+                    ).only("pk", "name", "last_run_at", "enabled")
+                }
+            except Exception:
+                # Fall back to the per-entry claim, which handles its own
+                # store errors. That keeps the old failure handling exactly.
+                logger.exception(
+                    "In-process scheduler could not read the schedule; "
+                    "falling back to per-entry claims",
+                )
+                rows = None
         for name, entry in self._schedules.items():
-            if not self._claim(name, entry, now):
+            # The prefetched rows make an idle tick one query. Once anything
+            # has run, a later entry could have been enabled or rewound by
+            # that runner, so read it fresh exactly as main did.
+            if rows is None or ran:
+                claimed = self._claim(name, entry, now)
+            else:
+                claimed = self._claim(name, entry, now, row=rows.get(name))
+            if not claimed:
                 continue
             try:
                 self._runner(entry)
@@ -206,7 +235,10 @@ class InProcessScheduler:
             ran.append(name)
         return ran
 
-    def _claim(self, name: str, entry: Mapping[str, Any], now: Any) -> bool:
+    def _claim(
+        self, name: str, entry: Mapping[str, Any], now: Any,
+        *, row: Any = _ROW_UNSET,
+    ) -> bool:
         """Return True only after atomically claiming an enabled, due entry.
 
         New rows and rows without a last-run time are initialized at now
@@ -215,9 +247,10 @@ class InProcessScheduler:
         claim errors return False.
         """
         try:
-            row = PeriodicTask.objects.filter(name=name).only(
-                "pk", "last_run_at", "enabled"
-            ).first()
+            if row is _ROW_UNSET:
+                row = PeriodicTask.objects.filter(name=name).only(
+                    "pk", "last_run_at", "enabled"
+                ).first()
             if row is None:
                 # No row yet: create one so a later switch to beat after
                 # sync_beat_schedule keeps the history. The schedule mirrors
@@ -248,7 +281,7 @@ class InProcessScheduler:
             if not is_due(entry["schedule"], row.last_run_at, now):
                 return False
             updated = PeriodicTask.objects.filter(
-                pk=row.pk, last_run_at=row.last_run_at
+                pk=row.pk, last_run_at=row.last_run_at, enabled=True,
             ).update(last_run_at=now, total_run_count=F("total_run_count") + 1)
             return updated == 1
         except Exception:

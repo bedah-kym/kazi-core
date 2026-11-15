@@ -218,12 +218,12 @@ class _GroupRedactingPattern:
 
 _SECRET_PATTERNS = [
     re.compile(
-        r"\b(?:sk|pk|rk)[-_]"
+        r"(?<![A-Za-z0-9_-])(?:sk|pk|rk)[-_]"
         r"(?=[A-Za-z0-9_-]*[0-9])"
         r"(?=[A-Za-z0-9_-]*[A-Z])"
         r"[A-Za-z0-9_-]{20,}"
     ),
-    re.compile(r"\b(?:sk|pk|rk)-[A-Za-z0-9]{16,}(?![A-Za-z0-9_-])"),
+    re.compile(r"(?<![A-Za-z0-9_-])(?:sk|pk|rk)-[A-Za-z0-9]{16,}(?![A-Za-z0-9_-])"),
     re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"),
     re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}\b|\bgithub_pat_[A-Za-z0-9_]{22,}\b"),
     re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}"),
@@ -231,7 +231,7 @@ _SECRET_PATTERNS = [
     re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"),
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)"),
     _GroupRedactingPattern(
-        re.compile(r"\b(?P<scheme>[a-z][a-z0-9+.-]*://[^\s:/@]+:)(?P<password>[^\s@/]+)@"),
+        re.compile(r"(?<![a-z0-9+.-])(?P<scheme>[a-z][a-z0-9+.-]*://[^\s:/@]+:)(?P<password>[^\s@/]+)@"),
         "password",
     ),
     re.compile(r"(?i)\bbearer[ \t]+[A-Za-z0-9._-]{16,}\b"),
@@ -239,7 +239,7 @@ _SECRET_PATTERNS = [
     re.compile(r"(?i)\b(?:password|passwd|pwd|secret|client[_-]?secret)\b[ \t]*[:=][ \t]*\S+"),
 ]
 
-_PII_EMAIL_RE = re.compile(r'[\w.+-]+@[\w-]+\.[\w.-]+')
+_PII_EMAIL_RE = re.compile(r'(?<![\w.+-])[\w.+-]+@[\w-]+\.[\w.-]+')
 _PII_PHONE_RE = re.compile(
     r'(?<!\d)(\+\d{1,3}[-.\s]?\d{2,4}[-.\s]?\d{3,4}[-.\s]?\d{2,4}'
     r'|0\d{2,3}[-.\s]?\d{3}[-.\s]?\d{3,4}'

@@ -10,7 +10,12 @@ from django.test import SimpleTestCase
 
 from orchestration.connectors.itinerary_connector import _is_placeholder_url
 from orchestration.llm_client import LLMClient
-from orchestration.security_policy import _SECRET_PATTERNS, redact_sensitive_text
+from orchestration.security_policy import (
+    _PII_EMAIL_RE,
+    _PII_PHONE_RE,
+    _SECRET_PATTERNS,
+    redact_sensitive_text,
+)
 from orchestration.tool_executor import _normalize_error
 
 
@@ -221,6 +226,36 @@ class SecretFormatRedactionTests(SimpleTestCase):
         for fragment in _substrings(body, 8):
             self.assertNotIn(fragment, output)
 
+    def test_provider_key_boundaries_still_redact(self):
+        body = _repeat("A1b2C3d4E5", 48)
+        key = "sk-" + body
+        cases = [
+            "KEY=" + key,
+            '"' + key + '"',
+            "(" + key + ")",
+            key,
+            "prefix line\n" + key,
+        ]
+        for text in cases:
+            with self.subTest(text=text):
+                output = redact_sensitive_text(text)
+                self.assertIn("[REDACTED SECRET]", output)
+                for fragment in _substrings(body, 8):
+                    self.assertNotIn(fragment, output)
+
+    def test_email_boundaries_still_redact(self):
+        address = "a.b+tag@example.co.uk"
+        cases = [
+            address,
+            "Contact " + address + " now",
+            "<" + address + ">",
+        ]
+        for text in cases:
+            with self.subTest(text=text):
+                output = redact_sensitive_text(text)
+                self.assertIn("[REDACTED EMAIL]", output)
+                self.assertNotIn(address, output)
+
 
 class SeededSecretFormatRedactionTests(SimpleTestCase):
     _DRAWS = 200
@@ -297,7 +332,7 @@ _REDACTION_THREAD_TIMEOUT_SECONDS = 20
 _REDACTION_ELAPSED_BOUND_SECONDS = 5.0
 
 
-def _run_redaction_in_thread(operation):
+def _run_redaction_in_thread(operation, timeout=_REDACTION_THREAD_TIMEOUT_SECONDS):
     result = {}
 
     def target():
@@ -307,7 +342,7 @@ def _run_redaction_in_thread(operation):
 
     thread = threading.Thread(target=target, daemon=True)
     thread.start()
-    thread.join(_REDACTION_THREAD_TIMEOUT_SECONDS)
+    thread.join(timeout)
     return thread.is_alive(), result.get("elapsed")
 
 
@@ -343,6 +378,85 @@ class RedactionCostTests(SimpleTestCase):
                         f"pattern {index} exceeded {_REDACTION_THREAD_TIMEOUT_SECONDS}s",
                     )
                     self.assertLess(elapsed, _REDACTION_ELAPSED_BOUND_SECONDS)
+
+
+_LINEARITY_BOUND_SECONDS = 1.0
+_LINEARITY_THREAD_TIMEOUT_SECONDS = 5.0
+
+
+class RedactionLinearityTests(SimpleTestCase):
+    @staticmethod
+    def _hostile_inputs():
+        return {
+            "sk-": _repeat("sk-", 100000),
+            "pk_": _repeat("pk_", 100000),
+            "a.": _repeat("a.", 100000),
+            "a-": _repeat("a-", 100000),
+            "a": _repeat("a", 100000),
+            "x://a:": _repeat("x://a:", 100000),
+            "a.b@": _repeat("a.b", 100000) + "@",
+            "AKIA": _repeat("AKIA", 100000),
+            "ghp_": _repeat("ghp_", 100000),
+            "github_pat_": _repeat("github_pat_", 100000),
+            "xoxb-": _repeat("xoxb-", 100000),
+            "AIza": _repeat("AIza", 100000),
+            "eyJ": "eyJ" + "A" * 100000,
+            "pem": "-----BEGIN RSA PRIVATE KEY-----" + "A" * 100000,
+            "bearer": "bearer " + "A" * 100000,
+            "api_key=": "api_key=" + "A" * 100000,
+            "password=": "password=" + "A" * 100000,
+            "digits": _repeat("1", 100000),
+            "plus": _repeat("+", 100000),
+            "paren": _repeat("(", 100000),
+        }
+
+    def _assert_fast(self, label, operation):
+        hung, elapsed = _run_redaction_in_thread(
+            operation, timeout=_LINEARITY_THREAD_TIMEOUT_SECONDS
+        )
+        self.assertFalse(
+            hung,
+            f"{label} did not finish within {_LINEARITY_THREAD_TIMEOUT_SECONDS}s",
+        )
+        self.assertLess(elapsed, _LINEARITY_BOUND_SECONDS, label)
+
+    def test_whole_redaction_is_linear_on_hostile_inputs(self):
+        for label, text in self._hostile_inputs().items():
+            with self.subTest(input=label):
+                self._assert_fast(
+                    f"redact_sensitive_text on {label}",
+                    lambda text=text: redact_sensitive_text(text),
+                )
+
+    def test_each_pattern_is_linear_on_its_own_class(self):
+        inputs = self._hostile_inputs()
+        pattern_inputs = {
+            0: ("sk-", "pk_"),
+            1: ("sk-", "a"),
+            2: ("AKIA",),
+            3: ("ghp_", "github_pat_"),
+            4: ("xoxb-",),
+            5: ("AIza",),
+            6: ("eyJ",),
+            7: ("pem",),
+            8: ("x://a:", "sk-"),
+            9: ("bearer",),
+            10: ("api_key=",),
+            11: ("password=",),
+            12: ("a.", "a-", "a", "a.b@"),
+            13: ("digits", "plus", "paren"),
+        }
+        patterns = list(_SECRET_PATTERNS) + [_PII_EMAIL_RE, _PII_PHONE_RE]
+        for index, labels in pattern_inputs.items():
+            pattern = patterns[index]
+            for label in labels:
+                with self.subTest(pattern=index, input=label):
+                    self._assert_fast(
+                        f"pattern {index} on {label}",
+                        lambda pattern=pattern, label=label: pattern.sub(
+                            "[REDACTED SECRET]", inputs[label]
+                        ),
+                    )
 
 
 class NormalizeErrorTests(SimpleTestCase):

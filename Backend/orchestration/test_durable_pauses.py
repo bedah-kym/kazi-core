@@ -112,7 +112,8 @@ def _assert_history_paired(messages):
 def _rich_calls():
     body = "B" * 300
     items = [f"item-{index:02d}" for index in range(20)]
-    command = "rm -rf /tmp/" + ("a" * 180)
+    # Above RECORD_STRING_MAX, so the plaintext display must shorten it.
+    command = "rm -rf /tmp/" + ("a" * 400)
     return {
         "email": {
             "id": "c1",

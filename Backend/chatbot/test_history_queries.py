@@ -48,3 +48,44 @@ class HistoryQueryCountTests(TransactionTestCase):
         self.assertEqual(len(large_rows), 8)
         self.assertEqual(small, large)
         self.assertLessEqual(large, 2)
+
+    def test_the_typed_record_query_count_is_flat_too(self):
+        from orchestration.models import Turn
+        from orchestration.tool_calls import (
+            link_turn_calls_to_message,
+            record_tool_calls,
+        )
+
+        def _room_with_turns(count):
+            User = get_user_model()
+            user = User.objects.create_user(username=f"turns-{count}", password="pw")  # nosec B106
+            member = Member.objects.select_related("User").get(User=user)
+            room = Chatroom.objects.create()
+            room.participants.add(member)
+            for index in range(count):
+                turn = Turn.objects.create(room=room, user=user, state="completed")
+                message = Message.objects.create(
+                    member=member,
+                    content=f"turn {index}",
+                    timestamp=timezone.now(),
+                    turn=turn,
+                )
+                room.chats.add(message)
+                record_tool_calls(turn.id, room, [{
+                    "call_id": f"c{index}", "name": "get_weather",
+                    "input": {"city": "Nairobi"}, "result": {"status": "success"},
+                    "shown": "sunny",
+                }])
+                link_turn_calls_to_message(turn.id, message.id)
+            return user, room
+
+        small_user, small_room = _room_with_turns(2)
+        large_user, large_room = _room_with_turns(10)
+
+        small, small_rows = self._count(small_user, small_room)
+        large, large_rows = self._count(large_user, large_room)
+
+        self.assertEqual(len(small_rows), 2)
+        self.assertEqual(len(large_rows), 8)
+        self.assertEqual(small, large)
+        self.assertLessEqual(large, 4)

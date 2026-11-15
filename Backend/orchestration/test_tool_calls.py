@@ -676,6 +676,7 @@ class TurnToolCallRecordTests(TestCase):
 class HugeInputRedactionTests(SimpleTestCase):
     N = 100_100
     TOKEN = "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6"  # nosec B105 - fake test fixture
+    _FILLER = "x " * (N // 2)
 
     def _starts(self, size):
         # Every start whose match can touch a kept character, wherever the
@@ -686,15 +687,15 @@ class HugeInputRedactionTests(SimpleTestCase):
         return (("head", head), ("tail", tail))
 
     def _value_with(self, pattern_text, start):
-        value = ["x", " "] * (self.N // 2)
-        value[start:start + len(pattern_text)] = list(pattern_text)
+        end = start + len(pattern_text)
+        head = self._FILLER[:start]
+        tail = self._FILLER[end:]
         # Give every pattern the word boundary it needs, as real text does.
         if start > 0:
-            value[start - 1] = " "
-        end = start + len(pattern_text)
-        if end < len(value):
-            value[end] = " "
-        return "".join(value)
+            head = head[:-1] + " "
+        if end < self.N:
+            tail = " " + tail[1:]
+        return head + pattern_text + tail
 
     def _assert_hidden(self, recorded, sensitive):
         for index in range(max(0, len(sensitive) - 5)):

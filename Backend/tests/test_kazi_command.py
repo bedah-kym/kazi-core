@@ -649,16 +649,33 @@ class RealSpecImportTests(unittest.TestCase):
     def test_every_real_spec_imports_from_its_real_working_folder(self):
         specs = {spec.name: spec for spec in K.build_child_specs(_settings(), os.name)}
         probes = {
-            "web": ("import Backend.asgi; print('ASGI_OK')", "ASGI_OK"),
-            "worker": ("import Backend.celery; print('CELERY_OK')", "CELERY_OK"),
-            "beat": ("import Backend.celery; print('CELERY_OK')", "CELERY_OK"),
-            "sidecar": ("import orchestration.shell_exec; print('SIDECAR_OK')", "SIDECAR_OK"),
+            "web": ("Backend.asgi", "ASGI_OK"),
+            "worker": ("Backend.celery", "CELERY_OK"),
+            "beat": ("Backend.celery", "CELERY_OK"),
+            "sidecar": ("orchestration.shell_exec", "SIDECAR_OK"),
         }
+        # Every spec starts in the same folder today, so one child per distinct
+        # folder can run all of that folder's probes and report each result.
+        by_cwd = {}
         for name, spec in specs.items():
-            code, marker = probes[name]
-            result = subprocess.run(  # nosec B603 - real import probe
+            by_cwd.setdefault(spec.cwd, []).append(name)
+        for cwd, names in by_cwd.items():
+            checks = [(name, *probes[name]) for name in names]
+            code = (
+                "import importlib, json, traceback\n"
+                f"checks = {checks!r}\n"
+                "out = {}\n"
+                "for name, module, marker in checks:\n"
+                "    try:\n"
+                "        importlib.import_module(module)\n"
+                "        out[name] = marker\n"
+                "    except Exception:\n"
+                "        out[name] = traceback.format_exc()\n"
+                "print('SPECS=' + json.dumps(out))\n"
+            )
+            result = subprocess.run(  # nosec B603 - real import probes
                 [sys.executable, "-c", code],
-                cwd=spec.cwd,
+                cwd=cwd,
                 env=K.utf8_env(os.environ),
                 stdin=subprocess.DEVNULL,
                 capture_output=True,
@@ -670,9 +687,20 @@ class RealSpecImportTests(unittest.TestCase):
             )
             self.assertEqual(
                 result.returncode, 0,
-                f"{name} import failed from {spec.cwd}: {result.stdout}{result.stderr}",
+                f"imports failed from {cwd}: {result.stdout}{result.stderr}",
             )
-            self.assertIn(marker, result.stdout)
+            line = next(
+                (row for row in result.stdout.splitlines() if row.startswith("SPECS=")),
+                None,
+            )
+            self.assertIsNotNone(line, result.stdout[-2000:] + result.stderr[-2000:])
+            reported = json.loads(line[len("SPECS="):])
+            for name in names:
+                marker = probes[name][1]
+                self.assertEqual(
+                    reported.get(name), marker,
+                    f"{name} import failed from {cwd}: {reported.get(name)}",
+                )
 
 
 class WebShutdownTests(unittest.TestCase):

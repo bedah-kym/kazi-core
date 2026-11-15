@@ -217,7 +217,13 @@ class _GroupRedactingPattern:
 
 
 _SECRET_PATTERNS = [
-    re.compile(r"\b(?:sk|pk|rk)[-_][A-Za-z0-9_-]{16,}"),
+    re.compile(
+        r"\b(?:sk|pk|rk)[-_]"
+        r"(?=[A-Za-z0-9_-]*[0-9])"
+        r"(?=[A-Za-z0-9_-]*[A-Z])"
+        r"[A-Za-z0-9_-]{20,}"
+    ),
+    re.compile(r"\b(?:sk|pk|rk)-[A-Za-z0-9]{16,}(?![A-Za-z0-9_-])"),
     re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"),
     re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}\b|\bgithub_pat_[A-Za-z0-9_]{22,}\b"),
     re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}"),

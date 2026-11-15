@@ -200,6 +200,27 @@ class SecretFormatRedactionTests(SimpleTestCase):
         self.assertIn("[REDACTED EMAIL]", output)
         self.assertNotIn("[REDACTED SECRET]", output)
 
+    def test_code_identifiers_are_not_redacted(self):
+        cases = [
+            "pk_relationship_manager = models.ForeignKey(User, on_delete=models.CASCADE)",
+            "self.kwargs['pk_url_kwarg_name_here']",
+            "sk_live_mode_enabled_for_tests = False",
+            "rk_deployment_rollout_strategy: canary",
+            "# sk-learn-is-a-library",
+            "pk_v2_migration_helper",
+            "sk-this-is-a-long-kebab-case-phrase-that-should-stay-readable",
+        ]
+        for text in cases:
+            with self.subTest(text=text):
+                self.assertEqual(redact_sensitive_text(text), text)
+
+    def test_short_alphanumeric_provider_key_is_still_redacted(self):
+        body = _repeat("A1b2C3d4E5", 48)
+        output = redact_sensitive_text("sk-" + body)
+        self.assertIn("[REDACTED SECRET]", output)
+        for fragment in _substrings(body, 8):
+            self.assertNotIn(fragment, output)
+
 
 class SeededSecretFormatRedactionTests(SimpleTestCase):
     _DRAWS = 200
@@ -232,10 +253,10 @@ class SeededSecretFormatRedactionTests(SimpleTestCase):
             ("anthropic", "sk-ant-api03-", 93, 93),
             ("openai-project", "sk-proj-", 120, 120),
             ("openai-svcacct", "sk-svcacct-", 100, 100),
-            ("provider-sk", "sk-", 16, 120),
-            ("stripe-live", "sk_live_", 24, 99),
-            ("provider-pk", "pk_", 16, 120),
-            ("provider-rk", "rk_", 16, 120),
+            ("provider-sk", "sk-", 40, 150),
+            ("stripe-live", "sk_live_", 40, 150),
+            ("provider-pk", "pk_", 40, 150),
+            ("provider-rk", "rk_", 40, 150),
         )
         for family, prefix, low, high in families:
             with self.subTest(family=family):
@@ -297,10 +318,20 @@ class RedactionCostTests(SimpleTestCase):
             return ("A1b2C3d4E5" * 100000)[:1000000]
         if mode == "hyphens":
             return "-" * 1000000
+        if mode == "provider-alnum":
+            return "sk-" + ("A1b2C3d4E5" * 100000)[:999997]
+        if mode == "provider-hyphens":
+            return "sk-" + "-" * 999997
         return "-----BEGIN RSA PRIVATE KEY-----\n" + "A" * 1000000
 
     def test_pathological_inputs_finish_within_a_fixed_bound(self):
-        for mode in ("alnum", "hyphens", "unclosed-pem"):
+        for mode in (
+            "alnum",
+            "hyphens",
+            "provider-alnum",
+            "provider-hyphens",
+            "unclosed-pem",
+        ):
             text = self._pathological_text(mode)
             for index, pattern in enumerate(_SECRET_PATTERNS):
                 with self.subTest(mode=mode, pattern=index):

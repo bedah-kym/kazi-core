@@ -320,6 +320,18 @@ def count_queued(room_id: Any, user_id: Any) -> int:
     ).count()
 
 
+def has_paused_or_queued(room_id: Any, user_id: Any) -> bool:
+    """Cheap indexed check: is there anything to pause-read or claim?
+
+    One ``EXISTS`` on ``(room, user, state)``. The coordinator uses it to
+    skip the paused-turn read and the drainer uses it to skip the heavier FIFO
+    claim when this key is idle (FU-47 c).
+    """
+    return Turn.objects.filter(
+        room_id=room_id, user_id=user_id, state__in=("paused", "queued"),
+    ).exists()
+
+
 def request_stop_for_key(room_id: Any, user_id: Any) -> StopResult:
     """Flag a running Turn and drop everything waiting for one key.
 
@@ -447,6 +459,10 @@ def claim_next_queued(room_id: Any, user_id: Any) -> Optional[Turn]:
     from django.db.models import OuterRef, Subquery
 
     from chatbot.models import Message
+
+    if not has_paused_or_queued(room_id, user_id):
+        # Idle key: one indexed EXISTS instead of the FIFO read below.
+        return None
 
     def _queued():
         # FIFO is keyed on the request message's autoincrement id: it is
@@ -1428,6 +1444,21 @@ async def aget_paused_turn(
     return await sync_to_async(get_paused_turn)(
         room_id, user_id, include_expired=include_expired,
     )
+
+
+async def aget_paused_turn_if_any(room_id: Any, user_id: Any) -> Optional[Turn]:
+    """The paused Turn, after the cheap idle check; ``None`` when nothing waits.
+
+    If the cheap check cannot run (a store error, or a test that forbids DB
+    access) fall through to the authoritative read instead of guessing: the
+    result is the same, just without the saving.
+    """
+    try:
+        if not await sync_to_async(has_paused_or_queued)(room_id, user_id):
+            return None
+    except Exception:
+        pass
+    return await aget_paused_turn(room_id, user_id)
 
 
 async def atransition(turn_id: str, expected_version: int, to_state: str, **kwargs) -> bool:

@@ -18,8 +18,9 @@ from asgiref.sync import async_to_sync
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
-from django.db import DatabaseError
+from django.db import DatabaseError, connection
 from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from chatbot import tasks as chatbot_tasks
@@ -224,6 +225,70 @@ class InProcessSchedulerTests(TestCase):
                 "interval": interval,
             },
         )
+
+    def _seed_named(self, name, last_run_at):
+        interval, _ = IntervalSchedule.objects.get_or_create(
+            every=60, period=IntervalSchedule.SECONDS
+        )
+        PeriodicTask.objects.update_or_create(
+            name=name,
+            defaults={
+                "task": "tests.test_process_weight.noop",
+                "enabled": True,
+                "last_run_at": last_run_at,
+                "interval": interval,
+            },
+        )
+
+    def test_a_tick_reads_all_schedule_rows_in_one_query(self):
+        """N idle entries cost one SELECT, not one per entry (the N+1)."""
+        from orchestration.in_process_scheduler import InProcessScheduler
+
+        schedules = {
+            f"idle-{index}": {
+                "task": "tests.test_process_weight.noop",
+                "schedule": 60.0,
+            }
+            for index in range(12)
+        }
+        for name in schedules:
+            self._seed_named(name, self.now)
+        scheduler = InProcessScheduler(
+            schedules=schedules,
+            runner=lambda entry: self.ran.append(entry["task"]),
+            now=lambda: self.now,
+        )
+        with CaptureQueriesContext(connection) as queries:
+            ran = scheduler.run_due(self.now)
+        self.assertEqual(ran, [])
+        self.assertEqual(len(queries.captured_queries), 1)
+        self.assertEqual(self.ran, [])
+
+    def test_a_tick_claims_only_the_due_entries(self):
+        """The one read is followed by a write only for each due entry."""
+        from orchestration.in_process_scheduler import InProcessScheduler
+
+        schedules = {
+            f"mix-{index}": {
+                "task": "tests.test_process_weight.noop",
+                "schedule": 60.0,
+            }
+            for index in range(12)
+        }
+        for index, name in enumerate(schedules):
+            last_run = (
+                self.now - timedelta(seconds=120) if index < 2 else self.now
+            )
+            self._seed_named(name, last_run)
+        scheduler = InProcessScheduler(
+            schedules=schedules,
+            runner=lambda entry: self.ran.append(entry["task"]),
+            now=lambda: self.now,
+        )
+        with CaptureQueriesContext(connection) as queries:
+            ran = scheduler.run_due(self.now)
+        self.assertEqual(sorted(ran), ["mix-0", "mix-1"])
+        self.assertEqual(len(queries.captured_queries), 3)
 
     def test_two_schedulers_ticking_together_run_the_job_once(self):
         from orchestration.in_process_scheduler import InProcessScheduler

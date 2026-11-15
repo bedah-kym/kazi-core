@@ -12,7 +12,8 @@ import asyncio
 import logging
 import threading
 import weakref
-from typing import Any, Dict, Optional, Set
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Set
 
 from asgiref.sync import sync_to_async
 from django.conf import settings
@@ -38,7 +39,7 @@ from orchestration.turn_leases import (
     unregister_live_turn,
 )
 
-from .history import decrypt_stored, get_history_rows
+from .history import DECRYPT_FAILED, decrypt_stored, get_history_rows
 from .kazi_messages import (
     KAZI_USERNAME,
     ORIGIN_TURN,
@@ -163,6 +164,23 @@ def save_turn_reply(room, result, *, user_id):
             logger.warning("AI reply not saved: room key unavailable")
             return None
     broadcast_kazi_message(room, message, result.full_response)
+    return message
+
+
+def _save_reply_and_schedule(room, result, *, user_id):
+    """Save the reply and schedule its context summary in one worker hop.
+
+    Same order as the two separate calls: the reply is persisted first; a
+    summary scheduling failure is logged and never fails the turn.
+    """
+    message = save_turn_reply(room, result, user_id=user_id)
+    if message is not None:
+        try:
+            from .context_summary import schedule_context_summary
+
+            schedule_context_summary(room.id, message.id)
+        except Exception as exc:
+            logger.warning("Context summary refresh skipped: %s", exc)
     return message
 
 
@@ -364,6 +382,70 @@ async def run_immediate_directives(
     return None
 
 
+@dataclass(frozen=True)
+class _TurnSetup:
+    """The reads a turn needs before it enters the coordinator (FU-47 b).
+
+    Collected in one worker hop: the room, the request message, its decrypted
+    content, the participants and the history rows.
+    """
+
+    room: Any
+    request: Any
+    content: str
+    participants: List[Any]
+    history_rows: List[Any]
+
+
+def _load_turn_setup(turn: Turn) -> _TurnSetup:
+    room = Chatroom.objects.filter(pk=turn.room_id).first()
+    if room is None:
+        return _TurnSetup(None, None, "", [], [])
+    request = _request_message(turn)
+    if request is None:
+        return _TurnSetup(room, None, "", [], [])
+    content, _payload = decrypt_stored(room, request)
+    if content == DECRYPT_FAILED:
+        return _TurnSetup(room, request, content, [], [])
+    participants = list(room.participants.select_related("User"))
+    history_rows = get_history_rows(
+        room,
+        limit=8,
+        request_message_id=request.id,
+        exclude_message_id=request.id,
+    )
+    return _TurnSetup(room, request, content, participants, history_rows)
+
+
+def _is_postgres() -> bool:
+    """Whether this install is on Postgres, where reads may leave the shared thread."""
+    try:
+        from django.db import connection
+
+        return connection.vendor == "postgresql"
+    except Exception:
+        return False
+
+
+def _load_turn_setup_off_thread(turn: Turn) -> _TurnSetup:
+    """Run the pure-read setup on a worker thread on Postgres.
+
+    Writes stay on the shared thread. The worker connection is closed here so
+    a test database can still be dropped; the claim/swap churn fix is separate
+    (``_close_worker_connection``).
+    """
+    try:
+        return _load_turn_setup(turn)
+    finally:
+        if _is_postgres():
+            try:
+                from django.db import connection
+
+                connection.close()
+            except Exception:
+                pass
+
+
 def _active_turn_exists(room_id: Any, user_id: Any) -> bool:
     return Turn.objects.filter(
         room_id=room_id, user_id=user_id,
@@ -387,11 +469,33 @@ def _writes_are_thread_sensitive() -> bool:
         return True
 
 
+def _close_worker_connection() -> None:
+    """Close this thread's connection on SQLite only.
+
+    SQLite must never leave a connection open on a pool thread (the test
+    database cannot be dropped and writes serialise across threads). On
+    Postgres the thread-local connection is reused on the next hop: closing it
+    here forced a fresh login per claim/swap/active-read, which is the
+    connection churn the stress run saw (FU-47 e3).
+    """
+    if not _writes_are_thread_sensitive():
+        return
+    try:
+        from django.db import connection
+
+        connection.close()
+    except Exception:
+        pass
+
+
 def _active_read_in_thread(room_id: Any, user_id: Any) -> bool:
     """Read the active-turn flag on a worker thread; a read may overlap writes."""
     try:
         return _active_turn_exists(room_id, user_id)
     finally:
+        # This one always runs on a pool thread (thread_sensitive=False), so it
+        # must release its connection; the claim/swap churn fix is about the
+        # shared thread, not this rare read.
         try:
             from django.db import connection
 
@@ -405,12 +509,7 @@ def _claim_in_thread(room_id: Any, user_id: Any):
     try:
         return claim_next_queued(room_id, user_id)
     finally:
-        try:
-            from django.db import connection
-
-            connection.close()
-        except Exception:
-            pass
+        _close_worker_connection()
 
 
 def _continue_in_thread(placeholder, paused, message_id):
@@ -420,12 +519,7 @@ def _continue_in_thread(placeholder, paused, message_id):
             placeholder, paused, message_id=message_id,
         )
     finally:
-        try:
-            from django.db import connection
-
-            connection.close()
-        except Exception:
-            pass
+        _close_worker_connection()
 
 
 def _persist_immediate_notice(room_id: Any, text: str) -> None:
@@ -878,22 +972,23 @@ class TurnRunner:
     async def _execute(self, turn: Turn, box: Dict[str, Any]) -> Any:
         from orchestration import coordinator as coordinator_mod
 
-        room = await sync_to_async(Chatroom.objects.filter(pk=turn.room_id).first)()
+        setup = await sync_to_async(
+            _load_turn_setup_off_thread, thread_sensitive=not _is_postgres(),
+        )(turn)
+        room = setup.room
         if room is None:
             await sync_to_async(_fail_turn)(turn, "room_gone")
             return None
-        request = await sync_to_async(_request_message)(turn)
+        request = setup.request
         if request is None:
             await sync_to_async(_fail_turn)(turn, "request_missing")
             return None
-        content, _payload = await sync_to_async(decrypt_stored)(room, request)
-        if content == "Error: Could not decrypt message.":
+        content = setup.content
+        if content == DECRYPT_FAILED:
             await sync_to_async(_fail_turn)(turn, "decrypt_failed")
             return None
 
-        participants = await sync_to_async(
-            lambda: list(room.participants.select_related("User"))
-        )()
+        participants = setup.participants
         kazi_member = next(
             (m for m in participants if m.User.username == KAZI_USERNAME), None,
         )
@@ -909,12 +1004,7 @@ class TurnRunner:
             await sync_to_async(_fail_turn)(turn, "empty_query")
             return None
 
-        history_rows = await sync_to_async(get_history_rows)(
-            room,
-            limit=8,
-            request_message_id=request.id,
-            exclude_message_id=request.id,
-        )
+        history_rows = setup.history_rows
         multi_user = len(human_members) > 1 or has_several_speakers(history_rows)
         history_messages = build_history_messages(
             history_rows,
@@ -1032,20 +1122,12 @@ class TurnRunner:
             )
 
         reply_saved = not (result.persist and result.full_response.strip())
-        ai_message = await sync_to_async(save_turn_reply)(
+        ai_message = await sync_to_async(_save_reply_and_schedule)(
             room, result, user_id=turn.user_id,
         )
         if ai_message is not None:
             reply_saved = True
-            await self._maybe_voice(ai_message, turn.user_id)
-            try:
-                from .context_summary import schedule_context_summary
-
-                await sync_to_async(schedule_context_summary)(
-                    room.id, ai_message.id,
-                )
-            except Exception as exc:
-                logger.warning("Context summary refresh skipped: %s", exc)
+            await self._maybe_voice(ai_message, result.ai_voice_enabled)
 
         if result.turn_state == "committing":
             await coordinator.finalize_turn(result, reply_saved=reply_saved)
@@ -1059,15 +1141,14 @@ class TurnRunner:
             )
         return result
 
-    async def _maybe_voice(self, ai_message, user_id: int) -> None:
+    async def _maybe_voice(self, ai_message, voice_enabled: bool) -> None:
         try:
-            from orchestration.user_preferences import get_user_preferences
+            if not voice_enabled:
+                return
             from .dispatch import dispatch_task
             from .tasks import generate_voice_response
 
-            prefs = await sync_to_async(get_user_preferences)(user_id)
-            if bool(prefs.get("ai_voice_enabled", False)):
-                dispatch_task(generate_voice_response, ai_message.id)
+            dispatch_task(generate_voice_response, ai_message.id)
         except Exception as exc:
             logger.debug("Voice preference check skipped: %s", exc)
 

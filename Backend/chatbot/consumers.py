@@ -2,6 +2,7 @@ import json
 import random
 import re
 import traceback
+from time import monotonic
 from asgiref.sync import sync_to_async
 from django.utils import timezone
 from channels.generic.websocket import AsyncWebsocketConsumer
@@ -43,6 +44,18 @@ from django.conf import settings
 from django.utils.text import get_valid_filename
 logger = logging.getLogger(__name__)
 User = get_user_model()
+
+# FU-48: last-seen writes are throttled per member so a busy room's presence
+# beats and disconnects cannot each cost a write. The window is wall-clock
+# independent; the value is a monotonic stamp.
+LAST_SEEN_WRITE_INTERVAL_SECONDS = 60.0
+_LAST_SEEN_WRITES: dict = {}
+
+
+def _reset_last_seen_throttle() -> None:
+    """Clear the per-process throttle (tests only)."""
+    _LAST_SEEN_WRITES.clear()
+
 
 _moderation_store_warned = False
 
@@ -243,8 +256,20 @@ class ChatConsumer(AsyncWebsocketConsumer):
         return entries
 
     async def _save_member_last_seen(self, user_id):
-        """Save "now" as the member's last seen time and return it."""
+        """Save "now" as the member's last seen time and return it.
+
+        Writes are throttled to one per member per minute (FU-48): presence
+        beats and disconnect still report "now", but a member with several
+        sockets no longer re-writes the same row on every tick. A skipped save
+        returns the current time, so the caller's offline broadcast stays
+        honest.
+        """
         now = timezone.now()
+        stamp = monotonic()
+        last = _LAST_SEEN_WRITES.get(user_id)
+        if last is not None and stamp - last < LAST_SEEN_WRITE_INTERVAL_SECONDS:
+            return now
+        _LAST_SEEN_WRITES[user_id] = stamp
 
         def _save():
             Member.objects.filter(User_id=user_id).update(last_seen=now)

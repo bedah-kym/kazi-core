@@ -251,6 +251,10 @@ class _FakeMember:
 class ConsumerPresenceTests(SimpleTestCase):
     def setUp(self):
         _reset_store()
+        from chatbot import consumers as consumers_mod
+
+        consumers_mod._reset_last_seen_throttle()
+        self.addCleanup(consumers_mod._reset_last_seen_throttle)
 
     def _consumer(self, room_id, user_id, username, members):
         from chatbot.consumers import ChatConsumer
@@ -370,6 +374,26 @@ class ConsumerPresenceTests(SimpleTestCase):
                 self.assertEqual(consumer._presence_ids, {1, 2})
 
         async_to_sync(run)()
+
+    def test_last_seen_is_written_at_most_once_a_minute(self):
+        consumer = self._consumer(38, 2, "bob", [_FakeMember(2, "bob")])
+        stamps = iter([1000.0, 1030.0, 1061.0])
+
+        async def run():
+            with patch("chatbot.consumers.Member") as member_model, patch(
+                "chatbot.consumers.monotonic", side_effect=lambda: next(stamps),
+            ):
+                first = await consumer._save_member_last_seen(2)
+                await consumer._save_member_last_seen(2)
+                third = await consumer._save_member_last_seen(2)
+            return member_model, first, third
+
+        member_model, first, third = async_to_sync(run)()
+        # First and third cross the one-minute window; the middle one is skipped.
+        self.assertEqual(member_model.objects.filter.return_value.update.call_count, 2)
+        # A skipped save still returns "now", so the offline broadcast is honest.
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(third)
 
     def test_only_the_first_and_last_connection_are_announced(self):
         members = [_FakeMember(2, "bob")]

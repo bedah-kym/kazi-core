@@ -26,10 +26,12 @@ from orchestration import turn_leases
 from orchestration.agent_loop import AgentEvent, _state_key
 from orchestration.coordinator import _load_turn_context_sync
 from orchestration.models import Turn
+from orchestration.turns import claim_next_queued
 from workflows.models import WorkflowApprovalRecord
 
-# Measured through the runner path. The hop count is vendor-independent. Both
-# query counts are exact: SQLite locally, Postgres from CI's printed numbers.
+# Measured through the runner path. Hops are vendor-independent. Query counts
+# are exact per vendor; the Postgres numbers are the ones CI printed (the PR
+# notes any still being confirmed).
 PLAIN_TURN_HOPS = 21
 PLAIN_TURN_QUERIES = 37
 PLAIN_TURN_POSTGRES_QUERIES = 33
@@ -42,9 +44,15 @@ APPROVAL_YES_POSTGRES_QUERIES = 58
 BUDGET_CONTINUE_HOPS = 32
 BUDGET_CONTINUE_QUERIES = 48
 BUDGET_CONTINUE_POSTGRES_QUERIES = 44
-QUEUED_BEHIND_HOPS = 26
-QUEUED_BEHIND_QUERIES = 39
-QUEUED_BEHIND_POSTGRES_QUERIES = 35
+QUEUED_BEHIND_HOPS = PLAIN_TURN_HOPS
+QUEUED_BEHIND_QUERIES = PLAIN_TURN_QUERIES + 1
+QUEUED_BEHIND_POSTGRES_QUERIES = PLAIN_TURN_POSTGRES_QUERIES + 1
+ORPHAN_APPROVAL_HOPS = 39
+ORPHAN_APPROVAL_QUERIES = 50
+ORPHAN_APPROVAL_POSTGRES_QUERIES = 46
+ORPHAN_LEGACY_HOPS = 26
+ORPHAN_LEGACY_QUERIES = 41
+ORPHAN_LEGACY_POSTGRES_QUERIES = 37
 
 
 def _text(text):
@@ -91,6 +99,7 @@ class _RunnerTestCase(TransactionTestCase):
     def setUp(self):
         super().setUp()
         cache.clear()
+        self.addCleanup(cache.clear)
         turn_leases._LIVE_TURNS.clear()
         turn_leases._FENCED_TURNS.clear()
         turn_leases._LAST_RENEWAL.clear()
@@ -244,6 +253,34 @@ class TurnContextFreshnessTests(_RunnerTestCase):
         self.assertTrue(captured[0].get("allow_email"))
         self.assertFalse(captured[1].get("allow_email"))
 
+    def test_one_failing_import_only_degrades_that_piece(self):
+        import sys
+
+        from chatbot.history import decrypt_stored
+
+        captured = []
+
+        async def fake_loop(**kwargs):
+            captured.append(dict(kwargs.get("preferences") or {}))
+            yield AgentEvent("text", {"text": "hello back"})
+            yield AgentEvent("done", {"end_reason": "finished"})
+
+        profile = self.user.profile
+        profile.notification_preferences = {"allow_email": True}
+        profile.save(update_fields=["notification_preferences"])
+        with patch.dict(
+            sys.modules, {"orchestration.preference_mining": None},
+        ), patch("orchestration.coordinator.run_agent_loop", new=fake_loop):
+            self._run_turn("@kazi hello")
+
+        self.assertEqual(len(captured), 1)
+        prefs = captured[0]
+        self.assertFalse(prefs.get("approval_overrides"))
+        self.assertTrue(prefs.get("allow_email"))
+        saved = Message.objects.order_by("-id").first()
+        self.assertIsNotNone(saved)
+        self.assertEqual(decrypt_stored(self.room, saved)[0], "hello back")
+
     def test_a_persona_lookup_error_drops_the_identity_and_keeps_the_turn(self):
         from chatbot.history import decrypt_stored
 
@@ -251,8 +288,9 @@ class TurnContextFreshnessTests(_RunnerTestCase):
         with patch(
             "orchestration.personas.resolve_room_persona",
             side_effect=RuntimeError("persona store down"),
-        ):
+        ) as resolver:
             self._run_turn("@kazi hello")
+        resolver.assert_called()
         self.assertEqual(Turn.objects.filter(state="completed").count(), 1)
         saved = Message.objects.order_by("-id").first()
         self.assertIsNotNone(saved)
@@ -314,6 +352,13 @@ class TurnContextPendingSnapshotTests(TransactionTestCase):
     def setUp(self):
         super().setUp()
         cache.clear()
+        self.addCleanup(cache.clear)
+        turn_leases._LIVE_TURNS.clear()
+        turn_leases._FENCED_TURNS.clear()
+        turn_leases._LAST_RENEWAL.clear()
+        self.addCleanup(turn_leases._LIVE_TURNS.clear)
+        self.addCleanup(turn_leases._FENCED_TURNS.clear)
+        self.addCleanup(turn_leases._LAST_RENEWAL.clear)
         User = get_user_model()
         self.user = User.objects.create_user(
             username="pending-snapshot", password="pw",  # nosec B106
@@ -328,6 +373,40 @@ class TurnContextPendingSnapshotTests(TransactionTestCase):
 
     def test_an_idle_key_is_nothing_pending(self):
         self.assertTrue(self._snapshot().nothing_pending)
+
+    def _claim_a_message(self):
+        content = encrypt_for_room(self.room, {"content": "@kazi hi"})
+        message = Message.objects.create(
+            member=self.member, content=json.dumps(content),
+            timestamp=timezone.now(),
+        )
+        self.room.chats.add(message)
+        enqueue_turn(
+            room_id=self.room.id, user_id=self.user.id,
+            request_message_id=message.id, cap=3,
+        )
+        return claim_next_queued(self.room.id, self.user.id)
+
+    def test_the_claim_annotation_sees_a_paused_row(self):
+        Turn.objects.create(room=self.room, user=self.user, state="paused")
+        self.assertTrue(self._claim_a_message().paused_exists)
+
+    def test_the_claim_annotation_is_false_without_a_paused_row(self):
+        self.assertFalse(self._claim_a_message().paused_exists)
+
+    def test_known_pending_skips_the_snapshot_queries(self):
+        with patch(
+            "orchestration.coordinator.has_paused",
+            side_effect=AssertionError("snapshot must be skipped"),
+        ), patch(
+            "orchestration.coordinator._pending_approval_record",
+            side_effect=AssertionError("snapshot must be skipped"),
+        ):
+            snapshot = _load_turn_context_sync(
+                self.user.id, self.room.id, {},
+                fast_path=True, known_pending=True,
+            )
+        self.assertFalse(snapshot.nothing_pending)
 
     def test_the_non_runner_path_does_not_read_the_snapshot_or_summary(self):
         snapshot = self._snapshot(fast_path=False)
@@ -352,11 +431,13 @@ class TurnContextPendingSnapshotTests(TransactionTestCase):
         self.assertFalse(self._snapshot().nothing_pending)
         turn.delete()
 
-    def test_a_queued_turn_is_not_idle(self):
+    def test_a_queued_turn_is_idle_because_main_ignores_queued_rows(self):
+        # Every pending read on main is paused-only; a queued row never made
+        # a turn non-idle, so the snapshot must ignore it too.
         turn = Turn.objects.create(
             room=self.room, user=self.user, state="queued",
         )
-        self.assertFalse(self._snapshot().nothing_pending)
+        self.assertTrue(self._snapshot().nothing_pending)
         turn.delete()
 
     def test_a_pending_unexpired_approval_row_is_not_idle(self):
@@ -382,7 +463,7 @@ class TurnContextPendingSnapshotTests(TransactionTestCase):
 
     def test_a_lookup_error_is_not_idle(self):
         with patch(
-            "orchestration.coordinator.has_paused_or_queued",
+            "orchestration.coordinator.has_paused",
             side_effect=RuntimeError("store down"),
         ):
             self.assertFalse(self._snapshot().nothing_pending)
@@ -442,14 +523,72 @@ class PendingPathCostTests(_RunnerTestCase):
             BUDGET_CONTINUE_POSTGRES_QUERIES,
         )
 
-    def test_a_turn_with_one_queued_behind_costs_main(self):
-        # A queued row is present for the whole measured turn. It has no
-        # request message, so the drainer cannot claim it after the first.
-        Turn.objects.create(room=self.room, user=self.user, state="queued")
+    def test_a_message_queued_during_setup_costs_what_a_plain_turn_costs(self):
+        # The second message arrives after the claim but before the context
+        # hop, the common fast-second-message race. Main ignores queued rows
+        # in every pending read, so this must cost no more than a plain turn
+        # (plus the second message's own INSERT).
+        from chatbot import turn_runner
+
+        real_request = turn_runner._request_message
+
+        def create_then_request(turn):
+            Turn.objects.create(room=self.room, user=self.user, state="queued")
+            return real_request(turn)
+
         self.llm.queue(_response([_text("hello back")]))
-        counts = self._measure("@kazi hello")
+        with patch(
+            "chatbot.turn_runner._request_message",
+            side_effect=create_then_request,
+        ):
+            counts = self._measure("@kazi hello")
         self.assertEqual(Turn.objects.filter(state="completed").count(), 1)
         self._assert_counts(
             counts, QUEUED_BEHIND_HOPS, QUEUED_BEHIND_QUERIES,
             QUEUED_BEHIND_POSTGRES_QUERIES,
+        )
+
+
+@override_settings(
+    CHANNEL_LAYERS={"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}},
+    TURN_QUEUE_MAX=3,
+)
+class KnownCostTests(_RunnerTestCase):
+    """Documented cost: the snapshot pays its reads, then main's full path.
+
+    This is an orphaned approval row or legacy cached loop state with no
+    paused Turn. The brief says report it, not fix it; these pins record the
+    exact cost so the owner can decide.
+    """
+
+    def test_an_orphaned_approval_row_costs_two_more_than_main(self):
+        WorkflowApprovalRecord.objects.create(
+            requested_by=self.user,
+            kind="agent_loop",
+            room_id=self.room.id,
+            step_id="step",
+            action="send_email",
+            status="pending",
+            expires_at=timezone.now() + timedelta(minutes=5),
+        )
+        self.llm.queue(_response([_text("hello back")]))
+        counts = self._measure("@kazi hello")
+        self.assertEqual(Turn.objects.filter(state="completed").count(), 1)
+        self._assert_counts(
+            counts, ORPHAN_APPROVAL_HOPS, ORPHAN_APPROVAL_QUERIES,
+            ORPHAN_APPROVAL_POSTGRES_QUERIES,
+        )
+
+    def test_an_orphaned_legacy_loop_state_costs_two_more_than_main(self):
+        cache.set(
+            _state_key(self.room.id, self.user.id),
+            json.dumps({"messages": [], "awaiting_budget": False}),
+            timeout=60,
+        )
+        self.llm.queue(_response([_text("hello back")]))
+        counts = self._measure("@kazi hello")
+        self.assertEqual(Turn.objects.filter(state="completed").count(), 1)
+        self._assert_counts(
+            counts, ORPHAN_LEGACY_HOPS, ORPHAN_LEGACY_QUERIES,
+            ORPHAN_LEGACY_POSTGRES_QUERIES,
         )

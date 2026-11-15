@@ -219,7 +219,10 @@ class InProcessScheduler:
                 )
                 rows = None
         for name, entry in self._schedules.items():
-            if rows is None:
+            # The prefetched rows make an idle tick one query. Once anything
+            # has run, a later entry could have been enabled or rewound by
+            # that runner, so read it fresh exactly as main did.
+            if rows is None or ran:
                 claimed = self._claim(name, entry, now)
             else:
                 claimed = self._claim(name, entry, now, row=rows.get(name))

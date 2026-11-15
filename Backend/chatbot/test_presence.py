@@ -416,22 +416,50 @@ class ConsumerPresenceTests(SimpleTestCase):
         )
 
     def test_a_failed_write_is_retried_on_the_next_call(self):
+        from datetime import datetime, timezone as dt_timezone
+
+        from chatbot import consumers as consumers_mod
+
         consumer = self._consumer(39, 2, "bob", [_FakeMember(2, "bob")])
         stamps = iter([1000.0, 1001.0])
+        moments = iter([
+            datetime(2026, 1, 1, 12, 0, tzinfo=dt_timezone.utc),
+            datetime(2026, 1, 1, 12, 0, 1, tzinfo=dt_timezone.utc),
+        ])
 
         async def run():
             with patch("chatbot.consumers.Member") as member_model, patch(
                 "chatbot.consumers.monotonic", side_effect=lambda: next(stamps),
+            ), patch(
+                "chatbot.consumers.timezone.now",
+                side_effect=lambda: next(moments),
             ):
                 member_model.objects.filter.return_value.update.side_effect = [
                     RuntimeError("database down"), None,
                 ]
                 await consumer._save_member_last_seen(2)
+                stamped_after_failure = 2 in consumers_mod._LAST_SEEN_WRITES
                 await consumer._save_member_last_seen(2)
-            return member_model
+                stamped_after_success = 2 in consumers_mod._LAST_SEEN_WRITES
+            return (
+                member_model, stamped_after_failure, stamped_after_success,
+            )
 
-        member_model = async_to_sync(run)()
-        self.assertEqual(member_model.objects.filter.return_value.update.call_count, 2)
+        member_model, after_failure, after_success = async_to_sync(run)()
+        updates = member_model.objects.filter.return_value.update
+        self.assertEqual(updates.call_count, 2)
+        # The failed write is retried with its own "now", not throttled.
+        self.assertEqual(
+            updates.call_args_list[0].kwargs["last_seen"],
+            datetime(2026, 1, 1, 12, 0, tzinfo=dt_timezone.utc),
+        )
+        self.assertEqual(
+            updates.call_args_list[1].kwargs["last_seen"],
+            datetime(2026, 1, 1, 12, 0, 1, tzinfo=dt_timezone.utc),
+        )
+        # The throttle window opens only after a successful write.
+        self.assertFalse(after_failure)
+        self.assertTrue(after_success)
 
     def test_a_final_disconnect_forces_the_write_after_a_throttled_tick(self):
         from datetime import datetime, timezone as dt_timezone

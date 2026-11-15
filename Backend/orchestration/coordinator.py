@@ -33,7 +33,7 @@ from orchestration.turns import (
     aget_turn,
     alink_message,
     atransition,
-    has_paused_or_queued,
+    has_paused,
     last_ran_turn_before,
     pause_ttl_seconds,
     ref_from_turn,
@@ -529,14 +529,11 @@ def _load_turn_context_sync(
     resolves it where main did), and the pending snapshot and memory summary
     are read only on the runner path that uses them.
     """
-    from orchestration.preference_mining import merge_learned_overrides
-    from orchestration.shell.autopilot import is_armed
-    from orchestration.shell.profile_store import profile as load_profile
-    from orchestration.shell.profiles import resolve_profile
-
     profile_obj = None
     profile_loaded = False
     try:
+        from orchestration.shell.profile_store import profile as load_profile
+
         profile_obj = load_profile(user_id)
         profile_loaded = True
     except Exception as e:
@@ -563,6 +560,8 @@ def _load_turn_context_sync(
 
     if preferences_loaded:
         try:
+            from orchestration.preference_mining import merge_learned_overrides
+
             user_preferences = merge_learned_overrides(
                 user_preferences, user_id, room_id,
             )
@@ -571,6 +570,8 @@ def _load_turn_context_sync(
 
     resolved_profile = None
     try:
+        from orchestration.shell.profiles import resolve_profile
+
         resolved_profile = resolve_profile(room_id, user_preferences)
         user_preferences["shell_profile"] = resolved_profile.name
     except Exception as e:
@@ -578,6 +579,8 @@ def _load_turn_context_sync(
 
     user_preferences.pop("_shell_tainted", None)
     try:
+        from orchestration.shell.autopilot import is_armed
+
         user_preferences["_shell_autopilot"] = bool(
             is_armed(user_id, room_id, profile_obj=profile_obj)
         )
@@ -590,7 +593,7 @@ def _load_turn_context_sync(
     if fast_path:
         if not known_pending:
             try:
-                if not has_paused_or_queued(room_id, user_id):
+                if not has_paused(room_id, user_id):
                     if _pending_approval_record(room_id, user_id) is None:
                         nothing_pending = not cache.get(
                             _state_key(room_id, user_id),
@@ -1090,7 +1093,6 @@ class OrchestrationCoordinator:
         # again, so nothing stale survives across turns (FU-47 b).
         known_pending = bool(
             getattr(claimed_turn, "paused_exists", False)
-            or getattr(claimed_turn, "other_queued", False)
         ) if claimed_turn is not None else False
         turn_context = await sync_to_async(_load_turn_context_sync)(
             user_id, room_id, adaptive_context,
@@ -1774,12 +1776,12 @@ class OrchestrationCoordinator:
         # One logical turn keeps one id. A reply that resolves a pause continues
         # that Turn; anything else (a question, another request) keeps the pause
         # armed and starts a new record (D8).
-        # One EXISTS first: an idle key skips the paused-turn read
-        # (FU-47 c). A paused row still reads fresh, same turn.
+        # An idle key skips the paused-turn read (FU-47 c). The snapshot is
+        # skipped on the non-runner and known-pending paths, so read the row
+        # directly here; a paused row is always fresh in this same turn.
         if claimed_turn is not None and turn_context.nothing_pending:
             paused_turn = None
         else:
-            # The snapshot above already ran the EXISTS; read the row directly.
             paused_turn = await aget_paused_turn(room_id, user_id)
         consent_reply = bool(
             pending_confirmation

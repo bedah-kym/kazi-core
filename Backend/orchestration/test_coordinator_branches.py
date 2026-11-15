@@ -155,7 +155,7 @@ class CoordinatorBranchTests(SimpleTestCase):
         result, mocks, send_chunk = self._run(
             "yes",
             patches={
-                "orchestration.coordinator.has_paused_or_queued": MagicMock(
+                "orchestration.coordinator.has_paused": MagicMock(
                     side_effect=RuntimeError("turn store down"),
                 ),
                 "orchestration.coordinator.has_pending_agent_state": AsyncMock(

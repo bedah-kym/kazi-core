@@ -264,6 +264,41 @@ class InProcessSchedulerTests(TestCase):
         self.assertEqual(len(queries.captured_queries), 1)
         self.assertEqual(self.ran, [])
 
+    def test_a_runner_reenabling_another_entry_runs_it_in_the_same_tick(self):
+        """A stale prefetched row must not delay an entry A re-enables."""
+        from orchestration.in_process_scheduler import InProcessScheduler
+
+        entries = {
+            "entry-a": {
+                "task": "tests.test_process_weight.noop",
+                "schedule": 60.0,
+                "label": "a",
+            },
+            "entry-b": {
+                "task": "tests.test_process_weight.noop",
+                "schedule": 60.0,
+                "label": "b",
+            },
+        }
+        for name in entries:
+            self._seed_named(name, self.now - timedelta(seconds=120))
+        PeriodicTask.objects.filter(name="entry-b").update(enabled=False)
+        ran = []
+
+        def runner(entry):
+            ran.append(entry["label"])
+            if entry["label"] == "a":
+                PeriodicTask.objects.filter(name="entry-b").update(enabled=True)
+
+        scheduler = InProcessScheduler(
+            schedules=entries, runner=runner, now=lambda: self.now,
+        )
+        result = scheduler.run_due(self.now)
+        self.assertEqual(result, ["entry-a", "entry-b"])
+        self.assertEqual(ran, ["a", "b"])
+        row_b = PeriodicTask.objects.get(name="entry-b")
+        self.assertEqual(row_b.last_run_at, self.now)
+
     def test_a_runner_disabling_another_entry_in_the_same_tick_blocks_it(self):
         """The real widened window: A's run disables B after the one read."""
         from orchestration.in_process_scheduler import InProcessScheduler
@@ -326,8 +361,8 @@ class InProcessSchedulerTests(TestCase):
             stale.last_run_at, self.now - timedelta(seconds=120),
         )
 
-    def test_a_tick_claims_only_the_due_entries(self):
-        """The one read is followed by a write only for each due entry."""
+    def test_a_non_idle_tick_costs_what_main_costs(self):
+        """Once A runs, later entries re-read per entry exactly as main did."""
         from orchestration.in_process_scheduler import InProcessScheduler
 
         schedules = {
@@ -350,7 +385,9 @@ class InProcessSchedulerTests(TestCase):
         with CaptureQueriesContext(connection) as queries:
             ran = scheduler.run_due(self.now)
         self.assertEqual(sorted(ran), ["mix-0", "mix-1"])
-        self.assertEqual(len(queries.captured_queries), 3)
+        # 1 prefetched read + A's update + B's per-entry read/update + the ten
+        # idle entries' per-entry reads = main's 12 reads + 2 updates.
+        self.assertEqual(len(queries.captured_queries), 14)
 
     def test_two_schedulers_ticking_together_run_the_job_once(self):
         from orchestration.in_process_scheduler import InProcessScheduler

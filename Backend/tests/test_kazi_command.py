@@ -649,16 +649,23 @@ class RealSpecImportTests(unittest.TestCase):
     def test_every_real_spec_imports_from_its_real_working_folder(self):
         specs = {spec.name: spec for spec in K.build_child_specs(_settings(), os.name)}
         probes = {
-            "web": ("import Backend.asgi; print('ASGI_OK')", "ASGI_OK"),
-            "worker": ("import Backend.celery; print('CELERY_OK')", "CELERY_OK"),
-            "beat": ("import Backend.celery; print('CELERY_OK')", "CELERY_OK"),
-            "sidecar": ("import orchestration.shell_exec; print('SIDECAR_OK')", "SIDECAR_OK"),
+            "web": ("Backend.asgi", "ASGI_OK"),
+            "worker": ("Backend.celery", "CELERY_OK"),
+            "beat": ("Backend.celery", "CELERY_OK"),
+            "sidecar": ("orchestration.shell_exec", "SIDECAR_OK"),
         }
+        # Each distinct (cwd, module) gets a fresh interpreter, so a module that
+        # only imports after another process's Django setup cannot pass. Worker
+        # and beat import the same module from the same folder, so they share one.
+        groups = {}
         for name, spec in specs.items():
-            code, marker = probes[name]
-            result = subprocess.run(  # nosec B603 - real import probe
+            module, marker = probes[name]
+            groups.setdefault((spec.cwd, module), []).append((name, marker))
+        for (cwd, module), checks in groups.items():
+            code = f"import {module}; print({checks[0][1]!r})"
+            result = subprocess.run(  # nosec B603 - real import probes
                 [sys.executable, "-c", code],
-                cwd=spec.cwd,
+                cwd=cwd,
                 env=K.utf8_env(os.environ),
                 stdin=subprocess.DEVNULL,
                 capture_output=True,
@@ -668,11 +675,15 @@ class RealSpecImportTests(unittest.TestCase):
                 timeout=120,
                 check=False,
             )
-            self.assertEqual(
-                result.returncode, 0,
-                f"{name} import failed from {spec.cwd}: {result.stdout}{result.stderr}",
-            )
-            self.assertIn(marker, result.stdout)
+            for name, marker in checks:
+                self.assertEqual(
+                    result.returncode, 0,
+                    f"{name} import failed from {cwd}: {result.stdout}{result.stderr}",
+                )
+                self.assertIn(
+                    marker, result.stdout,
+                    f"{name} import failed from {cwd}: {result.stdout}{result.stderr}",
+                )
 
 
 class WebShutdownTests(unittest.TestCase):

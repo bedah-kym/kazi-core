@@ -335,6 +335,7 @@ class CSPInventoryTests(TestCase):
             )
 
 
+@override_settings(PASSWORD_HASHERS=["django.contrib.auth.hashers.MD5PasswordHasher"])
 class CSPLockoutTests(TestCase):
     def setUp(self):
         AccessAttempt.objects.all().delete()

@@ -73,6 +73,10 @@ flake8 .
 bandit -r . -x ./tests,./venv --skip B101
 ```
 
+On Windows the test runner can go parallel once `tblib` is installed as a dev
+tool (`pip install tblib`, like `flake8` — it is not a project dependency):
+`python Backend/manage.py test --parallel 2`.
+
 Note: some SQLite test environments may fail on JSON SQL functions. PostgreSQL-backed runs are preferred for full validation.
 
 ## Pull Request Checklist

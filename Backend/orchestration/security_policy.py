@@ -195,14 +195,61 @@ def conservative_capability_prefs(prefs: Dict[str, Any]) -> Dict[str, Any]:
 # Secret + PII redaction (fail-plausible guard)
 # ---------------------------------------------------------------------------
 
+
+class _GroupRedactingPattern:
+    """Redact one named group while keeping the rest of the match intact."""
+
+    def __init__(self, pattern: re.Pattern, group: str) -> None:
+        self._pattern = pattern
+        self._group = group
+
+    def sub(self, replacement: str, text: str) -> str:
+        def _replace(match: re.Match) -> str:
+            whole_start, whole_end = match.span(0)
+            group_start, group_end = match.span(self._group)
+            return (
+                match.string[whole_start:group_start]
+                + replacement
+                + match.string[group_end:whole_end]
+            )
+
+        return self._pattern.sub(_replace, text)
+
+
 _SECRET_PATTERNS = [
-    re.compile(r"\b(?:sk|pk|rk)-[A-Za-z0-9]{16,}\b"),
+    _GroupRedactingPattern(
+        re.compile(
+            r"(?i)(?<![a-z0-9+.-])"
+            r"(?P<scheme>[a-z][a-z0-9+.-]*://[^\s:/@?#]*:)"
+            r"(?P<password>[^\s@/?#]+)@"
+        ),
+        "password",
+    ),
+    re.compile(
+        r"(?<![A-Za-z0-9_-])"
+        r"(?:sk-ant-|sk-proj-|sk-svcacct-|sk_live_|sk_test_|pk_live_|pk_test_|rk_live_|rk_test_)"
+        r"(?=[A-Za-z0-9_-]*[0-9A-Z])"
+        r"[A-Za-z0-9_-]{20,}"
+    ),
+    re.compile(
+        r"(?<![A-Za-z0-9_-])(?:sk|pk|rk)[-_]"
+        r"(?=[A-Za-z0-9_-]*[0-9])"
+        r"(?=[A-Za-z0-9_-]*[A-Z])"
+        r"[A-Za-z0-9_-]{20,}"
+    ),
+    re.compile(r"(?<![A-Za-z0-9_-])(?:sk|pk|rk)-[A-Za-z0-9]{16,}(?![A-Za-z0-9_-])"),
+    re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"),
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}\b|\bgithub_pat_[A-Za-z0-9_]{22,}\b"),
+    re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}"),
+    re.compile(r"\bAIza[0-9A-Za-z_-]{35}"),
+    re.compile(r"(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*\.[A-Za-z0-9_-]{8,}"),
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)"),
     re.compile(r"(?i)\bbearer[ \t]+[A-Za-z0-9._-]{16,}\b"),
     re.compile(r"(?i)\b(?:api[_-]?key|apikey|access[_-]?token|auth[_-]?token|refresh[_-]?token)\b[ \t]*[:=][ \t]*\S+"),
     re.compile(r"(?i)\b(?:password|passwd|pwd|secret|client[_-]?secret)\b[ \t]*[:=][ \t]*\S+"),
 ]
 
-_PII_EMAIL_RE = re.compile(r'[\w.+-]+@[\w-]+\.[\w.-]+')
+_PII_EMAIL_RE = re.compile(r'(?<![\w.+-])[\w.+-]+@[\w-]+\.[\w.-]+')
 _PII_PHONE_RE = re.compile(
     r'(?<!\d)(\+\d{1,3}[-.\s]?\d{2,4}[-.\s]?\d{3,4}[-.\s]?\d{2,4}'
     r'|0\d{2,3}[-.\s]?\d{3}[-.\s]?\d{3,4}'

@@ -1,13 +1,41 @@
 """Unit tests for v0.4.2 pure logic — fail-plausible guard, DeepSeek adapter,
 URL placeholder detection, and booking links."""
+import asyncio
+import json
+import os
+import random
+import sys
 from datetime import datetime
+from pathlib import Path
 
 from django.test import SimpleTestCase
 
 from orchestration.connectors.itinerary_connector import _is_placeholder_url
 from orchestration.llm_client import LLMClient
-from orchestration.security_policy import redact_sensitive_text
+from orchestration.security_policy import _SECRET_PATTERNS, redact_sensitive_text
 from orchestration.tool_executor import _normalize_error
+
+
+def _repeat(part, length):
+    return (part * ((length // len(part)) + 1))[:length]
+
+
+def _substrings(value, size):
+    return {value[index:index + size] for index in range(len(value) - size + 1)}
+
+
+_BASE64URL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+
+
+def _credential_contexts(credential):
+    return {
+        "alone": credential,
+        "sentence": f"Use the credential {credential} to authenticate.",
+        "assignment": f"token={credential}",
+        "json": json.dumps({"credential": credential}),
+        "start": credential + " followed by text",
+        "end": "text before " + credential,
+    }
 
 
 class RedactSensitiveTextTests(SimpleTestCase):
@@ -73,6 +101,492 @@ class RedactSensitiveTextTests(SimpleTestCase):
     def test_leaves_plain_text_untouched(self):
         text = "The weather in Nairobi is warm today."
         self.assertEqual(redact_sensitive_text(text), text)
+
+
+class SecretFormatRedactionTests(SimpleTestCase):
+    def _credentials(self):
+        filler = "Q7mK2pX9vB4nR8tY3wZ6"
+        aws = "AK" + "IA" + _repeat("K7M2Q9X4", 16)
+        github = "gh" + "p_" + _repeat("aB3dE6hJ9mN2pQ5sT8vW1y", 36)
+        github_pat = "github" + "_pat_" + _repeat("Z8y7X6w5V4u3T2s1R0q9", 30)
+        slack = "xo" + "xb-" + "1234567890-abcdefghij"
+        google = "AI" + "za" + _repeat("A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6", 35)
+        jwt = (
+            "eyJ" + "hbGciOiJIUzI1NiJ9"
+            + "."
+            + "eyJzdWIiOiIxMjM0NTY3ODkwIn0"
+            + "."
+            + "Q7mK2pX9vB4nR8tY3wZ6"
+        )
+        pem_body = _repeat("MIIEowA1b2C3d4E5", 64)
+        pem = (
+            "-----BEGIN " + "RSA PRIVATE KEY" + "-----\n"
+            + pem_body
+            + "\n-----END " + "RSA PRIVATE KEY" + "-----"
+        )
+        url_password = "P4ssw0rd" + "Q7mK2pX9"
+        url = "https" + "://" + "user" + ":" + url_password + "@" + "db.example.com"
+        return [
+            ("anthropic", "sk" + "-ant-api03-" + _repeat(filler, 24), _repeat(filler, 24)),
+            ("openai-project", "sk" + "-proj-" + _repeat(filler, 24), _repeat(filler, 24)),
+            ("stripe-live", "sk" + "_live_" + _repeat(filler, 24), _repeat(filler, 24)),
+            ("aws", aws, aws[len("AKIA"):]),
+            ("github", github, github[len("ghp_"):]),
+            ("github-fine-grained", github_pat, github_pat[len("github_pat_"):]),
+            ("slack", slack, slack[len("xoxb-"):]),
+            ("google", google, google[len("AIza"):]),
+            ("jwt", jwt, jwt),
+            ("pem", pem, pem_body),
+            ("url-password", url, url_password),
+        ]
+
+    def test_common_key_formats_are_redacted(self):
+        for name, credential, secret in self._credentials():
+            for context_name, text in _credential_contexts(credential).items():
+                with self.subTest(format=name, context=context_name):
+                    output = redact_sensitive_text(text)
+                    self.assertIn("[REDACTED SECRET]", output)
+                    for fragment in _substrings(secret, 6):
+                        self.assertNotIn(fragment, output)
+
+    def test_url_password_keeps_user_and_host(self):
+        _, credential, _ = next(
+            item for item in self._credentials() if item[0] == "url-password"
+        )
+        self.assertEqual(
+            redact_sensitive_text(credential),
+            "https://user:[REDACTED SECRET]@db.example.com",
+        )
+
+    def test_password_only_url_is_redacted(self):
+        output = redact_sensitive_text("REDIS_URL=redis://:S3cretPassw0rd@cache:6379/0")
+        self.assertEqual(output, "REDIS_URL=redis://:[REDACTED SECRET]@cache:6379/0")
+
+    def test_key_inside_url_password_does_not_split_redaction(self):
+        aws = "AK" + "IA" + _repeat("K7M2Q9X4", 16)
+        password = "before!" + aws + "!after"
+        text = "postgres://user:" + password + "@localhost/db"
+        output = redact_sensitive_text(text)
+        self.assertEqual(output, "postgres://user:[REDACTED SECRET]@localhost/db")
+        self.assertNotIn("before!", output)
+        self.assertNotIn("!after", output)
+
+    def test_jwt_with_empty_payload_is_redacted(self):
+        token = (
+            "eyJ" + "hbGciOiJIUzI1NiJ9"
+            + "."
+            + "e30"
+            + "."
+            + "Q7mK2pX9vB4nR8tY3wZ6"
+        )
+        output = redact_sensitive_text(token)
+        self.assertIn("[REDACTED SECRET]", output)
+        for fragment in _substrings(token, 8):
+            self.assertNotIn(fragment, output)
+
+    def test_uppercase_url_scheme_is_redacted(self):
+        output = redact_sensitive_text("HTTPS://bob:Hunter2Pass@localhost/x")
+        self.assertEqual(output, "HTTPS://bob:[REDACTED SECRET]@localhost/x")
+
+    def test_query_string_is_not_userinfo(self):
+        text = "https://example.com:443?next=alice@localhost/"
+        self.assertEqual(redact_sensitive_text(text), text)
+
+    def test_known_prefix_weaker_body_rule(self):
+        letters_only = _repeat("AbCdEfGhIjKlMnOpQrStUvWxYz", 40)
+        lowercase_digits = _repeat("abcdefghij0123456789", 40)
+        prefixes = (
+            "sk-ant-",
+            "sk-proj-",
+            "sk-svcacct-",
+            "sk_live_",
+            "sk_test_",
+            "pk_live_",
+            "pk_test_",
+            "rk_live_",
+            "rk_test_",
+        )
+        for prefix in prefixes:
+            for body in (letters_only, lowercase_digits):
+                with self.subTest(prefix=prefix, body=body):
+                    output = redact_sensitive_text(prefix + body)
+                    self.assertIn("[REDACTED SECRET]", output)
+                    for fragment in _substrings(body, 8):
+                        self.assertNotIn(fragment, output)
+
+    def test_truncated_pem_header_redacts_to_the_end(self):
+        body = _repeat("MIIEowA1b2C3d4E5", 64)
+        text = "-----BEGIN " + "OPENSSH PRIVATE KEY" + "-----\n" + body
+        output = redact_sensitive_text(text)
+        self.assertEqual(output, "[REDACTED SECRET]")
+        for fragment in _substrings(body, 6):
+            self.assertNotIn(fragment, output)
+
+    def test_todays_redactions_are_unchanged(self):
+        cases = [
+            ("provider-sk", "sk-" + "abcdefghijklmnop123456", "[REDACTED SECRET]"),
+            ("provider-pk", "pk-" + "abcdefghijklmnop123456", "[REDACTED SECRET]"),
+            ("provider-rk", "rk-" + "abcdefghijklmnop123456", "[REDACTED SECRET]"),
+            (
+                "bearer",
+                "Authorization: Bearer " + "abcdefghijklmnopqrstuvwxyz123456",
+                "[REDACTED SECRET]",
+            ),
+            ("api-key", "api_key=SECRET123", "[REDACTED SECRET]"),
+            ("password", "password=hunter2", "[REDACTED SECRET]"),
+            ("email", "joe@example.com", "[REDACTED EMAIL]"),
+            ("phone", "+254 712 345 678", "[REDACTED PHONE]"),
+        ]
+        for name, text, token in cases:
+            with self.subTest(case=name):
+                self.assertIn(token, redact_sensitive_text(text))
+
+    def test_negative_cases_are_not_redacted(self):
+        cases = [
+            ("sk-plus-word", "sk-documentation"),
+            ("uuid", "123e4567-e89b-12d3-a456-426614174000"),
+            ("git-sha", "da39a3ee5e6b4b0d3255bfef95601890afd80709"),
+            ("akia-word", "the AKIA prefix is not a key"),
+            ("url-without-credentials", "https://example.com/path?q=1"),
+        ]
+        for name, text in cases:
+            with self.subTest(case=name):
+                self.assertNotIn("[REDACTED SECRET]", redact_sensitive_text(text))
+
+    def test_email_is_not_treated_as_a_secret(self):
+        output = redact_sensitive_text("contact joe@example.com")
+        self.assertIn("[REDACTED EMAIL]", output)
+        self.assertNotIn("[REDACTED SECRET]", output)
+
+    def test_code_identifiers_are_not_redacted(self):
+        cases = [
+            "pk_relationship_manager = models.ForeignKey(User, on_delete=models.CASCADE)",
+            "self.kwargs['pk_url_kwarg_name_here']",
+            "sk_live_mode_enabled_for_tests = False",
+            "rk_deployment_rollout_strategy: canary",
+            "# sk-learn-is-a-library",
+            "pk_v2_migration_helper",
+            "sk-this-is-a-long-kebab-case-phrase-that-should-stay-readable",
+        ]
+        for text in cases:
+            with self.subTest(text=text):
+                self.assertEqual(redact_sensitive_text(text), text)
+
+    def test_short_alphanumeric_provider_key_is_still_redacted(self):
+        body = _repeat("A1b2C3d4E5", 48)
+        output = redact_sensitive_text("sk-" + body)
+        self.assertIn("[REDACTED SECRET]", output)
+        for fragment in _substrings(body, 8):
+            self.assertNotIn(fragment, output)
+
+    def test_provider_key_boundaries_still_redact(self):
+        body = _repeat("A1b2C3d4E5", 48)
+        key = "sk-" + body
+        cases = [
+            "KEY=" + key,
+            '"' + key + '"',
+            "(" + key + ")",
+            key,
+            "prefix line\n" + key,
+        ]
+        for text in cases:
+            with self.subTest(text=text):
+                output = redact_sensitive_text(text)
+                self.assertIn("[REDACTED SECRET]", output)
+                for fragment in _substrings(body, 8):
+                    self.assertNotIn(fragment, output)
+
+    def test_email_boundaries_still_redact(self):
+        address = "a.b+tag@example.co.uk"
+        cases = [
+            address,
+            "Contact " + address + " now",
+            "<" + address + ">",
+        ]
+        for text in cases:
+            with self.subTest(text=text):
+                output = redact_sensitive_text(text)
+                self.assertIn("[REDACTED EMAIL]", output)
+                self.assertNotIn(address, output)
+
+
+class SeededSecretFormatRedactionTests(SimpleTestCase):
+    _DRAWS = 200
+    _SECRET_SIZE = 8
+
+    @staticmethod
+    def _random_body(rng, length, alphabet):
+        return "".join(rng.choice(alphabet) for _ in range(length))
+
+    def _assert_redacted(self, family, draw, credential, secret):
+        for context_name, text in _credential_contexts(credential).items():
+            with self.subTest(family=family, draw=draw, context=context_name):
+                output = redact_sensitive_text(text)
+                self.assertIn("[REDACTED SECRET]", output)
+                for fragment in _substrings(secret, self._SECRET_SIZE):
+                    self.assertNotIn(fragment, output)
+
+    def _draw_provider_family(self, rng, family, prefix, low, high):
+        bodies = []
+        for draw in range(self._DRAWS):
+            body = self._random_body(rng, rng.randint(low, high), _BASE64URL)
+            bodies.append(body)
+            self._assert_redacted(family, draw, prefix + body, body)
+        self.assertTrue(any("-" in body for body in bodies))
+        self.assertTrue(any("_" in body for body in bodies))
+
+    def test_provider_keys_with_seeded_base64url_bodies_are_redacted(self):
+        rng = random.Random(20261115)  # nosec B311 — seeded test data, not security
+        families = (
+            ("anthropic", "sk-ant-api03-", 93, 93),
+            ("openai-project", "sk-proj-", 120, 120),
+            ("openai-svcacct", "sk-svcacct-", 100, 100),
+            ("provider-sk", "sk-", 40, 150),
+            ("stripe-live", "sk_live_", 40, 150),
+            ("stripe-test", "sk_test_", 40, 150),
+            ("pk-live", "pk_live_", 40, 150),
+            ("pk-test", "pk_test_", 40, 150),
+            ("rk-live", "rk_live_", 40, 150),
+            ("rk-test", "rk_test_", 40, 150),
+            ("provider-pk", "pk_", 40, 150),
+            ("provider-rk", "rk_", 40, 150),
+        )
+        for family, prefix, low, high in families:
+            with self.subTest(family=family):
+                self._draw_provider_family(rng, family, prefix, low, high)
+
+    def test_other_base64url_alphabet_patterns_are_redacted(self):
+        rng = random.Random(20261116)  # nosec B311 — seeded test data, not security
+        families = (
+            ("slack", "xoxb-", "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-", 10, 80, "-"),
+            ("google", "AIza", _BASE64URL, 35, 35, "-_"),
+            ("github-fine-grained", "github_pat_", "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_", 22, 80, "_"),
+        )
+        for family, prefix, alphabet, low, high, separators in families:
+            bodies = []
+            for draw in range(self._DRAWS):
+                body = self._random_body(rng, rng.randint(low, high), alphabet)
+                bodies.append(body)
+                self._assert_redacted(family, draw, prefix + body, body)
+            for separator in separators:
+                with self.subTest(family=family, separator=separator):
+                    self.assertTrue(any(separator in body for body in bodies))
+
+    def test_seeded_jwts_are_redacted(self):
+        rng = random.Random(20261117)  # nosec B311 — seeded test data, not security
+        seen_separators = set()
+        for draw in range(self._DRAWS):
+            header = "eyJ" + self._random_body(rng, rng.randint(8, 40), _BASE64URL)
+            payload = "eyJ" + self._random_body(rng, rng.randint(8, 40), _BASE64URL)
+            signature = self._random_body(rng, rng.randint(8, 40), _BASE64URL)
+            token = header + "." + payload + "." + signature
+            for segment in (header, payload, signature):
+                seen_separators.update(char for char in "-_" if char in segment)
+            self._assert_redacted("jwt", draw, token, token)
+        self.assertEqual(seen_separators, {"-", "_"})
+
+
+_REDACTION_ELAPSED_BOUND_SECONDS = 5.0
+_REDACTION_SUBPROCESS_TIMEOUT_SECONDS = 60.0
+
+
+class RedactionCostTests(SimpleTestCase):
+    @staticmethod
+    def _pathological_text(mode):
+        if mode == "alnum":
+            return ("A1b2C3d4E5" * 100000)[:1000000]
+        if mode == "hyphens":
+            return "-" * 1000000
+        if mode == "provider-alnum":
+            return "sk-" + ("A1b2C3d4E5" * 100000)[:999997]
+        if mode == "provider-hyphens":
+            return "sk-" + "-" * 999997
+        return "-----BEGIN RSA PRIVATE KEY-----\n" + "A" * 1000000
+
+    def test_pathological_inputs_finish_within_a_fixed_bound(self):
+        inputs = {
+            mode: self._pathological_text(mode)
+            for mode in (
+                "alnum",
+                "hyphens",
+                "provider-alnum",
+                "provider-hyphens",
+                "unclosed-pem",
+            )
+        }
+        targets = [f"secret:{index}" for index in range(len(_SECRET_PATTERNS))]
+        stdout, stderr = _run_async(
+            _run_linearity_child(
+                {"inputs": inputs, "targets": targets},
+                _REDACTION_SUBPROCESS_TIMEOUT_SECONDS,
+            )
+        )
+        if stdout is None:
+            self.fail(
+                f"cost subprocess exceeded {_REDACTION_SUBPROCESS_TIMEOUT_SECONDS}s"
+            )
+        results = [
+            json.loads(line.split(":", 1)[1])
+            for line in stdout.splitlines()
+            if line.startswith("TIMING:")
+        ]
+        self.assertTrue(results, stderr or stdout)
+        for result in results:
+            with self.subTest(input=result["input"], target=result["target"]):
+                self.assertLess(
+                    result["elapsed"], _REDACTION_ELAPSED_BOUND_SECONDS
+                )
+
+
+_LINEARITY_BOUND_SECONDS = 1.0
+
+_LINEARITY_CHILD_CODE = r"""
+import json
+import os
+import sys
+import time
+
+import django
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "Backend.settings")
+django.setup()
+
+from orchestration.security_policy import (
+    _PII_EMAIL_RE,
+    _PII_PHONE_RE,
+    _SECRET_PATTERNS,
+    redact_sensitive_text,
+)
+
+payload = json.loads(sys.stdin.read())
+patterns = list(_SECRET_PATTERNS) + [_PII_EMAIL_RE, _PII_PHONE_RE]
+for label, text in payload["inputs"].items():
+    for target in payload["targets"]:
+        start = time.perf_counter()
+        if target == "whole":
+            redact_sensitive_text(text)
+        elif target == "email":
+            _PII_EMAIL_RE.sub("[REDACTED SECRET]", text)
+        elif target == "phone":
+            _PII_PHONE_RE.sub("[REDACTED SECRET]", text)
+        else:
+            index = int(target.split(":", 1)[1])
+            patterns[index].sub("[REDACTED SECRET]", text)
+        elapsed = time.perf_counter() - start
+        print(
+            "TIMING:" + json.dumps(
+                {"input": label, "target": target, "elapsed": elapsed}
+            ),
+            flush=True,
+        )
+"""
+
+
+def _run_async(coroutine):
+    if sys.platform == "win32":
+        loop = asyncio.ProactorEventLoop()
+        try:
+            return loop.run_until_complete(coroutine)
+        finally:
+            loop.close()
+    return asyncio.run(coroutine)
+
+
+async def _run_linearity_child(payload, timeout):
+    repo_root = Path(__file__).resolve().parents[2]
+    env = dict(os.environ)
+    env.setdefault("DJANGO_SETTINGS_MODULE", "Backend.settings")
+    existing_path = env.get("PYTHONPATH")
+    paths = [str(repo_root), str(repo_root / "Backend")]
+    if existing_path:
+        paths.append(existing_path)
+    env["PYTHONPATH"] = os.pathsep.join(paths)
+    process = await asyncio.create_subprocess_exec(  # nosec B603,B607 — fixed interpreter and argv
+        sys.executable,
+        "-c",
+        _LINEARITY_CHILD_CODE,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            process.communicate(json.dumps(payload).encode("utf-8")),
+            timeout=timeout,
+        )
+    except asyncio.TimeoutError:
+        process.kill()
+        await process.wait()
+        return None, "timeout"
+    return stdout.decode("utf-8", errors="replace"), stderr.decode("utf-8", errors="replace")
+
+
+class RedactionLinearityTests(SimpleTestCase):
+    _SUBPROCESS_TIMEOUT_SECONDS = 20.0
+
+    @staticmethod
+    def _hostile_inputs():
+        return {
+            "sk-": _repeat("sk-", 100000),
+            "pk_": _repeat("pk_", 100000),
+            "a.": _repeat("a.", 100000),
+            "a-": _repeat("a-", 100000),
+            "a": _repeat("a", 100000),
+            "x://a:": _repeat("x://a:", 100000),
+            "a.b@": _repeat("a.b", 100000) + "@",
+            "AKIA": _repeat("AKIA", 100000),
+            "ghp_": _repeat("ghp_", 100000),
+            "github_pat_": _repeat("github_pat_", 100000),
+            "xoxb-": _repeat("xoxb-", 100000),
+            "AIza": _repeat("AIza", 100000),
+            "eyJ": "eyJ" + "A" * 100000,
+            "eyJ-": _repeat("eyJ-", 100000),
+            "eyJ.": _repeat("eyJ.", 100000),
+            "sk_live": "sk_live_" + "A" * 100000,
+            "pem": "-----BEGIN RSA PRIVATE KEY-----" + "A" * 100000,
+            "bearer": "bearer " + "A" * 100000,
+            "api_key=": "api_key=" + "A" * 100000,
+            "password=": "password=" + "A" * 100000,
+            "digits": _repeat("1", 100000),
+            "plus": _repeat("+", 100000),
+            "paren": _repeat("(", 100000),
+        }
+
+    def _run_payload(self, payload):
+        stdout, stderr = _run_async(
+            _run_linearity_child(payload, self._SUBPROCESS_TIMEOUT_SECONDS)
+        )
+        if stdout is None:
+            self.fail(
+                f"linearity subprocess exceeded {self._SUBPROCESS_TIMEOUT_SECONDS}s"
+            )
+        results = [
+            json.loads(line.split(":", 1)[1])
+            for line in stdout.splitlines()
+            if line.startswith("TIMING:")
+        ]
+        self.assertTrue(results, stderr or stdout)
+        return results
+
+    def _assert_fast(self, results):
+        for result in results:
+            with self.subTest(input=result["input"], target=result["target"]):
+                self.assertLess(result["elapsed"], _LINEARITY_BOUND_SECONDS)
+
+    def test_whole_redaction_is_linear_on_hostile_inputs(self):
+        results = self._run_payload(
+            {"inputs": self._hostile_inputs(), "targets": ["whole"]}
+        )
+        self._assert_fast(results)
+
+    def test_each_pattern_is_linear_on_its_own_class(self):
+        targets = [f"secret:{index}" for index in range(len(_SECRET_PATTERNS))]
+        targets += ["email", "phone"]
+        results = self._run_payload(
+            {"inputs": self._hostile_inputs(), "targets": targets}
+        )
+        self._assert_fast(results)
 
 
 class NormalizeErrorTests(SimpleTestCase):

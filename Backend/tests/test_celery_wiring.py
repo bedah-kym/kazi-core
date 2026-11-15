@@ -7,15 +7,16 @@ from unittest import TestCase
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 
-# One manage.py start-up covers both checks: the `check` command still has to
-# return, and a plain Django process still has to bind celery tasks to the
-# project app. The two probe the same start-up under the same env.
+# One manage.py start-up covers both checks: a plain Django process still has to
+# bind celery tasks to the project app, and the `check` command still has to
+# return. The binding is printed before `check` runs, so it is observed on a
+# plain start-up rather than after `check` has imported much of the project.
 _PROBE = (
+    "from chatbot.tasks import refresh_room_context_summary as t\n"
+    "print('APP=' + t.app.main)\n"
     "from django.core.management import call_command\n"
     "call_command('check')\n"
     "print('CHECK_OK')\n"
-    "from chatbot.tasks import refresh_room_context_summary as t\n"
-    "print('APP=' + t.app.main)\n"
 )
 
 

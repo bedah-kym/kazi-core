@@ -654,25 +654,15 @@ class RealSpecImportTests(unittest.TestCase):
             "beat": ("Backend.celery", "CELERY_OK"),
             "sidecar": ("orchestration.shell_exec", "SIDECAR_OK"),
         }
-        # Every spec starts in the same folder today, so one child per distinct
-        # folder can run all of that folder's probes and report each result.
-        by_cwd = {}
+        # Each distinct (cwd, module) gets a fresh interpreter, so a module that
+        # only imports after another process's Django setup cannot pass. Worker
+        # and beat import the same module from the same folder, so they share one.
+        groups = {}
         for name, spec in specs.items():
-            by_cwd.setdefault(spec.cwd, []).append(name)
-        for cwd, names in by_cwd.items():
-            checks = [(name, *probes[name]) for name in names]
-            code = (
-                "import importlib, json, traceback\n"
-                f"checks = {checks!r}\n"
-                "out = {}\n"
-                "for name, module, marker in checks:\n"
-                "    try:\n"
-                "        importlib.import_module(module)\n"
-                "        out[name] = marker\n"
-                "    except Exception:\n"
-                "        out[name] = traceback.format_exc()\n"
-                "print('SPECS=' + json.dumps(out))\n"
-            )
+            module, marker = probes[name]
+            groups.setdefault((spec.cwd, module), []).append((name, marker))
+        for (cwd, module), checks in groups.items():
+            code = f"import {module}; print({checks[0][1]!r})"
             result = subprocess.run(  # nosec B603 - real import probes
                 [sys.executable, "-c", code],
                 cwd=cwd,
@@ -685,21 +675,14 @@ class RealSpecImportTests(unittest.TestCase):
                 timeout=120,
                 check=False,
             )
-            self.assertEqual(
-                result.returncode, 0,
-                f"imports failed from {cwd}: {result.stdout}{result.stderr}",
-            )
-            line = next(
-                (row for row in result.stdout.splitlines() if row.startswith("SPECS=")),
-                None,
-            )
-            self.assertIsNotNone(line, result.stdout[-2000:] + result.stderr[-2000:])
-            reported = json.loads(line[len("SPECS="):])
-            for name in names:
-                marker = probes[name][1]
+            for name, marker in checks:
                 self.assertEqual(
-                    reported.get(name), marker,
-                    f"{name} import failed from {cwd}: {reported.get(name)}",
+                    result.returncode, 0,
+                    f"{name} import failed from {cwd}: {result.stdout}{result.stderr}",
+                )
+                self.assertIn(
+                    marker, result.stdout,
+                    f"{name} import failed from {cwd}: {result.stdout}{result.stderr}",
                 )
 
 

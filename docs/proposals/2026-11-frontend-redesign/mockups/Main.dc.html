@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Kazi chat room, desktop</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<style>
+body{margin:0}
+button{font:inherit;cursor:pointer}
+a{color:#8a3016}a:hover{color:#6f2611}
+.brick{background-image:url("Backend/chatbot/static/img/brick-wall.svg");background-size:96px 48px}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; box-sizing: border-box; display: flex; font-family: Inter, system-ui, sans-serif; font-size: 15px; line-height: 1.5; color: #3d3929; background: #f6f3ec; overflow: hidden">
+
+  <!-- Primary navigation: same component on every page -->
+  <nav aria-label="Primary" style="width: 232px; flex: none; box-sizing: border-box; background: #fcfbf8; border-right: 1px solid #e5e0d5; display: flex; flex-direction: column; padding: 16px 12px; gap: 20px">
+    <div style="display: flex; align-items: center; gap: 12px; padding: 0 8px">
+      <span style="width: 36px; height: 36px; border-radius: 11px; background: #a83c1e; color: #fff; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(168,60,30,.3)">
+        <svg viewBox="5 3 23 26" width="18" height="18" aria-hidden="true"><polygon fill="#fff" points="5,3 11,3 11,29 5,29"/><polygon fill="#fff" points="11,16 18,16 27,29 20,29"/><polygon fill="#f6c9b6" points="15,12 22,12 28,3 21,3"/></svg>
+      </span>
+      <div style="display: flex; flex-direction: column">
+        <span style="font-weight: 700; font-size: 16px; letter-spacing: -0.01em">Kazi</span>
+        <span style="font-size: 12px; color: #6e6a5e">Demo Workspace</span>
+      </div>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 2px; flex-grow: 1">
+      <sc-for list="{{nav}}" as="item" hint-placeholder-count="8">
+        <a href="#" aria-current="{{item.current}}" style="{{item.style}}">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="{{item.d}}"/></svg>
+          <span style="flex-grow: 1">{{item.label}}</span>
+          <sc-if value="{{item.badge}}" hint-placeholder-val="{{false}}"><span style="min-width: 20px; height: 20px; padding: 0 6px; box-sizing: border-box; border-radius: 999px; background: #a83c1e; color: #fff; font-size: 12px; font-weight: 600; display: flex; align-items: center; justify-content: center">{{item.badge}}</span></sc-if>
+        </a>
+      </sc-for>
+    </div>
+    <div style="display: flex; align-items: center; gap: 10px; padding: 12px 8px 0; border-top: 1px solid #e5e0d5">
+      <span style="width: 36px; height: 36px; border-radius: 50%; background: rgba(168,60,30,.12); color: #8a3016; font-weight: 600; display: flex; align-items: center; justify-content: center">D</span>
+      <div style="display: flex; flex-direction: column; flex-grow: 1">
+        <span style="font-weight: 600; font-size: 14px">demo</span>
+        <span style="font-size: 12px; color: #6e6a5e">Free plan</span>
+      </div>
+      <button aria-label="Switch to dark theme" style="width: 44px; height: 44px; border: 0; border-radius: 50%; background: transparent; color: #6e6a5e; display: flex; align-items: center; justify-content: center">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 019.5 4a8 8 0 1010.5 10.5z"/></svg>
+      </button>
+    </div>
+  </nav>
+
+  <!-- Room list -->
+  <aside aria-label="Chats" class="brick" style="width: 300px; flex: none; box-sizing: border-box; background-color: #fcfbf8; border-right: 1px solid #e5e0d5; display: flex; flex-direction: column; padding: 16px 12px; gap: 12px">
+    <div style="display: flex; align-items: center; justify-content: space-between; padding: 0 4px">
+      <h2 style="margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -0.02em">Chats</h2>
+      <button aria-label="New chat" style="width: 44px; height: 44px; border: 0; border-radius: 50%; background: rgba(168,60,30,.12); color: #8a3016; display: flex; align-items: center; justify-content: center">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+    </div>
+    <label style="display: flex; align-items: center; gap: 8px; height: 44px; padding: 0 14px; border-radius: 999px; background: #fff; border: 1px solid #e5e0d5; color: #6e6a5e">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M11 4a7 7 0 100 14 7 7 0 000-14zM16 16l4 4"/></svg>
+      <input type="search" placeholder="Search chats" aria-label="Search chats" style="border: 0; outline: 0; background: transparent; font: inherit; font-size: 16px; color: #3d3929; flex-grow: 1; min-width: 0">
+    </label>
+    <div style="display: flex; flex-direction: column; gap: 4px">
+      <a href="#" aria-current="page" style="display: flex; align-items: center; gap: 12px; padding: 10px; border-radius: 12px; background: #fff; border: 1px solid #e5e0d5; box-shadow: 0 2px 8px rgba(61,57,41,.06); text-decoration: none; color: #3d3929">
+        <span style="width: 40px; height: 40px; flex: none; border-radius: 50%; background: #a83c1e; display: flex; align-items: center; justify-content: center"><svg viewBox="5 3 23 26" width="18" height="18" aria-hidden="true"><polygon fill="#fff" points="5,3 11,3 11,29 5,29"/><polygon fill="#fff" points="11,16 18,16 27,29 20,29"/><polygon fill="#f6c9b6" points="15,12 22,12 28,3 21,3"/></svg></span>
+        <span style="display: flex; flex-direction: column; min-width: 0; flex-grow: 1">
+          <span style="display: flex; justify-content: space-between; gap: 8px"><span style="font-weight: 600">General</span><span style="font-size: 12px; color: #6e6a5e">Now</span></span>
+          <span style="font-size: 13px; color: #6e6a5e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Kazi: Waiting for your approval</span>
+        </span>
+      </a>
+      <a href="#" style="display: flex; align-items: center; gap: 12px; padding: 10px; border-radius: 12px; border: 1px solid transparent; text-decoration: none; color: #3d3929">
+        <span style="width: 40px; height: 40px; flex: none; border-radius: 50%; background: #e9e4d8; color: #57513f; font-weight: 600; display: flex; align-items: center; justify-content: center">CW</span>
+        <span style="display: flex; flex-direction: column; min-width: 0; flex-grow: 1">
+          <span style="display: flex; justify-content: space-between; gap: 8px"><span style="font-weight: 600">Client work</span><span style="font-size: 12px; color: #6e6a5e">Tue</span></span>
+          <span style="font-size: 13px; color: #6e6a5e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">You: Can you summarise the brief?</span>
+        </span>
+        <span style="min-width: 20px; height: 20px; padding: 0 6px; box-sizing: border-box; border-radius: 999px; background: #a83c1e; color: #fff; font-size: 12px; font-weight: 600; display: flex; align-items: center; justify-content: center">2</span>
+      </a>
+      <a href="#" style="display: flex; align-items: center; gap: 12px; padding: 10px; border-radius: 12px; border: 1px solid transparent; text-decoration: none; color: #3d3929">
+        <span style="width: 40px; height: 40px; flex: none; border-radius: 50%; background: #e9e4d8; color: #57513f; font-weight: 600; display: flex; align-items: center; justify-content: center">TR</span>
+        <span style="display: flex; flex-direction: column; min-width: 0; flex-grow: 1">
+          <span style="display: flex; justify-content: space-between; gap: 8px"><span style="font-weight: 600">Trip planning</span><span style="font-size: 12px; color: #6e6a5e">Mon</span></span>
+          <span style="font-size: 13px; color: #6e6a5e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Kazi: Itinerary saved</span>
+        </span>
+      </a>
+    </div>
+  </aside>
+
+  <!-- Conversation -->
+  <main class="brick" style="flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; background-color: #f6f3ec">
+    <header style="height: 64px; flex: none; box-sizing: border-box; display: flex; align-items: center; gap: 12px; padding: 0 20px; background: rgba(252,251,248,.9); border-bottom: 1px solid #e5e0d5">
+      <span style="width: 40px; height: 40px; flex: none; border-radius: 50%; background: #a83c1e; display: flex; align-items: center; justify-content: center"><svg viewBox="5 3 23 26" width="18" height="18" aria-hidden="true"><polygon fill="#fff" points="5,3 11,3 11,29 5,29"/><polygon fill="#fff" points="11,16 18,16 27,29 20,29"/><polygon fill="#f6c9b6" points="15,12 22,12 28,3 21,3"/></svg></span>
+      <div style="display: flex; flex-direction: column; flex-grow: 1; min-width: 0">
+        <h1 style="margin: 0; font-size: 16px; font-weight: 600">General</h1>
+        <span style="font-size: 13px; color: #2f6b4a; display: flex; align-items: center; gap: 6px"><span style="width: 8px; height: 8px; border-radius: 50%; background: #2f855a"></span>Kazi is ready</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 4px; padding: 4px; border-radius: 999px; background: #fff; border: 1px solid #e5e0d5">
+        <button style="height: 36px; padding: 0 14px; border: 0; border-radius: 999px; background: transparent; color: #3d3929; font-size: 14px; font-weight: 500; display: flex; align-items: center; gap: 8px">Auto model
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+        <button aria-label="Search this chat" style="width: 36px; height: 36px; border: 0; border-radius: 50%; background: transparent; color: #57513f; display: flex; align-items: center; justify-content: center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M11 4a7 7 0 100 14 7 7 0 000-14zM16 16l4 4"/></svg></button>
+        <button aria-label="Hide details panel" aria-pressed="true" style="width: 36px; height: 36px; border: 0; border-radius: 50%; background: rgba(168,60,30,.12); color: #8a3016; display: flex; align-items: center; justify-content: center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h18v14H3zM15 5v14"/></svg></button>
+      </div>
+    </header>
+
+    <div style="flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; gap: 16px; padding: 20px 24px; overflow: hidden">
+      <div style="align-self: center; font-size: 11px; font-weight: 600; letter-spacing: .1em; color: #6e6a5e; background: rgba(252,251,248,.9); padding: 4px 12px; border-radius: 999px; border: 1px solid #e5e0d5">TODAY</div>
+
+      <div style="align-self: flex-end; max-width: 440px; display: flex; flex-direction: column; align-items: flex-end; gap: 4px">
+        <div style="padding: 12px 18px; border-radius: 16px 16px 5px 16px; background: linear-gradient(135deg, #4a463c, #57513f); color: #f6f3ec; box-shadow: 0 4px 14px rgba(61,57,41,.22)">Draft a follow-up to Amina about the invoice we sent last week, and send it once I approve.</div>
+        <span style="font-size: 12px; color: #6e6a5e">7:41 PM</span>
+      </div>
+
+      <div style="align-self: flex-start; max-width: 480px; display: flex; flex-direction: column; gap: 4px">
+        <div style="padding: 14px 18px; border-radius: 16px 16px 16px 5px; background: #fcfbf8; border: 1px solid rgba(168,60,30,.25); box-shadow: 0 4px 16px rgba(168,60,30,.1); display: flex; flex-direction: column; gap: 12px">
+          <div style="display: flex; align-items: center; gap: 8px; color: #8a3016; font-weight: 600; font-size: 13px">
+            <span style="width: 22px; height: 22px; border-radius: 50%; background: #a83c1e; display: flex; align-items: center; justify-content: center"><svg viewBox="5 3 23 26" width="10" height="10" aria-hidden="true"><polygon fill="#fff" points="5,3 11,3 11,29 5,29"/><polygon fill="#fff" points="11,16 18,16 27,29 20,29"/><polygon fill="#f6c9b6" points="15,12 22,12 28,3 21,3"/></svg></span>Kazi
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #57513f">
+            <div style="display: flex; align-items: center; gap: 8px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2f6b4a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Done"><path d="M5 12l5 5 9-10"/></svg>Read the thread with Amina</div>
+            <div style="display: flex; align-items: center; gap: 8px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2f6b4a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Done"><path d="M5 12l5 5 9-10"/></svg>Drafted the follow-up email</div>
+            <div style="display: flex; align-items: center; gap: 8px; color: #8a3016; font-weight: 500"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" role="img" aria-label="Waiting"><path d="M12 3a9 9 0 100 18 9 9 0 000-18zM12 7v5l3 2"/></svg>Waiting for your approval</div>
+          </div>
+          <div>The follow-up is drafted. I will send it from your Gmail once you approve.</div>
+          <div style="border: 1px solid #e5e0d5; border-radius: 12px; background: #fff; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px">
+            <div style="display: flex; flex-direction: column; gap: 2px; font-size: 13px">
+              <span style="font-size: 11px; font-weight: 600; letter-spacing: .08em; color: #6e6a5e">SEND EMAIL · NEEDS APPROVAL</span>
+              <span><span style="color: #6e6a5e">To</span> amina@example.com</span>
+              <span style="font-weight: 600">Following up on last week's invoice</span>
+            </div>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap">
+              <button style="height: 44px; padding: 0 18px; border: 0; border-radius: 999px; background: #a83c1e; color: #fff; font-weight: 600; font-size: 14px">Approve and send</button>
+              <button style="height: 44px; padding: 0 18px; border: 1px solid #e5e0d5; border-radius: 999px; background: #fff; color: #3d3929; font-weight: 500; font-size: 14px">Edit draft</button>
+              <button style="height: 44px; padding: 0 14px; border: 0; border-radius: 999px; background: transparent; color: #6e6a5e; font-weight: 500; font-size: 14px">Reject</button>
+            </div>
+          </div>
+        </div>
+        <span style="font-size: 12px; color: #6e6a5e">7:42 PM</span>
+      </div>
+    </div>
+
+    <div style="flex: none; padding: 0 24px 20px">
+      <div style="display: flex; align-items: center; gap: 4px; min-height: 56px; box-sizing: border-box; padding: 6px 8px; border-radius: 28px; background: rgba(252,251,248,.96); border: 1px solid #e5e0d5; box-shadow: 0 6px 20px rgba(61,57,41,.1)">
+        <button aria-label="Attach a file" style="width: 44px; height: 44px; flex: none; border: 0; border-radius: 50%; background: transparent; color: #57513f; display: flex; align-items: center; justify-content: center"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 12.5l6-6a3 3 0 014 4l-8 8a5 5 0 01-7-7l7-7"/></svg></button>
+        <button aria-label="Record a voice note" style="width: 44px; height: 44px; flex: none; border: 0; border-radius: 50%; background: transparent; color: #57513f; display: flex; align-items: center; justify-content: center"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a3 3 0 00-3 3v5a3 3 0 006 0V6a3 3 0 00-3-3zM6 11a6 6 0 0012 0M12 17v4"/></svg></button>
+        <input type="text" placeholder="Message Kazi" aria-label="Message" style="flex-grow: 1; min-width: 0; border: 0; outline: 0; background: transparent; font: inherit; font-size: 16px; color: #3d3929; padding: 0 8px">
+        <button aria-label="Send message" style="width: 44px; height: 44px; flex: none; border: 0; border-radius: 50%; background: #a83c1e; color: #fff; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(168,60,30,.35)"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 11.5l18-8-7 18-3-7z"/></svg></button>
+      </div>
+    </div>
+  </main>
+
+  <!-- Details panel: docked column on wide screens -->
+  <aside aria-label="Chat details" style="width: 320px; flex: none; box-sizing: border-box; background: #fcfbf8; border-left: 1px solid #e5e0d5; display: flex; flex-direction: column; padding: 16px; gap: 16px">
+    <h2 style="margin: 0; font-size: 16px; font-weight: 600; height: 32px; display: flex; align-items: center">Details</h2>
+    <div role="group" aria-label="Assistant mode" style="display: flex; padding: 4px; border-radius: 999px; background: #efeae0">
+      <button aria-pressed="true" style="flex: 1 1 0; height: 36px; border: 0; border-radius: 999px; background: #fff; color: #3d3929; font-weight: 600; font-size: 14px; box-shadow: 0 1px 4px rgba(61,57,41,.12)">Ask first</button>
+      <button aria-pressed="false" style="flex: 1 1 0; height: 36px; border: 0; border-radius: 999px; background: transparent; color: #57513f; font-weight: 500; font-size: 14px">Autopilot</button>
+    </div>
+    <section style="border: 1px solid #e5e0d5; border-radius: 14px; background: #fff; padding: 14px; display: flex; flex-direction: column; gap: 6px">
+      <h3 style="margin: 0; font-size: 11px; font-weight: 600; letter-spacing: .1em; color: #6e6a5e">SUMMARY</h3>
+      <p style="margin: 0; font-size: 14px">Following up with Amina on an unpaid invoice. One email is waiting for approval.</p>
+    </section>
+    <section style="border: 1px solid #e5e0d5; border-radius: 14px; background: #fff; padding: 14px; display: flex; flex-direction: column; gap: 8px">
+      <div style="display: flex; align-items: center; justify-content: space-between">
+        <h3 style="margin: 0; font-size: 11px; font-weight: 600; letter-spacing: .1em; color: #6e6a5e">NOTES</h3>
+        <a href="#" style="font-size: 13px; font-weight: 600; text-decoration: none">Add note</a>
+      </div>
+      <p style="margin: 0; font-size: 14px; padding: 10px 12px; border-radius: 10px; background: #f6f3ec">Amina prefers email over WhatsApp.</p>
+    </section>
+    <section style="border: 1px solid #e5e0d5; border-radius: 14px; background: #fff; padding: 14px; display: flex; flex-direction: column; gap: 10px">
+      <h3 style="margin: 0; font-size: 11px; font-weight: 600; letter-spacing: .1em; color: #6e6a5e">ACTION RECEIPTS</h3>
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 14px"><span>Read Gmail thread</span><span style="font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 999px; background: rgba(72,150,101,.16); color: #24573b">Done</span></div>
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 14px"><span>Send email</span><span style="font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 999px; background: rgba(168,60,30,.12); color: #8a3016">Pending</span></div>
+    </section>
+  </aside>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+var base = 'display:flex;align-items:center;gap:12px;height:44px;padding:0 12px;border-radius:10px;text-decoration:none;font-size:15px;';
+var on = base + 'background:#a83c1e;color:#fff;font-weight:600;';
+var off = base + 'color:#57513f;font-weight:500;';
+var items = [
+['Dashboard', 'M3 11l9-8 9 8M5 10v10h14V10'],
+['Chats', 'M4 5h16v11H9l-5 4z', 2],
+['Automations', 'M5 4h5v5H5zM14 15h5v5h-5zM7.500 9v4.500a2 2 0 002 2H14'],
+['Inbox', 'M4 13l2-8h12l2 8v6H4zM4 13h5a3 3 0 006 0h5', 1],
+['Wallet', 'M3 7h16a2 2 0 012 2v9a2 2 0 01-2 2H3zM3 7V5a1 1 0 011-1h13M16 13.500h2'],
+['Reminders', 'M12 3a9 9 0 100 18 9 9 0 000-18zM12 7v5l3 2'],
+['Travel', 'M3 11l18-7-7 18-2.500-7.500z'],
+['Settings', 'M4 7h10M18 7h2M4 17h2M10 17h10M16 5v4M8 15v4']
+];
+return {
+nav: items.map(function (it) {
+var cur = it[0] === 'Chats';
+return { label: it[0], d: it[1], badge: cur ? null : (it[2] || null), current: cur ? 'page' : null, style: cur ? on : off };
+})
+};
+}
+}
+</script>
+</body>
+</html>

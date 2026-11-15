@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Kazi dashboard, desktop</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<style>
+body{margin:0}
+button{font:inherit;cursor:pointer}
+a{color:#8a3016}a:hover{color:#6f2611}
+.brick{background-image:url("Backend/chatbot/static/img/brick-wall.svg");background-size:96px 48px}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; box-sizing: border-box; display: flex; font-family: Inter, system-ui, sans-serif; font-size: 15px; line-height: 1.5; color: #3d3929; background: #f6f3ec; overflow: hidden">
+
+  <nav aria-label="Primary" style="width: 232px; flex: none; box-sizing: border-box; background: #fcfbf8; border-right: 1px solid #e5e0d5; display: flex; flex-direction: column; padding: 16px 12px; gap: 20px">
+    <div style="display: flex; align-items: center; gap: 12px; padding: 0 8px">
+      <span style="width: 36px; height: 36px; border-radius: 11px; background: #a83c1e; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(168,60,30,.3)">
+        <svg viewBox="5 3 23 26" width="18" height="18" aria-hidden="true"><polygon fill="#fff" points="5,3 11,3 11,29 5,29"/><polygon fill="#fff" points="11,16 18,16 27,29 20,29"/><polygon fill="#f6c9b6" points="15,12 22,12 28,3 21,3"/></svg>
+      </span>
+      <div style="display: flex; flex-direction: column">
+        <span style="font-weight: 700; font-size: 16px; letter-spacing: -0.01em">Kazi</span>
+        <span style="font-size: 12px; color: #6e6a5e">Demo Workspace</span>
+      </div>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 2px; flex-grow: 1">
+      <sc-for list="{{nav}}" as="item" hint-placeholder-count="8">
+        <a href="#" aria-current="{{item.current}}" style="{{item.style}}">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="{{item.d}}"/></svg>
+          <span style="flex-grow: 1">{{item.label}}</span>
+          <sc-if value="{{item.badge}}" hint-placeholder-val="{{false}}"><span style="min-width: 20px; height: 20px; padding: 0 6px; box-sizing: border-box; border-radius: 999px; background: #a83c1e; color: #fff; font-size: 12px; font-weight: 600; display: flex; align-items: center; justify-content: center">{{item.badge}}</span></sc-if>
+        </a>
+      </sc-for>
+    </div>
+    <div style="display: flex; align-items: center; gap: 10px; padding: 12px 8px 0; border-top: 1px solid #e5e0d5">
+      <span style="width: 36px; height: 36px; border-radius: 50%; background: rgba(168,60,30,.12); color: #8a3016; font-weight: 600; display: flex; align-items: center; justify-content: center">D</span>
+      <div style="display: flex; flex-direction: column; flex-grow: 1">
+        <span style="font-weight: 600; font-size: 14px">demo</span>
+        <span style="font-size: 12px; color: #6e6a5e">Free plan</span>
+      </div>
+      <button aria-label="Switch to dark theme" style="width: 44px; height: 44px; border: 0; border-radius: 50%; background: transparent; color: #6e6a5e; display: flex; align-items: center; justify-content: center">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 019.5 4a8 8 0 1010.5 10.5z"/></svg>
+      </button>
+    </div>
+  </nav>
+
+  <main style="flex: 1 1 0; min-width: 0; box-sizing: border-box; padding: 28px 32px; display: flex; flex-direction: column; gap: 20px; overflow: hidden">
+
+    <section class="brick" style="border: 1px solid #e5e0d5; border-radius: 16px; background-color: #fcfbf8; padding: 24px 28px; display: flex; align-items: center; justify-content: space-between; gap: 24px">
+      <div style="display: flex; flex-direction: column; gap: 4px">
+        <span style="font-size: 11px; font-weight: 600; letter-spacing: .12em; color: #8a3016">COMMAND CENTER</span>
+        <h1 style="margin: 0; font-size: 30px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.2">Welcome back, demo</h1>
+        <p style="margin: 0; color: #57513f">One thing needs you today.</p>
+      </div>
+      <a href="Main.dc.html" style="height: 48px; padding: 0 22px; border-radius: 999px; background: #a83c1e; color: #fff; font-weight: 600; text-decoration: none; display: flex; align-items: center; gap: 8px; box-shadow: 0 4px 12px rgba(168,60,30,.3)">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/></svg>Ask Kazi
+      </a>
+    </section>
+
+    <section aria-label="Needs you" style="border: 1px solid rgba(168,60,30,.25); border-radius: 14px; background: #fff; padding: 14px 18px; display: flex; align-items: center; gap: 14px; box-shadow: 0 4px 16px rgba(168,60,30,.08)">
+      <span style="width: 40px; height: 40px; flex: none; border-radius: 12px; background: rgba(168,60,30,.12); color: #8a3016; display: flex; align-items: center; justify-content: center"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 13l2-8h12l2 8v6H4zM4 13h5a3 3 0 006 0h5"/></svg></span>
+      <div style="display: flex; flex-direction: column; flex-grow: 1; min-width: 0">
+        <span style="font-weight: 600">Send email to amina@example.com</span>
+        <span style="font-size: 13px; color: #6e6a5e">Follow-up email workflow · waiting for approval in General</span>
+      </div>
+      <button style="height: 44px; padding: 0 18px; border: 0; border-radius: 999px; background: #a83c1e; color: #fff; font-weight: 600; font-size: 14px">Approve and send</button>
+      <button style="height: 44px; padding: 0 18px; border: 1px solid #e5e0d5; border-radius: 999px; background: #fff; color: #3d3929; font-weight: 500; font-size: 14px">Review</button>
+    </section>
+
+    <section aria-label="Modules" style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px">
+      <sc-for list="{{tiles}}" as="tile" hint-placeholder-count="6">
+        <a href="#" style="display: flex; align-items: center; gap: 14px; padding: 18px; border: 1px solid #e5e0d5; border-radius: 14px; background: #fff; text-decoration: none; color: #3d3929; box-shadow: 0 2px 8px rgba(61,57,41,.05)">
+          <span style="width: 44px; height: 44px; flex: none; border-radius: 12px; background: rgba(168,60,30,.12); color: #8a3016; display: flex; align-items: center; justify-content: center"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="{{tile.d}}"/></svg></span>
+          <span style="display: flex; flex-direction: column; flex-grow: 1; min-width: 0">
+            <span style="font-weight: 600; font-size: 16px">{{tile.label}}</span>
+            <span style="font-size: 13px; color: #6e6a5e">{{tile.sub}}</span>
+          </span>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8a3016" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+        </a>
+      </sc-for>
+    </section>
+
+    <section aria-label="Workspace numbers" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px">
+      <div style="border: 1px solid #e5e0d5; border-radius: 14px; background: #fff; padding: 16px 18px; display: flex; flex-direction: column; gap: 2px">
+        <span style="font-size: 11px; font-weight: 600; letter-spacing: .1em; color: #6e6a5e">ACTIVE ROOMS</span>
+        <span style="font-size: 28px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.25">3</span>
+        <span style="font-size: 13px; color: #6e6a5e">conversations</span>
+      </div>
+      <div style="border: 1px solid #e5e0d5; border-radius: 14px; background: #fff; padding: 16px 18px; display: flex; flex-direction: column; gap: 2px">
+        <span style="font-size: 11px; font-weight: 600; letter-spacing: .1em; color: #6e6a5e">UNREAD ROOMS</span>
+        <span style="font-size: 28px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.25">1</span>
+        <span style="font-size: 13px; color: #6e6a5e">Client work</span>
+      </div>
+      <div style="border: 1px solid #e5e0d5; border-radius: 14px; background: #fff; padding: 16px 18px; display: flex; flex-direction: column; gap: 2px">
+        <span style="font-size: 11px; font-weight: 600; letter-spacing: .1em; color: #6e6a5e">REMINDERS</span>
+        <span style="font-size: 28px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.25">0</span>
+        <span style="font-size: 13px; color: #6e6a5e">due today</span>
+      </div>
+      <div style="border: 1px solid #e5e0d5; border-radius: 14px; background: #fff; padding: 16px 18px; display: flex; flex-direction: column; gap: 2px">
+        <span style="font-size: 11px; font-weight: 600; letter-spacing: .1em; color: #6e6a5e">WALLET BALANCE</span>
+        <span style="font-size: 28px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.25">KES 0.00</span>
+        <span style="font-size: 13px; color: #6e6a5e">No transactions yet</span>
+      </div>
+    </section>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+var base = 'display:flex;align-items:center;gap:12px;height:44px;padding:0 12px;border-radius:10px;text-decoration:none;font-size:15px;';
+var on = base + 'background:#a83c1e;color:#fff;font-weight:600;';
+var off = base + 'color:#57513f;font-weight:500;';
+var P = {
+home: 'M3 11l9-8 9 8M5 10v10h14V10',
+chat: 'M4 5h16v11H9l-5 4z',
+flow: 'M5 4h5v5H5zM14 15h5v5h-5zM7.500 9v4.500a2 2 0 002 2H14',
+inbox: 'M4 13l2-8h12l2 8v6H4zM4 13h5a3 3 0 006 0h5',
+wallet: 'M3 7h16a2 2 0 012 2v9a2 2 0 01-2 2H3zM3 7V5a1 1 0 011-1h13M16 13.500h2',
+clock: 'M12 3a9 9 0 100 18 9 9 0 000-18zM12 7v5l3 2',
+plane: 'M3 11l18-7-7 18-2.500-7.500z',
+gear: 'M4 7h10M18 7h2M4 17h2M10 17h10M16 5v4M8 15v4'
+};
+var items = [['Dashboard', P.home], ['Chats', P.chat, 2], ['Automations', P.flow], ['Inbox', P.inbox, 1], ['Wallet', P.wallet], ['Reminders', P.clock], ['Travel', P.plane], ['Settings', P.gear]];
+return {
+nav: items.map(function (it) {
+var cur = it[0] === 'Dashboard';
+return { label: it[0], d: it[1], badge: it[2] || null, current: cur ? 'page' : null, style: cur ? on : off };
+}),
+tiles: [
+{ label: 'Chats', sub: 'Resume or start a conversation', d: P.chat },
+{ label: 'Automations', sub: 'Build and monitor workflows', d: P.flow },
+{ label: 'Wallet', sub: 'Balance, deposits and invoices', d: P.wallet },
+{ label: 'Reminders', sub: 'Schedule follow-ups', d: P.clock },
+{ label: 'Inbox', sub: 'Approvals and notifications', d: P.inbox },
+{ label: 'Travel', sub: 'Plan a trip with Kazi', d: P.plane }
+]
+};
+}
+}
+</script>
+</body>
+</html>

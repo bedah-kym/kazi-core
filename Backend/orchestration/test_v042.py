@@ -1,6 +1,7 @@
 """Unit tests for v0.4.2 pure logic — fail-plausible guard, DeepSeek adapter,
 URL placeholder detection, and booking links."""
 import json
+import random
 import threading
 import time
 from datetime import datetime
@@ -19,6 +20,20 @@ def _repeat(part, length):
 
 def _substrings(value, size):
     return {value[index:index + size] for index in range(len(value) - size + 1)}
+
+
+_BASE64URL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+
+
+def _credential_contexts(credential):
+    return {
+        "alone": credential,
+        "sentence": f"Use the credential {credential} to authenticate.",
+        "assignment": f"token={credential}",
+        "json": json.dumps({"credential": credential}),
+        "start": credential + " followed by text",
+        "end": "text before " + credential,
+    }
 
 
 class RedactSensitiveTextTests(SimpleTestCase):
@@ -123,20 +138,9 @@ class SecretFormatRedactionTests(SimpleTestCase):
             ("url-password", url, url_password),
         ]
 
-    @staticmethod
-    def _contexts(credential):
-        return {
-            "alone": credential,
-            "sentence": f"Use the credential {credential} to authenticate.",
-            "assignment": f"token={credential}",
-            "json": json.dumps({"credential": credential}),
-            "start": credential + " followed by text",
-            "end": "text before " + credential,
-        }
-
     def test_common_key_formats_are_redacted(self):
         for name, credential, secret in self._credentials():
-            for context_name, text in self._contexts(credential).items():
+            for context_name, text in _credential_contexts(credential).items():
                 with self.subTest(format=name, context=context_name):
                     output = redact_sensitive_text(text)
                     self.assertIn("[REDACTED SECRET]", output)
@@ -195,6 +199,77 @@ class SecretFormatRedactionTests(SimpleTestCase):
         output = redact_sensitive_text("contact joe@example.com")
         self.assertIn("[REDACTED EMAIL]", output)
         self.assertNotIn("[REDACTED SECRET]", output)
+
+
+class SeededSecretFormatRedactionTests(SimpleTestCase):
+    _DRAWS = 200
+    _SECRET_SIZE = 8
+
+    @staticmethod
+    def _random_body(rng, length, alphabet):
+        return "".join(rng.choice(alphabet) for _ in range(length))
+
+    def _assert_redacted(self, family, draw, credential, secret):
+        for context_name, text in _credential_contexts(credential).items():
+            with self.subTest(family=family, draw=draw, context=context_name):
+                output = redact_sensitive_text(text)
+                self.assertIn("[REDACTED SECRET]", output)
+                for fragment in _substrings(secret, self._SECRET_SIZE):
+                    self.assertNotIn(fragment, output)
+
+    def _draw_provider_family(self, rng, family, prefix, low, high):
+        bodies = []
+        for draw in range(self._DRAWS):
+            body = self._random_body(rng, rng.randint(low, high), _BASE64URL)
+            bodies.append(body)
+            self._assert_redacted(family, draw, prefix + body, body)
+        self.assertTrue(any("-" in body for body in bodies))
+        self.assertTrue(any("_" in body for body in bodies))
+
+    def test_provider_keys_with_seeded_base64url_bodies_are_redacted(self):
+        rng = random.Random(20261115)  # nosec B311 — seeded test data, not security
+        families = (
+            ("anthropic", "sk-ant-api03-", 93, 93),
+            ("openai-project", "sk-proj-", 120, 120),
+            ("openai-svcacct", "sk-svcacct-", 100, 100),
+            ("provider-sk", "sk-", 16, 120),
+            ("stripe-live", "sk_live_", 24, 99),
+            ("provider-pk", "pk_", 16, 120),
+            ("provider-rk", "rk_", 16, 120),
+        )
+        for family, prefix, low, high in families:
+            with self.subTest(family=family):
+                self._draw_provider_family(rng, family, prefix, low, high)
+
+    def test_other_base64url_alphabet_patterns_are_redacted(self):
+        rng = random.Random(20261116)  # nosec B311 — seeded test data, not security
+        families = (
+            ("slack", "xoxb-", "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-", 10, 80, "-"),
+            ("google", "AIza", _BASE64URL, 35, 35, "-_"),
+            ("github-fine-grained", "github_pat_", "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_", 22, 80, "_"),
+        )
+        for family, prefix, alphabet, low, high, separators in families:
+            bodies = []
+            for draw in range(self._DRAWS):
+                body = self._random_body(rng, rng.randint(low, high), alphabet)
+                bodies.append(body)
+                self._assert_redacted(family, draw, prefix + body, body)
+            for separator in separators:
+                with self.subTest(family=family, separator=separator):
+                    self.assertTrue(any(separator in body for body in bodies))
+
+    def test_seeded_jwts_are_redacted(self):
+        rng = random.Random(20261117)  # nosec B311 — seeded test data, not security
+        seen_separators = set()
+        for draw in range(self._DRAWS):
+            header = "eyJ" + self._random_body(rng, rng.randint(8, 40), _BASE64URL)
+            payload = "eyJ" + self._random_body(rng, rng.randint(8, 40), _BASE64URL)
+            signature = self._random_body(rng, rng.randint(8, 40), _BASE64URL)
+            token = header + "." + payload + "." + signature
+            for segment in (header, payload, signature):
+                seen_separators.update(char for char in "-_" if char in segment)
+            self._assert_redacted("jwt", draw, token, token)
+        self.assertEqual(seen_separators, {"-", "_"})
 
 
 _REDACTION_THREAD_TIMEOUT_SECONDS = 20

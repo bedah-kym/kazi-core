@@ -92,9 +92,12 @@ keyboard: send it work, see what it answers, and approve or reject what it asks.
 Premium (D21); no native speech model, voice is transcribed at the edges (D15); a topic
 per room with no switching (D4); built new on the v0.8 core.
 
-**Two things I still need from you** (they don't block approval):
-- **Group mode (TB-14).** Will anyone but you use this bot? If not, I would drop it.
-- **Voice replies (TB-M2).** Spoken answers, or are voice notes in and text out enough?
+**Answered on 2026-11-15**
+- **Family use (D27).** You are the only user at first, and the bridge is being built
+  for your family, so group mode (TB-14) stays in the plan and is designed for several
+  people, each paired to their own Kazi account.
+- **Spoken replies (D18).** Wanted, as a convenience. They stay last in line and must
+  not cost time choosing voice models.
 
 ---
 
@@ -1501,15 +1504,21 @@ through the same seam as the WebSocket (§1.8).
 | **D16** | Can a spoken "yes" approve | yes; no | **No.** Transcripts are `consent_eligible=False` (TB-M0); approve with the buttons. |
 | **D17** | Default speech-to-text | OpenAI `gpt-transcribe`; local faster-whisper; Groq | **OpenAI by default, plus `openai_compatible`** so local or Groq is one setting. This adds a disclosure: audio goes to the STT provider as well as Telegram. |
 | **D19** | How photos reach the agent | native image blocks; describe-first pre-pass | **Describe-first** (TB-M4). It works on all three providers with no protected-path change. |
-| **D20** | Which voice model speaks after 2027-01-06 | an OpenAI Realtime or audio model; a third-party or local TTS through `openai_compatible` | **Decide before January**, and only if voice replies are wanted (D18). |
+| **D20** | Which voice model speaks after 2027-01-06 | an OpenAI Realtime or audio model; a third-party or local TTS through `openai_compatible` | **Don't choose now.** The mouth adapter takes any OpenAI-compatible speech endpoint from config (`TTS_URL`, `TTS_MODEL`), so the model is a setting, not a design decision. Use whatever works when TB-M2 is built. Anthropic's API has no speech output: its own cookbook pairs Claude with a third-party voice service (checked 2026-11-15, search results only). |
 | **D22** | Default UI for approval cards | inline buttons; widgets (10.4) | **Buttons by default; widgets opt-in per binding** (`/ui widgets`) once a test widget renders on your device. |
 
-**Open: I need your answer**
+**Answered by you on 2026-11-15**
+
+| # | Question | Answer, and what it changes |
+|---|---|---|
+| **D18** | Do you want spoken replies (TB-M2)? | **Yes, as a convenience.** TB-M2 stays in stage 4, behind everything else, with no model research (D20). Voice notes *in* don't depend on it. |
+| **D27** | Will anyone but you use this bot? | **Only you at first; your family later, so group mode is key.** TB-14 stays and is designed for several people. Family members can already each pair their own private chat with the bot from stage 1, because links are per user (§3.3). TB-14 adds the shared family group. |
+
+**Open: one question**
 
 | # | Question | Why it matters |
 |---|---|---|
-| **D18** | Do you want spoken replies (TB-M2)? | It is the only ticket that depends on OpenAI's speech models, which are being removed in January (D20). Voice notes *in* don't depend on this. |
-| **D27** | Will anyone but you use this bot (group mode, TB-14)? | Group mode is the largest block of extra risk: other people see the cards, and drafts and widgets don't work in groups. If it is only you, I would drop it. |
+| **D28** | In the family group, does each person have their own Kazi account, or does everyone act as you? | It decides who a message is "from" in the room and who may approve. I recommend **one Kazi account per person**: Kazi's approvals are requester-only (`agent_loop.py:3983-3986`), so each person approves only their own requests, and nobody can approve as you. |
 
 ---
 
@@ -1595,11 +1604,11 @@ low- and medium-risk actions from your phone.
 
 | Ticket | Needs | What | Size |
 |---|---|---|---|
-| **TB-M2** | TB-M1, D18, D20 | Spoken replies: one mouth adapter replacing `generate_voice_response` and the `generate_speech` delivery gap; reply in kind plus `/voice`; the text is always sent too | M |
+| **TB-M2** | TB-M1 | Spoken replies (wanted, lowest priority, D18): one mouth adapter replacing `generate_voice_response` and the `generate_speech` delivery gap; reply in kind plus `/voice`; the text is always sent too | M |
 | **TB-M4** (core, plan) | TB-M3 | Photo understanding: a describe-first vision pre-pass into `processed_text`, framed as untrusted, cached by `file_unique_id` | M |
 | **TB-W1** | TB-11 | Approval widget: a static template, state in `chat_data`, taps through the same handler as buttons, fallback to buttons (§3.6) | M |
 | **TB-W2** | TB-10, TB-W1 | Status widget per run, where widgets are switched on | M |
-| **TB-14** | D27 | Group mode: a private forum supergroup with one topic per room; approvals and the PIN stay in the private chat; an edited status message instead of a draft, with the L4 rules | M |
+| **TB-14** | D27, D28 | Family group mode: a private forum supergroup with one topic per shared room. The gate accepts a member only if their `from.id` has its own active private link **and** that Kazi user is a member of the room; their message is submitted as that user. Each person's approval cards and PIN go to their own private chat, never the group. An edited status message replaces the draft, with the L4 rules. Until it ships, each family member can use their own private chat with the bot | M-L |
 | **TB-19** | — | D13: rebuild the v0.4.2 connector's sends on `bot_api.py`, or retire it | S |
 | **TB-M5** (core, later) | T-A2, plan | Native image blocks. Only if TB-M4 proves insufficient | L |
 

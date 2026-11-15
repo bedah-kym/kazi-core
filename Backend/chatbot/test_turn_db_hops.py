@@ -397,15 +397,15 @@ class TurnContextPendingSnapshotTests(TransactionTestCase):
     def test_known_pending_skips_the_snapshot_queries(self):
         with patch(
             "orchestration.coordinator.has_paused",
-            side_effect=AssertionError("snapshot must be skipped"),
-        ), patch(
+        ) as has_paused, patch(
             "orchestration.coordinator._pending_approval_record",
-            side_effect=AssertionError("snapshot must be skipped"),
-        ):
+        ) as approval:
             snapshot = _load_turn_context_sync(
                 self.user.id, self.room.id, {},
                 fast_path=True, known_pending=True,
             )
+        has_paused.assert_not_called()
+        approval.assert_not_called()
         self.assertFalse(snapshot.nothing_pending)
 
     def test_the_non_runner_path_does_not_read_the_snapshot_or_summary(self):

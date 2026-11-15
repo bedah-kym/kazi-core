@@ -1,13 +1,24 @@
 """Unit tests for v0.4.2 pure logic — fail-plausible guard, DeepSeek adapter,
 URL placeholder detection, and booking links."""
+import json
+import threading
+import time
 from datetime import datetime
 
 from django.test import SimpleTestCase
 
 from orchestration.connectors.itinerary_connector import _is_placeholder_url
 from orchestration.llm_client import LLMClient
-from orchestration.security_policy import redact_sensitive_text
+from orchestration.security_policy import _SECRET_PATTERNS, redact_sensitive_text
 from orchestration.tool_executor import _normalize_error
+
+
+def _repeat(part, length):
+    return (part * ((length // len(part)) + 1))[:length]
+
+
+def _substrings(value, size):
+    return {value[index:index + size] for index in range(len(value) - size + 1)}
 
 
 class RedactSensitiveTextTests(SimpleTestCase):
@@ -73,6 +84,159 @@ class RedactSensitiveTextTests(SimpleTestCase):
     def test_leaves_plain_text_untouched(self):
         text = "The weather in Nairobi is warm today."
         self.assertEqual(redact_sensitive_text(text), text)
+
+
+class SecretFormatRedactionTests(SimpleTestCase):
+    def _credentials(self):
+        filler = "Q7mK2pX9vB4nR8tY3wZ6"
+        aws = "AK" + "IA" + _repeat("K7M2Q9X4", 16)
+        github = "gh" + "p_" + _repeat("aB3dE6hJ9mN2pQ5sT8vW1y", 36)
+        github_pat = "github" + "_pat_" + _repeat("Z8y7X6w5V4u3T2s1R0q9", 30)
+        slack = "xo" + "xb-" + "1234567890-abcdefghij"
+        google = "AI" + "za" + _repeat("A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6", 35)
+        jwt = (
+            "eyJ" + "hbGciOiJIUzI1NiJ9"
+            + "."
+            + "eyJzdWIiOiIxMjM0NTY3ODkwIn0"
+            + "."
+            + "Q7mK2pX9vB4nR8tY3wZ6"
+        )
+        pem_body = _repeat("MIIEowA1b2C3d4E5", 64)
+        pem = (
+            "-----BEGIN " + "RSA PRIVATE KEY" + "-----\n"
+            + pem_body
+            + "\n-----END " + "RSA PRIVATE KEY" + "-----"
+        )
+        url_password = "P4ssw0rd" + "Q7mK2pX9"
+        url = "https" + "://" + "user" + ":" + url_password + "@" + "db.example.com"
+        return [
+            ("anthropic", "sk" + "-ant-api03-" + _repeat(filler, 24), _repeat(filler, 24)),
+            ("openai-project", "sk" + "-proj-" + _repeat(filler, 24), _repeat(filler, 24)),
+            ("stripe-live", "sk" + "_live_" + _repeat(filler, 24), _repeat(filler, 24)),
+            ("aws", aws, aws[len("AKIA"):]),
+            ("github", github, github[len("ghp_"):]),
+            ("github-fine-grained", github_pat, github_pat[len("github_pat_"):]),
+            ("slack", slack, slack[len("xoxb-"):]),
+            ("google", google, google[len("AIza"):]),
+            ("jwt", jwt, jwt),
+            ("pem", pem, pem_body),
+            ("url-password", url, url_password),
+        ]
+
+    @staticmethod
+    def _contexts(credential):
+        return {
+            "alone": credential,
+            "sentence": f"Use the credential {credential} to authenticate.",
+            "assignment": f"token={credential}",
+            "json": json.dumps({"credential": credential}),
+            "start": credential + " followed by text",
+            "end": "text before " + credential,
+        }
+
+    def test_common_key_formats_are_redacted(self):
+        for name, credential, secret in self._credentials():
+            for context_name, text in self._contexts(credential).items():
+                with self.subTest(format=name, context=context_name):
+                    output = redact_sensitive_text(text)
+                    self.assertIn("[REDACTED SECRET]", output)
+                    for fragment in _substrings(secret, 6):
+                        self.assertNotIn(fragment, output)
+
+    def test_url_password_keeps_user_and_host(self):
+        _, credential, _ = next(
+            item for item in self._credentials() if item[0] == "url-password"
+        )
+        self.assertEqual(
+            redact_sensitive_text(credential),
+            "https://user:[REDACTED SECRET]@db.example.com",
+        )
+
+    def test_truncated_pem_header_redacts_to_the_end(self):
+        body = _repeat("MIIEowA1b2C3d4E5", 64)
+        text = "-----BEGIN " + "OPENSSH PRIVATE KEY" + "-----\n" + body
+        output = redact_sensitive_text(text)
+        self.assertEqual(output, "[REDACTED SECRET]")
+        for fragment in _substrings(body, 6):
+            self.assertNotIn(fragment, output)
+
+    def test_todays_redactions_are_unchanged(self):
+        cases = [
+            ("provider-sk", "sk-" + "abcdefghijklmnop123456", "[REDACTED SECRET]"),
+            ("provider-pk", "pk-" + "abcdefghijklmnop123456", "[REDACTED SECRET]"),
+            ("provider-rk", "rk-" + "abcdefghijklmnop123456", "[REDACTED SECRET]"),
+            (
+                "bearer",
+                "Authorization: Bearer " + "abcdefghijklmnopqrstuvwxyz123456",
+                "[REDACTED SECRET]",
+            ),
+            ("api-key", "api_key=SECRET123", "[REDACTED SECRET]"),
+            ("password", "password=hunter2", "[REDACTED SECRET]"),
+            ("email", "joe@example.com", "[REDACTED EMAIL]"),
+            ("phone", "+254 712 345 678", "[REDACTED PHONE]"),
+        ]
+        for name, text, token in cases:
+            with self.subTest(case=name):
+                self.assertIn(token, redact_sensitive_text(text))
+
+    def test_negative_cases_are_not_redacted(self):
+        cases = [
+            ("sk-plus-word", "sk-documentation"),
+            ("uuid", "123e4567-e89b-12d3-a456-426614174000"),
+            ("git-sha", "da39a3ee5e6b4b0d3255bfef95601890afd80709"),
+            ("akia-word", "the AKIA prefix is not a key"),
+            ("url-without-credentials", "https://example.com/path?q=1"),
+        ]
+        for name, text in cases:
+            with self.subTest(case=name):
+                self.assertNotIn("[REDACTED SECRET]", redact_sensitive_text(text))
+
+    def test_email_is_not_treated_as_a_secret(self):
+        output = redact_sensitive_text("contact joe@example.com")
+        self.assertIn("[REDACTED EMAIL]", output)
+        self.assertNotIn("[REDACTED SECRET]", output)
+
+
+_REDACTION_THREAD_TIMEOUT_SECONDS = 20
+_REDACTION_ELAPSED_BOUND_SECONDS = 5.0
+
+
+def _run_redaction_in_thread(operation):
+    result = {}
+
+    def target():
+        start = time.perf_counter()
+        operation()
+        result["elapsed"] = time.perf_counter() - start
+
+    thread = threading.Thread(target=target, daemon=True)
+    thread.start()
+    thread.join(_REDACTION_THREAD_TIMEOUT_SECONDS)
+    return thread.is_alive(), result.get("elapsed")
+
+
+class RedactionCostTests(SimpleTestCase):
+    @staticmethod
+    def _pathological_text(mode):
+        if mode == "alnum":
+            return ("A1b2C3d4E5" * 100000)[:1000000]
+        if mode == "hyphens":
+            return "-" * 1000000
+        return "-----BEGIN RSA PRIVATE KEY-----\n" + "A" * 1000000
+
+    def test_pathological_inputs_finish_within_a_fixed_bound(self):
+        for mode in ("alnum", "hyphens", "unclosed-pem"):
+            text = self._pathological_text(mode)
+            for index, pattern in enumerate(_SECRET_PATTERNS):
+                with self.subTest(mode=mode, pattern=index):
+                    hung, elapsed = _run_redaction_in_thread(
+                        lambda pattern=pattern: pattern.sub("[REDACTED SECRET]", text)
+                    )
+                    self.assertFalse(
+                        hung,
+                        f"pattern {index} exceeded {_REDACTION_THREAD_TIMEOUT_SECONDS}s",
+                    )
+                    self.assertLess(elapsed, _REDACTION_ELAPSED_BOUND_SECONDS)
 
 
 class NormalizeErrorTests(SimpleTestCase):

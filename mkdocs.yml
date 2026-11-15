@@ -126,6 +126,7 @@ exclude_docs: |
   demo-workflows/
   kazi-reference/
   # Agent-facing working docs, not end-user documentation
+  design/
   golden-principles/
   plans/
   proposals/

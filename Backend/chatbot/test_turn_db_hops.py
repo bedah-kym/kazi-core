@@ -28,12 +28,23 @@ from orchestration.coordinator import _load_turn_context_sync
 from orchestration.models import Turn
 from workflows.models import WorkflowApprovalRecord
 
-# Measured on SQLite through the runner path after FU-47 round 2. The hop
-# count is vendor-independent; the query count is pinned on SQLite only.
-PLAIN_TURN_HOPS = 19
+# Measured through the runner path. The hop count is vendor-independent. Both
+# query counts are exact: SQLite locally, Postgres from CI's printed numbers.
+PLAIN_TURN_HOPS = 21
 PLAIN_TURN_QUERIES = 37
-TOOL_TURN_HOPS = 28
+PLAIN_TURN_POSTGRES_QUERIES = 33
+TOOL_TURN_HOPS = 30
 TOOL_TURN_QUERIES = 50
+TOOL_TURN_POSTGRES_QUERIES = 45
+APPROVAL_YES_HOPS = 42
+APPROVAL_YES_QUERIES = 63
+APPROVAL_YES_POSTGRES_QUERIES = 59
+BUDGET_CONTINUE_HOPS = 32
+BUDGET_CONTINUE_QUERIES = 48
+BUDGET_CONTINUE_POSTGRES_QUERIES = 44
+QUEUED_BEHIND_HOPS = 26
+QUEUED_BEHIND_QUERIES = 39
+QUEUED_BEHIND_POSTGRES_QUERIES = 35
 
 
 def _text(text):
@@ -44,11 +55,11 @@ def _tool(call_id, name, tool_input):
     return {"type": "tool_use", "id": call_id, "name": name, "input": tool_input}
 
 
-def _response(blocks, stop_reason="end_turn"):
+def _response(blocks, stop_reason="end_turn", usage=None):
     return {
         "content": blocks,
         "stop_reason": stop_reason,
-        "usage": {"input_tokens": 10, "output_tokens": 5},
+        "usage": usage or {"input_tokens": 10, "output_tokens": 5},
     }
 
 
@@ -140,12 +151,6 @@ class _RunnerTestCase(TransactionTestCase):
 
         async_to_sync(scenario)()
 
-
-@override_settings(
-    CHANNEL_LAYERS={"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}},
-    TURN_QUEUE_MAX=3,
-)
-class TurnDbHopTests(_RunnerTestCase):
     def _measure(self, text):
         self._enqueue(text)
         counts = {"hops": 0, "queries": 0}
@@ -170,23 +175,29 @@ class TurnDbHopTests(_RunnerTestCase):
         async_to_sync(scenario)()
         return counts
 
-    def _assert_counts(self, counts, hops, queries, label):
+    def _assert_counts(
+        self, counts, hops, sqlite_queries, postgres_queries,
+    ):
         self.assertEqual(counts["hops"], hops)
-        if connection.vendor != "sqlite":
-            print(
-                f"FU-47 Postgres measured {counts['queries']} queries for the "
-                f"{label} turn; the query pin is SQLite-only and the lead sets "
-                "the Postgres number from CI."
-            )
-            return
-        self.assertEqual(counts["queries"], queries)
+        expected = (
+            sqlite_queries if connection.vendor == "sqlite"
+            else postgres_queries
+        )
+        self.assertEqual(counts["queries"], expected)
 
+
+@override_settings(
+    CHANNEL_LAYERS={"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}},
+    TURN_QUEUE_MAX=3,
+)
+class TurnDbHopTests(_RunnerTestCase):
     def test_a_plain_turn_hop_and_query_counts(self):
         self.llm.queue(_response([_text("hello back")]))
         counts = self._measure("@kazi hello")
         self.assertEqual(Turn.objects.filter(state="completed").count(), 1)
         self._assert_counts(
-            counts, PLAIN_TURN_HOPS, PLAIN_TURN_QUERIES, "plain",
+            counts, PLAIN_TURN_HOPS, PLAIN_TURN_QUERIES,
+            PLAIN_TURN_POSTGRES_QUERIES,
         )
 
     def test_a_tool_turn_hop_and_query_counts(self):
@@ -201,7 +212,8 @@ class TurnDbHopTests(_RunnerTestCase):
         self.assertEqual(Turn.objects.filter(state="completed").count(), 1)
         self.assertEqual(self.execute_tool.await_count, 1)
         self._assert_counts(
-            counts, TOOL_TURN_HOPS, TOOL_TURN_QUERIES, "tool",
+            counts, TOOL_TURN_HOPS, TOOL_TURN_QUERIES,
+            TOOL_TURN_POSTGRES_QUERIES,
         )
 
 
@@ -233,6 +245,8 @@ class TurnContextFreshnessTests(_RunnerTestCase):
         self.assertFalse(captured[1].get("allow_email"))
 
     def test_a_persona_lookup_error_drops_the_identity_and_keeps_the_turn(self):
+        from chatbot.history import decrypt_stored
+
         self.llm.queue(_response([_text("hello back")]))
         with patch(
             "orchestration.personas.resolve_room_persona",
@@ -240,6 +254,9 @@ class TurnContextFreshnessTests(_RunnerTestCase):
         ):
             self._run_turn("@kazi hello")
         self.assertEqual(Turn.objects.filter(state="completed").count(), 1)
+        saved = Message.objects.order_by("-id").first()
+        self.assertIsNotNone(saved)
+        self.assertEqual(decrypt_stored(self.room, saved)[0], "hello back")
 
 
 @override_settings(
@@ -267,6 +284,29 @@ class VoiceDispatchTests(_RunnerTestCase):
         dispatch, _voice = self._run_with_voice(False)
         dispatch.assert_not_called()
 
+    def test_a_preference_changed_during_the_turn_wins(self):
+        from chatbot.turn_runner import save_turn_reply as real_save
+
+        profile = self.user.profile
+        profile.notification_preferences = {"ai_voice_enabled": False}
+        profile.save(update_fields=["notification_preferences"])
+        self.llm.queue(_response([_text("hello back")]))
+
+        def save_then_enable(room, result, *, user_id):
+            profile.notification_preferences = {"ai_voice_enabled": True}
+            profile.save(update_fields=["notification_preferences"])
+            return real_save(room, result, user_id=user_id)
+
+        with patch(
+            "chatbot.turn_runner.save_turn_reply", side_effect=save_then_enable,
+        ), patch("chatbot.dispatch.dispatch_task") as dispatch, patch(
+            "chatbot.tasks.generate_voice_response", new=object(),
+        ) as voice:
+            self._run_turn("@kazi hello")
+
+        saved = Message.objects.order_by("-id").first()
+        dispatch.assert_called_once_with(voice, saved.id)
+
 
 class TurnContextPendingSnapshotTests(TransactionTestCase):
     """The fast path's ``nothing_pending`` keeps the old pending meaning."""
@@ -281,11 +321,18 @@ class TurnContextPendingSnapshotTests(TransactionTestCase):
         self.member = Member.objects.select_related("User").get(User=self.user)
         self.room = Chatroom.objects.get(participants=self.member)
 
-    def _snapshot(self):
-        return _load_turn_context_sync(self.user.id, self.room.id, {})
+    def _snapshot(self, *, fast_path=True):
+        return _load_turn_context_sync(
+            self.user.id, self.room.id, {}, fast_path=fast_path,
+        )
 
     def test_an_idle_key_is_nothing_pending(self):
         self.assertTrue(self._snapshot().nothing_pending)
+
+    def test_the_non_runner_path_does_not_read_the_snapshot_or_summary(self):
+        snapshot = self._snapshot(fast_path=False)
+        self.assertFalse(snapshot.nothing_pending)
+        self.assertIsNone(snapshot.memory_summary)
 
     def test_a_paused_turn_is_never_idle(self):
         for pause_kind in ("approval", "budget", "quota"):
@@ -339,3 +386,70 @@ class TurnContextPendingSnapshotTests(TransactionTestCase):
             side_effect=RuntimeError("store down"),
         ):
             self.assertFalse(self._snapshot().nothing_pending)
+
+
+@override_settings(
+    CHANNEL_LAYERS={"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}},
+    TURN_QUEUE_MAX=3,
+    CONSENT_SKEW_SECONDS=0,
+)
+class PendingPathCostTests(_RunnerTestCase):
+    """FU-47 r3: pending paths must not cost more than origin/main."""
+
+    def test_an_approval_yes_turn_resumes_at_main_cost(self):
+        self.llm.queue(_response(
+            [_tool("c1", "send_email", {"to": "a@b.c"})],
+            stop_reason="tool_use",
+        ))
+        self._run_turn("@kazi send it")
+        paused = Turn.objects.get(state="paused")
+        self.assertEqual(paused.pause_kind, "approval")
+        self.assertEqual(self.execute_tool.await_count, 0)
+
+        self.llm.queue(_response([_text("Sent.")]))
+        counts = self._measure("yes")
+        self.assertEqual(self.execute_tool.await_count, 1)
+        self.assertEqual(Turn.objects.filter(state="completed").count(), 1)
+        self._assert_counts(
+            counts, APPROVAL_YES_HOPS, APPROVAL_YES_QUERIES,
+            APPROVAL_YES_POSTGRES_QUERIES,
+        )
+
+    def test_a_budget_continue_turn_resumes_at_main_cost(self):
+        self.llm.queue(_response(
+            [
+                _tool("b1", "request_more_budget", {"reason": "need more"}),
+                _tool("c1", "get_weather", {"city": "Nairobi"}),
+            ],
+            stop_reason="tool_use",
+            usage={"input_tokens": 50, "output_tokens": 50},
+        ))
+        with override_settings(
+            AGENT_TURN_TOKEN_BUDGET=10, AGENT_TURN_TOKEN_BUDGET_MAX=100000,
+        ):
+            self._run_turn("@kazi go")
+        paused = Turn.objects.get(state="paused")
+        self.assertEqual(paused.pause_kind, "budget")
+
+        self.llm.queue(_response([_text("Continued.")]))
+        with override_settings(
+            AGENT_TURN_TOKEN_BUDGET=10, AGENT_TURN_TOKEN_BUDGET_MAX=100000,
+        ):
+            counts = self._measure("continue")
+        self.assertEqual(Turn.objects.filter(state="completed").count(), 1)
+        self._assert_counts(
+            counts, BUDGET_CONTINUE_HOPS, BUDGET_CONTINUE_QUERIES,
+            BUDGET_CONTINUE_POSTGRES_QUERIES,
+        )
+
+    def test_a_turn_with_one_queued_behind_costs_main(self):
+        # A queued row is present for the whole measured turn. It has no
+        # request message, so the drainer cannot claim it after the first.
+        Turn.objects.create(room=self.room, user=self.user, state="queued")
+        self.llm.queue(_response([_text("hello back")]))
+        counts = self._measure("@kazi hello")
+        self.assertEqual(Turn.objects.filter(state="completed").count(), 1)
+        self._assert_counts(
+            counts, QUEUED_BEHIND_HOPS, QUEUED_BEHIND_QUERIES,
+            QUEUED_BEHIND_POSTGRES_QUERIES,
+        )

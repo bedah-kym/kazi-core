@@ -264,6 +264,38 @@ class InProcessSchedulerTests(TestCase):
         self.assertEqual(len(queries.captured_queries), 1)
         self.assertEqual(self.ran, [])
 
+    def test_a_runner_disabling_another_entry_in_the_same_tick_blocks_it(self):
+        """The real widened window: A's run disables B after the one read."""
+        from orchestration.in_process_scheduler import InProcessScheduler
+
+        entries = {
+            "entry-a": {
+                "task": "tests.test_process_weight.noop",
+                "schedule": 60.0,
+                "label": "a",
+            },
+            "entry-b": {
+                "task": "tests.test_process_weight.noop",
+                "schedule": 60.0,
+                "label": "b",
+            },
+        }
+        for name in entries:
+            self._seed_named(name, self.now - timedelta(seconds=120))
+        ran = []
+
+        def runner(entry):
+            ran.append(entry["label"])
+            if entry["label"] == "a":
+                PeriodicTask.objects.filter(name="entry-b").update(enabled=False)
+
+        scheduler = InProcessScheduler(
+            schedules=entries, runner=runner, now=lambda: self.now,
+        )
+        result = scheduler.run_due(self.now)
+        self.assertEqual(result, ["entry-a"])
+        self.assertEqual(ran, ["a"])
+
     def test_a_disable_after_the_tick_read_blocks_the_claim(self):
         """The CAS re-checks enabled, so a row disabled mid-tick does not run."""
         from orchestration.in_process_scheduler import InProcessScheduler

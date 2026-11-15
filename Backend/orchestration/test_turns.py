@@ -31,7 +31,6 @@ from orchestration.turns import (
     USER_CANCEL,
     atransition as real_atransition,
     _notice_text,
-    aget_paused_turn_if_any,
     claim_next_queued,
     claim_turn,
     continue_pause,
@@ -329,51 +328,6 @@ class ClaimTurnTests(_TurnTelemetryMixin, TransactionTestCase):
         self.assertEqual(old.state, "failed")
         self.assertEqual(old.end_reason, "abandoned")
         self.assertEqual(Turn.objects.filter(state="running").count(), 1)
-
-
-class PausedReadFastPathTests(TransactionTestCase):
-    """FU-47 c: an idle key never pays for the paused-turn read."""
-
-    def setUp(self):
-        super().setUp()
-        self.user = User.objects.create_user(
-            username="fast-path", password="fake-token",  # nosec B106
-        )
-        self.room = Chatroom.objects.create()
-
-    def test_an_idle_key_does_not_read_the_paused_turn(self):
-        with patch(
-            "orchestration.turns.aget_paused_turn", new=AsyncMock()
-        ) as paused:
-            result = async_to_sync(aget_paused_turn_if_any)(
-                self.room.id, self.user.id,
-            )
-        self.assertIsNone(result)
-        paused.assert_not_awaited()
-
-    def test_a_paused_key_reads_it(self):
-        paused_turn = Turn.objects.create(
-            room=self.room, user=self.user, state="paused",
-        )
-        with patch(
-            "orchestration.turns.aget_paused_turn",
-            new=AsyncMock(return_value=paused_turn),
-        ) as paused:
-            result = async_to_sync(aget_paused_turn_if_any)(
-                self.room.id, self.user.id,
-            )
-        self.assertEqual(result, paused_turn)
-        paused.assert_awaited_once_with(self.room.id, self.user.id)
-
-    def test_an_idle_claim_uses_one_cheap_check_not_the_fifo_read(self):
-        from django.test.utils import CaptureQueriesContext
-
-        with CaptureQueriesContext(connection) as queries:
-            self.assertIsNone(claim_next_queued(self.room.id, self.user.id))
-        self.assertEqual(len(queries.captured_queries), 1)
-        sql = queries.captured_queries[0]["sql"].upper()
-        self.assertIn("LIMIT 1", sql)
-        self.assertNotIn("ORDER BY", sql)
 
 
 class OrphanQueueNoticeTests(TransactionTestCase):

@@ -128,9 +128,17 @@ async def save_memory_state(context: Dict[str, Any], state: Dict[str, Any]) -> N
         return
 
 
+def load_memory_summary_sync(context: Dict[str, Any]) -> Optional[str]:
+    """The cached summary, for callers already on a sync worker thread."""
+    try:
+        return cache.get(_summary_key(context))
+    except Exception:
+        return None
+
+
 async def load_memory_summary(context: Dict[str, Any]) -> Optional[str]:
     try:
-        return await sync_to_async(cache.get)(_summary_key(context))
+        return await sync_to_async(load_memory_summary_sync)(context)
     except Exception:
         return None
 

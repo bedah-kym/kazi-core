@@ -255,20 +255,21 @@ class ChatConsumer(AsyncWebsocketConsumer):
             })
         return entries
 
-    async def _save_member_last_seen(self, user_id):
+    async def _save_member_last_seen(self, user_id, *, force: bool = False):
         """Save "now" as the member's last seen time and return it.
 
-        Writes are throttled to one per member per minute (FU-48): presence
-        beats and disconnect still report "now", but a member with several
-        sockets no longer re-writes the same row on every tick. A skipped save
-        returns the current time, so the caller's offline broadcast stays
-        honest.
+        Presence ticks are throttled to one write per member per minute
+        (FU-48). The final disconnect passes ``force=True`` so the last value
+        is always stored; it also drops the throttle entry so the map cannot
+        grow without bound. A skipped save still returns the current time so
+        the caller's broadcast stays honest.
         """
         now = timezone.now()
         stamp = monotonic()
-        last = _LAST_SEEN_WRITES.get(user_id)
-        if last is not None and stamp - last < LAST_SEEN_WRITE_INTERVAL_SECONDS:
-            return now
+        if not force:
+            last = _LAST_SEEN_WRITES.get(user_id)
+            if last is not None and stamp - last < LAST_SEEN_WRITE_INTERVAL_SECONDS:
+                return now
 
         def _save():
             Member.objects.filter(User_id=user_id).update(last_seen=now)
@@ -279,7 +280,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
             # A failed write must not consume the window: retry next time.
             logger.debug("Member.last_seen save skipped: %s", exc)
             return now
-        _LAST_SEEN_WRITES[user_id] = stamp
+        if force:
+            _LAST_SEEN_WRITES.pop(user_id, None)
+        else:
+            _LAST_SEEN_WRITES[user_id] = stamp
         return now
 
     async def _presence_loop(self, room_id, user_id, connection_id):
@@ -531,7 +535,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
             if room_id is not None and connection_id is not None:
                 last = await presence.disconnect(room_id, user_id, connection_id)
                 if last:
-                    seen_at = await self._save_member_last_seen(user_id)
+                    seen_at = await self._save_member_last_seen(
+                        user_id, force=True,
+                    )
                     await self._broadcast_presence("offline", seen_at.isoformat())
 
         except Exception as e:

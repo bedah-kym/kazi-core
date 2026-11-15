@@ -30,7 +30,6 @@ from orchestration.turns import (
     aclaim_turn,
     afinalize_turn,
     aget_paused_turn,
-    aget_paused_turn_if_any,
     aget_turn,
     alink_message,
     atransition,
@@ -59,7 +58,11 @@ from orchestration.adaptive_task import (
     clear_result_sets,
     is_cancel_request,
 )
-from orchestration.memory_state import load_memory_summary, clear_memory
+from orchestration.memory_state import (
+    clear_memory,
+    load_memory_summary,
+    load_memory_summary_sync,
+)
 from orchestration.tool_calls import (
     did_not_run_reason,
     record_from_event,
@@ -498,17 +501,15 @@ class TurnContext:
     """The stable per-turn reads the coordinator needs before it routes.
 
     Loaded in one sync hop (FU-47 b). Everything here is read again on the
-    next turn, so a preference or persona change is never served from an
-    earlier turn's snapshot. Pending state is reduced to a cheap existence
-    snapshot: an empty one lets the runner path skip the full reads, and any
-    doubt (or an actual pause/approval) takes the full, fresh path.
+    next turn, so a preference change is never served from an earlier turn's
+    snapshot. Pending state is reduced to a cheap existence snapshot: an empty
+    one lets the runner path skip the full reads, and any doubt (or an actual
+    pause/approval) takes the full, fresh path. Persona stays lazy in
+    ``_with_persona_identity``, as on main.
     """
 
     user_preferences: Dict[str, Any]
     resolved_profile: Any
-    persona: Any
-    # The user's own voice choice, read before learned overrides are merged.
-    ai_voice_enabled: bool
     # True only when the fast check saw no pause, no queued row, no approval
     # and no legacy loop state. The runner path then skips the four pending
     # reads; any doubt leaves it False and takes the full, fresh path.
@@ -517,15 +518,17 @@ class TurnContext:
 
 
 def _load_turn_context_sync(
-    user_id: int, room_id: Any, adaptive_context: Dict[str, Any],
+    user_id: int, room_id: Any, adaptive_context: Dict[str, Any], *,
+    fast_path: bool, known_pending: bool = False,
 ) -> TurnContext:
-    """Read preferences and persona in one worker hop.
+    """Read the stable per-turn state in one worker hop.
 
     The fallback rules are the ones the coordinator used inline: a profile
     failure still lets the preferences path try, and learned overrides only
-    apply when the user's own preferences loaded.
+    apply when the user's own preferences loaded. Persona is lazy (the caller
+    resolves it where main did), and the pending snapshot and memory summary
+    are read only on the runner path that uses them.
     """
-    from orchestration.personas import resolve_room_persona
     from orchestration.preference_mining import merge_learned_overrides
     from orchestration.shell.autopilot import is_armed
     from orchestration.shell.profile_store import profile as load_profile
@@ -558,8 +561,6 @@ def _load_turn_context_sync(
             user_preferences = conservative_default_preferences()
             preferences_loaded = False
 
-    ai_voice_enabled = bool(user_preferences.get("ai_voice_enabled", False))
-
     if preferences_loaded:
         try:
             user_preferences = merge_learned_overrides(
@@ -584,36 +585,24 @@ def _load_turn_context_sync(
         logger.debug("Shell autopilot lookup skipped: %s", e)
         user_preferences["_shell_autopilot"] = False
 
-    try:
-        persona = resolve_room_persona(room_id, user_id)
-    except Exception as e:
-        # The old inline path caught this: a persona lookup bug drops the
-        # identity block, never the turn.
-        logger.debug("Persona resolution skipped: %s", e)
-        persona = None
-
     nothing_pending = False
-    try:
-        if not has_paused_or_queued(room_id, user_id):
-            if _pending_approval_record(room_id, user_id) is None:
-                nothing_pending = not cache.get(_state_key(room_id, user_id))
-    except Exception:
-        # Any doubt: take the full pending path (fail closed).
-        nothing_pending = False
-
     memory_summary = None
-    try:
-        from orchestration.memory_state import _summary_key
-
-        memory_summary = cache.get(_summary_key(adaptive_context))
-    except Exception as e:
-        logger.debug("Memory summary read skipped: %s", e)
+    if fast_path:
+        if not known_pending:
+            try:
+                if not has_paused_or_queued(room_id, user_id):
+                    if _pending_approval_record(room_id, user_id) is None:
+                        nothing_pending = not cache.get(
+                            _state_key(room_id, user_id),
+                        )
+            except Exception:
+                # Any doubt: take the full pending path (fail closed).
+                nothing_pending = False
+        memory_summary = load_memory_summary_sync(adaptive_context)
 
     return TurnContext(
         user_preferences=user_preferences,
         resolved_profile=resolved_profile,
-        persona=persona,
-        ai_voice_enabled=ai_voice_enabled,
         nothing_pending=nothing_pending,
         memory_summary=memory_summary,
     )
@@ -644,9 +633,6 @@ class OrchestrationResult:
     # has saved the reply.
     turn_version: int = 0
     turn_state: str = ""
-    # Whether this turn's user preferences asked for a voice reply. Read once
-    # with the other per-turn preferences, so the runner needs no extra hop.
-    ai_voice_enabled: bool = False
 
 
 class OrchestrationCoordinator:
@@ -1100,10 +1086,16 @@ class OrchestrationCoordinator:
             "room_id": room_id,
             "username": username,
         }
-        # One hop for preferences, persona and the memory summary. Each turn
-        # reads them again, so nothing stale survives across turns (FU-47 b).
+        # One hop for preferences and the memory summary. Each turn reads them
+        # again, so nothing stale survives across turns (FU-47 b).
+        known_pending = bool(
+            getattr(claimed_turn, "paused_exists", False)
+            or getattr(claimed_turn, "other_queued", False)
+        ) if claimed_turn is not None else False
         turn_context = await sync_to_async(_load_turn_context_sync)(
             user_id, room_id, adaptive_context,
+            fast_path=claimed_turn is not None,
+            known_pending=known_pending,
         )
         memory_summary = (
             turn_context.memory_summary
@@ -1124,9 +1116,14 @@ class OrchestrationCoordinator:
         async def _with_persona_identity(room_id, user_id, ctx_prompt: str) -> str:
             """Prepend the room persona's identity + skills to the loop context."""
             try:
-                from orchestration.personas import persona_identity_prompt
+                from orchestration.personas import (
+                    persona_identity_prompt,
+                    resolve_room_persona,
+                )
 
-                persona = turn_context.persona
+                persona = await sync_to_async(resolve_room_persona)(
+                    room_id, user_id,
+                )
                 if persona:
                     identity = persona_identity_prompt(persona, user_capabilities=user_preferences)
                     return "\n\n".join([identity, ctx_prompt or ""]).strip()
@@ -1782,7 +1779,8 @@ class OrchestrationCoordinator:
         if claimed_turn is not None and turn_context.nothing_pending:
             paused_turn = None
         else:
-            paused_turn = await aget_paused_turn_if_any(room_id, user_id)
+            # The snapshot above already ran the EXISTS; read the row directly.
+            paused_turn = await aget_paused_turn(room_id, user_id)
         consent_reply = bool(
             pending_confirmation
             and (is_autopilot_request(query) or is_approval_reply(query))
@@ -2176,7 +2174,6 @@ class OrchestrationCoordinator:
             turn_id=_turn_id(),
             turn_version=turn_box["ref"].version if turn_box.get("ref") else 0,
             turn_state=turn_box["ref"].state if turn_box.get("ref") else "",
-            ai_voice_enabled=turn_context.ai_voice_enabled,
         )
 
     async def finalize_turn(

@@ -1066,7 +1066,7 @@ class TurnRunner:
         )
         if ai_message is not None:
             reply_saved = True
-            await self._maybe_voice(ai_message, result.ai_voice_enabled)
+            await self._maybe_voice(ai_message, turn.user_id)
             try:
                 from .context_summary import schedule_context_summary
 
@@ -1088,14 +1088,15 @@ class TurnRunner:
             )
         return result
 
-    async def _maybe_voice(self, ai_message, voice_enabled: bool) -> None:
+    async def _maybe_voice(self, ai_message, user_id: int) -> None:
         try:
-            if not voice_enabled:
-                return
+            from orchestration.user_preferences import get_user_preferences
             from .dispatch import dispatch_task
             from .tasks import generate_voice_response
 
-            dispatch_task(generate_voice_response, ai_message.id)
+            prefs = await sync_to_async(get_user_preferences)(user_id)
+            if bool(prefs.get("ai_voice_enabled", False)):
+                dispatch_task(generate_voice_response, ai_message.id)
         except Exception as exc:
             logger.debug("Voice preference check skipped: %s", exc)
 

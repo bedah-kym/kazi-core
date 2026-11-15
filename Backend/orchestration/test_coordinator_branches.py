@@ -123,6 +123,41 @@ class CoordinatorBranchTests(SimpleTestCase):
         result, mocks, send_chunk = self._run(
             "yes",
             patches={
+                "orchestration.coordinator._pending_approval_record": MagicMock(
+                    return_value=object(),
+                ),
+                "orchestration.coordinator.has_pending_agent_state": AsyncMock(
+                    return_value=True,
+                ),
+                "orchestration.coordinator.resume_after_confirmation": recording_resume,
+            },
+            claimed_turn=claimed,
+        )
+        mocks["_pending_approval_record"].assert_called()
+        self.assertEqual(len(resumes), 1)
+        self.assertTrue(any(c.args[1] == "ok" for c in send_chunk.await_args_list))
+
+    def test_a_snapshot_lookup_error_still_takes_the_full_pending_path(self):
+        from types import SimpleNamespace
+
+        claimed = SimpleNamespace(
+            pk="00000000-0000-0000-0000-000000000001",
+            version=0,
+            state="running",
+        )
+        resumes = []
+
+        async def recording_resume(**kwargs):
+            resumes.append(kwargs)
+            async for event in _event_stream(**kwargs):
+                yield event
+
+        result, mocks, send_chunk = self._run(
+            "yes",
+            patches={
+                "orchestration.coordinator.has_paused_or_queued": MagicMock(
+                    side_effect=RuntimeError("turn store down"),
+                ),
                 "orchestration.coordinator.has_pending_agent_state": AsyncMock(
                     return_value=True,
                 ),

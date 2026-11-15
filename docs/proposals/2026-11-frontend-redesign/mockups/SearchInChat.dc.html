@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Kazi search inside a chat</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<style>
+body{margin:0}
+button{font:inherit;cursor:pointer}
+a{color:#8a3016}a:hover{color:#6f2611}
+mark{background:#f3d9a4;color:#3d3929;border-radius:3px;padding:0 2px}
+.brick{background-image:url("Backend/chatbot/static/img/brick-wall.svg");background-size:96px 48px}
+</style>
+</helmet>
+<div style="width: 1000px; height: 900px; box-sizing: border-box; display: flex; font-family: Inter, system-ui, sans-serif; font-size: 15px; line-height: 1.5; color: #3d3929; background: #f6f3ec; overflow: hidden">
+
+  <!-- Conversation, jumped to a result -->
+  <main class="brick" style="flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; background-color: #f6f3ec">
+    <header style="height: 64px; flex: none; box-sizing: border-box; display: flex; align-items: center; gap: 12px; padding: 0 20px; background: rgba(252,251,248,.9); border-bottom: 1px solid #e5e0d5">
+      <span style="width: 40px; height: 40px; flex: none; border-radius: 50%; background: #a83c1e; color: #fff; font-weight: 600; display: flex; align-items: center; justify-content: center">K</span>
+      <div style="display: flex; flex-direction: column; flex-grow: 1; min-width: 0">
+        <h1 style="margin: 0; font-size: 16px; font-weight: 600">General</h1>
+        <span style="font-size: 13px; color: #6e6a5e">Invoices, follow-ups and day-to-day admin</span>
+      </div>
+    </header>
+
+    <div style="flex: none; display: flex; align-items: center; gap: 10px; padding: 8px 20px; background: #3d3929; color: #f6f3ec; font-size: 13px">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M11 4a7 7 0 100 14 7 7 0 000-14zM16 16l4 4"/></svg>
+      <span style="flex-grow: 1">Showing 12 March, from your search. Newer messages are below.</span>
+      <a href="#" style="color: #f6c9b6; font-weight: 600">Back to latest</a>
+    </div>
+
+    <div style="flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; gap: 14px; padding: 20px 24px; overflow: hidden">
+      <div style="align-self: center; font-size: 11px; font-weight: 600; letter-spacing: .1em; color: #6e6a5e; background: rgba(252,251,248,.9); padding: 4px 12px; border-radius: 999px; border: 1px solid #e5e0d5">12 MARCH</div>
+
+      <div style="align-self: flex-end; max-width: 400px; display: flex; flex-direction: column; align-items: flex-end; gap: 4px">
+        <div style="padding: 12px 18px; border-radius: 16px 16px 5px 16px; background: linear-gradient(135deg, #4a463c, #57513f); color: #f6f3ec">Has Amina paid yet?</div>
+        <span style="font-size: 12px; color: #6e6a5e">9:02 AM</span>
+      </div>
+
+      <div style="align-self: flex-start; max-width: 440px; display: flex; flex-direction: column; gap: 4px">
+        <div style="padding: 14px 18px; border-radius: 16px 16px 16px 5px; background: #fcfbf8; border: 2px solid #a83c1e; box-shadow: 0 0 0 6px rgba(168,60,30,.14); display: flex; flex-direction: column; gap: 8px">
+          <div style="color: #8a3016; font-weight: 600; font-size: 13px">Kazi</div>
+          <div>Not yet. The <mark>invoice</mark> for the March retainer was sent on 4 March and is eight days old. Do you want me to draft a follow-up?</div>
+        </div>
+        <span style="font-size: 12px; color: #6e6a5e">9:02 AM · result 2 of 7</span>
+      </div>
+
+      <div style="align-self: flex-end; max-width: 400px; display: flex; flex-direction: column; align-items: flex-end; gap: 4px">
+        <div style="padding: 12px 18px; border-radius: 16px 16px 5px 16px; background: linear-gradient(135deg, #4a463c, #57513f); color: #f6f3ec">Yes, keep it short and friendly.</div>
+        <span style="font-size: 12px; color: #6e6a5e">9:03 AM</span>
+      </div>
+
+      <div style="align-self: flex-start; max-width: 440px; display: flex; flex-direction: column; gap: 4px">
+        <div style="padding: 14px 18px; border-radius: 16px 16px 16px 5px; background: #fcfbf8; border: 1px solid rgba(168,60,30,.25); display: flex; flex-direction: column; gap: 8px">
+          <div style="color: #8a3016; font-weight: 600; font-size: 13px">Kazi</div>
+          <div>Drafted. It is waiting for your approval before it goes out.</div>
+        </div>
+        <span style="font-size: 12px; color: #6e6a5e">9:03 AM</span>
+      </div>
+    </div>
+  </main>
+
+  <!-- Search tab in the details panel -->
+  <aside aria-label="Search this chat" style="width: 380px; flex: none; box-sizing: border-box; background: #fcfbf8; border-left: 1px solid #e5e0d5; display: flex; flex-direction: column; padding: 14px 16px; gap: 12px">
+    <div role="tablist" aria-label="Details" style="display: flex; gap: 20px; border-bottom: 1px solid #e5e0d5">
+      <button role="tab" aria-selected="false" style="height: 40px; padding: 0; border: 0; border-bottom: 2px solid transparent; background: transparent; color: #57513f; font-weight: 500; font-size: 14px">Activity</button>
+      <button role="tab" aria-selected="false" style="height: 40px; padding: 0; border: 0; border-bottom: 2px solid transparent; background: transparent; color: #57513f; font-weight: 500; font-size: 14px">Notes</button>
+      <button role="tab" aria-selected="false" style="height: 40px; padding: 0; border: 0; border-bottom: 2px solid transparent; background: transparent; color: #57513f; font-weight: 500; font-size: 14px">Memory</button>
+      <button role="tab" aria-selected="true" style="height: 40px; padding: 0; border: 0; border-bottom: 2px solid #a83c1e; background: transparent; color: #3d3929; font-weight: 600; font-size: 14px">Search</button>
+    </div>
+
+    <label style="display: flex; align-items: center; gap: 8px; height: 44px; flex: none; padding: 0 14px; border-radius: 999px; background: #fff; border: 2px solid #a83c1e; color: #57513f">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M11 4a7 7 0 100 14 7 7 0 000-14zM16 16l4 4"/></svg>
+      <input type="search" value="invoice" aria-label="Search this chat" style="border: 0; outline: 0; background: transparent; font: inherit; font-size: 16px; color: #3d3929; flex-grow: 1; min-width: 0">
+    </label>
+
+    <div role="group" aria-label="Filters" style="display: flex; flex-wrap: wrap; gap: 6px">
+      <button aria-pressed="true" style="height: 32px; padding: 0 12px; border: 0; border-radius: 999px; background: #3d3929; color: #f6f3ec; font-size: 13px; font-weight: 600">All</button>
+      <button aria-pressed="false" style="height: 32px; padding: 0 12px; border: 1px solid #e5e0d5; border-radius: 999px; background: #fff; color: #3d3929; font-size: 13px">Messages</button>
+      <button aria-pressed="false" style="height: 32px; padding: 0 12px; border: 1px solid #e5e0d5; border-radius: 999px; background: #fff; color: #3d3929; font-size: 13px">Media</button>
+      <button aria-pressed="false" style="height: 32px; padding: 0 12px; border: 1px solid #e5e0d5; border-radius: 999px; background: #fff; color: #3d3929; font-size: 13px">Actions</button>
+      <button style="height: 32px; padding: 0 12px; border: 1px dashed #cfc8b8; border-radius: 999px; background: transparent; color: #57513f; font-size: 13px">From anyone</button>
+      <button style="height: 32px; padding: 0 12px; border: 1px dashed #cfc8b8; border-radius: 999px; background: transparent; color: #57513f; font-size: 13px">Any date</button>
+    </div>
+
+    <div style="display: flex; align-items: baseline; justify-content: space-between; font-size: 12px; color: #6e6a5e">
+      <span>7 results in all history, newest first</span>
+      <span style="font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">2 / 7</span>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 6px; min-height: 0">
+      <a href="#" style="display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 10px; border: 1px solid #e5e0d5; background: #fff; text-decoration: none; color: #3d3929">
+        <span style="display: flex; justify-content: space-between; font-size: 12px; color: #6e6a5e"><span style="font-weight: 600; color: #8a3016">Action · Send email</span><span>Today</span></span>
+        <span style="font-size: 14px">Following up on last week's <mark>invoice</mark>, to amina@example.com</span>
+      </a>
+      <a href="#" aria-current="true" style="display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 10px; border: 2px solid #a83c1e; background: rgba(168,60,30,.06); text-decoration: none; color: #3d3929">
+        <span style="display: flex; justify-content: space-between; font-size: 12px; color: #6e6a5e"><span style="font-weight: 600">Kazi</span><span>12 Mar</span></span>
+        <span style="font-size: 14px">Not yet. The <mark>invoice</mark> for the March retainer was sent on 4 March and is eight days old…</span>
+      </a>
+      <a href="#" style="display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 10px; border: 1px solid #e5e0d5; background: #fff; text-decoration: none; color: #3d3929">
+        <span style="display: flex; justify-content: space-between; font-size: 12px; color: #6e6a5e"><span style="font-weight: 600">File · PDF</span><span>4 Mar</span></span>
+        <span style="font-size: 14px"><span style="font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px">march-retainer.pdf</span> — found in the document text: "<mark>Invoice</mark> number 0031"</span>
+      </a>
+      <a href="#" style="display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 10px; border: 1px solid #e5e0d5; background: #fff; text-decoration: none; color: #3d3929">
+        <span style="display: flex; justify-content: space-between; font-size: 12px; color: #6e6a5e"><span style="font-weight: 600">You · voice note</span><span>2 Mar</span></span>
+        <span style="font-size: 14px">Transcript: "…remind me to send the <mark>invoice</mark> before Friday…"</span>
+      </a>
+      <a href="#" style="display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 10px; border: 1px solid #e5e0d5; background: #fff; text-decoration: none; color: #3d3929">
+        <span style="display: flex; justify-content: space-between; font-size: 12px; color: #6e6a5e"><span style="font-weight: 600">You</span><span>14 Feb</span></span>
+        <span style="font-size: 14px">Can you make the February <mark>invoice</mark> match the new rate?</span>
+      </a>
+    </div>
+
+    <div style="display: flex; align-items: center; gap: 8px; margin-top: auto; padding-top: 10px; border-top: 1px solid #e5e0d5">
+      <button aria-label="Previous result" style="width: 40px; height: 40px; border: 1px solid #e5e0d5; border-radius: 50%; background: #fff; color: #3d3929; display: flex; align-items: center; justify-content: center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 15l6-6 6 6"/></svg></button>
+      <button aria-label="Next result" style="width: 40px; height: 40px; border: 1px solid #e5e0d5; border-radius: 50%; background: #fff; color: #3d3929; display: flex; align-items: center; justify-content: center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
+      <a href="GlobalSearch.dc.html" style="margin-left: auto; font-size: 13px; font-weight: 600">Search all chats</a>
+    </div>
+  </aside>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1000,"height":900}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Kazi dashboard, phone</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<style>
+body{margin:0}
+button{font:inherit;cursor:pointer}
+a{color:#8a3016}a:hover{color:#6f2611}
+.brick{background-image:url("Backend/chatbot/static/img/brick-wall.svg");background-size:96px 48px}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; display: flex; flex-direction: column; font-family: Inter, system-ui, sans-serif; font-size: 15px; line-height: 1.5; color: #3d3929; background: #f6f3ec; overflow: hidden">
+
+  <header style="height: 60px; flex: none; box-sizing: border-box; display: flex; align-items: center; gap: 12px; padding: 0 8px 0 16px; background: rgba(252,251,248,.92); border-bottom: 1px solid #e5e0d5">
+    <span style="width: 32px; height: 32px; flex: none; border-radius: 10px; background: #a83c1e; display: flex; align-items: center; justify-content: center"><svg viewBox="5 3 23 26" width="16" height="16" aria-hidden="true"><polygon fill="#fff" points="5,3 11,3 11,29 5,29"/><polygon fill="#fff" points="11,16 18,16 27,29 20,29"/><polygon fill="#f6c9b6" points="15,12 22,12 28,3 21,3"/></svg></span>
+    <span style="font-weight: 600; font-size: 16px; flex-grow: 1">Dashboard</span>
+    <button aria-label="Notifications, 1 unread" style="position: relative; width: 44px; height: 44px; border: 0; border-radius: 50%; background: transparent; color: #57513f; display: flex; align-items: center; justify-content: center">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 16V11a6 6 0 0112 0v5l2 2H4zM10 20a2 2 0 004 0"/></svg>
+      <span style="position: absolute; top: 9px; right: 9px; width: 10px; height: 10px; border-radius: 50%; background: #a83c1e; border: 2px solid #fcfbf8"></span>
+    </button>
+  </header>
+
+  <main style="flex: 1 1 0; min-height: 0; box-sizing: border-box; padding: 16px; display: flex; flex-direction: column; gap: 14px; overflow: hidden">
+
+    <section class="brick" style="border: 1px solid #e5e0d5; border-radius: 16px; background-color: #fcfbf8; padding: 18px; display: flex; flex-direction: column; gap: 4px">
+      <span style="font-size: 11px; font-weight: 600; letter-spacing: .12em; color: #8a3016">COMMAND CENTER</span>
+      <h1 style="margin: 0; font-size: 24px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.2">Welcome back, demo</h1>
+      <p style="margin: 0; color: #57513f">One thing needs you today.</p>
+    </section>
+
+    <section aria-label="Needs you" style="border: 1px solid rgba(168,60,30,.25); border-radius: 14px; background: #fff; padding: 14px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 4px 16px rgba(168,60,30,.08)">
+      <div style="display: flex; align-items: center; gap: 12px">
+        <span style="width: 40px; height: 40px; flex: none; border-radius: 12px; background: rgba(168,60,30,.12); color: #8a3016; display: flex; align-items: center; justify-content: center"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 13l2-8h12l2 8v6H4zM4 13h5a3 3 0 006 0h5"/></svg></span>
+        <div style="display: flex; flex-direction: column; min-width: 0">
+          <span style="font-weight: 600">Send email to Amina</span>
+          <span style="font-size: 13px; color: #6e6a5e">Waiting for approval in General</span>
+        </div>
+      </div>
+      <div style="display: flex; gap: 8px">
+        <button style="flex: 2 1 0; height: 46px; border: 0; border-radius: 999px; background: #a83c1e; color: #fff; font-weight: 600; font-size: 15px">Approve and send</button>
+        <button style="flex: 1 1 0; height: 46px; border: 1px solid #e5e0d5; border-radius: 999px; background: #fff; color: #3d3929; font-weight: 500; font-size: 15px">Review</button>
+      </div>
+    </section>
+
+    <section aria-label="Modules" style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px">
+      <sc-for list="{{tiles}}" as="tile" hint-placeholder-count="6">
+        <a href="{{tile.href}}" style="display: flex; flex-direction: column; gap: 8px; padding: 14px; border: 1px solid #e5e0d5; border-radius: 14px; background: #fff; text-decoration: none; color: #3d3929; box-shadow: 0 2px 8px rgba(61,57,41,.05)">
+          <span style="width: 36px; height: 36px; border-radius: 10px; background: rgba(168,60,30,.12); color: #8a3016; display: flex; align-items: center; justify-content: center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="{{tile.d}}"/></svg></span>
+          <span style="display: flex; flex-direction: column">
+            <span style="font-weight: 600">{{tile.label}}</span>
+            <span style="font-size: 12px; color: #6e6a5e">{{tile.sub}}</span>
+          </span>
+        </a>
+      </sc-for>
+    </section>
+  </main>
+
+  <nav aria-label="Primary" style="flex: none; display: flex; padding: 6px 8px 10px; background: rgba(252,251,248,.96); border-top: 1px solid #e5e0d5">
+    <sc-for list="{{tabs}}" as="tab" hint-placeholder-count="5">
+      <a href="{{tab.href}}" aria-current="{{tab.current}}" style="{{tab.style}}">
+        <span style="{{tab.pill}}"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="{{tab.d}}"/></svg></span>
+        <span>{{tab.label}}</span>
+      </a>
+    </sc-for>
+  </nav>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+renderVals() {
+var P = {
+home: 'M3 11l9-8 9 8M5 10v10h14V10',
+chat: 'M4 5h16v11H9l-5 4z',
+flow: 'M5 4h5v5H5zM14 15h5v5h-5zM7.500 9v4.500a2 2 0 002 2H14',
+inbox: 'M4 13l2-8h12l2 8v6H4zM4 13h5a3 3 0 006 0h5',
+wallet: 'M3 7h16a2 2 0 012 2v9a2 2 0 01-2 2H3zM3 7V5a1 1 0 011-1h13M16 13.500h2',
+clock: 'M12 3a9 9 0 100 18 9 9 0 000-18zM12 7v5l3 2',
+plane: 'M3 11l18-7-7 18-2.500-7.500z',
+more: 'M4 7h16M4 12h16M4 17h16'
+};
+var base = 'flex:1 1 0;min-height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;text-decoration:none;font-size:11px;';
+var pill = 'width:56px;height:30px;border-radius:999px;display:flex;align-items:center;justify-content:center;';
+var tabs = [['Home', P.home, 'DashboardPhone.dc.html'], ['Chats', P.chat, 'ChatsListPhone.dc.html'], ['Automations', P.flow, '#'], ['Inbox', P.inbox, '#'], ['More', P.more, '#']];
+return {
+tabs: tabs.map(function (it) {
+var cur = it[0] === 'Home';
+return {
+label: it[0], d: it[1], href: it[2], current: cur ? 'page' : null,
+style: base + (cur ? 'color:#8a3016;font-weight:600;' : 'color:#57513f;font-weight:500;'),
+pill: pill + (cur ? 'background:rgba(168,60,30,.14);' : '')
+};
+}),
+tiles: [
+{ label: 'Chats', sub: '1 unread room', d: P.chat, href: 'ChatsListPhone.dc.html' },
+{ label: 'Automations', sub: 'Build and monitor', d: P.flow, href: '#' },
+{ label: 'Wallet', sub: 'KES 0.00', d: P.wallet, href: '#' },
+{ label: 'Reminders', sub: '0 due today', d: P.clock, href: '#' },
+{ label: 'Inbox', sub: '1 approval', d: P.inbox, href: '#' },
+{ label: 'Travel', sub: 'Plan a trip', d: P.plane, href: '#' }
+]
+};
+}
+}
+</script>
+</body>
+</html>

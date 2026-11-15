@@ -269,7 +269,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
         last = _LAST_SEEN_WRITES.get(user_id)
         if last is not None and stamp - last < LAST_SEEN_WRITE_INTERVAL_SECONDS:
             return now
-        _LAST_SEEN_WRITES[user_id] = stamp
 
         def _save():
             Member.objects.filter(User_id=user_id).update(last_seen=now)
@@ -277,7 +276,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
         try:
             await sync_to_async(_save)()
         except Exception as exc:
+            # A failed write must not consume the window: retry next time.
             logger.debug("Member.last_seen save skipped: %s", exc)
+            return now
+        _LAST_SEEN_WRITES[user_id] = stamp
         return now
 
     async def _presence_loop(self, room_id, user_id, connection_id):

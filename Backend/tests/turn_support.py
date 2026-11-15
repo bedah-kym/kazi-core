@@ -19,6 +19,7 @@ def turn_test_patches() -> dict:
         "orchestration.coordinator.aget_paused_turn": AsyncMock(return_value=None),
         # FU-47 c's cheap check and the read behind it: keep routing tests off
         # the Turn store as well.
+        "orchestration.coordinator.has_paused_or_queued": lambda *a, **k: False,
         "orchestration.turns.has_paused_or_queued": lambda *a, **k: False,
         "orchestration.turns.aget_paused_turn": AsyncMock(return_value=None),
         "orchestration.coordinator.aget_turn": AsyncMock(return_value=None),

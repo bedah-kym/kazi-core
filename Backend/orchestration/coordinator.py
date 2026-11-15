@@ -507,6 +507,8 @@ class TurnContext:
     user_preferences: Dict[str, Any]
     resolved_profile: Any
     persona: Any
+    # The user's own voice choice, read before learned overrides are merged.
+    ai_voice_enabled: bool
     # True only when the fast check saw no pause, no queued row, no approval
     # and no legacy loop state. The runner path then skips the four pending
     # reads; any doubt leaves it False and takes the full, fresh path.
@@ -556,6 +558,8 @@ def _load_turn_context_sync(
             user_preferences = conservative_default_preferences()
             preferences_loaded = False
 
+    ai_voice_enabled = bool(user_preferences.get("ai_voice_enabled", False))
+
     if preferences_loaded:
         try:
             user_preferences = merge_learned_overrides(
@@ -580,7 +584,13 @@ def _load_turn_context_sync(
         logger.debug("Shell autopilot lookup skipped: %s", e)
         user_preferences["_shell_autopilot"] = False
 
-    persona = resolve_room_persona(room_id, user_id)
+    try:
+        persona = resolve_room_persona(room_id, user_id)
+    except Exception as e:
+        # The old inline path caught this: a persona lookup bug drops the
+        # identity block, never the turn.
+        logger.debug("Persona resolution skipped: %s", e)
+        persona = None
 
     nothing_pending = False
     try:
@@ -603,38 +613,10 @@ def _load_turn_context_sync(
         user_preferences=user_preferences,
         resolved_profile=resolved_profile,
         persona=persona,
+        ai_voice_enabled=ai_voice_enabled,
         nothing_pending=nothing_pending,
         memory_summary=memory_summary,
     )
-
-
-def _is_postgres() -> bool:
-    try:
-        from django.db import connection
-
-        return connection.vendor == "postgresql"
-    except Exception:
-        return False
-
-
-def _load_turn_context_off_thread(
-    user_id: int, room_id: Any, adaptive_context: Dict[str, Any],
-) -> TurnContext:
-    """Run the pure-read context loader off the shared thread on Postgres.
-
-    The worker connection is closed afterwards so a test database can still be
-    dropped. Writes and the pause lazy-expiry stay on the shared thread.
-    """
-    try:
-        return _load_turn_context_sync(user_id, room_id, adaptive_context)
-    finally:
-        if _is_postgres():
-            try:
-                from django.db import connection
-
-                connection.close()
-            except Exception:
-                pass
 
 
 @dataclass
@@ -1120,9 +1102,9 @@ class OrchestrationCoordinator:
         }
         # One hop for preferences, persona and the memory summary. Each turn
         # reads them again, so nothing stale survives across turns (FU-47 b).
-        turn_context = await sync_to_async(
-            _load_turn_context_off_thread, thread_sensitive=not _is_postgres(),
-        )(user_id, room_id, adaptive_context)
+        turn_context = await sync_to_async(_load_turn_context_sync)(
+            user_id, room_id, adaptive_context,
+        )
         memory_summary = (
             turn_context.memory_summary
             if claimed_turn is not None
@@ -1795,7 +1777,7 @@ class OrchestrationCoordinator:
         # One logical turn keeps one id. A reply that resolves a pause continues
         # that Turn; anything else (a question, another request) keeps the pause
         # armed and starts a new record (D8).
-        # One indexed EXISTS first: an idle key skips the paused-turn read
+        # One EXISTS first: an idle key skips the paused-turn read
         # (FU-47 c). A paused row still reads fresh, same turn.
         if claimed_turn is not None and turn_context.nothing_pending:
             paused_turn = None
@@ -2194,9 +2176,7 @@ class OrchestrationCoordinator:
             turn_id=_turn_id(),
             turn_version=turn_box["ref"].version if turn_box.get("ref") else 0,
             turn_state=turn_box["ref"].state if turn_box.get("ref") else "",
-            ai_voice_enabled=bool(
-                user_preferences.get("ai_voice_enabled", False)
-            ),
+            ai_voice_enabled=turn_context.ai_voice_enabled,
         )
 
     async def finalize_turn(

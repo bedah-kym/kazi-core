@@ -376,24 +376,56 @@ class ConsumerPresenceTests(SimpleTestCase):
         async_to_sync(run)()
 
     def test_last_seen_is_written_at_most_once_a_minute(self):
+        from datetime import datetime, timezone as dt_timezone
+
         consumer = self._consumer(38, 2, "bob", [_FakeMember(2, "bob")])
         stamps = iter([1000.0, 1030.0, 1061.0])
+        moments = iter([
+            datetime(2026, 1, 1, 12, 0, tzinfo=dt_timezone.utc),
+            datetime(2026, 1, 1, 12, 0, 30, tzinfo=dt_timezone.utc),
+            datetime(2026, 1, 1, 12, 1, 1, tzinfo=dt_timezone.utc),
+        ])
+
+        async def run():
+            with patch("chatbot.consumers.Member") as member_model, patch(
+                "chatbot.consumers.monotonic", side_effect=lambda: next(stamps),
+            ), patch(
+                "chatbot.consumers.timezone.now", side_effect=lambda: next(moments),
+            ):
+                first = await consumer._save_member_last_seen(2)
+                skipped = await consumer._save_member_last_seen(2)
+                third = await consumer._save_member_last_seen(2)
+            return member_model, first, skipped, third
+
+        member_model, first, skipped, third = async_to_sync(run)()
+        # First and third cross the one-minute window; the middle one is skipped.
+        self.assertEqual(member_model.objects.filter.return_value.update.call_count, 2)
+        # Every call reports its own "now", including the skipped one.
+        self.assertEqual(first, datetime(2026, 1, 1, 12, 0, tzinfo=dt_timezone.utc))
+        self.assertEqual(
+            skipped, datetime(2026, 1, 1, 12, 0, 30, tzinfo=dt_timezone.utc),
+        )
+        self.assertEqual(
+            third, datetime(2026, 1, 1, 12, 1, 1, tzinfo=dt_timezone.utc),
+        )
+
+    def test_a_failed_write_is_retried_on_the_next_call(self):
+        consumer = self._consumer(39, 2, "bob", [_FakeMember(2, "bob")])
+        stamps = iter([1000.0, 1001.0])
 
         async def run():
             with patch("chatbot.consumers.Member") as member_model, patch(
                 "chatbot.consumers.monotonic", side_effect=lambda: next(stamps),
             ):
-                first = await consumer._save_member_last_seen(2)
+                member_model.objects.filter.return_value.update.side_effect = [
+                    RuntimeError("database down"), None,
+                ]
                 await consumer._save_member_last_seen(2)
-                third = await consumer._save_member_last_seen(2)
-            return member_model, first, third
+                await consumer._save_member_last_seen(2)
+            return member_model
 
-        member_model, first, third = async_to_sync(run)()
-        # First and third cross the one-minute window; the middle one is skipped.
+        member_model = async_to_sync(run)()
         self.assertEqual(member_model.objects.filter.return_value.update.call_count, 2)
-        # A skipped save still returns "now", so the offline broadcast is honest.
-        self.assertIsNotNone(first)
-        self.assertIsNotNone(third)
 
     def test_only_the_first_and_last_connection_are_announced(self):
         members = [_FakeMember(2, "bob")]

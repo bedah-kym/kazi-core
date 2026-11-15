@@ -264,6 +264,36 @@ class InProcessSchedulerTests(TestCase):
         self.assertEqual(len(queries.captured_queries), 1)
         self.assertEqual(self.ran, [])
 
+    def test_a_disable_after_the_tick_read_blocks_the_claim(self):
+        """The CAS re-checks enabled, so a row disabled mid-tick does not run."""
+        from orchestration.in_process_scheduler import InProcessScheduler
+
+        self._seed_named("due-mid-tick", self.now - timedelta(seconds=120))
+        scheduler = InProcessScheduler(
+            schedules={
+                "due-mid-tick": {
+                    "task": "tests.test_process_weight.noop",
+                    "schedule": 60.0,
+                },
+            },
+            runner=lambda entry: self.ran.append(entry["task"]),
+            now=lambda: self.now,
+        )
+        stale = PeriodicTask.objects.get(name="due-mid-tick")
+        PeriodicTask.objects.filter(pk=stale.pk).update(enabled=False)
+
+        claimed = scheduler._claim(
+            "due-mid-tick", scheduler._schedules["due-mid-tick"],
+            self.now, row=stale,
+        )
+        self.assertFalse(claimed)
+        self.assertEqual(self.ran, [])
+        stale.refresh_from_db()
+        self.assertFalse(stale.enabled)
+        self.assertEqual(
+            stale.last_run_at, self.now - timedelta(seconds=120),
+        )
+
     def test_a_tick_claims_only_the_due_entries(self):
         """The one read is followed by a write only for each due entry."""
         from orchestration.in_process_scheduler import InProcessScheduler

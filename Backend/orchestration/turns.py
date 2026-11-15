@@ -321,7 +321,7 @@ def count_queued(room_id: Any, user_id: Any) -> int:
 
 
 def has_paused_or_queued(room_id: Any, user_id: Any) -> bool:
-    """Cheap indexed check: is there anything to pause-read or claim?
+    """Cheap check: is there anything to pause-read or claim?
 
     One ``EXISTS`` on ``(room, user, state)``. The coordinator uses it to
     skip the paused-turn read and the drainer uses it to skip the heavier FIFO
@@ -461,7 +461,7 @@ def claim_next_queued(room_id: Any, user_id: Any) -> Optional[Turn]:
     from chatbot.models import Message
 
     if not has_paused_or_queued(room_id, user_id):
-        # Idle key: one indexed EXISTS instead of the FIFO read below.
+        # Idle key: one EXISTS instead of the FIFO read below.
         return None
 
     def _queued():

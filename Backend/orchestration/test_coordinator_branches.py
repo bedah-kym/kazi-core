@@ -24,7 +24,7 @@ async def _event_stream(**kwargs):
 
 
 class CoordinatorBranchTests(SimpleTestCase):
-    def _run(self, query, patches=None):
+    def _run(self, query, patches=None, claimed_turn=None):
         """Run handle_message with common state deps mocked.
 
         `patches` maps "orchestration.coordinator.<name>" -> new value.
@@ -67,6 +67,7 @@ class CoordinatorBranchTests(SimpleTestCase):
                 send_step_event=send_step,
                 get_context_prompt=AsyncMock(return_value=""),
                 bump_signals=MagicMock(),
+                claimed_turn=claimed_turn,
             )
 
         with stack:
@@ -103,6 +104,34 @@ class CoordinatorBranchTests(SimpleTestCase):
         self.assertIn("Undone.", texts)
 
     # -- agent loop consent ------------------------------------------------ #
+
+    def test_a_yes_with_a_claimed_turn_still_resumes_a_held_approval(self):
+        from types import SimpleNamespace
+
+        claimed = SimpleNamespace(
+            pk="00000000-0000-0000-0000-000000000001",
+            version=0,
+            state="running",
+        )
+        resumes = []
+
+        async def recording_resume(**kwargs):
+            resumes.append(kwargs)
+            async for event in _event_stream(**kwargs):
+                yield event
+
+        result, mocks, send_chunk = self._run(
+            "yes",
+            patches={
+                "orchestration.coordinator.has_pending_agent_state": AsyncMock(
+                    return_value=True,
+                ),
+                "orchestration.coordinator.resume_after_confirmation": recording_resume,
+            },
+            claimed_turn=claimed,
+        )
+        self.assertEqual(len(resumes), 1)
+        self.assertTrue(any(c.args[1] == "ok" for c in send_chunk.await_args_list))
 
     def test_agent_loop_resume_after_confirmation(self):
         result, mocks, send_chunk = self._run(

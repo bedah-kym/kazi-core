@@ -198,7 +198,7 @@ class InProcessScheduler:
         now = now or self._now()
         ran: List[str] = []
         names = list(self._schedules)
-        rows: dict = {}
+        rows = None
         if names:
             # One read for every schedule row this tick, however many entries
             # there are. `_claim` gets the row it already has instead of
@@ -211,13 +211,19 @@ class InProcessScheduler:
                     ).only("pk", "name", "last_run_at", "enabled")
                 }
             except Exception:
+                # Fall back to the per-entry claim, which handles its own
+                # store errors. That keeps the old failure handling exactly.
                 logger.exception(
                     "In-process scheduler could not read the schedule; "
-                    "skipping this tick",
+                    "falling back to per-entry claims",
                 )
-                return ran
+                rows = None
         for name, entry in self._schedules.items():
-            if not self._claim(name, entry, now, row=rows.get(name)):
+            if rows is None:
+                claimed = self._claim(name, entry, now)
+            else:
+                claimed = self._claim(name, entry, now, row=rows.get(name))
+            if not claimed:
                 continue
             try:
                 self._runner(entry)
@@ -272,7 +278,7 @@ class InProcessScheduler:
             if not is_due(entry["schedule"], row.last_run_at, now):
                 return False
             updated = PeriodicTask.objects.filter(
-                pk=row.pk, last_run_at=row.last_run_at
+                pk=row.pk, last_run_at=row.last_run_at, enabled=True,
             ).update(last_run_at=now, total_run_count=F("total_run_count") + 1)
             return updated == 1
         except Exception:

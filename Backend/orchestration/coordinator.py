@@ -510,9 +510,9 @@ class TurnContext:
 
     user_preferences: Dict[str, Any]
     resolved_profile: Any
-    # True only when the fast check saw no pause, no queued row, no approval
-    # and no legacy loop state. The runner path then skips the four pending
-    # reads; any doubt leaves it False and takes the full, fresh path.
+    # True only when the paused-only check saw no pause, no approval and no
+    # legacy loop state. The runner path then skips the four pending reads;
+    # any doubt leaves it False and takes the full, fresh path.
     nothing_pending: bool
     memory_summary: Optional[str]
 
@@ -1089,8 +1089,9 @@ class OrchestrationCoordinator:
             "room_id": room_id,
             "username": username,
         }
-        # One hop for preferences and the memory summary. Each turn reads them
-        # again, so nothing stale survives across turns (FU-47 b).
+        # On the runner path this is one hop for preferences and the memory
+        # summary. With no claimed turn the summary is its own hop, as on
+        # main. Each turn reads them again, so nothing stale survives.
         known_pending = bool(
             getattr(claimed_turn, "paused_exists", False)
         ) if claimed_turn is not None else False
@@ -1582,9 +1583,9 @@ class OrchestrationCoordinator:
         from orchestration.shell.chat_intents import is_autopilot_disarm_request
         explicit_disarm = is_autopilot_disarm_request(query)
         if claimed_turn is not None and turn_context.nothing_pending:
-            # The runner already holds this turn and the cheap snapshot says
-            # nothing is paused, queued, awaiting approval or kept in the
-            # legacy cache: skip the four pending reads (FU-47 b/c).
+            # The runner already holds this turn and the paused-only snapshot
+            # says nothing is paused, awaiting approval or kept in the legacy
+            # cache: skip the four pending reads (FU-47 b/c).
             loop_state = None
             pending_confirmation = False
             pending_budget = False

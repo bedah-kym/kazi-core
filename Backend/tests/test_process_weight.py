@@ -264,6 +264,36 @@ class InProcessSchedulerTests(TestCase):
         self.assertEqual(len(queries.captured_queries), 1)
         self.assertEqual(self.ran, [])
 
+    def test_a_prefetch_error_falls_back_to_per_entry_claims(self):
+        """A failed batched read must not skip a due entry."""
+        from orchestration.in_process_scheduler import InProcessScheduler
+
+        self._seed_named("due-prefetch", self.now - timedelta(seconds=120))
+        scheduler = InProcessScheduler(
+            schedules={
+                "due-prefetch": {
+                    "task": "tests.test_process_weight.noop",
+                    "schedule": 60.0,
+                },
+            },
+            runner=lambda entry: self.ran.append(entry["task"]),
+            now=lambda: self.now,
+        )
+        real_filter = PeriodicTask.objects.filter
+
+        def flaky_filter(*args, **kwargs):
+            if "name__in" in kwargs:
+                raise DatabaseError("prefetch down")
+            return real_filter(*args, **kwargs)
+
+        with patch.object(
+            PeriodicTask.objects, "filter", side_effect=flaky_filter,
+        ):
+            ran = scheduler.run_due(self.now)
+
+        self.assertEqual(ran, ["due-prefetch"])
+        self.assertEqual(self.ran, ["tests.test_process_weight.noop"])
+
     def test_a_runner_reenabling_another_entry_runs_it_in_the_same_tick(self):
         """A stale prefetched row must not delay an entry A re-enables."""
         from orchestration.in_process_scheduler import InProcessScheduler

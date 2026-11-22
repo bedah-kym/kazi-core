@@ -30,8 +30,7 @@ from orchestration.turns import claim_next_queued
 from workflows.models import WorkflowApprovalRecord
 
 # Measured through the runner path. Hops are vendor-independent. Query counts
-# are exact per vendor; the Postgres numbers are the ones CI printed (the PR
-# notes any still being confirmed).
+# are exact per vendor; every Postgres number is the one CI printed.
 PLAIN_TURN_HOPS = 21
 PLAIN_TURN_QUERIES = 37
 PLAIN_TURN_POSTGRES_QUERIES = 33
@@ -103,6 +102,9 @@ class _RunnerTestCase(TransactionTestCase):
         turn_leases._LIVE_TURNS.clear()
         turn_leases._FENCED_TURNS.clear()
         turn_leases._LAST_RENEWAL.clear()
+        self.addCleanup(turn_leases._LIVE_TURNS.clear)
+        self.addCleanup(turn_leases._FENCED_TURNS.clear)
+        self.addCleanup(turn_leases._LAST_RENEWAL.clear)
         from orchestration import agent_loop
 
         agent_loop._circuit_state.clear()
@@ -253,11 +255,72 @@ class TurnContextFreshnessTests(_RunnerTestCase):
         self.assertTrue(captured[0].get("allow_email"))
         self.assertFalse(captured[1].get("allow_email"))
 
-    def test_one_failing_import_only_degrades_that_piece(self):
+    def test_each_loader_import_failing_degrades_only_that_piece(self):
         import sys
 
         from chatbot.history import decrypt_stored
+        from orchestration.preference_mining import LEARNED_OVERRIDES_KEY
 
+        profile = self.user.profile
+        profile.notification_preferences = {
+            "allow_email": True,
+            LEARNED_OVERRIDES_KEY: {
+                str(self.room.id): {"send_email": "auto"},
+            },
+        }
+        profile.save(update_fields=["notification_preferences"])
+        cases = {
+            "orchestration.shell.profile_store": {
+                "shell_profile": True, "learned": True,
+            },
+            "orchestration.preference_mining": {
+                "shell_profile": True, "learned": False,
+            },
+            "orchestration.shell.profiles": {
+                "shell_profile": False, "learned": True,
+            },
+            "orchestration.shell.autopilot": {
+                "shell_profile": True, "learned": True,
+            },
+        }
+        for module, expected in cases.items():
+            with self.subTest(module=module):
+                cache.delete(f"learned_overrides:{self.user.id}")
+                captured = []
+
+                async def fake_loop(**kwargs):
+                    captured.append(dict(kwargs.get("preferences") or {}))
+                    yield AgentEvent("text", {"text": "hello back"})
+                    yield AgentEvent("done", {"end_reason": "finished"})
+
+                with patch.dict(
+                    sys.modules, {module: None},
+                ), patch(
+                    "orchestration.coordinator.run_agent_loop", new=fake_loop,
+                ):
+                    self._run_turn("@kazi hello")
+
+                self.assertEqual(len(captured), 1)
+                prefs = captured[0]
+                self.assertEqual(
+                    bool(prefs.get("shell_profile")),
+                    expected["shell_profile"],
+                )
+                learned = (prefs.get("approval_overrides") or {}).get(
+                    "send_email",
+                )
+                self.assertEqual(learned == "auto", expected["learned"])
+                self.assertIn("_shell_autopilot", prefs)
+                self.assertIs(prefs["_shell_autopilot"], False)
+                self.assertTrue(prefs.get("allow_email"))
+                saved = Message.objects.order_by("-id").first()
+                self.assertIsNotNone(saved)
+                self.assertEqual(decrypt_stored(self.room, saved)[0], "hello back")
+
+    def test_a_stored_taint_flag_never_reaches_the_turn(self):
+        from orchestration.coordinator import _load_turn_context_sync
+
+        stored = {"allow_email": True, "_shell_tainted": True}
         captured = []
 
         async def fake_loop(**kwargs):
@@ -265,21 +328,56 @@ class TurnContextFreshnessTests(_RunnerTestCase):
             yield AgentEvent("text", {"text": "hello back"})
             yield AgentEvent("done", {"end_reason": "finished"})
 
-        profile = self.user.profile
-        profile.notification_preferences = {"allow_email": True}
-        profile.save(update_fields=["notification_preferences"])
-        with patch.dict(
-            sys.modules, {"orchestration.preference_mining": None},
-        ), patch("orchestration.coordinator.run_agent_loop", new=fake_loop):
+        with patch(
+            "orchestration.coordinator.get_user_preferences",
+            return_value=dict(stored),
+        ):
+            non_runner = _load_turn_context_sync(
+                self.user.id, self.room.id, {}, fast_path=False,
+            )
+            with patch(
+                "orchestration.coordinator.run_agent_loop", new=fake_loop,
+            ):
+                self._run_turn("@kazi hello")
+
+        self.assertNotIn("_shell_tainted", non_runner.user_preferences)
+        self.assertNotIn("_shell_tainted", captured[0])
+
+    def test_an_autopilot_lookup_failure_fails_closed(self):
+        from orchestration.coordinator import _load_turn_context_sync
+
+        with patch(
+            "orchestration.shell.autopilot.is_armed",
+            side_effect=RuntimeError("autopilot store down"),
+        ):
+            context = _load_turn_context_sync(
+                self.user.id, self.room.id, {}, fast_path=False,
+            )
+
+        self.assertIn("_shell_autopilot", context.user_preferences)
+        self.assertIs(context.user_preferences["_shell_autopilot"], False)
+
+    def test_the_runner_path_keeps_the_memory_summary(self):
+        from orchestration.memory_state import save_memory_summary
+
+        context = {
+            "user_id": self.user.id,
+            "room_id": self.room.id,
+            "username": self.user.username,
+        }
+        async_to_sync(save_memory_summary)(context, "remember the milk")
+        captured = []
+
+        async def fake_loop(**kwargs):
+            captured.append(kwargs.get("memory_summary") or "")
+            yield AgentEvent("text", {"text": "hello back"})
+            yield AgentEvent("done", {"end_reason": "finished"})
+
+        with patch("orchestration.coordinator.run_agent_loop", new=fake_loop):
             self._run_turn("@kazi hello")
 
         self.assertEqual(len(captured), 1)
-        prefs = captured[0]
-        self.assertFalse(prefs.get("approval_overrides"))
-        self.assertTrue(prefs.get("allow_email"))
-        saved = Message.objects.order_by("-id").first()
-        self.assertIsNotNone(saved)
-        self.assertEqual(decrypt_stored(self.room, saved)[0], "hello back")
+        self.assertIn("remember the milk", captured[0])
 
     def test_a_persona_lookup_error_drops_the_identity_and_keeps_the_turn(self):
         from chatbot.history import decrypt_stored
@@ -521,6 +619,19 @@ class PendingPathCostTests(_RunnerTestCase):
         self._assert_counts(
             counts, BUDGET_CONTINUE_HOPS, BUDGET_CONTINUE_QUERIES,
             BUDGET_CONTINUE_POSTGRES_QUERIES,
+        )
+
+    def test_a_turn_with_one_message_queued_behind_costs_a_plain_turn(self):
+        # The second message is already queued before the claim and sits
+        # outside the measured window; the snapshot ignores queued rows, so
+        # the turn itself costs exactly what a plain turn costs.
+        Turn.objects.create(room=self.room, user=self.user, state="queued")
+        self.llm.queue(_response([_text("hello back")]))
+        counts = self._measure("@kazi hello")
+        self.assertEqual(Turn.objects.filter(state="completed").count(), 1)
+        self._assert_counts(
+            counts, PLAIN_TURN_HOPS, PLAIN_TURN_QUERIES,
+            PLAIN_TURN_POSTGRES_QUERIES,
         )
 
     def test_a_message_queued_during_setup_costs_what_a_plain_turn_costs(self):

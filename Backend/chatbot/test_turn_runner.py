@@ -1104,8 +1104,12 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
         from orchestration.tool_schemas import get_tool_definitions as real_tools
 
         tool = _tool("c1", "run_command", {"command": "rm scratch.txt"})
-        not_armed = "Autopilot was not armed when this turn started"
-        armed = "Autopilot was armed when this turn started"
+        not_armed = (
+            "Autopilot was not armed for this room as of the user's latest message"
+        )
+        armed = (
+            "Autopilot was armed for this room as of the user's latest message"
+        )
         open_env = {
             "profile": "open", "sandboxed": False, "platform": "Linux",
             "shell": "bash", "taint_minutes": 15,
@@ -1221,7 +1225,10 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
         self.assertEqual(len(self.llm.calls), 2)
         for call in self.llm.calls:
             system = call.get("system") or ""
-            self.assertIn("Autopilot was armed when this turn started", system)
+            self.assertIn(
+                "Autopilot was armed for this room as of the user's latest message",
+                system,
+            )
             self.assertNotIn("right now", system)
 
     @override_settings(CONSENT_SKEW_SECONDS=0)

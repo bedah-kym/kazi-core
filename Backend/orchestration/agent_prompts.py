@@ -232,13 +232,13 @@ def build_environment_block(env: Optional[Dict[str, Any]]) -> str:
                 )
             elif state:
                 lines.append(
-                    "- Autopilot was armed when this turn started. The harness "
-                    "re-checks before every command, so an approval prompt "
-                    "means it has ended."
+                    "- Autopilot was armed for this room as of the user's latest "
+                    "message. The harness re-checks it before every command."
                 )
             else:
                 lines.append(
-                    "- Autopilot was not armed when this turn started."
+                    "- Autopilot was not armed for this room as of the user's "
+                    "latest message."
                 )
         lines.append(
             "- Your part is to call the tool. The harness then asks the user and shows them "

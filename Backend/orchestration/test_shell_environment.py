@@ -79,7 +79,7 @@ class EnvironmentBlockTests(SimpleTestCase):
         self.assertIn("not sandboxed", block)
         self.assertNotIn("Windows", block)
 
-    def test_open_block_says_autopilot_was_armed_as_of_the_latest_message(self):
+    def test_open_block_says_autopilot_was_armed_when_the_step_began(self):
         block = build_environment_block({**WINDOWS_OPEN, "autopilot_armed": True})
         armed_line = next(
             line for line in block.splitlines() if "Autopilot was armed" in line
@@ -89,21 +89,20 @@ class EnvironmentBlockTests(SimpleTestCase):
         # model contradict a real arming; keep any such clause out.
         self.assertNotIn("approval prompt", armed_line)
         self.assertIn(
-            "Autopilot was armed for this room as of the user's latest message",
+            "Autopilot was armed for this room when this step began",
             armed_line,
         )
         self.assertIn("re-checks it before every command", armed_line)
         self.assertNotIn("right now", block)
 
-    def test_open_block_says_autopilot_was_not_armed_as_of_the_latest_message(self):
+    def test_open_block_says_autopilot_was_not_armed_when_the_step_began(self):
         block = build_environment_block({**WINDOWS_OPEN, "autopilot_armed": False})
 
         self.assertIn(
-            "Autopilot was not armed for this room as of the user's latest "
-            "message",
+            "Autopilot was not armed for this room when this step began",
             block,
         )
-        self.assertNotIn("Autopilot was armed for this room as of", block)
+        self.assertNotIn("Autopilot was armed for this room when", block)
         self.assertNotIn("right now", block)
 
     def test_open_block_says_the_autopilot_state_is_unknown_when_unreadable(self):
@@ -111,7 +110,7 @@ class EnvironmentBlockTests(SimpleTestCase):
 
         self.assertIn("could not be read this turn", block)
         self.assertIn("treats it as not armed", block)
-        self.assertNotIn("was armed for this room as of", block)
+        self.assertNotIn("was armed for this room when", block)
 
     def test_sandboxed_block_has_no_autopilot_state_line(self):
         block = build_environment_block({**STANDARD, "autopilot_armed": True})

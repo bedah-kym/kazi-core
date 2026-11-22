@@ -1158,12 +1158,8 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
         from orchestration.tool_schemas import get_tool_definitions as real_tools
 
         tool = _tool("c1", "run_command", {"command": "rm scratch.txt"})
-        not_armed = (
-            "Autopilot was not armed for this room as of the user's latest message"
-        )
-        armed = (
-            "Autopilot was armed for this room as of the user's latest message"
-        )
+        not_armed = "Autopilot was not armed for this room when this step began"
+        armed = "Autopilot was armed for this room when this step began"
         open_env = {
             "profile": "open", "sandboxed": False, "platform": "Linux",
             "shell": "bash", "taint_minutes": 15,
@@ -1217,6 +1213,103 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
         self.assertNotIn(not_armed, after)
         self.assertNotIn("right now", before)
         self.assertNotIn("right now", after)
+
+    @override_settings(CONSENT_SKEW_SECONDS=0)
+    def test_the_resumed_run_is_told_the_reply_armed_autopilot(self):
+        from orchestration.tool_schemas import get_tool_definitions as real_tools
+
+        tool = _tool("c1", "run_command", {"command": "rm scratch.txt"})
+        fact = '[Harness: the user replied "autopilot" to the approval prompt.'
+        open_env = {
+            "profile": "open", "sandboxed": False, "platform": "Linux",
+            "shell": "bash", "taint_minutes": 15,
+        }
+
+        def tools_with_shell(**kwargs):
+            return real_tools(available_actions={"run_command"}, **kwargs)
+
+        async def scenario():
+            with self._open_profile(), patch(
+                "orchestration.shell.environment.get_shell_environment",
+                new=AsyncMock(return_value=open_env),
+            ), patch(
+                "orchestration.agent_loop.get_tool_definitions",
+                new=tools_with_shell,
+            ):
+                comm = await self._connect()
+                await self._send(comm, "@kazi autopilot off")
+                self.assertTrue(await self._wait_for(
+                    lambda: any(
+                        "Autopilot was not armed" in text
+                        for text in self._saved_texts()
+                    ),
+                ))
+
+                self.llm.queue(_response([tool], stop_reason="tool_use"))
+                await self._send(comm, "@kazi rm scratch.txt")
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(state="paused").exists(),
+                ))
+                self.assertEqual(len(self.llm.calls), 1)
+
+                self.llm.queue(_response([_text("done")]))
+                await self._send(comm, "@kazi autopilot")
+                self.assertTrue(await self._wait_for(
+                    lambda: len(self.llm.calls) >= 2,
+                ))
+                await self.runner.drain(timeout=15)
+
+        self._run(scenario())
+
+        before = self.llm.calls[0]["system"]
+        after = self.llm.calls[1]["system"]
+        self.assertNotIn(fact, before)
+        self.assertIn(fact, after)
+        self.assertIn(
+            "approved the held command and armed autopilot for this room",
+            after,
+        )
+
+    @override_settings(CONSENT_SKEW_SECONDS=0)
+    def test_a_plain_yes_resume_does_not_get_the_autopilot_fact(self):
+        from orchestration.tool_schemas import get_tool_definitions as real_tools
+
+        tool = _tool("c1", "run_command", {"command": "rm scratch.txt"})
+        fact = '[Harness: the user replied "autopilot" to the approval prompt.'
+        open_env = {
+            "profile": "open", "sandboxed": False, "platform": "Linux",
+            "shell": "bash", "taint_minutes": 15,
+        }
+
+        def tools_with_shell(**kwargs):
+            return real_tools(available_actions={"run_command"}, **kwargs)
+
+        async def scenario():
+            with self._open_profile(), patch(
+                "orchestration.shell.environment.get_shell_environment",
+                new=AsyncMock(return_value=open_env),
+            ), patch(
+                "orchestration.agent_loop.get_tool_definitions",
+                new=tools_with_shell,
+            ):
+                comm = await self._connect()
+                self.llm.queue(_response([tool], stop_reason="tool_use"))
+                await self._send(comm, "@kazi rm scratch.txt")
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(state="paused").exists(),
+                ))
+                self.assertEqual(len(self.llm.calls), 1)
+
+                self.llm.queue(_response([_text("done")]))
+                await self._send(comm, "@kazi yes")
+                self.assertTrue(await self._wait_for(
+                    lambda: len(self.llm.calls) >= 2,
+                ))
+                await self.runner.drain(timeout=15)
+
+        self._run(scenario())
+
+        self.assertNotIn(fact, self.llm.calls[1]["system"])
 
     @override_settings(CONSENT_SKEW_SECONDS=0)
     def test_a_mid_turn_disarm_leaves_no_right_now_claim_and_the_next_batch_asks(self):
@@ -1280,7 +1373,7 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
         for call in self.llm.calls:
             system = call.get("system") or ""
             self.assertIn(
-                "Autopilot was armed for this room as of the user's latest message",
+                "Autopilot was armed for this room when this step began",
                 system,
             )
             self.assertNotIn("right now", system)

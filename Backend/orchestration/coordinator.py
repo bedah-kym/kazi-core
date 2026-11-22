@@ -471,6 +471,10 @@ _AUTOPILOT_STATE_UNREADABLE_REPLY = (
     "I couldn't read whether autopilot is armed for this room. It is off for "
     "this turn; the harness will still ask before commands that need approval."
 )
+_AUTOPILOT_ARMED_RESUME_NOTE = (
+    '[Harness: the user replied "autopilot" to the approval prompt. That '
+    "approved the held command and armed autopilot for this room.]"
+)
 
 
 def _room_exists(room_id) -> bool:
@@ -2013,13 +2017,22 @@ class OrchestrationCoordinator:
         # --- Agent loop confirmation resume ---
         if not pending_handled:
             if pending_confirmation:
-                async def _resume_confirmed():
+                async def _resume_confirmed(*, armed_by_autopilot: bool = False):
                     ctx_prompt = ""
                     try:
                         ctx_prompt = await get_context_prompt() or ""
                     except Exception:
                         pass
                     ctx_prompt = await _with_persona_identity(room_id, user_id, ctx_prompt)
+                    if armed_by_autopilot:
+                        # The resumed loop starts from the pause's saved state;
+                        # it never sees the user's "autopilot" reply. Tell it
+                        # what that reply did, as a harness fact.
+                        ctx_prompt = "\n\n".join(
+                            part for part in (
+                                ctx_prompt, _AUTOPILOT_ARMED_RESUME_NOTE,
+                            ) if part
+                        )
                     env_block = await _environment_block()
                     mem_sum = await load_memory_summary(adaptive_context) or ""
                     await _handle_agent_resume(ctx_prompt, mem_sum, env_block)
@@ -2060,7 +2073,7 @@ class OrchestrationCoordinator:
                         # command the window covers, and only if it armed.
                         if await _arm_autopilot_from_chat():
                             if await _resume_turn(turn_box["ref"]):
-                                await _resume_confirmed()
+                                await _resume_confirmed(armed_by_autopilot=True)
                             else:
                                 await _resume_lost()
                             pending_handled = True

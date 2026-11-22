@@ -135,12 +135,36 @@ class BroadcastFrameTests(TestCase):
         self.assertEqual(group, f"chat_{room.id}")
         self.assertEqual(event["type"], "ai_message_saved")
         frame = event["message"]
-        self.assertEqual(set(frame), {"id", "member", "content", "timestamp", "parent_id"})
+        self.assertEqual(
+            set(frame),
+            {"id", "member", "content", "timestamp", "parent_id"},
+        )
         self.assertEqual(frame["id"], message.id)
         self.assertEqual(frame["member"], "kazi")
         self.assertEqual(frame["content"], "hello")
         self.assertEqual(frame["timestamp"], str(message.timestamp))
         self.assertIsNone(frame["parent_id"])
+        self.assertNotIn("turn_continues", frame)
+
+    def test_a_continuing_notice_frame_says_the_turn_continues(self):
+        from chatbot.kazi_messages import persist_kazi_message
+
+        user = get_user_model().objects.create_user(username="frame-next", password="pw")  # nosec B106
+        room = _room_for(user)
+        layer = MagicMock()
+        layer.group_send = AsyncMock()
+
+        persist_kazi_message(
+            room,
+            content="Autopilot armed for this room.",
+            origin="turn_notice",
+            channel_layer=layer,
+            turn_continues=True,
+        )
+
+        group, event = layer.group_send.await_args.args
+        self.assertEqual(group, f"chat_{room.id}")
+        self.assertIs(event["message"].get("turn_continues"), True)
 
 
 class TranscriptOriginTests(SimpleTestCase):

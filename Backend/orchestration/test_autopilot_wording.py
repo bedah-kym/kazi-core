@@ -54,6 +54,9 @@ class AutopilotArmedWordingTests(SimpleTestCase):
             "orchestration.shell.autopilot.is_armed": MagicMock(return_value=False),
             "orchestration.shell.autopilot.arm": MagicMock(return_value=True),
             "orchestration.shell.environment.get_shell_environment": AsyncMock(return_value={}),
+            # Exercise the save-failure fallback on purpose, so the reply is
+            # still streamed and these wording assertions see it.
+            "orchestration.coordinator._persist_turn_notice": MagicMock(return_value=False),
         }
         if isinstance(taint, Exception):
             defaults["orchestration.coordinator._conversation_tainted"] = MagicMock(side_effect=taint)

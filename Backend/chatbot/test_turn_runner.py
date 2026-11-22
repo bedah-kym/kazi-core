@@ -32,6 +32,7 @@ from chatbot.models import Chatroom, Member, Message
 from chatbot.turn_runner import (
     DISARM_FAILED_NOTICE,
     RECORD_FAILED_NOTICE,
+    STOP_NOTICE,
     TurnRunner,
 )
 from orchestration import turn_leases
@@ -850,6 +851,14 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
             return_value=PROFILES["open"],
         )
 
+    def _saved_texts(self):
+        from chatbot.history import decrypt_stored
+
+        return [
+            decrypt_stored(self.room, message)[0]
+            for message in Message.objects.order_by("timestamp", "id")
+        ]
+
     @override_settings(CONSENT_SKEW_SECONDS=0)
     def test_autopilot_arm_failure_keeps_the_pause(self):
         tool = _tool("c1", "run_command", {"command": "rm scratch.txt"})
@@ -913,6 +922,577 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
                 self.assertEqual(self.execute_tool.await_count, 2)
 
         self._run(scenario())
+
+    def test_a_bare_autopilot_with_nothing_pending_is_answered_truthfully(self):
+        async def scenario():
+            with self._open_profile():
+                comm = await self._connect()
+                await self._send(comm, "@kazi autopilot")
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(state="completed").exists(),
+                ))
+                await self.runner.drain(timeout=15)
+
+        self._run(scenario())
+
+        self.assertEqual(self.llm.calls, [])
+        self.assertFalse(self._is_autopilot_armed())
+        replies = [
+            text for text in self._saved_texts() if "Autopilot" in text
+        ]
+        self.assertTrue(replies)
+        self.assertIn("Autopilot was not armed", replies[-1])
+        self.assertIn("approval prompt", replies[-1])
+
+    def test_a_bare_autopilot_when_already_armed_says_so_and_keeps_the_window(self):
+        from orchestration.shell import autopilot
+
+        self._arm_autopilot()
+        before = autopilot.status(self.user.id, self.room.id)["expires_at"]
+
+        async def scenario():
+            with self._open_profile():
+                comm = await self._connect()
+                await self._send(comm, "@kazi autopilot")
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(state="completed").exists(),
+                ))
+                await self.runner.drain(timeout=15)
+
+        self._run(scenario())
+
+        self.assertEqual(self.llm.calls, [])
+        self.assertTrue(self._is_autopilot_armed())
+        self.assertEqual(
+            autopilot.status(self.user.id, self.room.id)["expires_at"], before,
+        )
+        replies = [
+            text for text in self._saved_texts() if "Autopilot" in text
+        ]
+        self.assertTrue(replies)
+        self.assertIn("already armed", replies[-1])
+        self.assertNotIn("was not armed", replies[-1])
+
+    def test_a_bare_autopilot_in_a_sandboxed_room_says_it_does_not_apply(self):
+        async def scenario():
+            comm = await self._connect()
+            await self._send(comm, "@kazi autopilot")
+            self.assertTrue(await self._wait_for(
+                lambda: Turn.objects.filter(state="completed").exists(),
+            ))
+            await self.runner.drain(timeout=15)
+
+        self._run(scenario())
+
+        self.assertEqual(self.llm.calls, [])
+        self.assertFalse(self._is_autopilot_armed())
+        replies = [
+            text for text in self._saved_texts() if "Autopilot" in text
+        ]
+        self.assertTrue(replies)
+        self.assertIn("doesn't apply", replies[-1])
+        self.assertIn("sandboxed", replies[-1])
+        self.assertNotIn("approval prompt", replies[-1])
+
+    def test_a_bare_autopilot_when_already_armed_in_a_tainted_room_warns_about_network(self):
+        self._arm_autopilot()
+
+        async def scenario():
+            with self._open_profile(), patch(
+                "orchestration.coordinator._conversation_tainted",
+                return_value=True,
+            ):
+                comm = await self._connect()
+                await self._send(comm, "@kazi autopilot")
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(state="completed").exists(),
+                ))
+                await self.runner.drain(timeout=15)
+
+        self._run(scenario())
+
+        self.assertEqual(self.llm.calls, [])
+        self.assertTrue(self._is_autopilot_armed())
+        replies = [
+            text for text in self._saved_texts() if "Autopilot" in text
+        ]
+        self.assertTrue(replies)
+        self.assertIn("already armed", replies[-1])
+        self.assertIn(
+            "commands that reach the network will still ask", replies[-1],
+        )
+
+    def test_a_bare_autopilot_with_an_unreadable_state_says_so(self):
+        async def scenario():
+            with self._open_profile(), patch(
+                "orchestration.shell.autopilot.is_armed",
+                side_effect=RuntimeError("autopilot store down"),
+            ):
+                comm = await self._connect()
+                await self._send(comm, "@kazi autopilot")
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(state="completed").exists(),
+                ))
+                await self.runner.drain(timeout=15)
+
+        self._run(scenario())
+
+        self.assertEqual(self.llm.calls, [])
+        self.assertFalse(self._is_autopilot_armed())
+        replies = [
+            text for text in self._saved_texts() if "autopilot" in text.lower()
+        ]
+        self.assertTrue(replies)
+        self.assertIn("couldn't read", replies[-1])
+        self.assertNotIn("Autopilot was not armed", replies[-1])
+
+    @override_settings(CONSENT_SKEW_SECONDS=0)
+    def test_the_arm_confirmation_reaches_the_socket_as_a_saved_message(self):
+        tool = _tool("c1", "run_command", {"command": "rm scratch.txt"})
+
+        async def scenario():
+            with self._open_profile():
+                comm, _paused = await self._pause_for_blocks([tool])
+                self.llm.queue(_response([_text("done")]))
+                await self._send(comm, "@kazi autopilot")
+                frames = []
+                while True:
+                    frame = await comm.receive_json_from(timeout=8)
+                    frames.append(frame)
+                    if frame.get("command") == "ai_message_saved":
+                        content = (frame.get("message") or {}).get("content") or ""
+                        if "done" in content:
+                            break
+                await self.runner.drain(timeout=15)
+                return frames
+
+        frames = self._run(scenario())
+
+        saved = [
+            (index, frame.get("message") or {})
+            for index, frame in enumerate(frames)
+            if frame.get("command") == "ai_message_saved"
+        ]
+        arm = [
+            (index, message) for index, message in saved
+            if "Autopilot armed" in (message.get("content") or "")
+        ]
+        turn = [
+            (index, message) for index, message in saved
+            if "done" in (message.get("content") or "")
+        ]
+        self.assertEqual(len(arm), 1, "the arm confirmation was not saved once")
+        self.assertEqual(len(turn), 1, "the resumed turn's reply was not saved once")
+        self.assertLess(arm[0][0], turn[0][0])
+        self.assertIs(arm[0][1].get("turn_continues"), True)
+        self.assertNotIn("turn_continues", turn[0][1])
+        self.assertNotIn(
+            "Autopilot armed", turn[0][1].get("content") or "",
+            "the turn's saved reply also carried the arm confirmation",
+        )
+        streamed = [
+            frame.get("chunk") or ""
+            for frame in frames
+            if frame.get("command") == "ai_stream"
+        ]
+        self.assertFalse(
+            any("Autopilot armed" in chunk for chunk in streamed),
+            "the arm confirmation was streamed instead of saved",
+        )
+
+    def test_a_disarm_notice_frame_does_not_say_the_turn_continues(self):
+        self._arm_autopilot()
+
+        def _is_disarm_frame(frame):
+            content = (frame.get("message") or {}).get("content") or ""
+            return (
+                frame.get("command") == "ai_message_saved"
+                and "Autopilot disarmed" in content
+            )
+
+        async def scenario():
+            comm = await self._connect()
+            await self._send(comm, "@kazi autopilot off")
+            frame, _frames = await self._collect(comm, _is_disarm_frame)
+            self.assertIsNotNone(frame)
+            return frame
+
+        frame = self._run(scenario())
+        self.assertNotIn("turn_continues", frame.get("message") or {})
+
+    def test_a_stop_notice_frame_does_not_say_the_turn_continues(self):
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def before(n):
+            if n == 1:
+                entered.set()
+                await release.wait()
+
+        self.llm.before_call = before
+        self.llm.queue(_response([_text("working")]))
+
+        def _is_stop_frame(frame):
+            content = (frame.get("message") or {}).get("content") or ""
+            return (
+                frame.get("command") == "ai_message_saved"
+                and STOP_NOTICE in content
+            )
+
+        async def scenario():
+            comm = await self._connect()
+            await self._send(comm, "@kazi long thing")
+            await asyncio.wait_for(entered.wait(), timeout=5)
+            await self._send(comm, "@kazi stop")
+            frame, _frames = await self._collect(comm, _is_stop_frame)
+            self.assertIsNotNone(frame)
+            release.set()
+            await self.runner.drain(timeout=15)
+            return frame
+
+        frame = self._run(scenario())
+        self.assertNotIn("turn_continues", frame.get("message") or {})
+
+    @override_settings(CONSENT_SKEW_SECONDS=0)
+    def test_the_model_sees_the_autopilot_state_before_and_after_arming(self):
+        from orchestration.tool_schemas import get_tool_definitions as real_tools
+
+        tool = _tool("c1", "run_command", {"command": "rm scratch.txt"})
+        not_armed = "Autopilot was not armed for this room when this step began"
+        armed = "Autopilot was armed for this room when this step began"
+        open_env = {
+            "profile": "open", "sandboxed": False, "platform": "Linux",
+            "shell": "bash", "taint_minutes": 15,
+        }
+
+        def tools_with_shell(**kwargs):
+            # The test process has no SHELL_EXEC_TOKEN, so the connector would
+            # not otherwise be offered; the shell section rides with it.
+            return real_tools(available_actions={"run_command"}, **kwargs)
+
+        async def scenario():
+            with self._open_profile(), patch(
+                "orchestration.shell.environment.get_shell_environment",
+                new=AsyncMock(return_value=open_env),
+            ), patch(
+                "orchestration.agent_loop.get_tool_definitions",
+                new=tools_with_shell,
+            ):
+                comm = await self._connect()
+                # The live sequence: a bare autopilot is answered by the
+                # harness, then a shell command pauses for approval, then the
+                # approval reply arms the window and resumes the run.
+                await self._send(comm, "@kazi autopilot")
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(state="completed").exists(),
+                ))
+                await self.runner.drain(timeout=15)
+                self.assertEqual(self.llm.calls, [])
+
+                self.llm.queue(_response([tool], stop_reason="tool_use"))
+                await self._send(comm, "@kazi rm scratch.txt")
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(state="paused").exists(),
+                ))
+                self.assertEqual(len(self.llm.calls), 1)
+
+                self.llm.queue(_response([_text("done")]))
+                await self._send(comm, "@kazi autopilot")
+                self.assertTrue(await self._wait_for(
+                    lambda: len(self.llm.calls) >= 2,
+                ))
+                await self.runner.drain(timeout=15)
+
+        self._run(scenario())
+
+        before = self.llm.calls[0]["system"]
+        after = self.llm.calls[1]["system"]
+        self.assertIn(not_armed, before)
+        self.assertNotIn(armed, before)
+        self.assertIn(armed, after)
+        self.assertNotIn(not_armed, after)
+        self.assertNotIn("right now", before)
+        self.assertNotIn("right now", after)
+
+    @override_settings(CONSENT_SKEW_SECONDS=0)
+    def test_the_resumed_run_is_told_the_reply_armed_autopilot(self):
+        from orchestration.tool_schemas import get_tool_definitions as real_tools
+
+        tool = _tool("c1", "run_command", {"command": "rm scratch.txt"})
+        fact = '[Harness: the user replied "autopilot" to the approval prompt.'
+        open_env = {
+            "profile": "open", "sandboxed": False, "platform": "Linux",
+            "shell": "bash", "taint_minutes": 15,
+        }
+
+        def tools_with_shell(**kwargs):
+            return real_tools(available_actions={"run_command"}, **kwargs)
+
+        async def scenario():
+            with self._open_profile(), patch(
+                "orchestration.shell.environment.get_shell_environment",
+                new=AsyncMock(return_value=open_env),
+            ), patch(
+                "orchestration.agent_loop.get_tool_definitions",
+                new=tools_with_shell,
+            ):
+                comm = await self._connect()
+                await self._send(comm, "@kazi autopilot off")
+                self.assertTrue(await self._wait_for(
+                    lambda: any(
+                        "Autopilot was not armed" in text
+                        for text in self._saved_texts()
+                    ),
+                ))
+
+                self.llm.queue(_response([tool], stop_reason="tool_use"))
+                await self._send(comm, "@kazi rm scratch.txt")
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(state="paused").exists(),
+                ))
+                self.assertEqual(len(self.llm.calls), 1)
+
+                self.llm.queue(_response([_text("done")]))
+                await self._send(comm, "@kazi autopilot")
+                self.assertTrue(await self._wait_for(
+                    lambda: len(self.llm.calls) >= 2,
+                ))
+                await self.runner.drain(timeout=15)
+
+        self._run(scenario())
+
+        before = self.llm.calls[0]["system"]
+        after = self.llm.calls[1]["system"]
+        self.assertNotIn(fact, before)
+        self.assertIn(fact, after)
+        self.assertIn(
+            "approved the held command and armed autopilot for this room",
+            after,
+        )
+
+    @override_settings(CONSENT_SKEW_SECONDS=0)
+    def test_a_plain_yes_resume_does_not_get_the_autopilot_fact(self):
+        from orchestration.tool_schemas import get_tool_definitions as real_tools
+
+        tool = _tool("c1", "run_command", {"command": "rm scratch.txt"})
+        fact = '[Harness: the user replied "autopilot" to the approval prompt.'
+        open_env = {
+            "profile": "open", "sandboxed": False, "platform": "Linux",
+            "shell": "bash", "taint_minutes": 15,
+        }
+
+        def tools_with_shell(**kwargs):
+            return real_tools(available_actions={"run_command"}, **kwargs)
+
+        async def scenario():
+            with self._open_profile(), patch(
+                "orchestration.shell.environment.get_shell_environment",
+                new=AsyncMock(return_value=open_env),
+            ), patch(
+                "orchestration.agent_loop.get_tool_definitions",
+                new=tools_with_shell,
+            ):
+                comm = await self._connect()
+                self.llm.queue(_response([tool], stop_reason="tool_use"))
+                await self._send(comm, "@kazi rm scratch.txt")
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(state="paused").exists(),
+                ))
+                self.assertEqual(len(self.llm.calls), 1)
+
+                self.llm.queue(_response([_text("done")]))
+                await self._send(comm, "@kazi yes")
+                self.assertTrue(await self._wait_for(
+                    lambda: len(self.llm.calls) >= 2,
+                ))
+                await self.runner.drain(timeout=15)
+
+        self._run(scenario())
+
+        self.assertNotIn(fact, self.llm.calls[1]["system"])
+
+    @override_settings(CONSENT_SKEW_SECONDS=0)
+    def test_a_mid_turn_disarm_leaves_no_right_now_claim_and_the_next_batch_asks(self):
+        from orchestration.tool_schemas import get_tool_definitions as real_tools
+
+        tool = _tool("c1", "run_command", {"command": "rm scratch.txt"})
+        open_env = {
+            "profile": "open", "sandboxed": False, "platform": "Linux",
+            "shell": "bash", "taint_minutes": 15,
+        }
+
+        def tools_with_shell(**kwargs):
+            return real_tools(available_actions={"run_command"}, **kwargs)
+
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def before(n):
+            if n == 2:
+                entered.set()
+                await release.wait()
+
+        self._arm_autopilot()
+
+        async def scenario():
+            self.llm.before_call = before
+            with self._open_profile(), patch(
+                "orchestration.shell.environment.get_shell_environment",
+                new=AsyncMock(return_value=open_env),
+            ), patch(
+                "orchestration.agent_loop.get_tool_definitions",
+                new=tools_with_shell,
+            ):
+                comm = await self._connect()
+                self.llm.queue(
+                    _response([tool], stop_reason="tool_use"),
+                    _response([tool], stop_reason="tool_use"),
+                )
+                await self._send(comm, "@kazi rm scratch.txt")
+                await asyncio.wait_for(entered.wait(), timeout=8)
+                self.assertTrue(await self._maybe_true(self._is_autopilot_armed))
+                await self._send(comm, "@kazi autopilot off")
+                self.assertTrue(await self._wait_for(
+                    lambda: not self._is_autopilot_armed(),
+                ))
+                release.set()
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(
+                        state="paused", pause_kind="approval",
+                    ).exists(),
+                ))
+                await self._send(comm, "@kazi no")
+                self.assertTrue(await self._wait_for(
+                    lambda: not Turn.objects.filter(state="paused").exists(),
+                ))
+                await self.runner.drain(timeout=15)
+
+        self._run(scenario())
+
+        self.assertEqual(len(self.llm.calls), 2)
+        for call in self.llm.calls:
+            system = call.get("system") or ""
+            self.assertIn(
+                "Autopilot was armed for this room when this step began",
+                system,
+            )
+            self.assertNotIn("right now", system)
+
+    @override_settings(CONSENT_SKEW_SECONDS=0)
+    def test_a_stop_after_arming_saves_armed_before_off(self):
+        tool = _tool("c1", "run_command", {"command": "rm scratch.txt"})
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def before(n):
+            if n == 2:
+                entered.set()
+                await release.wait()
+
+        async def scenario():
+            self.llm.before_call = before
+            with self._open_profile():
+                comm, _paused = await self._pause_for_blocks([tool])
+                self.llm.queue(_response([_text("done")]))
+                await self._send(comm, "@kazi autopilot")
+                await asyncio.wait_for(entered.wait(), timeout=8)
+                self.assertTrue(await self._maybe_true(self._is_autopilot_armed))
+                await self._send(comm, "@kazi stop")
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(
+                        cancel_requested_at__isnull=False,
+                    ).exists(),
+                    timeout=5,
+                ))
+                release.set()
+                self.assertTrue(await self._wait_for(
+                    lambda: not Turn.objects.filter(
+                        state__in=("running", "committing", "paused"),
+                    ).exists(),
+                    timeout=10,
+                ))
+                await self.runner.drain(timeout=15)
+
+        self._run(scenario())
+
+        self.assertFalse(self._is_autopilot_armed())
+        texts = self._saved_texts()
+        armed = [
+            index for index, text in enumerate(texts)
+            if "Autopilot armed" in text
+        ]
+        off = [
+            index for index, text in enumerate(texts)
+            if "Autopilot is now off" in text
+        ]
+        self.assertEqual(len(armed), 1, "the arm confirmation was not saved once")
+        self.assertEqual(len(off), 1, "the stop notice was not saved once")
+        self.assertLess(armed[0], off[0])
+        turn_reply = [text for text in texts if "done" in text]
+        self.assertTrue(turn_reply, "the resumed turn's saved reply is missing")
+        self.assertNotIn("Autopilot armed", turn_reply[-1])
+
+    @override_settings(CONSENT_SKEW_SECONDS=0)
+    def test_a_failed_arm_notice_streams_once_and_the_turn_still_resumes(self):
+        from chatbot.kazi_messages import (
+            KaziMessageError,
+            persist_kazi_message as real_persist,
+        )
+
+        tool = _tool("c1", "run_command", {"command": "rm scratch.txt"})
+
+        def fail_arm_notice(room, **kwargs):
+            if "Autopilot armed" in (kwargs.get("content") or ""):
+                raise KaziMessageError("room key down")
+            return real_persist(room, **kwargs)
+
+        async def scenario():
+            with self._open_profile(), patch(
+                "chatbot.kazi_messages.persist_kazi_message",
+                side_effect=fail_arm_notice,
+            ):
+                comm, paused = await self._pause_for_blocks([tool])
+                self.llm.queue(_response([_text("done")]))
+                await self._send(comm, "@kazi autopilot")
+                frames = []
+                while True:
+                    frame = await comm.receive_json_from(timeout=8)
+                    frames.append(frame)
+                    if frame.get("command") == "ai_message_saved":
+                        content = (frame.get("message") or {}).get("content") or ""
+                        if "done" in content:
+                            break
+                await self.runner.drain(timeout=15)
+                return frames, paused.pk
+
+        frames, paused_id = self._run(scenario())
+
+        streamed = [
+            frame.get("chunk") or ""
+            for frame in frames
+            if frame.get("command") == "ai_stream"
+        ]
+        self.assertEqual(
+            sum("Autopilot armed" in chunk for chunk in streamed), 1,
+            "the fallback should stream the confirmation exactly once",
+        )
+        saved = [
+            frame.get("message") or {}
+            for frame in frames
+            if frame.get("command") == "ai_message_saved"
+        ]
+        arm_saved = [
+            message for message in saved
+            if "Autopilot armed" in (message.get("content") or "")
+        ]
+        self.assertEqual(len(arm_saved), 1)
+        self.assertEqual(
+            (arm_saved[0].get("content") or "").count("Autopilot armed"), 1,
+        )
+        self.assertIn("done", arm_saved[0].get("content") or "")
+        self.assertTrue(self._is_autopilot_armed())
+        self.assertEqual(self.execute_tool.await_count, 1)
+        self.assertEqual(Turn.objects.get(pk=paused_id).state, "completed")
 
     @override_settings(CONSENT_SKEW_SECONDS=0)
     def test_quota_still_blocked_keeps_the_pause(self):

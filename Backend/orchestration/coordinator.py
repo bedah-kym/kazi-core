@@ -453,6 +453,10 @@ _AUTOPILOT_NOT_ARMED_NO_PENDING_REPLY = (
     "autopilot is armed by replying **autopilot** to a shell command's "
     "approval prompt."
 )
+_AUTOPILOT_ALREADY_ARMED_REPLY = (
+    "Autopilot is already armed for this room. I won't extend the window; it "
+    "will expire on its own. Commands on the destructive list still ask."
+)
 
 
 def _room_exists(room_id) -> bool:
@@ -1578,19 +1582,22 @@ class OrchestrationCoordinator:
                 )
                 # Save the confirmation now, where it happened. A stop later in
                 # the resumed run must read as newer, not older, after a reload.
-                # If it cannot be saved, keep the old delivery: the reply rides
-                # on the turn instead of being lost.
+                # The saved message is also the live delivery: streaming it too
+                # would blink out when the turn's saved reply replaces the
+                # stream pane. If it cannot be saved, keep the old delivery and
+                # let the reply ride on the turn.
                 saved = False
                 try:
                     saved = await sync_to_async(_persist_turn_notice)(
-                        room_id, reply, broadcast=False,
+                        room_id, reply,
                     )
                 except Exception as exc:
                     logger.warning(
                         "Autopilot arm notice not saved: %s",
                         type(exc).__name__,
                     )
-                await broadcast_chunk(reply, harness=True, record=not saved)
+                if not saved:
+                    await broadcast_chunk(reply, harness=True)
             else:
                 await broadcast_chunk(
                     "I couldn't arm autopilot, so nothing has changed. It needs a room on "
@@ -1655,9 +1662,15 @@ class OrchestrationCoordinator:
         deferred_directive = None
         immediate_directive = bool(explicit_disarm)
         if autopilot_request_nothing_pending:
-            await broadcast_chunk(
-                _AUTOPILOT_NOT_ARMED_NO_PENDING_REPLY, harness=True,
+            # Say what is true now, from the state this turn already loaded.
+            # Never re-arm or extend an open window: arming stays consent to a
+            # prompt the user has just seen.
+            reply = (
+                _AUTOPILOT_ALREADY_ARMED_REPLY
+                if user_preferences.get("_shell_autopilot")
+                else _AUTOPILOT_NOT_ARMED_NO_PENDING_REPLY
             )
+            await broadcast_chunk(reply, harness=True)
             immediate_directive = True
 
         # Host grants for the sandboxed shell's egress proxy: exact replies only.

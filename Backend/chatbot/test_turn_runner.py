@@ -942,6 +942,76 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
         self.assertIn("Autopilot was not armed", replies[-1])
         self.assertIn("approval prompt", replies[-1])
 
+    def test_a_bare_autopilot_when_already_armed_says_so_and_keeps_the_window(self):
+        from orchestration.shell import autopilot
+
+        self._arm_autopilot()
+        before = autopilot.status(self.user.id, self.room.id)["expires_at"]
+
+        async def scenario():
+            comm = await self._connect()
+            await self._send(comm, "@kazi autopilot")
+            self.assertTrue(await self._wait_for(
+                lambda: Turn.objects.filter(state="completed").exists(),
+            ))
+            await self.runner.drain(timeout=15)
+
+        self._run(scenario())
+
+        self.assertEqual(self.llm.calls, [])
+        self.assertTrue(self._is_autopilot_armed())
+        self.assertEqual(
+            autopilot.status(self.user.id, self.room.id)["expires_at"], before,
+        )
+        replies = [
+            text for text in self._saved_texts() if "Autopilot" in text
+        ]
+        self.assertTrue(replies)
+        self.assertIn("already armed", replies[-1])
+        self.assertNotIn("was not armed", replies[-1])
+
+    @override_settings(CONSENT_SKEW_SECONDS=0)
+    def test_the_arm_confirmation_reaches_the_socket_as_a_saved_message(self):
+        tool = _tool("c1", "run_command", {"command": "rm scratch.txt"})
+
+        async def scenario():
+            with self._open_profile():
+                comm, _paused = await self._pause_for_blocks([tool])
+                self.llm.queue(_response([_text("done")]))
+                await self._send(comm, "@kazi autopilot")
+                frames = []
+                while True:
+                    frame = await comm.receive_json_from(timeout=8)
+                    frames.append(frame)
+                    if frame.get("command") == "ai_message_saved":
+                        content = (frame.get("message") or {}).get("content") or ""
+                        if "done" in content:
+                            break
+                await self.runner.drain(timeout=15)
+                return frames
+
+        frames = self._run(scenario())
+
+        saved = [
+            (index, (frame.get("message") or {}).get("content") or "")
+            for index, frame in enumerate(frames)
+            if frame.get("command") == "ai_message_saved"
+        ]
+        arm = [index for index, content in saved if "Autopilot armed" in content]
+        turn = [index for index, content in saved if "done" in content]
+        self.assertTrue(arm, "the arm confirmation was not saved to the socket")
+        self.assertTrue(turn, "the resumed turn's saved reply never arrived")
+        self.assertLess(arm[0], turn[0])
+        streamed = [
+            frame.get("chunk") or ""
+            for frame in frames
+            if frame.get("command") == "ai_stream"
+        ]
+        self.assertFalse(
+            any("Autopilot armed" in chunk for chunk in streamed),
+            "the arm confirmation was streamed instead of saved",
+        )
+
     @override_settings(CONSENT_SKEW_SECONDS=0)
     def test_a_stop_after_arming_saves_armed_before_off(self):
         tool = _tool("c1", "run_command", {"command": "rm scratch.txt"})

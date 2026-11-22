@@ -850,6 +850,14 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
             return_value=PROFILES["open"],
         )
 
+    def _saved_texts(self):
+        from chatbot.history import decrypt_stored
+
+        return [
+            decrypt_stored(self.room, message)[0]
+            for message in Message.objects.order_by("timestamp", "id")
+        ]
+
     @override_settings(CONSENT_SKEW_SECONDS=0)
     def test_autopilot_arm_failure_keeps_the_pause(self):
         tool = _tool("c1", "run_command", {"command": "rm scratch.txt"})
@@ -913,6 +921,75 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
                 self.assertEqual(self.execute_tool.await_count, 2)
 
         self._run(scenario())
+
+    def test_a_bare_autopilot_with_nothing_pending_is_answered_truthfully(self):
+        async def scenario():
+            comm = await self._connect()
+            await self._send(comm, "@kazi autopilot")
+            self.assertTrue(await self._wait_for(
+                lambda: Turn.objects.filter(state="completed").exists(),
+            ))
+            await self.runner.drain(timeout=15)
+
+        self._run(scenario())
+
+        self.assertEqual(self.llm.calls, [])
+        self.assertFalse(self._is_autopilot_armed())
+        replies = [
+            text for text in self._saved_texts() if "Autopilot" in text
+        ]
+        self.assertTrue(replies)
+        self.assertIn("Autopilot was not armed", replies[-1])
+        self.assertIn("approval prompt", replies[-1])
+
+    @override_settings(CONSENT_SKEW_SECONDS=0)
+    def test_a_stop_after_arming_saves_armed_before_off(self):
+        tool = _tool("c1", "run_command", {"command": "rm scratch.txt"})
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def before(n):
+            if n == 2:
+                entered.set()
+                await release.wait()
+
+        async def scenario():
+            self.llm.before_call = before
+            with self._open_profile():
+                comm, _paused = await self._pause_for_blocks([tool])
+                self.llm.queue(_response([_text("done")]))
+                await self._send(comm, "@kazi autopilot")
+                await asyncio.wait_for(entered.wait(), timeout=8)
+                self.assertTrue(await self._maybe_true(self._is_autopilot_armed))
+                await self._send(comm, "@kazi stop")
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(
+                        cancel_requested_at__isnull=False,
+                    ).exists(),
+                    timeout=5,
+                ))
+                release.set()
+                self.assertTrue(await self._wait_for(
+                    lambda: not Turn.objects.filter(
+                        state__in=("running", "committing", "paused"),
+                    ).exists(),
+                    timeout=10,
+                ))
+                await self.runner.drain(timeout=15)
+
+        self._run(scenario())
+
+        self.assertFalse(self._is_autopilot_armed())
+        texts = self._saved_texts()
+        armed = next(
+            index for index, text in enumerate(texts)
+            if "Autopilot armed" in text
+        )
+        off = next(
+            index for index, text in enumerate(texts)
+            if "Autopilot is now off" in text
+        )
+        self.assertLess(armed, off)
 
     @override_settings(CONSENT_SKEW_SECONDS=0)
     def test_quota_still_blocked_keeps_the_pause(self):

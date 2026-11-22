@@ -448,6 +448,11 @@ _AUTOPILOT_HINT_TAINTED = (
     + " While this room holds untrusted content, commands that reach the "
     "network will still ask."
 )
+_AUTOPILOT_NOT_ARMED_NO_PENDING_REPLY = (
+    "Autopilot was not armed for this room. Nothing is waiting for approval; "
+    "autopilot is armed by replying **autopilot** to a shell command's "
+    "approval prompt."
+)
 
 
 def _room_exists(room_id) -> bool:
@@ -456,7 +461,7 @@ def _room_exists(room_id) -> bool:
     return Chatroom.objects.filter(pk=room_id).exists()
 
 
-def _persist_turn_notice(room_id, text: str) -> bool:
+def _persist_turn_notice(room_id, text: str, *, broadcast: bool = True) -> bool:
     """Save and broadcast one harness note outside a Turn."""
     from chatbot.kazi_messages import (
         KaziMessageError,
@@ -469,7 +474,9 @@ def _persist_turn_notice(room_id, text: str) -> bool:
     if room is None:
         return False
     try:
-        persist_kazi_message(room, content=text, origin=ORIGIN_TURN_NOTICE)
+        persist_kazi_message(
+            room, content=text, origin=ORIGIN_TURN_NOTICE, broadcast=broadcast,
+        )
     except KaziMessageError:
         logger.warning("Turn notice not saved: the room key is unavailable")
         return False
@@ -1015,9 +1022,12 @@ class OrchestrationCoordinator:
                 active_seconds=float(stream_state.get("active_seconds") or 0),
             )
 
-        async def broadcast_chunk(chunk_text, is_final=False, harness=False):
-            # Store all chunks to build full response
-            if chunk_text:
+        async def broadcast_chunk(chunk_text, is_final=False, harness=False, record=True):
+            # Store all chunks to build full response. A harness note that was
+            # saved as its own message at the moment it happened must not also
+            # ride on this turn's later reply: that would put it after a newer
+            # notice in the saved order (#315 follow-up).
+            if chunk_text and record:
                 stream_state["full_response"].append(chunk_text)
                 stream_state["harness" if harness else "model"].append(chunk_text)
 
@@ -1566,7 +1576,21 @@ class OrchestrationCoordinator:
                     if await _room_is_tainted()
                     else _AUTOPILOT_ARMED_REPLY
                 )
-                await broadcast_chunk(reply, harness=True)
+                # Save the confirmation now, where it happened. A stop later in
+                # the resumed run must read as newer, not older, after a reload.
+                # If it cannot be saved, keep the old delivery: the reply rides
+                # on the turn instead of being lost.
+                saved = False
+                try:
+                    saved = await sync_to_async(_persist_turn_notice)(
+                        room_id, reply, broadcast=False,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Autopilot arm notice not saved: %s",
+                        type(exc).__name__,
+                    )
+                await broadcast_chunk(reply, harness=True, record=not saved)
             else:
                 await broadcast_chunk(
                     "I couldn't arm autopilot, so nothing has changed. It needs a room on "
@@ -1598,6 +1622,15 @@ class OrchestrationCoordinator:
             # must resume without inflating the budget (T-F3b).
             pending_pause = await pending_resume_kind(room_id, user_id, state=loop_state) if pending_budget else ""
         cancel_request = is_cancel_request(query) if pending_confirmation else is_cancel_command(query)
+        # "autopilot" is consent to a prompt the user has just seen. With
+        # nothing pending it must not reach the model, which would otherwise
+        # claim a window that was never armed (#315). Arming stays consent to a
+        # prompt; this only tells the truth about the current state.
+        autopilot_request_nothing_pending = bool(
+            is_autopilot_request(query)
+            and not pending_confirmation
+            and not pending_budget
+        )
         if explicit_disarm or cancel_request:
             was_armed = bool(user_preferences.get("_shell_autopilot"))
             autopilot_turn["forced_off"] = True
@@ -1621,6 +1654,11 @@ class OrchestrationCoordinator:
 
         deferred_directive = None
         immediate_directive = bool(explicit_disarm)
+        if autopilot_request_nothing_pending:
+            await broadcast_chunk(
+                _AUTOPILOT_NOT_ARMED_NO_PENDING_REPLY, harness=True,
+            )
+            immediate_directive = True
 
         # Host grants for the sandboxed shell's egress proxy: exact replies only.
         # Revoking a host only reduces permission, so it runs now. Allowing one

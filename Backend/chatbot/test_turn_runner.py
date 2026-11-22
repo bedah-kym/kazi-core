@@ -1013,6 +1013,65 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
         )
 
     @override_settings(CONSENT_SKEW_SECONDS=0)
+    def test_the_model_sees_the_autopilot_state_before_and_after_arming(self):
+        from orchestration.tool_schemas import get_tool_definitions as real_tools
+
+        tool = _tool("c1", "run_command", {"command": "rm scratch.txt"})
+        not_armed = "Autopilot is not armed for this room right now"
+        armed = "Autopilot is armed for this room right now"
+        open_env = {
+            "profile": "open", "sandboxed": False, "platform": "Linux",
+            "shell": "bash", "taint_minutes": 15,
+        }
+
+        def tools_with_shell(**kwargs):
+            # The test process has no SHELL_EXEC_TOKEN, so the connector would
+            # not otherwise be offered; the shell section rides with it.
+            return real_tools(available_actions={"run_command"}, **kwargs)
+
+        async def scenario():
+            with self._open_profile(), patch(
+                "orchestration.shell.environment.get_shell_environment",
+                new=AsyncMock(return_value=open_env),
+            ), patch(
+                "orchestration.agent_loop.get_tool_definitions",
+                new=tools_with_shell,
+            ):
+                comm = await self._connect()
+                # The live sequence: a bare autopilot is answered by the
+                # harness, then a shell command pauses for approval, then the
+                # approval reply arms the window and resumes the run.
+                await self._send(comm, "@kazi autopilot")
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(state="completed").exists(),
+                ))
+                await self.runner.drain(timeout=15)
+                self.assertEqual(self.llm.calls, [])
+
+                self.llm.queue(_response([tool], stop_reason="tool_use"))
+                await self._send(comm, "@kazi rm scratch.txt")
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(state="paused").exists(),
+                ))
+                self.assertEqual(len(self.llm.calls), 1)
+
+                self.llm.queue(_response([_text("done")]))
+                await self._send(comm, "@kazi autopilot")
+                self.assertTrue(await self._wait_for(
+                    lambda: len(self.llm.calls) >= 2,
+                ))
+                await self.runner.drain(timeout=15)
+
+        self._run(scenario())
+
+        before = self.llm.calls[0]["system"]
+        after = self.llm.calls[1]["system"]
+        self.assertIn(not_armed, before)
+        self.assertNotIn(armed, before)
+        self.assertIn(armed, after)
+        self.assertNotIn(not_armed, after)
+
+    @override_settings(CONSENT_SKEW_SECONDS=0)
     def test_a_stop_after_arming_saves_armed_before_off(self):
         tool = _tool("c1", "run_command", {"command": "rm scratch.txt"})
         entered = asyncio.Event()

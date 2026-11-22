@@ -1026,12 +1026,9 @@ class OrchestrationCoordinator:
                 active_seconds=float(stream_state.get("active_seconds") or 0),
             )
 
-        async def broadcast_chunk(chunk_text, is_final=False, harness=False, record=True):
-            # Store all chunks to build full response. A harness note that was
-            # saved as its own message at the moment it happened must not also
-            # ride on this turn's later reply: that would put it after a newer
-            # notice in the saved order (#315 follow-up).
-            if chunk_text and record:
+        async def broadcast_chunk(chunk_text, is_final=False, harness=False):
+            # Store all chunks to build full response
+            if chunk_text:
                 stream_state["full_response"].append(chunk_text)
                 stream_state["harness" if harness else "model"].append(chunk_text)
 
@@ -1159,7 +1156,14 @@ class OrchestrationCoordinator:
                 from orchestration.agent_prompts import build_environment_block
                 from orchestration.shell.environment import get_shell_environment
 
-                return build_environment_block(await get_shell_environment(resolved_profile))
+                facts = await get_shell_environment(resolved_profile)
+                if facts.get("profile") == "open":
+                    # The window can change between a pause and its resume; the
+                    # turn already holds the current value, so no extra read.
+                    facts["autopilot_armed"] = bool(
+                        user_preferences.get("_shell_autopilot")
+                    )
+                return build_environment_block(facts)
             except Exception as exc:
                 logger.debug("Environment block skipped: %s", exc)
                 return ""

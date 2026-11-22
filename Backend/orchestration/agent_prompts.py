@@ -223,6 +223,13 @@ def build_environment_block(env: Optional[Dict[str, Any]]) -> str:
             "short destructive list. Otherwise the command runs at once. While the user has "
             "autopilot armed, a plain delete runs without asking and only the destructive list asks."
         )
+        if "autopilot_armed" in env:
+            lines.append(
+                "- Autopilot is armed for this room right now; its window expires "
+                "on its own."
+                if env.get("autopilot_armed")
+                else "- Autopilot is not armed for this room right now."
+            )
         lines.append(
             "- Your part is to call the tool. The harness then asks the user and shows them "
             "the exact action. Do not ask for permission in text and do not write the approval "

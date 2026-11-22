@@ -79,6 +79,23 @@ class EnvironmentBlockTests(SimpleTestCase):
         self.assertIn("not sandboxed", block)
         self.assertNotIn("Windows", block)
 
+    def test_open_block_says_autopilot_is_armed_when_the_window_is_open(self):
+        block = build_environment_block({**WINDOWS_OPEN, "autopilot_armed": True})
+
+        self.assertIn("Autopilot is armed for this room right now", block)
+        self.assertNotIn("Autopilot is not armed", block)
+
+    def test_open_block_says_autopilot_is_not_armed_when_the_window_is_closed(self):
+        block = build_environment_block({**WINDOWS_OPEN, "autopilot_armed": False})
+
+        self.assertIn("Autopilot is not armed for this room right now", block)
+        self.assertNotIn("Autopilot is armed", block)
+
+    def test_sandboxed_block_has_no_autopilot_state_line(self):
+        block = build_environment_block({**STANDARD, "autopilot_armed": True})
+
+        self.assertNotIn("Autopilot is", block)
+
 
 class SystemPromptTests(SimpleTestCase):
     def test_prompt_no_longer_describes_another_product_or_asks_for_narration(self):

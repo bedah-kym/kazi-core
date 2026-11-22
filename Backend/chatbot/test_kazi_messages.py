@@ -135,11 +135,15 @@ class BroadcastFrameTests(TestCase):
         self.assertEqual(group, f"chat_{room.id}")
         self.assertEqual(event["type"], "ai_message_saved")
         frame = event["message"]
-        self.assertEqual(set(frame), {"id", "member", "content", "timestamp", "parent_id"})
+        self.assertEqual(
+            set(frame),
+            {"id", "member", "content", "timestamp", "parent_id", "origin"},
+        )
         self.assertEqual(frame["id"], message.id)
         self.assertEqual(frame["member"], "kazi")
         self.assertEqual(frame["content"], "hello")
         self.assertEqual(frame["timestamp"], str(message.timestamp))
+        self.assertEqual(frame["origin"], "turn")
         self.assertIsNone(frame["parent_id"])
 
 

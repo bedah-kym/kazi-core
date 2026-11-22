@@ -163,7 +163,9 @@ def save_turn_reply(room, result, *, user_id):
         except KaziMessageError:
             logger.warning("AI reply not saved: room key unavailable")
             return None
-    broadcast_kazi_message(room, message, result.full_response)
+    broadcast_kazi_message(
+        room, message, result.full_response, origin=ORIGIN_TURN,
+    )
     return message
 
 

@@ -430,13 +430,16 @@ _AUTOPILOT_ARMED_REPLY = (
     "the window expires or you say **autopilot off**. Commands on the "
     "destructive list still ask."
 )
+_AUTOPILOT_TAINT_NOTE = (
+    " Because this room recently read untrusted content, commands that reach "
+    "the network will still ask while the room holds it. That lifts on its "
+    "own, though I can't tell you exactly when."
+)
 _AUTOPILOT_ARMED_TAINTED_REPLY = (
     "Autopilot armed for this room. Shell commands, including root ones, "
     "now run on this unsandboxed host without asking until the window "
     "expires or you say **autopilot off**. Commands on the destructive "
-    "list still ask. Because this room recently read untrusted content, "
-    "commands that reach the network will still ask while the room holds "
-    "it. That lifts on its own, though I can't tell you exactly when."
+    "list still ask." + _AUTOPILOT_TAINT_NOTE
 )
 _AUTOPILOT_HINT = (
     "\n\nThis room's shell is unsandboxed, so I ask before commands like this. "
@@ -457,6 +460,17 @@ _AUTOPILOT_ALREADY_ARMED_REPLY = (
     "Autopilot is already armed for this room. I won't extend the window; it "
     "will expire on its own. Commands on the destructive list still ask."
 )
+_AUTOPILOT_ALREADY_ARMED_TAINTED_REPLY = (
+    _AUTOPILOT_ALREADY_ARMED_REPLY + _AUTOPILOT_TAINT_NOTE
+)
+_AUTOPILOT_NOT_APPLICABLE_REPLY = (
+    "Autopilot doesn't apply to this room because its shell is sandboxed. "
+    "There is nothing to arm here."
+)
+_AUTOPILOT_STATE_UNREADABLE_REPLY = (
+    "I couldn't read whether autopilot is armed for this room. It is off for "
+    "this turn; the harness will still ask before commands that need approval."
+)
 
 
 def _room_exists(room_id) -> bool:
@@ -465,7 +479,7 @@ def _room_exists(room_id) -> bool:
     return Chatroom.objects.filter(pk=room_id).exists()
 
 
-def _persist_turn_notice(room_id, text: str, *, broadcast: bool = True) -> bool:
+def _persist_turn_notice(room_id, text: str) -> bool:
     """Save and broadcast one harness note outside a Turn."""
     from chatbot.kazi_messages import (
         KaziMessageError,
@@ -478,9 +492,7 @@ def _persist_turn_notice(room_id, text: str, *, broadcast: bool = True) -> bool:
     if room is None:
         return False
     try:
-        persist_kazi_message(
-            room, content=text, origin=ORIGIN_TURN_NOTICE, broadcast=broadcast,
-        )
+        persist_kazi_message(room, content=text, origin=ORIGIN_TURN_NOTICE)
     except KaziMessageError:
         logger.warning("Turn notice not saved: the room key is unavailable")
         return False
@@ -595,9 +607,13 @@ def _load_turn_context_sync(
         user_preferences["_shell_autopilot"] = bool(
             is_armed(user_id, room_id, profile_obj=profile_obj)
         )
+        user_preferences["_shell_autopilot_known"] = True
     except Exception as e:
+        # The gate stays closed. Keep "could not read" separate from a real
+        # "not armed" so the reply and the prompt can say which one it is.
         logger.debug("Shell autopilot lookup skipped: %s", e)
         user_preferences["_shell_autopilot"] = False
+        user_preferences["_shell_autopilot_known"] = False
 
     nothing_pending = False
     memory_summary = None
@@ -1158,11 +1174,14 @@ class OrchestrationCoordinator:
 
                 facts = await get_shell_environment(resolved_profile)
                 if facts.get("profile") == "open":
-                    # The window can change between a pause and its resume; the
-                    # turn already holds the current value, so no extra read.
-                    facts["autopilot_armed"] = bool(
-                        user_preferences.get("_shell_autopilot")
-                    )
+                    # The turn already holds the value read at load; no extra
+                    # read. None means the read failed, not "not armed".
+                    if user_preferences.get("_shell_autopilot_known") is False:
+                        facts["autopilot_armed"] = None
+                    else:
+                        facts["autopilot_armed"] = bool(
+                            user_preferences.get("_shell_autopilot")
+                        )
                 return build_environment_block(facts)
             except Exception as exc:
                 logger.debug("Environment block skipped: %s", exc)
@@ -1179,14 +1198,17 @@ class OrchestrationCoordinator:
             refreshed = dict(prefs) if isinstance(prefs, dict) else {}
             if autopilot_turn["forced_off"]:
                 refreshed["_shell_autopilot"] = False
+                refreshed["_shell_autopilot_known"] = True
                 return refreshed
             try:
                 refreshed["_shell_autopilot"] = bool(
                     await sync_to_async(autopilot_mod.is_armed)(user_id, room_id)
                 )
+                refreshed["_shell_autopilot_known"] = True
             except Exception as exc:
                 logger.debug("Autopilot refresh skipped: %s", exc)
                 refreshed["_shell_autopilot"] = False
+                refreshed["_shell_autopilot_known"] = False
             return refreshed
 
         async def _has_pending_confirmation() -> bool:
@@ -1579,6 +1601,7 @@ class OrchestrationCoordinator:
                 armed = False
             if armed:
                 user_preferences["_shell_autopilot"] = True
+                user_preferences["_shell_autopilot_known"] = True
                 reply = (
                     _AUTOPILOT_ARMED_TAINTED_REPLY
                     if await _room_is_tainted()
@@ -1652,6 +1675,7 @@ class OrchestrationCoordinator:
                 disarmed = await sync_to_async(autopilot_mod.disarm)(user_id, room_id, reason="chat")
             except Exception as exc:
                 logger.warning("Autopilot disarm failed: %s", exc)
+            user_preferences["_shell_autopilot_known"] = disarmed is not None
             if disarmed:
                 await broadcast_chunk("Autopilot disarmed for this room.\n\n", harness=True)
             elif disarmed is None and (was_armed or explicit_disarm):
@@ -1666,14 +1690,21 @@ class OrchestrationCoordinator:
         deferred_directive = None
         immediate_directive = bool(explicit_disarm)
         if autopilot_request_nothing_pending:
-            # Say what is true now, from the state this turn already loaded.
-            # Never re-arm or extend an open window: arming stays consent to a
-            # prompt the user has just seen.
-            reply = (
-                _AUTOPILOT_ALREADY_ARMED_REPLY
-                if user_preferences.get("_shell_autopilot")
-                else _AUTOPILOT_NOT_ARMED_NO_PENDING_REPLY
-            )
+            # Say what is true for this room, from the state the turn already
+            # loaded. Never re-arm or extend an open window: arming stays
+            # consent to a prompt the user has just seen.
+            if user_preferences.get("shell_profile") != "open":
+                reply = _AUTOPILOT_NOT_APPLICABLE_REPLY
+            elif user_preferences.get("_shell_autopilot_known") is False:
+                reply = _AUTOPILOT_STATE_UNREADABLE_REPLY
+            elif user_preferences.get("_shell_autopilot"):
+                reply = (
+                    _AUTOPILOT_ALREADY_ARMED_TAINTED_REPLY
+                    if await _room_is_tainted()
+                    else _AUTOPILOT_ALREADY_ARMED_REPLY
+                )
+            else:
+                reply = _AUTOPILOT_NOT_ARMED_NO_PENDING_REPLY
             await broadcast_chunk(reply, harness=True)
             immediate_directive = True
 

@@ -79,22 +79,31 @@ class EnvironmentBlockTests(SimpleTestCase):
         self.assertIn("not sandboxed", block)
         self.assertNotIn("Windows", block)
 
-    def test_open_block_says_autopilot_is_armed_when_the_window_is_open(self):
+    def test_open_block_says_autopilot_was_armed_when_the_turn_started(self):
         block = build_environment_block({**WINDOWS_OPEN, "autopilot_armed": True})
 
-        self.assertIn("Autopilot is armed for this room right now", block)
-        self.assertNotIn("Autopilot is not armed", block)
+        self.assertIn("Autopilot was armed when this turn started", block)
+        self.assertIn("re-checks before every command", block)
+        self.assertNotIn("right now", block)
 
-    def test_open_block_says_autopilot_is_not_armed_when_the_window_is_closed(self):
+    def test_open_block_says_autopilot_was_not_armed_when_the_turn_started(self):
         block = build_environment_block({**WINDOWS_OPEN, "autopilot_armed": False})
 
-        self.assertIn("Autopilot is not armed for this room right now", block)
-        self.assertNotIn("Autopilot is armed", block)
+        self.assertIn("Autopilot was not armed when this turn started", block)
+        self.assertNotIn("Autopilot was armed when", block)
+        self.assertNotIn("right now", block)
+
+    def test_open_block_says_the_autopilot_state_is_unknown_when_unreadable(self):
+        block = build_environment_block({**WINDOWS_OPEN, "autopilot_armed": None})
+
+        self.assertIn("could not be read this turn", block)
+        self.assertIn("treats it as not armed", block)
+        self.assertNotIn("was armed when this turn started", block)
 
     def test_sandboxed_block_has_no_autopilot_state_line(self):
         block = build_environment_block({**STANDARD, "autopilot_armed": True})
 
-        self.assertNotIn("Autopilot is", block)
+        self.assertNotIn("Autopilot was", block)
 
 
 class SystemPromptTests(SimpleTestCase):

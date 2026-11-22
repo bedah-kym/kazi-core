@@ -112,18 +112,24 @@ def encrypt_content_for_room(room: Chatroom, content: str) -> Optional[Dict[str,
     return encrypt_for_room(room, {"content": content, "timestamp": str(timezone.now())})
 
 
-def _default_frame(message: Message, content: str) -> Dict[str, Any]:
-    return {
+def _default_frame(
+    message: Message, content: str, origin: Optional[str] = None,
+) -> Dict[str, Any]:
+    frame = {
         "id": message.id,
         "member": KAZI_USERNAME,
         "content": content,
         "timestamp": str(message.timestamp),
         "parent_id": message.parent_id,
     }
+    if origin:
+        frame["origin"] = origin
+    return frame
 
 
 def broadcast_kazi_message(
-    room: Chatroom, message: Message, content: str, *, channel_layer: Any = None,
+    room: Chatroom, message: Message, content: str, *,
+    channel_layer: Any = None, origin: Optional[str] = None,
 ) -> None:
     """Push one already-persisted Kazi message to the room's sockets."""
     try:
@@ -131,7 +137,10 @@ def broadcast_kazi_message(
         if layer is not None:
             async_to_sync(layer.group_send)(
                 f"chat_{room.id}",
-                {"type": "ai_message_saved", "message": _default_frame(message, content)},
+                {
+                    "type": "ai_message_saved",
+                    "message": _default_frame(message, content, origin),
+                },
             )
     except Exception as exc:
         logger.warning("Kazi message realtime push failed: %s", exc)
@@ -193,6 +202,6 @@ def persist_kazi_message(
 
     if broadcast:
         broadcast_kazi_message(
-            room, message, content, channel_layer=channel_layer,
+            room, message, content, channel_layer=channel_layer, origin=origin,
         )
     return message

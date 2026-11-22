@@ -924,12 +924,13 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
 
     def test_a_bare_autopilot_with_nothing_pending_is_answered_truthfully(self):
         async def scenario():
-            comm = await self._connect()
-            await self._send(comm, "@kazi autopilot")
-            self.assertTrue(await self._wait_for(
-                lambda: Turn.objects.filter(state="completed").exists(),
-            ))
-            await self.runner.drain(timeout=15)
+            with self._open_profile():
+                comm = await self._connect()
+                await self._send(comm, "@kazi autopilot")
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(state="completed").exists(),
+                ))
+                await self.runner.drain(timeout=15)
 
         self._run(scenario())
 
@@ -949,12 +950,13 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
         before = autopilot.status(self.user.id, self.room.id)["expires_at"]
 
         async def scenario():
-            comm = await self._connect()
-            await self._send(comm, "@kazi autopilot")
-            self.assertTrue(await self._wait_for(
-                lambda: Turn.objects.filter(state="completed").exists(),
-            ))
-            await self.runner.drain(timeout=15)
+            with self._open_profile():
+                comm = await self._connect()
+                await self._send(comm, "@kazi autopilot")
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(state="completed").exists(),
+                ))
+                await self.runner.drain(timeout=15)
 
         self._run(scenario())
 
@@ -969,6 +971,79 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
         self.assertTrue(replies)
         self.assertIn("already armed", replies[-1])
         self.assertNotIn("was not armed", replies[-1])
+
+    def test_a_bare_autopilot_in_a_sandboxed_room_says_it_does_not_apply(self):
+        async def scenario():
+            comm = await self._connect()
+            await self._send(comm, "@kazi autopilot")
+            self.assertTrue(await self._wait_for(
+                lambda: Turn.objects.filter(state="completed").exists(),
+            ))
+            await self.runner.drain(timeout=15)
+
+        self._run(scenario())
+
+        self.assertEqual(self.llm.calls, [])
+        self.assertFalse(self._is_autopilot_armed())
+        replies = [
+            text for text in self._saved_texts() if "Autopilot" in text
+        ]
+        self.assertTrue(replies)
+        self.assertIn("doesn't apply", replies[-1])
+        self.assertIn("sandboxed", replies[-1])
+        self.assertNotIn("approval prompt", replies[-1])
+
+    def test_a_bare_autopilot_when_already_armed_in_a_tainted_room_warns_about_network(self):
+        self._arm_autopilot()
+
+        async def scenario():
+            with self._open_profile(), patch(
+                "orchestration.coordinator._conversation_tainted",
+                return_value=True,
+            ):
+                comm = await self._connect()
+                await self._send(comm, "@kazi autopilot")
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(state="completed").exists(),
+                ))
+                await self.runner.drain(timeout=15)
+
+        self._run(scenario())
+
+        self.assertEqual(self.llm.calls, [])
+        self.assertTrue(self._is_autopilot_armed())
+        replies = [
+            text for text in self._saved_texts() if "Autopilot" in text
+        ]
+        self.assertTrue(replies)
+        self.assertIn("already armed", replies[-1])
+        self.assertIn(
+            "commands that reach the network will still ask", replies[-1],
+        )
+
+    def test_a_bare_autopilot_with_an_unreadable_state_says_so(self):
+        async def scenario():
+            with self._open_profile(), patch(
+                "orchestration.shell.autopilot.is_armed",
+                side_effect=RuntimeError("autopilot store down"),
+            ):
+                comm = await self._connect()
+                await self._send(comm, "@kazi autopilot")
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(state="completed").exists(),
+                ))
+                await self.runner.drain(timeout=15)
+
+        self._run(scenario())
+
+        self.assertEqual(self.llm.calls, [])
+        self.assertFalse(self._is_autopilot_armed())
+        replies = [
+            text for text in self._saved_texts() if "autopilot" in text.lower()
+        ]
+        self.assertTrue(replies)
+        self.assertIn("couldn't read", replies[-1])
+        self.assertNotIn("Autopilot was not armed", replies[-1])
 
     @override_settings(CONSENT_SKEW_SECONDS=0)
     def test_the_arm_confirmation_reaches_the_socket_as_a_saved_message(self):
@@ -993,15 +1068,27 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
         frames = self._run(scenario())
 
         saved = [
-            (index, (frame.get("message") or {}).get("content") or "")
+            (index, frame.get("message") or {})
             for index, frame in enumerate(frames)
             if frame.get("command") == "ai_message_saved"
         ]
-        arm = [index for index, content in saved if "Autopilot armed" in content]
-        turn = [index for index, content in saved if "done" in content]
-        self.assertTrue(arm, "the arm confirmation was not saved to the socket")
-        self.assertTrue(turn, "the resumed turn's saved reply never arrived")
-        self.assertLess(arm[0], turn[0])
+        arm = [
+            (index, message) for index, message in saved
+            if "Autopilot armed" in (message.get("content") or "")
+        ]
+        turn = [
+            (index, message) for index, message in saved
+            if "done" in (message.get("content") or "")
+        ]
+        self.assertEqual(len(arm), 1, "the arm confirmation was not saved once")
+        self.assertEqual(len(turn), 1, "the resumed turn's reply was not saved once")
+        self.assertLess(arm[0][0], turn[0][0])
+        self.assertEqual(arm[0][1].get("origin"), "turn_notice")
+        self.assertEqual(turn[0][1].get("origin"), "turn")
+        self.assertNotIn(
+            "Autopilot armed", turn[0][1].get("content") or "",
+            "the turn's saved reply also carried the arm confirmation",
+        )
         streamed = [
             frame.get("chunk") or ""
             for frame in frames
@@ -1017,8 +1104,8 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
         from orchestration.tool_schemas import get_tool_definitions as real_tools
 
         tool = _tool("c1", "run_command", {"command": "rm scratch.txt"})
-        not_armed = "Autopilot is not armed for this room right now"
-        armed = "Autopilot is armed for this room right now"
+        not_armed = "Autopilot was not armed when this turn started"
+        armed = "Autopilot was armed when this turn started"
         open_env = {
             "profile": "open", "sandboxed": False, "platform": "Linux",
             "shell": "bash", "taint_minutes": 15,
@@ -1070,6 +1157,72 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
         self.assertNotIn(armed, before)
         self.assertIn(armed, after)
         self.assertNotIn(not_armed, after)
+        self.assertNotIn("right now", before)
+        self.assertNotIn("right now", after)
+
+    @override_settings(CONSENT_SKEW_SECONDS=0)
+    def test_a_mid_turn_disarm_leaves_no_right_now_claim_and_the_next_batch_asks(self):
+        from orchestration.tool_schemas import get_tool_definitions as real_tools
+
+        tool = _tool("c1", "run_command", {"command": "rm scratch.txt"})
+        open_env = {
+            "profile": "open", "sandboxed": False, "platform": "Linux",
+            "shell": "bash", "taint_minutes": 15,
+        }
+
+        def tools_with_shell(**kwargs):
+            return real_tools(available_actions={"run_command"}, **kwargs)
+
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def before(n):
+            if n == 2:
+                entered.set()
+                await release.wait()
+
+        self._arm_autopilot()
+
+        async def scenario():
+            self.llm.before_call = before
+            with self._open_profile(), patch(
+                "orchestration.shell.environment.get_shell_environment",
+                new=AsyncMock(return_value=open_env),
+            ), patch(
+                "orchestration.agent_loop.get_tool_definitions",
+                new=tools_with_shell,
+            ):
+                comm = await self._connect()
+                self.llm.queue(
+                    _response([tool], stop_reason="tool_use"),
+                    _response([tool], stop_reason="tool_use"),
+                )
+                await self._send(comm, "@kazi rm scratch.txt")
+                await asyncio.wait_for(entered.wait(), timeout=8)
+                self.assertTrue(await self._maybe_true(self._is_autopilot_armed))
+                await self._send(comm, "@kazi autopilot off")
+                self.assertTrue(await self._wait_for(
+                    lambda: not self._is_autopilot_armed(),
+                ))
+                release.set()
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(
+                        state="paused", pause_kind="approval",
+                    ).exists(),
+                ))
+                await self._send(comm, "@kazi no")
+                self.assertTrue(await self._wait_for(
+                    lambda: not Turn.objects.filter(state="paused").exists(),
+                ))
+                await self.runner.drain(timeout=15)
+
+        self._run(scenario())
+
+        self.assertEqual(len(self.llm.calls), 2)
+        for call in self.llm.calls:
+            system = call.get("system") or ""
+            self.assertIn("Autopilot was armed when this turn started", system)
+            self.assertNotIn("right now", system)
 
     @override_settings(CONSENT_SKEW_SECONDS=0)
     def test_a_stop_after_arming_saves_armed_before_off(self):
@@ -1110,15 +1263,82 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
 
         self.assertFalse(self._is_autopilot_armed())
         texts = self._saved_texts()
-        armed = next(
+        armed = [
             index for index, text in enumerate(texts)
             if "Autopilot armed" in text
-        )
-        off = next(
+        ]
+        off = [
             index for index, text in enumerate(texts)
             if "Autopilot is now off" in text
+        ]
+        self.assertEqual(len(armed), 1, "the arm confirmation was not saved once")
+        self.assertEqual(len(off), 1, "the stop notice was not saved once")
+        self.assertLess(armed[0], off[0])
+        turn_reply = [text for text in texts if "done" in text]
+        self.assertTrue(turn_reply, "the resumed turn's saved reply is missing")
+        self.assertNotIn("Autopilot armed", turn_reply[-1])
+
+    @override_settings(CONSENT_SKEW_SECONDS=0)
+    def test_a_failed_arm_notice_streams_once_and_the_turn_still_resumes(self):
+        from chatbot.kazi_messages import (
+            KaziMessageError,
+            persist_kazi_message as real_persist,
         )
-        self.assertLess(armed, off)
+
+        tool = _tool("c1", "run_command", {"command": "rm scratch.txt"})
+
+        def fail_arm_notice(room, **kwargs):
+            if "Autopilot armed" in (kwargs.get("content") or ""):
+                raise KaziMessageError("room key down")
+            return real_persist(room, **kwargs)
+
+        async def scenario():
+            with self._open_profile(), patch(
+                "chatbot.kazi_messages.persist_kazi_message",
+                side_effect=fail_arm_notice,
+            ):
+                comm, paused = await self._pause_for_blocks([tool])
+                self.llm.queue(_response([_text("done")]))
+                await self._send(comm, "@kazi autopilot")
+                frames = []
+                while True:
+                    frame = await comm.receive_json_from(timeout=8)
+                    frames.append(frame)
+                    if frame.get("command") == "ai_message_saved":
+                        content = (frame.get("message") or {}).get("content") or ""
+                        if "done" in content:
+                            break
+                await self.runner.drain(timeout=15)
+                return frames, paused.pk
+
+        frames, paused_id = self._run(scenario())
+
+        streamed = [
+            frame.get("chunk") or ""
+            for frame in frames
+            if frame.get("command") == "ai_stream"
+        ]
+        self.assertEqual(
+            sum("Autopilot armed" in chunk for chunk in streamed), 1,
+            "the fallback should stream the confirmation exactly once",
+        )
+        saved = [
+            frame.get("message") or {}
+            for frame in frames
+            if frame.get("command") == "ai_message_saved"
+        ]
+        arm_saved = [
+            message for message in saved
+            if "Autopilot armed" in (message.get("content") or "")
+        ]
+        self.assertEqual(len(arm_saved), 1)
+        self.assertEqual(
+            (arm_saved[0].get("content") or "").count("Autopilot armed"), 1,
+        )
+        self.assertIn("done", arm_saved[0].get("content") or "")
+        self.assertTrue(self._is_autopilot_armed())
+        self.assertEqual(self.execute_tool.await_count, 1)
+        self.assertEqual(Turn.objects.get(pk=paused_id).state, "completed")
 
     @override_settings(CONSENT_SKEW_SECONDS=0)
     def test_quota_still_blocked_keeps_the_pause(self):

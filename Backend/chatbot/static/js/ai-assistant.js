@@ -373,14 +373,26 @@ class KaziAssistant {
         // Handle saved message after streaming completes — smooth transition
         if (data.command === 'ai_message_saved') {
             console.log('AI message saved event received');
-            this.isThinking = false;
-            this._stepCount = 0;
+            // A turn notice can be saved while the turn is still running (the
+            // arm confirmation starts a resumed turn). Keep the indicator up
+            // until the model actually answers; other saved messages behave
+            // as before.
+            const keepThinking = (
+                data.message && data.message.origin === 'turn_notice'
+                && this.isThinking
+            );
+            if (!keepThinking) {
+                this.isThinking = false;
+                this._stepCount = 0;
+            }
 
             const chatList = this.getCurrentMessageList();
             if (!chatList) return;
 
             // Remove thinking indicators
-            chatList.querySelectorAll('.kazi-thinking').forEach(el => el.remove());
+            if (!keepThinking) {
+                chatList.querySelectorAll('.kazi-thinking').forEach(el => el.remove());
+            }
 
             // Morph stream container → saved message with crossfade
             const streamEl = chatList.querySelector('.ai-stream-container');

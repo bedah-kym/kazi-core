@@ -33,6 +33,7 @@ from orchestration.turns import (
     aget_turn,
     alink_message,
     atransition,
+    has_paused,
     last_ran_turn_before,
     pause_ttl_seconds,
     ref_from_turn,
@@ -57,7 +58,11 @@ from orchestration.adaptive_task import (
     clear_result_sets,
     is_cancel_request,
 )
-from orchestration.memory_state import load_memory_summary, clear_memory
+from orchestration.memory_state import (
+    clear_memory,
+    load_memory_summary,
+    load_memory_summary_sync,
+)
 from orchestration.tool_calls import (
     did_not_run_reason,
     record_from_event,
@@ -90,6 +95,8 @@ from orchestration.agent_loop import (
     has_expired_pause,
     pending_approval_prompt,
     load_pending_state,
+    _state_key,
+    _pending_approval_record,
     cancel_pending_action,
     clear_loop_state,
     dismiss_pending_confirmation,
@@ -487,6 +494,121 @@ def _history_replays_untrusted(history_msgs: Optional[List[dict]]) -> bool:
             ):
                 return True
     return False
+
+
+@dataclass(frozen=True)
+class TurnContext:
+    """The stable per-turn reads the coordinator needs before it routes.
+
+    Loaded in one sync hop (FU-47 b). Everything here is read again on the
+    next turn, so a preference change is never served from an earlier turn's
+    snapshot. Pending state is reduced to a cheap existence snapshot: an empty
+    one lets the runner path skip the full reads, and any doubt (or an actual
+    pause/approval) takes the full, fresh path. Persona stays lazy in
+    ``_with_persona_identity``, as on main.
+    """
+
+    user_preferences: Dict[str, Any]
+    resolved_profile: Any
+    # True only when the paused-only check saw no pause, no approval and no
+    # legacy loop state. The runner path then skips the four pending reads;
+    # any doubt leaves it False and takes the full, fresh path.
+    nothing_pending: bool
+    memory_summary: Optional[str]
+
+
+def _load_turn_context_sync(
+    user_id: int, room_id: Any, adaptive_context: Dict[str, Any], *,
+    fast_path: bool, known_pending: bool = False,
+) -> TurnContext:
+    """Read the stable per-turn state in one worker hop.
+
+    The fallback rules are the ones the coordinator used inline: a profile
+    failure still lets the preferences path try, and learned overrides only
+    apply when the user's own preferences loaded. Persona is lazy (the caller
+    resolves it where main did), and the pending snapshot and memory summary
+    are read only on the runner path that uses them.
+    """
+    profile_obj = None
+    profile_loaded = False
+    try:
+        from orchestration.shell.profile_store import profile as load_profile
+
+        profile_obj = load_profile(user_id)
+        profile_loaded = True
+    except Exception as e:
+        logger.debug("Profile load skipped: %s", e)
+
+    user_preferences = {}
+    preferences_loaded = True
+    if not profile_loaded:
+        try:
+            user_preferences = get_user_preferences(user_id)
+        except Exception as e:
+            logger.warning(f"User preferences load failed: {e}")
+            user_preferences = conservative_default_preferences()
+            preferences_loaded = False
+    else:
+        try:
+            user_preferences = get_user_preferences(
+                user_id, profile_obj=profile_obj,
+            )
+        except Exception as e:
+            logger.warning(f"User preferences load failed: {e}")
+            user_preferences = conservative_default_preferences()
+            preferences_loaded = False
+
+    if preferences_loaded:
+        try:
+            from orchestration.preference_mining import merge_learned_overrides
+
+            user_preferences = merge_learned_overrides(
+                user_preferences, user_id, room_id,
+            )
+        except Exception as e:
+            logger.debug("Learned override merge skipped: %s", e)
+
+    resolved_profile = None
+    try:
+        from orchestration.shell.profiles import resolve_profile
+
+        resolved_profile = resolve_profile(room_id, user_preferences)
+        user_preferences["shell_profile"] = resolved_profile.name
+    except Exception as e:
+        logger.debug("Shell profile resolution skipped: %s", e)
+
+    user_preferences.pop("_shell_tainted", None)
+    try:
+        from orchestration.shell.autopilot import is_armed
+
+        user_preferences["_shell_autopilot"] = bool(
+            is_armed(user_id, room_id, profile_obj=profile_obj)
+        )
+    except Exception as e:
+        logger.debug("Shell autopilot lookup skipped: %s", e)
+        user_preferences["_shell_autopilot"] = False
+
+    nothing_pending = False
+    memory_summary = None
+    if fast_path:
+        if not known_pending:
+            try:
+                if not has_paused(room_id, user_id):
+                    if _pending_approval_record(room_id, user_id) is None:
+                        nothing_pending = not cache.get(
+                            _state_key(room_id, user_id),
+                        )
+            except Exception:
+                # Any doubt: take the full pending path (fail closed).
+                nothing_pending = False
+        memory_summary = load_memory_summary_sync(adaptive_context)
+
+    return TurnContext(
+        user_preferences=user_preferences,
+        resolved_profile=resolved_profile,
+        nothing_pending=nothing_pending,
+        memory_summary=memory_summary,
+    )
 
 
 @dataclass
@@ -967,61 +1089,24 @@ class OrchestrationCoordinator:
             "room_id": room_id,
             "username": username,
         }
-        memory_summary = await load_memory_summary(adaptive_context)
-        user_preferences = {}
-        preferences_loaded = True
-        profile_obj = None
-        profile_loaded = False
-        try:
-            from orchestration.shell.profile_store import profile as load_profile
-            profile_obj = await sync_to_async(load_profile)(user_id)
-            profile_loaded = True
-        except Exception as e:
-            logger.debug("Profile load skipped: %s", e)
-        if not profile_loaded:
-            # The profile could not be read at all. Try the preferences path once
-            # more (it fails closed on its own) before denying the sensitive gates.
-            try:
-                user_preferences = await sync_to_async(get_user_preferences)(user_id)
-            except Exception as e:
-                logger.warning(f"User preferences load failed: {e}")
-                user_preferences = conservative_default_preferences()
-                preferences_loaded = False
-        else:
-            try:
-                user_preferences = await sync_to_async(get_user_preferences)(
-                    user_id, profile_obj=profile_obj,
-                )
-            except Exception as e:
-                logger.warning(f"User preferences load failed: {e}")
-                user_preferences = conservative_default_preferences()
-                preferences_loaded = False
-        # Learned overrides only relieve friction beneath the user's own choices.
-        # When those could not be read, none is applied.
-        if preferences_loaded:
-            try:
-                from orchestration.preference_mining import merge_learned_overrides
-                user_preferences = await sync_to_async(merge_learned_overrides)(user_preferences, user_id, room_id)
-            except Exception as e:
-                logger.debug("Learned override merge skipped: %s", e)
-        resolved_profile = None
-        try:
-            from orchestration.shell.profiles import resolve_profile
-            resolved_profile = await sync_to_async(resolve_profile)(room_id, user_preferences)
-            user_preferences["shell_profile"] = resolved_profile.name
-        except Exception as e:
-            logger.debug("Shell profile resolution skipped: %s", e)
-        # Human-armed window for the unsandboxed profile. Always overwritten here
-        # so a stored preference can never set it. Fail closed: no lookup -> ask.
-        user_preferences.pop("_shell_tainted", None)
-        try:
-            from orchestration.shell.autopilot import is_armed
-            user_preferences["_shell_autopilot"] = bool(
-                await sync_to_async(is_armed)(user_id, room_id, profile_obj=profile_obj)
-            )
-        except Exception as e:
-            logger.debug("Shell autopilot lookup skipped: %s", e)
-            user_preferences["_shell_autopilot"] = False
+        # On the runner path this is one hop for preferences and the memory
+        # summary. With no claimed turn the summary is its own hop, as on
+        # main. Each turn reads them again, so nothing stale survives.
+        known_pending = bool(
+            getattr(claimed_turn, "paused_exists", False)
+        ) if claimed_turn is not None else False
+        turn_context = await sync_to_async(_load_turn_context_sync)(
+            user_id, room_id, adaptive_context,
+            fast_path=claimed_turn is not None,
+            known_pending=known_pending,
+        )
+        memory_summary = (
+            turn_context.memory_summary
+            if claimed_turn is not None
+            else await load_memory_summary(adaptive_context)
+        )
+        user_preferences = turn_context.user_preferences
+        resolved_profile = turn_context.resolved_profile
         # One read per turn: the reset and pause checks below share this state.
         loop_state = None
 
@@ -1034,9 +1119,14 @@ class OrchestrationCoordinator:
         async def _with_persona_identity(room_id, user_id, ctx_prompt: str) -> str:
             """Prepend the room persona's identity + skills to the loop context."""
             try:
-                from orchestration.personas import persona_identity_prompt, resolve_room_persona
+                from orchestration.personas import (
+                    persona_identity_prompt,
+                    resolve_room_persona,
+                )
 
-                persona = await sync_to_async(resolve_room_persona)(room_id, user_id)
+                persona = await sync_to_async(resolve_room_persona)(
+                    room_id, user_id,
+                )
                 if persona:
                     identity = persona_identity_prompt(persona, user_capabilities=user_preferences)
                     return "\n\n".join([identity, ctx_prompt or ""]).strip()
@@ -1492,12 +1582,21 @@ class OrchestrationCoordinator:
         # disarms the window, so "why did it stop?" reaches the model.
         from orchestration.shell.chat_intents import is_autopilot_disarm_request
         explicit_disarm = is_autopilot_disarm_request(query)
-        loop_state = await load_pending_state(room_id, user_id)
-        pending_confirmation = await _has_pending_confirmation()
-        pending_budget = await has_pending_budget_state(room_id, user_id, state=loop_state)
-        # A quota pause also keeps the turn with awaiting_budget set, but it must
-        # resume without inflating the budget (T-F3b).
-        pending_pause = await pending_resume_kind(room_id, user_id, state=loop_state) if pending_budget else ""
+        if claimed_turn is not None and turn_context.nothing_pending:
+            # The runner already holds this turn and the paused-only snapshot
+            # says nothing is paused, awaiting approval or kept in the legacy
+            # cache: skip the four pending reads (FU-47 b/c).
+            loop_state = None
+            pending_confirmation = False
+            pending_budget = False
+            pending_pause = ""
+        else:
+            loop_state = await load_pending_state(room_id, user_id)
+            pending_confirmation = await _has_pending_confirmation()
+            pending_budget = await has_pending_budget_state(room_id, user_id, state=loop_state)
+            # A quota pause also keeps the turn with awaiting_budget set, but it
+            # must resume without inflating the budget (T-F3b).
+            pending_pause = await pending_resume_kind(room_id, user_id, state=loop_state) if pending_budget else ""
         cancel_request = is_cancel_request(query) if pending_confirmation else is_cancel_command(query)
         if explicit_disarm or cancel_request:
             was_armed = bool(user_preferences.get("_shell_autopilot"))
@@ -1678,7 +1777,13 @@ class OrchestrationCoordinator:
         # One logical turn keeps one id. A reply that resolves a pause continues
         # that Turn; anything else (a question, another request) keeps the pause
         # armed and starts a new record (D8).
-        paused_turn = await aget_paused_turn(room_id, user_id)
+        # An idle key skips the paused-turn read (FU-47 c). The snapshot is
+        # skipped on the non-runner and known-pending paths, so read the row
+        # directly here; a paused row is always fresh in this same turn.
+        if claimed_turn is not None and turn_context.nothing_pending:
+            paused_turn = None
+        else:
+            paused_turn = await aget_paused_turn(room_id, user_id)
         consent_reply = bool(
             pending_confirmation
             and (is_autopilot_request(query) or is_approval_reply(query))

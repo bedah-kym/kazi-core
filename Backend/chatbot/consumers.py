@@ -2,6 +2,7 @@ import json
 import random
 import re
 import traceback
+from time import monotonic
 from asgiref.sync import sync_to_async
 from django.utils import timezone
 from channels.generic.websocket import AsyncWebsocketConsumer
@@ -43,6 +44,18 @@ from django.conf import settings
 from django.utils.text import get_valid_filename
 logger = logging.getLogger(__name__)
 User = get_user_model()
+
+# FU-48: last-seen writes are throttled per member so a busy room's presence
+# beats and disconnects cannot each cost a write. The window is wall-clock
+# independent; the value is a monotonic stamp.
+LAST_SEEN_WRITE_INTERVAL_SECONDS = 60.0
+_LAST_SEEN_WRITES: dict = {}
+
+
+def _reset_last_seen_throttle() -> None:
+    """Clear the per-process throttle (tests only)."""
+    _LAST_SEEN_WRITES.clear()
+
 
 _moderation_store_warned = False
 
@@ -242,9 +255,21 @@ class ChatConsumer(AsyncWebsocketConsumer):
             })
         return entries
 
-    async def _save_member_last_seen(self, user_id):
-        """Save "now" as the member's last seen time and return it."""
+    async def _save_member_last_seen(self, user_id, *, force: bool = False):
+        """Save "now" as the member's last seen time and return it.
+
+        Presence ticks are throttled to one write per member per minute
+        (FU-48). The final disconnect passes ``force=True`` so the last value
+        is always stored; it also drops the throttle entry so the map cannot
+        grow without bound. A skipped save still returns the current time so
+        the caller's broadcast stays honest.
+        """
         now = timezone.now()
+        stamp = monotonic()
+        if not force:
+            last = _LAST_SEEN_WRITES.get(user_id)
+            if last is not None and stamp - last < LAST_SEEN_WRITE_INTERVAL_SECONDS:
+                return now
 
         def _save():
             Member.objects.filter(User_id=user_id).update(last_seen=now)
@@ -252,7 +277,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
         try:
             await sync_to_async(_save)()
         except Exception as exc:
+            # A failed write must not consume the window: retry next time.
             logger.debug("Member.last_seen save skipped: %s", exc)
+            return now
+        if force:
+            _LAST_SEEN_WRITES.pop(user_id, None)
+        else:
+            _LAST_SEEN_WRITES[user_id] = stamp
         return now
 
     async def _presence_loop(self, room_id, user_id, connection_id):
@@ -504,7 +535,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
             if room_id is not None and connection_id is not None:
                 last = await presence.disconnect(room_id, user_id, connection_id)
                 if last:
-                    seen_at = await self._save_member_last_seen(user_id)
+                    seen_at = await self._save_member_last_seen(
+                        user_id, force=True,
+                    )
                     await self._broadcast_presence("offline", seen_at.isoformat())
 
         except Exception as e:

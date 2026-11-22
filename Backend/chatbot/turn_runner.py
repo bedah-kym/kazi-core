@@ -12,7 +12,8 @@ import asyncio
 import logging
 import threading
 import weakref
-from typing import Any, Dict, Optional, Set
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Set
 
 from asgiref.sync import sync_to_async
 from django.conf import settings
@@ -38,7 +39,7 @@ from orchestration.turn_leases import (
     unregister_live_turn,
 )
 
-from .history import decrypt_stored, get_history_rows
+from .history import DECRYPT_FAILED, decrypt_stored, get_history_rows
 from .kazi_messages import (
     KAZI_USERNAME,
     ORIGIN_TURN,
@@ -362,6 +363,35 @@ async def run_immediate_directives(
         if stop_notice is not None:
             return stop_notice
     return None
+
+
+@dataclass(frozen=True)
+class _TurnSetup:
+    """The reads a turn needs before it enters the coordinator (FU-47 b).
+
+    Collected in one shared-thread hop: the room, the request message, its
+    decrypted content and the participants. History stays its own hop, as on
+    main, so its read cannot overlap the next message's write.
+    """
+
+    room: Any
+    request: Any
+    content: str
+    participants: List[Any]
+
+
+def _load_turn_setup(turn: Turn) -> _TurnSetup:
+    room = Chatroom.objects.filter(pk=turn.room_id).first()
+    if room is None:
+        return _TurnSetup(None, None, "", [])
+    request = _request_message(turn)
+    if request is None:
+        return _TurnSetup(room, None, "", [])
+    content, _payload = decrypt_stored(room, request)
+    if content == DECRYPT_FAILED:
+        return _TurnSetup(room, request, content, [])
+    participants = list(room.participants.select_related("User"))
+    return _TurnSetup(room, request, content, participants)
 
 
 def _active_turn_exists(room_id: Any, user_id: Any) -> bool:
@@ -878,22 +908,21 @@ class TurnRunner:
     async def _execute(self, turn: Turn, box: Dict[str, Any]) -> Any:
         from orchestration import coordinator as coordinator_mod
 
-        room = await sync_to_async(Chatroom.objects.filter(pk=turn.room_id).first)()
+        setup = await sync_to_async(_load_turn_setup)(turn)
+        room = setup.room
         if room is None:
             await sync_to_async(_fail_turn)(turn, "room_gone")
             return None
-        request = await sync_to_async(_request_message)(turn)
+        request = setup.request
         if request is None:
             await sync_to_async(_fail_turn)(turn, "request_missing")
             return None
-        content, _payload = await sync_to_async(decrypt_stored)(room, request)
-        if content == "Error: Could not decrypt message.":
+        content = setup.content
+        if content == DECRYPT_FAILED:
             await sync_to_async(_fail_turn)(turn, "decrypt_failed")
             return None
 
-        participants = await sync_to_async(
-            lambda: list(room.participants.select_related("User"))
-        )()
+        participants = setup.participants
         kazi_member = next(
             (m for m in participants if m.User.username == KAZI_USERNAME), None,
         )

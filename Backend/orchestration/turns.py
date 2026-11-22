@@ -320,6 +320,18 @@ def count_queued(room_id: Any, user_id: Any) -> int:
     ).count()
 
 
+def has_paused(room_id: Any, user_id: Any) -> bool:
+    """Cheap paused-only check: does this key have a paused Turn?
+
+    One ``EXISTS`` on ``(room, user, state="paused")``. The coordinator uses
+    it to skip the paused-turn read when this key is idle (FU-47 c). It
+    deliberately ignores queued rows, as every pending read on main does.
+    """
+    return Turn.objects.filter(
+        room_id=room_id, user_id=user_id, state="paused",
+    ).exists()
+
+
 def request_stop_for_key(room_id: Any, user_id: Any) -> StopResult:
     """Flag a running Turn and drop everything waiting for one key.
 
@@ -467,6 +479,16 @@ def claim_next_queued(room_id: Any, user_id: Any) -> Optional[Turn]:
                         room_id=room_id,
                         user_id=user_id,
                         state__in=("running", "committing"),
+                    )
+                ),
+                # This rides in the claim's own SELECT: the coordinator needs
+                # it to skip the idle snapshot on a paused key without paying
+                # an extra query.
+                paused_exists=Exists(
+                    Turn.objects.filter(
+                        room_id=room_id,
+                        user_id=user_id,
+                        state="paused",
                     )
                 ),
             )

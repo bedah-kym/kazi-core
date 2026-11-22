@@ -479,7 +479,7 @@ def _room_exists(room_id) -> bool:
     return Chatroom.objects.filter(pk=room_id).exists()
 
 
-def _persist_turn_notice(room_id, text: str) -> bool:
+def _persist_turn_notice(room_id, text: str, *, turn_continues: bool = False) -> bool:
     """Save and broadcast one harness note outside a Turn."""
     from chatbot.kazi_messages import (
         KaziMessageError,
@@ -492,7 +492,10 @@ def _persist_turn_notice(room_id, text: str) -> bool:
     if room is None:
         return False
     try:
-        persist_kazi_message(room, content=text, origin=ORIGIN_TURN_NOTICE)
+        persist_kazi_message(
+            room, content=text, origin=ORIGIN_TURN_NOTICE,
+            turn_continues=turn_continues,
+        )
     except KaziMessageError:
         logger.warning("Turn notice not saved: the room key is unavailable")
         return False
@@ -1616,7 +1619,7 @@ class OrchestrationCoordinator:
                 saved = False
                 try:
                     saved = await sync_to_async(_persist_turn_notice)(
-                        room_id, reply,
+                        room_id, reply, turn_continues=True,
                     )
                 except Exception as exc:
                     logger.warning(

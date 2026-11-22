@@ -113,7 +113,7 @@ def encrypt_content_for_room(room: Chatroom, content: str) -> Optional[Dict[str,
 
 
 def _default_frame(
-    message: Message, content: str, origin: Optional[str] = None,
+    message: Message, content: str, turn_continues: bool = False,
 ) -> Dict[str, Any]:
     frame = {
         "id": message.id,
@@ -122,14 +122,14 @@ def _default_frame(
         "timestamp": str(message.timestamp),
         "parent_id": message.parent_id,
     }
-    if origin:
-        frame["origin"] = origin
+    if turn_continues:
+        frame["turn_continues"] = True
     return frame
 
 
 def broadcast_kazi_message(
     room: Chatroom, message: Message, content: str, *,
-    channel_layer: Any = None, origin: Optional[str] = None,
+    channel_layer: Any = None, turn_continues: bool = False,
 ) -> None:
     """Push one already-persisted Kazi message to the room's sockets."""
     try:
@@ -139,7 +139,7 @@ def broadcast_kazi_message(
                 f"chat_{room.id}",
                 {
                     "type": "ai_message_saved",
-                    "message": _default_frame(message, content, origin),
+                    "message": _default_frame(message, content, turn_continues),
                 },
             )
     except Exception as exc:
@@ -158,6 +158,7 @@ def persist_kazi_message(
     by: Optional[int] = None,
     broadcast: bool = True,
     channel_layer: Any = None,
+    turn_continues: bool = False,
 ) -> Message:
     """Persist and broadcast one Kazi-authored message.
 
@@ -202,6 +203,7 @@ def persist_kazi_message(
 
     if broadcast:
         broadcast_kazi_message(
-            room, message, content, channel_layer=channel_layer, origin=origin,
+            room, message, content, channel_layer=channel_layer,
+            turn_continues=turn_continues,
         )
     return message

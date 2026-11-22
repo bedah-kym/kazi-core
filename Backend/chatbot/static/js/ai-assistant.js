@@ -373,12 +373,11 @@ class KaziAssistant {
         // Handle saved message after streaming completes — smooth transition
         if (data.command === 'ai_message_saved') {
             console.log('AI message saved event received');
-            // A turn notice can be saved while the turn is still running (the
-            // arm confirmation starts a resumed turn). Keep the indicator up
-            // until the model actually answers; other saved messages behave
-            // as before.
+            // The server marks only a notice that a turn continues after (the
+            // arm confirmation). Keep the indicator for that one; every other
+            // saved message clears it as before.
             const keepThinking = (
-                data.message && data.message.origin === 'turn_notice'
+                data.message && data.message.turn_continues === true
                 && this.isThinking
             );
             if (!keepThinking) {

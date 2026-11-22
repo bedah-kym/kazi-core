@@ -32,6 +32,7 @@ from chatbot.models import Chatroom, Member, Message
 from chatbot.turn_runner import (
     DISARM_FAILED_NOTICE,
     RECORD_FAILED_NOTICE,
+    STOP_NOTICE,
     TurnRunner,
 )
 from orchestration import turn_leases
@@ -1083,8 +1084,8 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
         self.assertEqual(len(arm), 1, "the arm confirmation was not saved once")
         self.assertEqual(len(turn), 1, "the resumed turn's reply was not saved once")
         self.assertLess(arm[0][0], turn[0][0])
-        self.assertEqual(arm[0][1].get("origin"), "turn_notice")
-        self.assertEqual(turn[0][1].get("origin"), "turn")
+        self.assertIs(arm[0][1].get("turn_continues"), True)
+        self.assertNotIn("turn_continues", turn[0][1])
         self.assertNotIn(
             "Autopilot armed", turn[0][1].get("content") or "",
             "the turn's saved reply also carried the arm confirmation",
@@ -1098,6 +1099,59 @@ class TurnRunnerWebsocketTests(TransactionTestCase):
             any("Autopilot armed" in chunk for chunk in streamed),
             "the arm confirmation was streamed instead of saved",
         )
+
+    def test_a_disarm_notice_frame_does_not_say_the_turn_continues(self):
+        self._arm_autopilot()
+
+        def _is_disarm_frame(frame):
+            content = (frame.get("message") or {}).get("content") or ""
+            return (
+                frame.get("command") == "ai_message_saved"
+                and "Autopilot disarmed" in content
+            )
+
+        async def scenario():
+            comm = await self._connect()
+            await self._send(comm, "@kazi autopilot off")
+            frame, _frames = await self._collect(comm, _is_disarm_frame)
+            self.assertIsNotNone(frame)
+            return frame
+
+        frame = self._run(scenario())
+        self.assertNotIn("turn_continues", frame.get("message") or {})
+
+    def test_a_stop_notice_frame_does_not_say_the_turn_continues(self):
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def before(n):
+            if n == 1:
+                entered.set()
+                await release.wait()
+
+        self.llm.before_call = before
+        self.llm.queue(_response([_text("working")]))
+
+        def _is_stop_frame(frame):
+            content = (frame.get("message") or {}).get("content") or ""
+            return (
+                frame.get("command") == "ai_message_saved"
+                and STOP_NOTICE in content
+            )
+
+        async def scenario():
+            comm = await self._connect()
+            await self._send(comm, "@kazi long thing")
+            await asyncio.wait_for(entered.wait(), timeout=5)
+            await self._send(comm, "@kazi stop")
+            frame, _frames = await self._collect(comm, _is_stop_frame)
+            self.assertIsNotNone(frame)
+            release.set()
+            await self.runner.drain(timeout=15)
+            return frame
+
+        frame = self._run(scenario())
+        self.assertNotIn("turn_continues", frame.get("message") or {})
 
     @override_settings(CONSENT_SKEW_SECONDS=0)
     def test_the_model_sees_the_autopilot_state_before_and_after_arming(self):

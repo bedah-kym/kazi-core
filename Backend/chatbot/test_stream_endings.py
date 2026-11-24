@@ -64,6 +64,18 @@ _QUOTA_PAUSE = (
 )
 
 
+def _closing(fn):
+    """Close the worker thread's DB connection after a test read."""
+    from django.db import connection
+
+    def run():
+        try:
+            return fn()
+        finally:
+            connection.close()
+    return run
+
+
 def _text(text):
     return {"type": "text", "text": text}
 
@@ -347,7 +359,6 @@ class StreamEndingFramesTests(TransactionTestCase):
             self._reasoning(),
             self._stream("Hi there."),
             self._done(),
-            self._done(),
             self._stream("", is_final=True),
             self._saved("Hi there."),
         ])
@@ -378,7 +389,6 @@ class StreamEndingFramesTests(TransactionTestCase):
             self._step("executing", "completed", "get weather: success"),
             self._reasoning(),
             self._stream("It is sunny."),
-            self._done(),
             self._done(),
             self._stream("", is_final=True),
             self._saved("It is sunny."),
@@ -415,7 +425,6 @@ class StreamEndingFramesTests(TransactionTestCase):
             self._step("executing", "completed", "get weather: success"),
             self._reasoning(),
             self._stream("Both are sunny."),
-            self._done(),
             self._done(),
             self._stream("", is_final=True),
             self._saved("Both are sunny."),
@@ -462,7 +471,6 @@ class StreamEndingFramesTests(TransactionTestCase):
             self._step("executing", "completed", "send email: success"),
             self._reasoning(),
             self._stream("Sent."),
-            self._done(),
             self._done(),
             self._stream("", is_final=True),
             self._saved("Sent."),
@@ -566,7 +574,6 @@ class StreamEndingFramesTests(TransactionTestCase):
             self._saved(STOP_NOTICE),
             self._stream(STOP_ENDED_REPLY_LINE.lstrip()),
             self._done(),
-            self._done(),
             self._stream("", is_final=True),
             self._saved(STOP_ENDED_REPLY_LINE),
         ])
@@ -628,6 +635,7 @@ class StreamEndingFramesTests(TransactionTestCase):
             self._echo("@kazi reset"),
             self._stream("Okay, starting fresh. What would you like to do?"),
             self._done("Context reset."),
+            self._stream("", is_final=True),
         ])
 
     def test_a_fresh_loop_error(self):
@@ -704,6 +712,11 @@ class StreamEndingFramesTests(TransactionTestCase):
             self._stream("", is_final=True),
             self._saved(_CONFIRM_PROMPT),
             self._echo("@kazi yes"),
+            self._saved(
+                "Something went wrong on my side. Nothing further was run."
+            ),
+            self._done(),
+            self._stream("", is_final=True),
         ])
 
     def test_an_error_in_pending_approval_prompt(self):
@@ -734,6 +747,11 @@ class StreamEndingFramesTests(TransactionTestCase):
                 self._stream("", is_final=True),
                 self._saved(_CONFIRM_PROMPT),
                 self._echo("@kazi what does that do?"),
+                self._saved(
+                    "Something went wrong on my side. Nothing further was run."
+                ),
+                self._done(),
+                self._stream("", is_final=True),
             ],
         )
 
@@ -771,13 +789,11 @@ class StreamEndingFramesTests(TransactionTestCase):
             self._echo("@kazi second"),
             self._stream("first answer"),
             self._done(),
-            self._done(),
             self._stream("", is_final=True),
             self._saved("first answer"),
             self._thinking(),
             self._reasoning(),
             self._stream("second answer"),
-            self._done(),
             self._done(),
             self._stream("", is_final=True),
             self._saved("second answer"),
@@ -831,13 +847,11 @@ class StreamEndingFramesTests(TransactionTestCase):
             ),
             self._stream("first answer"),
             self._done(),
-            self._done(),
             self._stream("", is_final=True),
             self._saved("first answer"),
             self._thinking(),
             self._reasoning(),
             self._stream("second answer"),
-            self._done(),
             self._done(),
             self._stream("", is_final=True),
             self._saved("second answer"),
@@ -900,7 +914,6 @@ class StreamEndingFramesTests(TransactionTestCase):
             self._reasoning(),
             self._stream("Hi."),
             self._done(),
-            self._done(),
             self._stream("", is_final=True),
             self._saved("Hi."),
         ])
@@ -950,7 +963,289 @@ class StreamEndingFramesTests(TransactionTestCase):
             self._reasoning(),
             self._stream(LEASE_LOST_NOTE),
             self._done(),
-            self._done(),
             self._stream("", is_final=True),
             self._saved(LEASE_LOST_NOTE),
         ])
+
+    # --- honesty fixes (these fail on the pre-fix behaviour) -------------
+
+    def _done_count(self, frames):
+        return sum(
+            1 for frame in frames
+            if frame.get("command") == "orchestration_step"
+            and frame["event"].get("phase") == "done"
+        )
+
+    def _has_final(self, frames):
+        return any(
+            frame.get("command") == "ai_stream" and frame.get("is_final")
+            for frame in frames
+        )
+
+    def _notices_for_turn(self, turn_id):
+        from chatbot.history import decrypt_stored
+
+        texts = []
+        for message in Message.objects.filter(
+            turn_id=turn_id, member__User__username="kazi",
+        ):
+            content, payload = decrypt_stored(self.room, message)
+            if (payload or {}).get("origin") == "turn_notice":
+                texts.append(content)
+        return texts
+
+    def test_a_fresh_turn_sends_exactly_one_done(self):
+        self.llm.queue(_response([_text("Hi there.")]))
+
+        async def scenario():
+            comm = await self._connect()
+            await self._send(comm, "@kazi hello")
+            self.assertTrue(await self._wait_for(
+                lambda: Turn.objects.filter(state="completed").exists(),
+            ))
+            await self.runner.drain(timeout=15)
+            return await self._drain_frames(comm)
+
+        frames = self._run(scenario())
+        self.assertEqual(self._done_count(frames), 1)
+
+    def test_a_confirmation_resume_sends_exactly_one_done(self):
+        async def scenario():
+            comm = await self._connect()
+            paused = await self._pause_for_blocks([
+                _tool("c1", "send_email", {"to": "a@b.c", "body": "hi"}),
+            ])(comm)
+            await self._drain_frames(comm)  # consume the pause segment
+            self.llm.queue(_response([_text("Sent.")]))
+            await self._send(comm, "@kazi yes")
+            self.assertTrue(await self._wait_for(
+                lambda: Turn.objects.filter(
+                    pk=paused.pk, state="completed",
+                ).exists(),
+            ))
+            await self.runner.drain(timeout=15)
+            return await self._drain_frames(comm)
+
+        frames = self._run(scenario())
+        self.assertEqual(self._done_count(frames), 1)
+
+    def test_a_budget_resume_sends_exactly_one_done(self):
+        self.llm.queue(
+            _response(
+                [_tool("b1", "request_more_budget", {"reason": "need more"})],
+                stop_reason="tool_use",
+            ),
+            _response([_text("Finished.")]),
+        )
+
+        async def scenario():
+            comm = await self._connect()
+            await self._send(comm, "@kazi keep going")
+            self.assertTrue(await self._wait_for(
+                lambda: Turn.objects.filter(state="paused").exists(),
+            ))
+            await self.runner.drain(timeout=15)
+            await self._drain_frames(comm)  # consume the pause segment
+            paused = await sync_to_async(
+                lambda: Turn.objects.get(state="paused")
+            )()
+            await self._send(comm, "@kazi continue")
+            self.assertTrue(await self._wait_for(
+                lambda: Turn.objects.filter(
+                    pk=paused.pk, state="completed",
+                ).exists(),
+            ))
+            await self.runner.drain(timeout=15)
+            return await self._drain_frames(comm)
+
+        frames = self._run(scenario())
+        self.assertEqual(self._done_count(frames), 1)
+
+    def test_a_reset_sends_is_final(self):
+        async def scenario():
+            comm = await self._connect()
+            await self._send(comm, "@kazi reset")
+            self.assertTrue(await self._wait_for(
+                lambda: Turn.objects.filter(
+                    state__in=("completed", "failed"),
+                ).exists(),
+            ))
+            await self.runner.drain(timeout=15)
+            return await self._drain_frames(comm)
+
+        frames = self._run(scenario())
+        self.assertTrue(self._has_final(frames))
+
+    def _resume_error_frames(self, name="yes"):
+        async def failing_resume(**kwargs):
+            raise RuntimeError("resume boom")
+
+        async def scenario():
+            comm = await self._connect()
+            paused = await self._pause_for_blocks([
+                _tool("r1", "send_email", {"to": "a@b.c", "body": "hi"}),
+            ])(comm)
+            await self._drain_frames(comm)  # consume the pause segment
+            with patch(
+                "orchestration.coordinator.resume_after_confirmation",
+                new=failing_resume,
+            ):
+                await self._send(comm, f"@kazi {name}")
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(
+                        pk=paused.pk, state="failed",
+                    ).exists(),
+                ))
+                await self.runner.drain(timeout=15)
+            frames = await self._drain_frames(comm)
+            return paused.pk, frames
+
+        return self._run(scenario())
+
+    def test_a_resume_path_error_sends_is_final(self):
+        _turn_id, frames = self._resume_error_frames()
+        self.assertTrue(self._has_final(frames))
+
+    def test_a_resume_path_error_saves_one_linked_notice(self):
+        turn_id, _frames = self._resume_error_frames()
+        self.assertEqual(
+            self._notices_for_turn(turn_id),
+            ["Something went wrong on my side. Nothing further was run."],
+        )
+
+    def test_a_pending_approval_prompt_error_sends_is_final(self):
+        async def scenario():
+            comm = await self._connect()
+            await self._pause_for_blocks([
+                _tool("q1", "send_email", {"to": "a@b.c", "body": "hi"}),
+            ])(comm)
+            await self._drain_frames(comm)  # consume the pause segment
+            with patch(
+                "orchestration.coordinator.pending_approval_prompt",
+                new=AsyncMock(side_effect=RuntimeError("prompt boom")),
+            ):
+                await self._send(comm, "@kazi what does that do?")
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(state="failed").exists(),
+                ))
+                await self.runner.drain(timeout=15)
+            return await self._drain_frames(comm)
+
+        frames = self._run(scenario())
+        self.assertTrue(self._has_final(frames))
+
+    def test_a_failed_send_chunk_still_completes_and_saves_the_reply(self):
+        from channels.layers import get_channel_layer
+
+        layer = get_channel_layer()
+        real_group_send = layer.group_send
+        attempts = {"n": 0}
+
+        async def flaky_group_send(channel, message):
+            if message.get("type") == "ai_stream_chunk":
+                attempts["n"] += 1
+                if attempts["n"] == 1:
+                    raise RuntimeError("stream down")
+            return await real_group_send(channel, message)
+
+        self.llm.queue(_response([_text("Hi there.")]))
+
+        async def scenario():
+            comm = await self._connect()
+            with patch.object(
+                layer, "group_send", new=flaky_group_send,
+            ), patch("orchestration.coordinator.record_event") as record:
+                await self._send(comm, "@kazi hello")
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(state="completed").exists(),
+                ))
+                await self.runner.drain(timeout=15)
+            events = [call.args[0] for call in record.call_args_list if call.args]
+            return await self._drain_frames(comm), events
+
+        frames, events = self._run(scenario())
+        self.assertEqual(self._done_count(frames), 1)
+        self.assertIn("stream_send_failed", events)
+        saved = [
+            frame["message"]["content"]
+            for frame in frames if frame.get("command") == "ai_message_saved"
+        ]
+        self.assertEqual(saved, ["Hi there."])
+
+    @override_settings(TURN_SHUTDOWN_GRACE_SECONDS=1)
+    def test_shutdown_with_a_stalled_group_send_ends_within_the_grace(self):
+        from channels.layers import get_channel_layer
+
+        layer = get_channel_layer()
+        real_group_send = layer.group_send
+        stalled = asyncio.Event()
+        release = asyncio.Event()
+
+        async def stalling_group_send(channel, message):
+            # The final chunk never returns, even when shutdown cancels it.
+            if (
+                message.get("type") == "ai_stream_chunk"
+                and message.get("is_final")
+            ):
+                stalled.set()
+                while True:
+                    try:
+                        await release.wait()
+                        break
+                    except asyncio.CancelledError:
+                        continue
+            return await real_group_send(channel, message)
+
+        self.llm.queue(_response([_text("Hi there.")]))
+
+        async def scenario():
+            comm = await self._connect()
+            try:
+                with patch.object(
+                    layer, "group_send", new=stalling_group_send,
+                ):
+                    await self._send(comm, "@kazi hello")
+                    await asyncio.wait_for(stalled.wait(), timeout=8)
+                    at_complete = {}
+                    start = asyncio.get_running_loop().time()
+                    await self._lifespan_shutdown(
+                        at_complete=at_complete,
+                    )
+                    elapsed = asyncio.get_running_loop().time() - start
+                self.assertLess(elapsed, 4.0)
+                self.assertEqual(len(at_complete["turns"]), 1)
+                state, reason, _partial = next(
+                    iter(at_complete["turns"].values())
+                )
+                self.assertIn(state, {"completed", "failed"})
+                if state == "failed":
+                    self.assertEqual(reason, "shutdown")
+            finally:
+                release.set()
+                await asyncio.sleep(0.1)
+
+        self._run(scenario())
+
+    async def _lifespan_shutdown(self, *, at_complete):
+        from Backend.asgi import lifespan
+
+        sent = []
+
+        async def receive():
+            return {"type": "lifespan.shutdown"}
+
+        async def send(message):
+            sent.append(message)
+            if message.get("type") == "lifespan.shutdown.complete":
+                at_complete["turns"] = await sync_to_async(
+                    _closing(lambda: {
+                        str(pk): (state, reason, partial)
+                        for pk, state, reason, partial in Turn.objects.values_list(
+                            "id", "state", "end_reason", "partial",
+                        )
+                    }),
+                    thread_sensitive=False,
+                )()
+
+        await lifespan({"type": "lifespan"}, receive, send)
+        self.assertEqual(sent[-1]["type"], "lifespan.shutdown.complete")

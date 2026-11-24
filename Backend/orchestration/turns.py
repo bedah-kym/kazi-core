@@ -1095,10 +1095,13 @@ def _notice_text(expired_queued: int, *, completed: bool = False) -> str:
 def _saved_reply_exists(turn_id: Any) -> bool:
     """A Kazi-authored reply saved *after* the turn's latest human message (R8).
 
-    A ``turn_notice`` never sets ``turn=`` and the request message belongs to a
-    human member, so neither can be mistaken for the reply. The latest linked
-    human message is the one that resumed the turn, so the "Please confirm…"
-    reply of a segment that ended paused is never counted (M1).
+    A ``turn_notice`` may now be linked to a Turn, but only after its
+    ``failed(error)`` transition returned True. That ending is terminal, so the
+    reaper and the shutdown paths never read it. A running or committing Turn
+    can therefore only carry its reply. The request message belongs to a human
+    member, so it is never mistaken for the reply. The latest linked human
+    message is the one that resumed the turn, so the "Please confirm…" reply of
+    a segment that ended paused is never counted (M1).
     """
     from chatbot.models import Message
 

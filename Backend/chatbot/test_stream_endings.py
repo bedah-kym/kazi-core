@@ -1,11 +1,19 @@
 """217a-0: every chat turn ends honestly on today's (v1) stream.
 
 These tests drive the real consumer, the real runner, real Turn rows and the
-in-memory channel layer through a ``WebsocketCommunicator``. Only the model is
-faked, at ``orchestration.agent_loop.get_llm_client``. They record the exact
-frames the browser receives, in order, after the consumer handlers, with the
-volatile ids and timestamps normalised. Later 217a PRs must keep these
+in-memory channel layer through a ``WebsocketCommunicator``. They record the
+exact frames the browser receives, in order, after the consumer handlers, with
+the volatile ids and timestamps normalised. Later 217a PRs must keep these
 sequences passing.
+
+The model is faked at ``orchestration.agent_loop.get_llm_client``. The seams
+below the frame boundary are also patched, none of which produces a frame:
+``execute_tool`` and ``preview_tool`` (no real connector or approval card),
+``_resolve_persona`` (no persona lookup), ``enforce_agent_caps`` (this test
+user may use the tools), ``_search_backend_available`` (no search backend) and
+``orchestration.shell.environment.get_shell_environment`` (no host probe). The
+consumer, runner, coordinator and channel layer that produce the frames are
+real.
 
 These sequences characterise the endings on ``origin/main``. The honesty
 fixes (one ``done`` per turn, ``is_final`` on every exit, and a failed
@@ -712,11 +720,11 @@ class StreamEndingFramesTests(TransactionTestCase):
             self._stream("", is_final=True),
             self._saved(_CONFIRM_PROMPT),
             self._echo("@kazi yes"),
+            self._done(),
+            self._stream("", is_final=True),
             self._saved(
                 "Something went wrong on my side. Nothing further was run."
             ),
-            self._done(),
-            self._stream("", is_final=True),
         ])
 
     def test_an_error_in_pending_approval_prompt(self):
@@ -747,11 +755,11 @@ class StreamEndingFramesTests(TransactionTestCase):
                 self._stream("", is_final=True),
                 self._saved(_CONFIRM_PROMPT),
                 self._echo("@kazi what does that do?"),
+                self._done(),
+                self._stream("", is_final=True),
                 self._saved(
                     "Something went wrong on my side. Nothing further was run."
                 ),
-                self._done(),
-                self._stream("", is_final=True),
             ],
         )
 
@@ -991,6 +999,18 @@ class StreamEndingFramesTests(TransactionTestCase):
         ):
             content, payload = decrypt_stored(self.room, message)
             if (payload or {}).get("origin") == "turn_notice":
+                texts.append(content)
+        return texts
+
+    def _turn_reply_texts(self, turn_id):
+        from chatbot.history import decrypt_stored
+
+        texts = []
+        for message in Message.objects.filter(
+            turn_id=turn_id, member__User__username="kazi",
+        ):
+            content, payload = decrypt_stored(self.room, message)
+            if (payload or {}).get("origin") == "turn":
                 texts.append(content)
         return texts
 
@@ -1249,3 +1269,275 @@ class StreamEndingFramesTests(TransactionTestCase):
 
         await lifespan({"type": "lifespan"}, receive, send)
         self.assertEqual(sent[-1]["type"], "lifespan.shutdown.complete")
+
+    def test_an_error_notice_is_saved_after_the_stream_end(self):
+        _turn_id, frames = self._resume_error_frames()
+        index = {}
+        for position, frame in enumerate(frames):
+            if (
+                frame.get("command") == "orchestration_step"
+                and frame["event"].get("phase") == "done"
+            ):
+                index.setdefault("done", position)
+            elif (
+                frame.get("command") == "ai_stream"
+                and frame.get("is_final")
+            ):
+                index.setdefault("final", position)
+            elif (
+                frame.get("command") == "ai_message_saved"
+                and frame["message"].get("content")
+                == "Something went wrong on my side. Nothing further was run."
+            ):
+                index.setdefault("notice", position)
+        self.assertEqual(set(index), {"done", "final", "notice"})
+        self.assertLess(index["done"], index["final"])
+        self.assertLess(index["final"], index["notice"])
+
+    @override_settings(TURN_SHUTDOWN_GRACE_SECONDS=0)
+    def test_a_zero_shutdown_grace_still_sends_the_stream_end(self):
+        self.llm.queue(_response([_text("Hi there.")]))
+
+        async def scenario():
+            comm = await self._connect()
+            await self._send(comm, "@kazi hello")
+            self.assertTrue(await self._wait_for(
+                lambda: Turn.objects.filter(state="completed").exists(),
+            ))
+            await self.runner.drain(timeout=15)
+            return await self._drain_frames(comm)
+
+        frames = self._run(scenario())
+        self.assertEqual(self._done_count(frames), 1)
+        self.assertTrue(self._has_final(frames))
+
+    def test_a_channel_layer_cancelled_send_still_completes_the_turn(self):
+        from channels.layers import get_channel_layer
+
+        layer = get_channel_layer()
+        real_group_send = layer.group_send
+
+        async def cancelling_group_send(channel, message):
+            if (
+                message.get("type") == "ai_stream_chunk"
+                and message.get("is_final")
+            ):
+                raise asyncio.CancelledError()
+            return await real_group_send(channel, message)
+
+        self.llm.queue(_response([_text("Hi there.")]))
+
+        async def scenario():
+            comm = await self._connect()
+            with patch.object(
+                layer, "group_send", new=cancelling_group_send,
+            ):
+                await self._send(comm, "@kazi hello")
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(state="completed").exists(),
+                ))
+                await self.runner.drain(timeout=15)
+            turn = await sync_to_async(lambda: Turn.objects.get())()
+            return await self._drain_frames(comm), turn.pk
+
+        frames, turn_id = self._run(scenario())
+        self.assertEqual(self._done_count(frames), 1)
+        self.assertEqual(self._turn_reply_texts(turn_id), ["Hi there."])
+
+    @override_settings(TURN_SHUTDOWN_GRACE_SECONDS=1)
+    def test_a_stalled_final_send_is_given_up_and_the_turn_completes(self):
+        from channels.layers import get_channel_layer
+
+        layer = get_channel_layer()
+        real_group_send = layer.group_send
+        stalled = asyncio.Event()
+        cancelled = asyncio.Event()
+        release = asyncio.Event()
+
+        async def stalling_group_send(channel, message):
+            if (
+                message.get("type") == "ai_stream_chunk"
+                and message.get("is_final")
+            ):
+                stalled.set()
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    raise
+            return await real_group_send(channel, message)
+
+        self.llm.queue(_response([_text("Hi there.")]))
+
+        async def scenario():
+            comm = await self._connect()
+            try:
+                with patch.object(
+                    layer, "group_send", new=stalling_group_send,
+                ):
+                    await self._send(comm, "@kazi hello")
+                    await asyncio.wait_for(stalled.wait(), timeout=8)
+                    turn = await sync_to_async(lambda: Turn.objects.get())()
+                    self.assertTrue(await self._wait_for(
+                        lambda: Turn.objects.filter(
+                            pk=turn.pk, state="completed",
+                        ).exists(),
+                        timeout=5,
+                    ))
+                    await self.runner.drain(timeout=15)
+                    self.assertTrue(await asyncio.wait_for(
+                        cancelled.wait(), timeout=2,
+                    ))
+                    replies = await sync_to_async(
+                        self._turn_reply_texts
+                    )(turn.pk)
+                    self.assertEqual(replies, ["Hi there."])
+            finally:
+                release.set()
+
+        self._run(scenario())
+
+    @override_settings(TURN_SHUTDOWN_GRACE_SECONDS=1)
+    def test_shutdown_with_a_stalled_group_send_ends_the_turn(self):
+        from channels.layers import get_channel_layer
+
+        layer = get_channel_layer()
+        real_group_send = layer.group_send
+        stalled = asyncio.Event()
+        cancelled = asyncio.Event()
+        release = asyncio.Event()
+
+        async def stalling_group_send(channel, message):
+            if (
+                message.get("type") == "ai_stream_chunk"
+                and message.get("is_final")
+            ):
+                stalled.set()
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    raise
+            return await real_group_send(channel, message)
+
+        self.llm.queue(_response([_text("Hi there.")]))
+
+        async def scenario():
+            comm = await self._connect()
+            try:
+                with patch.object(
+                    layer, "group_send", new=stalling_group_send,
+                ), patch(
+                    "orchestration.coordinator.shutdown_grace_seconds",
+                    return_value=5.0,
+                ):
+                    await self._send(comm, "@kazi hello")
+                    await asyncio.wait_for(stalled.wait(), timeout=8)
+                    turn = await sync_to_async(lambda: Turn.objects.get())()
+                    at_complete = {}
+                    start = asyncio.get_running_loop().time()
+                    await self._lifespan_shutdown(
+                        at_complete=at_complete,
+                    )
+                    elapsed = asyncio.get_running_loop().time() - start
+                    self.assertLess(elapsed, 4.0)
+                    self.assertTrue(await asyncio.wait_for(
+                        cancelled.wait(), timeout=2,
+                    ))
+                    self.assertEqual(len(at_complete["turns"]), 1)
+                    state, reason, partial = next(
+                        iter(at_complete["turns"].values())
+                    )
+                    self.assertEqual(state, "failed")
+                    self.assertEqual(reason, "shutdown")
+                    self.assertIs(partial, True)
+                    self.assertEqual(
+                        await sync_to_async(self._turn_reply_texts)(turn.pk),
+                        [],
+                    )
+            finally:
+                release.set()
+
+        self._run(scenario())
+
+    @override_settings(TURN_SHUTDOWN_GRACE_SECONDS=1)
+    def test_a_cancel_while_writing_the_error_skips_the_stream_end(self):
+        from orchestration import coordinator as coordinator_mod
+
+        real_atransition = coordinator_mod.atransition
+        stalled = asyncio.Event()
+        release = asyncio.Event()
+
+        async def stalling_transition(turn_id, version, to_state, **kwargs):
+            if to_state == "failed" and kwargs.get("end_reason") == "error":
+                stalled.set()
+                await release.wait()
+            return await real_atransition(turn_id, version, to_state, **kwargs)
+
+        async def scenario():
+            comm = await self._connect()
+            await self._pause_for_blocks([
+                _tool("q1", "send_email", {"to": "a@b.c", "body": "hi"}),
+            ])(comm)
+            await self._drain_frames(comm)  # consume the pause segment
+            try:
+                with patch(
+                    "orchestration.coordinator.pending_approval_prompt",
+                    new=AsyncMock(side_effect=RuntimeError("prompt boom")),
+                ), patch(
+                    "orchestration.coordinator.atransition",
+                    new=stalling_transition,
+                ):
+                    await self._send(comm, "@kazi what does that do?")
+                    await asyncio.wait_for(stalled.wait(), timeout=8)
+                    await self._lifespan_shutdown(at_complete={})
+                return await self._drain_frames(comm)
+            finally:
+                release.set()
+
+        frames = self._run(scenario())
+        self.assertEqual(
+            [
+                frame for frame in frames
+                if frame.get("command") == "orchestration_step"
+                and frame["event"].get("phase") == "done"
+            ],
+            [],
+        )
+        self.assertFalse(self._has_final(frames))
+
+    def test_a_cancelled_send_with_a_cancelling_task_ends_failed(self):
+        from channels.layers import get_channel_layer
+
+        layer = get_channel_layer()
+        real_group_send = layer.group_send
+
+        async def cancelling_group_send(channel, message):
+            if (
+                message.get("type") == "ai_stream_chunk"
+                and message.get("is_final")
+            ):
+                raise asyncio.CancelledError()
+            return await real_group_send(channel, message)
+
+        self.llm.queue(_response([_text("Hi there.")]))
+
+        async def scenario():
+            comm = await self._connect()
+            with patch.object(
+                layer, "group_send", new=cancelling_group_send,
+            ), patch(
+                "orchestration.coordinator._send_task_is_cancelling",
+                return_value=True,
+            ):
+                await self._send(comm, "@kazi hello")
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(
+                        state="failed", end_reason="shutdown",
+                    ).exists(),
+                ))
+                await self.runner.drain(timeout=15)
+            return await self._drain_frames(comm)
+
+        frames = self._run(scenario())
+        self.assertFalse(self._has_final(frames))

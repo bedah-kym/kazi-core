@@ -8,7 +8,7 @@ from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from asgiref.sync import async_to_sync
+from asgiref.sync import async_to_sync, sync_to_async
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError, connection, transaction
 from django.test import SimpleTestCase, TransactionTestCase, override_settings
@@ -37,6 +37,7 @@ from orchestration.turns import (
     create_turn,
     last_ran_turn_before,
     reap_lapsed_turns,
+    reap_turn,
     transition,
 )
 
@@ -576,6 +577,89 @@ class CoordinatorTurnTests(_CoordinatorTurnBase):
         self.message.refresh_from_db()
         self.assertEqual(self.message.turn_id, turn.pk)
 
+    def _resume_done_then_raise(self):
+        async def _events(**_kwargs):
+            yield AgentEvent("done", {"end_reason": "finished"})
+            raise RuntimeError("resume boom")
+
+        return _events
+
+    def _error_notices(self, turn_id):
+        from chatbot.history import decrypt_stored
+
+        texts = []
+        for message in Message.objects.filter(
+            turn_id=turn_id, member__User__username="kazi",
+        ):
+            content, payload = decrypt_stored(self.room, message)
+            if (payload or {}).get("origin") == "turn_notice":
+                texts.append(content)
+        return texts
+
+    def test_an_error_transition_that_loses_saves_no_notice(self):
+        paused = self._paused_turn()
+
+        async def lose(turn_id, version, to_state, **kwargs):
+            if to_state == "failed":
+                await sync_to_async(
+                    Turn.objects.filter(pk=turn_id).update
+                )(
+                    state="failed", end_reason="lease_lost",
+                    version=version + 1, ended_at=timezone.now(),
+                )
+                return False
+            return await real_atransition(turn_id, version, to_state, **kwargs)
+
+        with self.assertRaises(RuntimeError):
+            self._handle(
+                "yes",
+                pending=True,
+                run_loop=self._loop(),
+                resume=self._resume_done_then_raise(),
+                extra_patches={
+                    "orchestration.coordinator.atransition": lose,
+                },
+                finalize=False,
+            )
+
+        paused.refresh_from_db()
+        self.assertEqual(paused.state, "failed")
+        self.assertEqual(paused.end_reason, "lease_lost")
+        self.assertEqual(self._error_notices(paused.pk), [])
+
+    def test_an_error_transition_that_raises_saves_no_notice_and_reaps_failed(self):
+        paused = self._paused_turn()
+
+        async def down(turn_id, version, to_state, **kwargs):
+            if to_state == "failed":
+                raise RuntimeError("transition down")
+            return await real_atransition(turn_id, version, to_state, **kwargs)
+
+        with self.assertRaises(RuntimeError):
+            self._handle(
+                "yes",
+                pending=True,
+                run_loop=self._loop(),
+                resume=self._resume_done_then_raise(),
+                extra_patches={
+                    "orchestration.coordinator.atransition": down,
+                },
+                finalize=False,
+            )
+
+        paused.refresh_from_db()
+        self.assertEqual(paused.state, "committing")
+        self.assertEqual(self._error_notices(paused.pk), [])
+
+        Turn.objects.filter(pk=paused.pk).update(
+            lease_expires_at=timezone.now() - timedelta(seconds=1),
+        )
+        paused.refresh_from_db()
+        self.assertTrue(reap_turn(paused))
+        paused.refresh_from_db()
+        self.assertEqual(paused.state, "failed")
+        self.assertEqual(paused.end_reason, "lease_lost")
+
     def test_approval_resume_reuses_the_same_turn_id(self):
         first = self._handle(
             "run the command",
@@ -1029,25 +1113,24 @@ class CoordinatorTurnTests(_CoordinatorTurnBase):
         self.assertEqual(turn.end_reason, "shutdown")
         self.assertIs(turn.partial, True)
 
-    def test_cancellation_after_committing_ends_the_turn_terminal(self):
+    def test_a_cancelled_done_step_ends_the_turn_normally(self):
+        """A CancelledError from the layer is not this task's shutdown."""
         async def cancel_on_done(_correlation_id, event):
             if event.get("phase") == "done":
                 raise asyncio.CancelledError()
 
-        with self.assertRaises(asyncio.CancelledError):
-            self._handle(
-                "hello",
-                run_loop=self._loop(
-                    AgentEvent("text_delta", {"text": "Hi."}),
-                    AgentEvent("done", {"end_reason": "finished"}),
-                ),
-                send_step_event=cancel_on_done,
-            )
+        result = self._handle(
+            "hello",
+            run_loop=self._loop(
+                AgentEvent("text_delta", {"text": "Hi."}),
+                AgentEvent("done", {"end_reason": "finished"}),
+            ),
+            send_step_event=cancel_on_done,
+        )
         turn = Turn.objects.get()
-        self.assertIn(turn.state, TERMINAL_STATES)
-        self.assertEqual(turn.state, "failed")
-        self.assertEqual(turn.end_reason, "shutdown")
-        self.assertIs(turn.partial, True)
+        self.assertEqual(turn.state, "completed")
+        self.assertEqual(turn.end_reason, "finished")
+        self.assertEqual(result.full_response, "Hi.")
 
     def test_finalize_telemetry_names_the_committing_from_state(self):
         result = self._handle(

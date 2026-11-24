@@ -42,6 +42,7 @@ from orchestration.turn_leases import (
     cancel_requested,
     register_live_turn,
     request_cancel,
+    shutdown_grace_seconds,
     turn_fenced,
     turn_live,
     unregister_live_turn,
@@ -318,9 +319,15 @@ async def _user_cancel_ending(ref: TurnRef) -> bool:
     return bool(row is not None and row.cancel_requested_at is not None)
 
 
+def _send_task_is_cancelling() -> bool:
+    """Whether this task has a pending cancellation (Python 3.11+)."""
+    task = asyncio.current_task()
+    return bool(task is not None and task.cancelling())
+
+
 async def _end_unexpected_turn(
     turn_box: Dict, stream_state: Dict, outcome: str, room_id=None,
-) -> None:
+) -> bool:
     """Write the honest terminal state for an exception after the claim.
 
     ``CancelledError`` now means only the runner's shutdown cut this turn off:
@@ -330,6 +337,11 @@ async def _end_unexpected_turn(
     have been dispatched without a visible ``tool_start`` event (E10), so
     "nothing ran" is never a safe guess. The write is shielded so it still
     lands; the caller re-raises the original exception either way.
+
+    For an ``error`` outcome it returns True only when the ``failed(error)``
+    transition really landed. The caller then saves the linked notice *after*
+    the stream end, and this function marks the Turn settled so a second call
+    does nothing.
     """
     ref = turn_box.get("ref")
     if ref is None or turn_box.get("settled"):
@@ -383,20 +395,20 @@ async def _end_unexpected_turn(
         atransition(ref.id, ref.version, to_state, **updates),
     )
     if outcome != "cancelled":
+        moved = False
         try:
-            await task
+            moved = bool(await task)
         except Exception:
             logger.warning("Could not record the turn's unexpected ending.")
-        # Today this ending saved nothing, so a reload showed the user's
-        # message with no reply. Save one honest notice linked to the Turn.
-        if room_id is not None:
-            try:
-                await sync_to_async(_persist_turn_notice)(
-                    room_id, UNEXPECTED_ERROR_NOTICE, turn_id=ref.id,
-                )
-            except Exception:
-                logger.warning("Unexpected-error notice not saved", exc_info=True)
-        return
+        if not moved:
+            # The row already ended (or the write was lost). A notice linked
+            # here would make a terminal Turn look answered; save none.
+            return False
+        turn_box["settled"] = True
+        # The caller saves the notice after the stream end, so the browser's
+        # is_final comes first.
+        stream_state["deferred_notice_turn"] = ref.id
+        return True
     # A shutdown ending is bounded like every other shutdown write: if the
     # database is stalled, the reaper (or the lite boot sweep) ends the row.
     grace = float(getattr(settings, "TURN_SHUTDOWN_GRACE_SECONDS", 20))
@@ -413,6 +425,7 @@ async def _end_unexpected_turn(
         except (Exception, asyncio.TimeoutError):
             pass
         raise
+    return False
 
 
 def _tool_record(data: Dict) -> Dict:
@@ -764,13 +777,19 @@ class OrchestrationCoordinator:
             )
             raise
         except Exception:
-            await _end_unexpected_turn(
+            stream_state["deferred_notice"] = await _end_unexpected_turn(
                 turn_box, stream_state, "error", room_id=room_id,
             )
             raise
         finally:
+            current = asyncio.current_task()
+            cancelling = bool(current is not None and current.cancelling())
             end_stream = stream_state.get("end_stream")
-            if end_stream is not None and not stream_state.get("cancelled"):
+            if (
+                end_stream is not None
+                and not stream_state.get("cancelled")
+                and not cancelling
+            ):
                 try:
                     await end_stream()
                 except asyncio.CancelledError:
@@ -783,6 +802,21 @@ class OrchestrationCoordinator:
                     raise
                 except Exception:
                     logger.warning("Stream end send failed", exc_info=True)
+                else:
+                    notice_turn = stream_state.get("deferred_notice_turn")
+                    if stream_state.get("deferred_notice") and notice_turn:
+                        # After the stream end, so the browser never leaves an
+                        # empty reply bubble for the saved notice to replace.
+                        try:
+                            await sync_to_async(_persist_turn_notice)(
+                                room_id, UNEXPECTED_ERROR_NOTICE,
+                                turn_id=notice_turn,
+                            )
+                        except Exception:
+                            logger.warning(
+                                "Unexpected-error notice not saved",
+                                exc_info=True,
+                            )
 
     async def _handle_message_body(
         self,
@@ -1207,7 +1241,7 @@ class OrchestrationCoordinator:
                     task.exception()
 
             send = asyncio.ensure_future(_send_end())
-            grace = float(getattr(settings, "TURN_SHUTDOWN_GRACE_SECONDS", 20))
+            grace = float(shutdown_grace_seconds())
             try:
                 done, pending = await asyncio.wait({send}, timeout=grace)
             except asyncio.CancelledError:
@@ -1223,8 +1257,14 @@ class OrchestrationCoordinator:
                     task.add_done_callback(_discard)
             for task in done:
                 if task.cancelled():
-                    # The send itself raised CancelledError: never swallow it.
-                    raise asyncio.CancelledError()
+                    if _send_task_is_cancelling():
+                        raise asyncio.CancelledError()
+                    # The channel layer raised CancelledError inside the send,
+                    # not a shutdown of this task: log it and end normally.
+                    logger.warning(
+                        "Stream end send was cancelled by the channel layer",
+                    )
+                    continue
                 if task.exception() is not None:
                     logger.warning(
                         "Stream end send failed: %s",

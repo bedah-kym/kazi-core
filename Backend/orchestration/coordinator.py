@@ -345,7 +345,7 @@ async def _end_unexpected_turn(
     """
     ref = turn_box.get("ref")
     if ref is None or turn_box.get("settled"):
-        return
+        return False
     unregister_live_turn(ref.id)
     if outcome == "cancelled":
         # The server cut the turn off. It is not the user's cancel, and the
@@ -360,9 +360,7 @@ async def _end_unexpected_turn(
                     asyncio.shield(
                         sync_to_async(_saved_reply_exists)(ref.id),
                     ),
-                    timeout=float(getattr(
-                        settings, "TURN_SHUTDOWN_GRACE_SECONDS", 20,
-                    )),
+                    timeout=float(shutdown_grace_seconds()),
                 ))
             except (asyncio.TimeoutError, Exception):
                 reply_saved = False
@@ -411,7 +409,7 @@ async def _end_unexpected_turn(
         return True
     # A shutdown ending is bounded like every other shutdown write: if the
     # database is stalled, the reaper (or the lite boot sweep) ends the row.
-    grace = float(getattr(settings, "TURN_SHUTDOWN_GRACE_SECONDS", 20))
+    grace = float(shutdown_grace_seconds())
     try:
         await asyncio.wait_for(asyncio.shield(task), timeout=grace)
     except asyncio.TimeoutError:
@@ -750,6 +748,40 @@ class OrchestrationCoordinator:
             "ref": None, "settled": False, "hold": False, "agent_ran": False,
             "claim_status": "",
         }
+
+        async def _save_deferred_notice(*, shielded: bool = False) -> None:
+            """Save the linked error notice once, best-effort.
+
+            A late shutdown must not lose it after the ``failed(error)`` write
+            landed, but it must not outlive the shutdown grace either: the
+            shielded path bounds the save with the validated grace.
+            """
+            notice_turn = stream_state.get("deferred_notice_turn")
+            if not (stream_state.get("deferred_notice") and notice_turn):
+                return
+            write = asyncio.ensure_future(sync_to_async(_persist_turn_notice)(
+                room_id, UNEXPECTED_ERROR_NOTICE, turn_id=notice_turn,
+            ))
+            try:
+                if shielded:
+                    grace = float(shutdown_grace_seconds())
+                    await asyncio.wait_for(asyncio.shield(write), timeout=grace)
+                else:
+                    await write
+            except asyncio.CancelledError:
+                if shielded:
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.shield(write), timeout=grace,
+                        )
+                    except (Exception, asyncio.TimeoutError):
+                        pass
+                raise
+            except (Exception, asyncio.TimeoutError):
+                logger.warning(
+                    "Unexpected-error notice not saved", exc_info=True,
+                )
+
         try:
             return await self._handle_message_body(
                 stream_state=stream_state,
@@ -794,29 +826,20 @@ class OrchestrationCoordinator:
                     await end_stream()
                 except asyncio.CancelledError:
                     # Shutdown cut the turn off while its stream end was being
-                    # sent. End the Turn with the ref the body already holds,
-                    # then let the cancellation continue.
+                    # sent. Keep the notice the failed(error) write earned,
+                    # bounded by the grace, then let the cancellation continue.
+                    await _save_deferred_notice(shielded=True)
                     await _end_unexpected_turn(
                         turn_box, stream_state, "cancelled", room_id=room_id,
                     )
                     raise
                 except Exception:
                     logger.warning("Stream end send failed", exc_info=True)
+                    await _save_deferred_notice()
                 else:
-                    notice_turn = stream_state.get("deferred_notice_turn")
-                    if stream_state.get("deferred_notice") and notice_turn:
-                        # After the stream end, so the browser never leaves an
-                        # empty reply bubble for the saved notice to replace.
-                        try:
-                            await sync_to_async(_persist_turn_notice)(
-                                room_id, UNEXPECTED_ERROR_NOTICE,
-                                turn_id=notice_turn,
-                            )
-                        except Exception:
-                            logger.warning(
-                                "Unexpected-error notice not saved",
-                                exc_info=True,
-                            )
+                    # After the stream end, so the browser never leaves an
+                    # empty reply bubble for the saved notice to replace.
+                    await _save_deferred_notice()
 
     async def _handle_message_body(
         self,

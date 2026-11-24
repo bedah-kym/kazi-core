@@ -1192,60 +1192,6 @@ class StreamEndingFramesTests(TransactionTestCase):
         ]
         self.assertEqual(saved, ["Hi there."])
 
-    @override_settings(TURN_SHUTDOWN_GRACE_SECONDS=1)
-    def test_shutdown_with_a_stalled_group_send_ends_within_the_grace(self):
-        from channels.layers import get_channel_layer
-
-        layer = get_channel_layer()
-        real_group_send = layer.group_send
-        stalled = asyncio.Event()
-        release = asyncio.Event()
-
-        async def stalling_group_send(channel, message):
-            # The final chunk never returns, even when shutdown cancels it.
-            if (
-                message.get("type") == "ai_stream_chunk"
-                and message.get("is_final")
-            ):
-                stalled.set()
-                while True:
-                    try:
-                        await release.wait()
-                        break
-                    except asyncio.CancelledError:
-                        continue
-            return await real_group_send(channel, message)
-
-        self.llm.queue(_response([_text("Hi there.")]))
-
-        async def scenario():
-            comm = await self._connect()
-            try:
-                with patch.object(
-                    layer, "group_send", new=stalling_group_send,
-                ):
-                    await self._send(comm, "@kazi hello")
-                    await asyncio.wait_for(stalled.wait(), timeout=8)
-                    at_complete = {}
-                    start = asyncio.get_running_loop().time()
-                    await self._lifespan_shutdown(
-                        at_complete=at_complete,
-                    )
-                    elapsed = asyncio.get_running_loop().time() - start
-                self.assertLess(elapsed, 4.0)
-                self.assertEqual(len(at_complete["turns"]), 1)
-                state, reason, _partial = next(
-                    iter(at_complete["turns"].values())
-                )
-                self.assertIn(state, {"completed", "failed"})
-                if state == "failed":
-                    self.assertEqual(reason, "shutdown")
-            finally:
-                release.set()
-                await asyncio.sleep(0.1)
-
-        self._run(scenario())
-
     async def _lifespan_shutdown(self, *, at_complete):
         from Backend.asgi import lifespan
 
@@ -1476,7 +1422,7 @@ class StreamEndingFramesTests(TransactionTestCase):
 
         async def scenario():
             comm = await self._connect()
-            await self._pause_for_blocks([
+            paused = await self._pause_for_blocks([
                 _tool("q1", "send_email", {"to": "a@b.c", "body": "hi"}),
             ])(comm)
             await self._drain_frames(comm)  # consume the pause segment
@@ -1490,12 +1436,21 @@ class StreamEndingFramesTests(TransactionTestCase):
                 ):
                     await self._send(comm, "@kazi what does that do?")
                     await asyncio.wait_for(stalled.wait(), timeout=8)
-                    await self._lifespan_shutdown(at_complete={})
-                return await self._drain_frames(comm)
+                    placeholder = await sync_to_async(
+                        lambda: Turn.objects.exclude(pk=paused.pk).get()
+                    )()
+                    at_complete = {}
+                    await self._lifespan_shutdown(at_complete=at_complete)
+                frames = await self._drain_frames(comm)
+                return frames, at_complete, str(placeholder.pk)
             finally:
                 release.set()
 
-        frames = self._run(scenario())
+        frames, at_complete, placeholder_id = self._run(scenario())
+        self.assertEqual(
+            at_complete["turns"][placeholder_id],
+            ("failed", "shutdown", True),
+        )
         self.assertEqual(
             [
                 frame for frame in frames
@@ -1541,3 +1496,94 @@ class StreamEndingFramesTests(TransactionTestCase):
 
         frames = self._run(scenario())
         self.assertFalse(self._has_final(frames))
+
+    @override_settings(TURN_SHUTDOWN_GRACE_SECONDS=1)
+    def test_the_notice_survives_a_shutdown_during_the_stream_end(self):
+        from channels.layers import get_channel_layer
+
+        layer = get_channel_layer()
+        real_group_send = layer.group_send
+        stalled = asyncio.Event()
+        cancelled = asyncio.Event()
+        release = asyncio.Event()
+
+        async def stalling_group_send(channel, message):
+            if (
+                message.get("type") == "ai_stream_chunk"
+                and message.get("is_final")
+            ):
+                stalled.set()
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    raise
+            return await real_group_send(channel, message)
+
+        async def scenario():
+            comm = await self._connect()
+            paused = await self._pause_for_blocks([
+                _tool("r1", "send_email", {"to": "a@b.c", "body": "hi"}),
+            ])(comm)
+            await self._drain_frames(comm)  # consume the pause segment
+            try:
+                with patch.object(
+                    layer, "group_send", new=stalling_group_send,
+                ), patch(
+                    "orchestration.coordinator.resume_after_confirmation",
+                    new=AsyncMock(side_effect=RuntimeError("resume boom")),
+                ), patch(
+                    "orchestration.coordinator.shutdown_grace_seconds",
+                    return_value=5.0,
+                ):
+                    await self._send(comm, "@kazi yes")
+                    await asyncio.wait_for(stalled.wait(), timeout=8)
+                    await self._lifespan_shutdown(at_complete={})
+                self.assertTrue(await asyncio.wait_for(
+                    cancelled.wait(), timeout=2,
+                ))
+            finally:
+                release.set()
+            return str(paused.pk)
+
+        turn_id = self._run(scenario())
+        turn = Turn.objects.get(pk=turn_id)
+        self.assertEqual(turn.state, "failed")
+        self.assertEqual(turn.end_reason, "error")
+        self.assertEqual(
+            self._notices_for_turn(turn_id),
+            ["Something went wrong on my side. Nothing further was run."],
+        )
+
+    @override_settings(TURN_SHUTDOWN_GRACE_SECONDS=1)
+    def test_the_notice_survives_an_exception_in_the_stream_end(self):
+        async def scenario():
+            comm = await self._connect()
+            paused = await self._pause_for_blocks([
+                _tool("r2", "send_email", {"to": "a@b.c", "body": "hi"}),
+            ])(comm)
+            await self._drain_frames(comm)  # consume the pause segment
+            with patch(
+                "orchestration.coordinator.resume_after_confirmation",
+                new=AsyncMock(side_effect=RuntimeError("resume boom")),
+            ), patch(
+                "orchestration.coordinator.shutdown_grace_seconds",
+                side_effect=RuntimeError("grace boom"),
+            ):
+                await self._send(comm, "@kazi yes")
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(
+                        pk=paused.pk, state="failed", end_reason="error",
+                    ).exists(),
+                ))
+                await self.runner.drain(timeout=15)
+            return str(paused.pk)
+
+        turn_id = self._run(scenario())
+        turn = Turn.objects.get(pk=turn_id)
+        self.assertEqual(turn.state, "failed")
+        self.assertEqual(turn.end_reason, "error")
+        self.assertEqual(
+            self._notices_for_turn(turn_id),
+            ["Something went wrong on my side. Nothing further was run."],
+        )

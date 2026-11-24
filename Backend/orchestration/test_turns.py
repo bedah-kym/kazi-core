@@ -17,7 +17,7 @@ from django.utils import timezone
 from chatbot.models import Chatroom, Member, Message
 from orchestration import turn_leases
 from orchestration.agent_loop import AgentEvent, HARD_TURN_TIMEOUT_SECONDS
-from orchestration.coordinator import OrchestrationCoordinator
+from orchestration.coordinator import OrchestrationCoordinator, _end_unexpected_turn
 from orchestration.llm_client import TokenQuotaExceeded
 from orchestration.models import Turn
 from orchestration.turns import (
@@ -28,6 +28,7 @@ from orchestration.turns import (
     STALE_TURN_MARGIN_SECONDS,
     TERMINAL_STATES,
     TOOK_OVER,
+    TurnRef,
     USER_CANCEL,
     atransition as real_atransition,
     _notice_text,
@@ -1112,6 +1113,47 @@ class CoordinatorTurnTests(_CoordinatorTurnBase):
         self.assertEqual(turn.state, "failed")
         self.assertEqual(turn.end_reason, "shutdown")
         self.assertIs(turn.partial, True)
+
+    @override_settings(TURN_SHUTDOWN_GRACE_SECONDS=0)
+    def test_a_zero_grace_cancellation_still_ends_the_running_row(self):
+        turn = Turn.objects.create(
+            room=self.room, user=self.user, state="running",
+            started_at=timezone.now(), attempt=1,
+        )
+        ref = TurnRef(id=str(turn.pk), version=turn.version, state=turn.state)
+        box = {"ref": ref, "settled": False}
+
+        async def scenario():
+            go = asyncio.Event()
+
+            async def slow_transition(*args, **kwargs):
+                await go.wait()
+                return await real_atransition(*args, **kwargs)
+
+            with patch(
+                "orchestration.coordinator.atransition",
+                new=slow_transition,
+            ):
+                ending = asyncio.ensure_future(
+                    _end_unexpected_turn(box, {}, "cancelled"),
+                )
+                await asyncio.wait({ending}, timeout=0.5)
+                if ending.done():
+                    # The raw 0 timed out: the row is still running.
+                    state = await sync_to_async(
+                        lambda: Turn.objects.get(pk=turn.pk).state
+                    )()
+                else:
+                    go.set()
+                    await ending
+                    state = "failed"
+                go.set()
+            return state
+
+        self.assertEqual(async_to_sync(scenario)(), "failed")
+        turn.refresh_from_db()
+        self.assertEqual(turn.state, "failed")
+        self.assertEqual(turn.end_reason, "shutdown")
 
     def test_a_cancelled_done_step_ends_the_turn_normally(self):
         """A CancelledError from the layer is not this task's shutdown."""

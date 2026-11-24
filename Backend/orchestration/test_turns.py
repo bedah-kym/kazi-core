@@ -1155,6 +1155,44 @@ class CoordinatorTurnTests(_CoordinatorTurnBase):
         self.assertEqual(turn.state, "failed")
         self.assertEqual(turn.end_reason, "shutdown")
 
+    @override_settings(TURN_SHUTDOWN_GRACE_SECONDS=1)
+    def test_a_cancel_retry_uses_the_same_deadline(self):
+        turn = Turn.objects.create(
+            room=self.room, user=self.user, state="running",
+            started_at=timezone.now(), attempt=1,
+        )
+        ref = TurnRef(id=str(turn.pk), version=turn.version, state=turn.state)
+        box = {"ref": ref, "settled": False}
+
+        async def scenario():
+            gate = asyncio.Event()
+
+            async def slow_transition(*args, **kwargs):
+                await gate.wait()
+                return await real_atransition(*args, **kwargs)
+
+            loop = asyncio.get_running_loop()
+            with patch(
+                "orchestration.coordinator.atransition",
+                new=slow_transition,
+            ):
+                started = loop.time()
+                call = asyncio.ensure_future(
+                    _end_unexpected_turn(box, {}, "cancelled"),
+                )
+                await asyncio.sleep(0.2)
+                call.cancel()
+                try:
+                    await call
+                except asyncio.CancelledError:
+                    pass
+                elapsed = loop.time() - started
+                gate.set()
+                await asyncio.sleep(0.05)
+            return elapsed
+
+        self.assertLess(async_to_sync(scenario)(), 1.1)
+
     def test_a_cancelled_done_step_ends_the_turn_normally(self):
         """A CancelledError from the layer is not this task's shutdown."""
         async def cancel_on_done(_correlation_id, event):

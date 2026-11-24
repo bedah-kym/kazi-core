@@ -292,6 +292,35 @@ class StreamEndingFramesTests(TransactionTestCase):
                     break
         return frames
 
+    async def _wait_for_frame(self, comm, predicate, timeout=5.0):
+        """Wait for a queued frame matching ``predicate`` without consuming it."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while loop.time() < deadline:
+            for item in list(comm.output_queue._queue):
+                text = item.get("text") if isinstance(item, dict) else None
+                if not text:
+                    continue
+                try:
+                    frame = json.loads(text)
+                except (TypeError, ValueError):
+                    continue
+                if predicate(frame):
+                    return True
+            await asyncio.sleep(0.01)
+        return False
+
+    async def _wait_for_echo(self, comm, content, timeout=5.0):
+        """Wait until the consumer's echo of ``content`` is queued, unread."""
+        return await self._wait_for_frame(
+            comm,
+            lambda frame: (
+                frame.get("command") == "new_message"
+                and (frame.get("message") or {}).get("content") == content
+            ),
+            timeout,
+        )
+
     def _echo(self, content):
         return {
             "command": "new_message",
@@ -565,6 +594,13 @@ class StreamEndingFramesTests(TransactionTestCase):
                     pk=turn.pk, cancel_requested_at__isnull=False,
                 ).exists(),
             ))
+            # The flag is visible before the stop notice is saved. Release
+            # only once the notice is on disk, so the pinned order holds.
+            self.assertTrue(await self._wait_for(
+                lambda: any(
+                    STOP_NOTICE in text for text in self._notice_texts()
+                ),
+            ))
             release.set()
             self.assertTrue(await self._wait_for(
                 lambda: Turn.objects.filter(
@@ -783,6 +819,14 @@ class StreamEndingFramesTests(TransactionTestCase):
             await self._send(comm, "@kazi first")
             await asyncio.wait_for(entered.wait(), timeout=5)
             await self._send(comm, "@kazi second")
+            self.assertTrue(await self._wait_for_echo(comm, "@kazi second"))
+            self.assertTrue(await self._wait_for_frame(
+                comm,
+                lambda frame: (
+                    frame.get("command") == "ai_stream"
+                    and (frame.get("chunk") or "").startswith("[Harness: queued")
+                ),
+            ))
             release.set()
             self.assertTrue(await self._wait_for(
                 lambda: Turn.objects.filter(state="completed").count() == 2,
@@ -795,6 +839,7 @@ class StreamEndingFramesTests(TransactionTestCase):
             self._thinking(),
             self._reasoning(),
             self._echo("@kazi second"),
+            self._stream("[Harness: queued (position 1).]\n\n"),
             self._stream("first answer"),
             self._done(),
             self._stream("", is_final=True),
@@ -1587,3 +1632,34 @@ class StreamEndingFramesTests(TransactionTestCase):
             self._notices_for_turn(turn_id),
             ["Something went wrong on my side. Nothing further was run."],
         )
+
+    def test_a_layer_cancelled_done_step_still_sends_is_final(self):
+        from channels.layers import get_channel_layer
+
+        layer = get_channel_layer()
+        real_group_send = layer.group_send
+
+        async def cancelling_done(channel, message):
+            if message.get("type") == "ai_step_event":
+                event = message.get("event") or {}
+                if event.get("phase") == "done":
+                    raise asyncio.CancelledError()
+            return await real_group_send(channel, message)
+
+        self.llm.queue(_response([_text("Hi there.")]))
+
+        async def scenario():
+            comm = await self._connect()
+            with patch.object(layer, "group_send", new=cancelling_done):
+                await self._send(comm, "@kazi hello")
+                self.assertTrue(await self._wait_for(
+                    lambda: Turn.objects.filter(state="completed").exists(),
+                ))
+                await self.runner.drain(timeout=15)
+            turn = await sync_to_async(lambda: Turn.objects.get())()
+            return await self._drain_frames(comm), turn.pk
+
+        frames, turn_id = self._run(scenario())
+        self.assertTrue(self._has_final(frames))
+        self.assertEqual(self._done_count(frames), 0)
+        self.assertEqual(self._turn_reply_texts(turn_id), ["Hi there."])

@@ -319,7 +319,7 @@ window.KAZI_ARCH = {
          "refs": [{"file": "Backend/chatbot/consumers.py", "symbol": "get_current_chatroom"}, {"file": "Backend/chatbot/consumers.py", "symbol": "get_chatroom_participants"}]},
         {"level": "web", "edge": "w_b_asgi", "reverse": true, "title": "Echoed to the sender",
          "body": "send_chat_message writes the saved message straight to this socket (a direct self.send), so the sender sees its own message. It is not a group fan-out.",
-         "payload": {"command": "new_message", "message": {"member": "admin", "content": "@kazi what is 17 times 23?"}},
+         "payload": {"command": "new_message", "message": {"id": 42, "member": "admin", "content": "@kazi what is 17 times 23?", "timestamp": "2026-10-17T09:00:00+03:00", "parent_id": null}},
          "refs": [{"file": "Backend/chatbot/consumers.py", "symbol": "send_chat_message"}]},
         {"level": "web", "edge": "w_cons_runner", "title": "Queued for the runner",
          "body": "AI room and @kazi: the consumer saves a queued Turn linked to the message, submits the key to the runner and returns. A second message queues behind it.",

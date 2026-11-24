@@ -325,6 +325,23 @@ def _send_task_is_cancelling() -> bool:
     return bool(task is not None and task.cancelling())
 
 
+async def _bounded_write(write, deadline: float) -> None:
+    """Await ``write`` shielded; a cancel retry gets only the time left."""
+    loop = asyncio.get_running_loop()
+    try:
+        await asyncio.wait_for(
+            asyncio.shield(write), timeout=max(0.0, deadline - loop.time()),
+        )
+    except asyncio.CancelledError:
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(write), timeout=max(0.0, deadline - loop.time()),
+            )
+        except (Exception, asyncio.TimeoutError):
+            pass
+        raise
+
+
 async def _end_unexpected_turn(
     turn_box: Dict, stream_state: Dict, outcome: str, room_id=None,
 ) -> bool:
@@ -410,19 +427,11 @@ async def _end_unexpected_turn(
     # A shutdown ending is bounded like every other shutdown write: if the
     # database is stalled, the reaper (or the lite boot sweep) ends the row.
     grace = float(shutdown_grace_seconds())
+    deadline = asyncio.get_running_loop().time() + grace
     try:
-        await asyncio.wait_for(asyncio.shield(task), timeout=grace)
+        await _bounded_write(task, deadline)
     except asyncio.TimeoutError:
         logger.warning("Shutdown ending write timed out; the reaper will end the turn.")
-    except asyncio.CancelledError:
-        # The inner task keeps running after the shield is cancelled; wait for
-        # it, within the grace, so the row is terminal before this
-        # cancellation finishes.
-        try:
-            await asyncio.wait_for(asyncio.shield(task), timeout=grace)
-        except (Exception, asyncio.TimeoutError):
-            pass
-        raise
     return False
 
 
@@ -762,24 +771,18 @@ class OrchestrationCoordinator:
             write = asyncio.ensure_future(sync_to_async(_persist_turn_notice)(
                 room_id, UNEXPECTED_ERROR_NOTICE, turn_id=notice_turn,
             ))
+            deadline = (
+                asyncio.get_running_loop().time()
+                + float(shutdown_grace_seconds())
+            )
             try:
-                if shielded:
-                    grace = float(shutdown_grace_seconds())
-                    await asyncio.wait_for(asyncio.shield(write), timeout=grace)
-                else:
-                    await write
+                await _bounded_write(write, deadline)
             except asyncio.CancelledError:
-                if shielded:
-                    try:
-                        await asyncio.wait_for(
-                            asyncio.shield(write), timeout=grace,
-                        )
-                    except (Exception, asyncio.TimeoutError):
-                        pass
                 raise
             except (Exception, asyncio.TimeoutError):
                 logger.warning(
-                    "Unexpected-error notice not saved", exc_info=True,
+                    "Unexpected-error notice not saved (shielded=%s)",
+                    shielded, exc_info=True,
                 )
 
         try:
@@ -1254,9 +1257,18 @@ class OrchestrationCoordinator:
             stream_state["ended"] = True
 
             async def _send_end():
-                await emit_progress(
-                    "done", "completed", stream_state.get("done_message"),
-                )
+                try:
+                    await emit_progress(
+                        "done", "completed", stream_state.get("done_message"),
+                    )
+                except asyncio.CancelledError:
+                    if _send_task_is_cancelling():
+                        raise
+                    # The channel layer raised it on the done step, not a
+                    # shutdown of this send: still try the final chunk.
+                    logger.warning(
+                        "Stream end done step was cancelled by the channel layer",
+                    )
                 await broadcast_chunk("", is_final=True)
 
             def _discard(task):

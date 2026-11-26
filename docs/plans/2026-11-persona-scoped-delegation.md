@@ -124,11 +124,14 @@ run; 0c only corrects what is recorded.
      `deepseek_web_search` / `deepseek_read_url` only if they are ever added)
      and only when the rule allows. Anything else is removed. This covers
      provider fallback and future call paths. Kazi declares no DeepSeek
-     search tool today.
+     search tool today. Permission is required but not sufficient: native
+     search is sent only if it is also in the tools offered for this request
+     (a `delegate_task` `tools` filter that leaves it out removes it).
    - **Response check:** a per-provider reader detects server-side tool use
      (Anthropic `usage.server_tool_use`; DeepSeek's search blocks, field
-     names to be confirmed from its docs). An unrecognised block type taints
-     the run. Search that was not allowed stops the run and is recorded.
+     names to be confirmed from its docs) and compares it with the tools
+     actually sent in that request. An unrecognised block type taints the
+     run. A search the request did not offer stops the run and is recorded.
    - **Provider table:** per provider, whether search can be turned off and
      whether it can be detected. A turn whose scope excludes search never
      falls back to a provider that fails either check.
@@ -260,7 +263,10 @@ does not merge.
 
 - **No new I/O on the hot path.** The checks are in-memory work: set lookups
   on the tool list and a scan of the response blocks. No added database,
-  cache or network call per model call or per tool call. Bounds are computed
+  cache or network call per model call or per delegated tool execution. The
+  one exception is the bounded writes of a persona-scoped `delegate_task`
+  call: one `Handoff` row and one room note per delegation, counted in the
+  per-delegation budget below. Bounds are computed
   once per turn or sub-run, not per call. The provider table is a module
   constant. Where a test can count queries (`assertNumQueries`), it does.
 - **Budget per model call:** the request-boundary filter plus the response
@@ -269,7 +275,8 @@ does not merge.
   small home-lab box. [Inference] Model calls take seconds, so this should be
   well under 0.1% of a turn; the PR measures it rather than assuming it.
 - **Per delegation (Phases 0–1):** at most one added query, the target
-  persona lookup, which `run_handoff` already makes.
+  persona lookup, which `run_handoff` already makes, plus one `Handoff` row
+  and one room note for each persona-scoped delegation.
 - **Telemetry (Phase 2):** written once per turn through the existing
   `record_event` path, never per call. Violation events are rare by design.
 - **Regression check:** the golden eval's run time before and after each

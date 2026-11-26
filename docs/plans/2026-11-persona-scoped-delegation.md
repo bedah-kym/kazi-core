@@ -133,8 +133,10 @@ run; 0c only corrects what is recorded.
      actually sent in that request. An unrecognised block type taints the
      run. A search the request did not offer stops the run and is recorded.
    - **Provider table:** per provider, whether search can be turned off and
-     whether it can be detected. A turn whose scope excludes search never
-     falls back to a provider that fails either check.
+     whether it can be detected. Any request whose offered tools omit search
+     (because the scope excludes it or a `delegate_task` `tools` filter left
+     it out) is served only by providers that pass both checks; a provider
+     that fails either one is skipped in fallback for that request.
    - Taint stays as the last line. Kazi cannot stop a provider that searches
      without being asked; the only remedy there is the choice of provider.
 6. Check whether a sub-agent sees `delegate_task` in its own tool list; if

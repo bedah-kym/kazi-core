@@ -111,11 +111,29 @@ run; 0c only corrects what is recorded.
    argument and denies any other call before execution.
 4. Each delegated log entry carries its own `receipt_id` and a `not_run`
    flag; `record_from_event` stores them, so refused calls are `denied`.
-5. Native search is offered only when the effective scope is unbounded or
-   includes `web_search`. The filter runs on the offered tool list before
-   `_rebuild_search_tool` and before `create_message`, in the main loop and in
-   sub-runs. If a provider still reports a server-side search that was not
-   offered, the run stops and the event is recorded (fail closed).
+5. Native search follows one rule and is enforced at the provider boundary:
+   - **Rule:** a function in `personas.py` allows search only when the user's
+     `allow_web_search` is not off (native search skips that flag today, too)
+     and the effective scope is unbounded or includes `web_search` or
+     `search_info`. The mapping lives there, not as a catalog alias.
+   - **Offer:** `_rebuild_search_tool` takes `search_allowed` as a required
+     argument, in the main loop and in sub-runs.
+   - **Request boundary:** just before `llm_client` sends any request, it
+     keeps only the server-side tool types the harness knows for that
+     provider (`web_search_20250305` on Anthropic; DeepSeek's
+     `deepseek_web_search` / `deepseek_read_url` only if they are ever added)
+     and only when the rule allows. Anything else is removed. This covers
+     provider fallback and future call paths. Kazi declares no DeepSeek
+     search tool today.
+   - **Response check:** a per-provider reader detects server-side tool use
+     (Anthropic `usage.server_tool_use`; DeepSeek's search blocks, field
+     names to be confirmed from its docs). An unrecognised block type taints
+     the run. Search that was not allowed stops the run and is recorded.
+   - **Provider table:** per provider, whether search can be turned off and
+     whether it can be detected. A turn whose scope excludes search never
+     falls back to a provider that fails either check.
+   - Taint stays as the last line. Kazi cannot stop a provider that searches
+     without being asked; the only remedy there is the choice of provider.
 6. Check whether a sub-agent sees `delegate_task` in its own tool list; if
    so, remove the meta-tools from it.
 
@@ -132,7 +150,11 @@ run; 0c only corrects what is recorded.
     skills, not the room persona's identity (today it keeps the room's);
   - with a persona scope that excludes `web_search`, the request sent to the
     provider has no native search tool, in the main loop and in a sub-run
-    (today both offer it);
+    (today both offer it); the same with `allow_web_search` off;
+  - an unknown server-side tool type is removed at the request boundary,
+    including after a provider fallback;
+  - a response reporting search that was not offered stops the run and is
+    recorded;
   - two disjoint scopes deny every call;
   - a scripted sub-agent that emits a tool outside its offered list never
     reaches `_execute_with_timeout` (today it does);
@@ -228,6 +250,30 @@ claims, work tokens, wall-clock time. Model per persona is decided by this
 pack, not before it.
 
 ---
+
+## Performance budget (every phase)
+
+Self-hosters compare Kazi with harnesses written in Rust and Go, so the
+checks in this plan must not make the harness feel slower. Each phase's PR
+measures its overhead and pastes the numbers; a phase that misses its budget
+does not merge.
+
+- **No new I/O on the hot path.** The checks are in-memory work: set lookups
+  on the tool list and a scan of the response blocks. No added database,
+  cache or network call per model call or per tool call. Bounds are computed
+  once per turn or sub-run, not per call. The provider table is a module
+  constant. Where a test can count queries (`assertNumQueries`), it does.
+- **Budget per model call:** the request-boundary filter plus the response
+  check together add under 1 ms at p99, measured with a micro-benchmark on
+  the reference hardware in the frontend redesign proposal (§4.5) and on a
+  small home-lab box. [Inference] Model calls take seconds, so this should be
+  well under 0.1% of a turn; the PR measures it rather than assuming it.
+- **Per delegation (Phases 0–1):** at most one added query, the target
+  persona lookup, which `run_handoff` already makes.
+- **Telemetry (Phase 2):** written once per turn through the existing
+  `record_event` path, never per call. Violation events are rare by design.
+- **Regression check:** the golden eval's run time before and after each
+  phase is recorded in the PR.
 
 ## Working beside v0.8
 

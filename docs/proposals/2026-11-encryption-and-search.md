@@ -60,7 +60,8 @@ The gaps are around the scheme, not in it:
 
 | # | Finding | Where | Severity |
 |---|---|---|---|
-| E1, E2 | Two write paths store plaintext copies of message content beside the ciphertext. Details are in a private security advisory, per `SECURITY.md`, until fixed. | withheld | High |
+| E1 | Voice messages overwrite the encrypted `Message.content` with the plaintext transcript, and `voice_transcript` is plaintext too. History passes non-JSON content through as legacy plaintext. | `chatbot/tasks.py:268-270`, `chatbot/history.py:43-47` `[Verified]` | High: chat text readable in a dump |
+| E2 | Pinning stores client-supplied message text in plaintext: in full in `RoomNote.source_message_content`, and the first 100 characters in `RoomNote.content`. The text comes from `request.data`. It is never checked against the stored message, and the message is not checked to belong to the room. | `chatbot/message_actions.py:93-123` `[Verified]` | High |
 | E3 | Derived data is plaintext: `RoomContext.summary` and `memory_*`, `RoomNote.content`, `DailySummary`, `Reminder.content`, `DocumentUpload.processed_text`, `AIConversation.context`. | `chatbot/models.py` `[Verified]` | Medium: leaks the gist of rooms. Larger job (Phase 3). |
 | E3b | `ActionReceipt.params/result` are plaintext, cut to 160 characters (`action_receipts.py:116-139`). They duplicate what `TurnToolCall.input_enc` encrypts. Receipts are append-only (non-negotiable 4), so any fix is forward-only. | `orchestration/models.py:196-202` | Medium; needs a maintainer decision |
 | E3c | Media on disk is plaintext: voice notes, TTS audio and uploaded documents. | `chatbot/voice_views.py:40-48`, `chatbot/tasks.py:351` (per review; not opened by hand) | Medium; out of scope here, named so it isn't forgotten |
@@ -92,7 +93,8 @@ When each step can land:
 | Step | Files | Can land |
 |---|---|---|
 | Phase 0 | `users/encryption.py`, `users/integrations_views.py`, one fail-closed fix in `chatbot/models.py` (`Chatroom.save`), a new management command, tests, docs | Now: no open v0.8 issue touches these |
-| E1/E2 fixes | Chat write paths that v0.8 is changing (see the advisory) | Fixed privately first; then sequenced against T-A2/T-A3, T-B4 and T-C1/T-C3 |
+| E1 fix | `chatbot/tasks.py`, `kazi_messages.py` | After T-A2/T-A3 and T-B4 |
+| E2 fix | `message_actions.py`, `RoomNote` | After T-C1/T-C3 |
 | F-80 index | new table | Not in v0.8: it is Phase 4b of the redesign and needs a migration and a plan |
 
 ## 4. Phased plan (each step one small PR)
@@ -154,13 +156,21 @@ Once `--verify` reports zero legacy rows, the `SECRET_KEY` fallback (E7) can be 
 
 ### Phase 1 — gated as in §3
 
-**5–6. Close E1 and E2.**
+**5. Close E1.**
 
-- The fix steps are in the private advisory.
-- Both fixes route content through the existing room cipher.
-- Existing rows are fixed with a management command, in batches. A data migration also
-  works but is a protected path, so it needs a plan.
-- Test: no message text appears in any stored plaintext column.
+- Put the transcript in the encrypted payload (`{"content": transcript, "voice": true}`) via
+  `encrypt_content_for_room`.
+- Stop writing plaintext `voice_transcript`.
+- Fix existing rows with a management command, in batches. A data migration also works but
+  is a protected path, so it needs a plan.
+
+**6. Close E2.**
+
+- Pinning loads the message filtered by both id and room.
+- It reads the content by decrypting server-side and ignores the text the client sent.
+- It stores only the message id, with no plaintext copy in `content` or
+  `source_message_content`.
+- Test: no pinned text appears in any stored `RoomNote` column.
 
 **7. One room-cipher helper (E9).**
 

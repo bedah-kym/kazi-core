@@ -83,8 +83,17 @@ delegated `TurnToolCall` row gets the parent `delegate_task` call's receipt
 Delegated records also hard-code `not_run: False`, so a call the harness
 refused is stored as `error`, as if it ran.
 
-**Risk class:** read-only enforcement. 0a and 0b only narrow what may run;
-0c only corrects what is recorded.
+**Bug 0d: native search ignores persona scope.**
+Native (provider-side) `web_search` runs without passing through
+`_bucket_tool_calls`. The main loop adds it to the offered tools without
+checking the room persona's scope (the `web_search_tool` step after
+`get_tool_definitions`), and a sub-run with no `tools` filter inherits it.
+`_rebuild_search_tool` keeps any `web_search` entry it is given. A persona
+whose scope excludes search can therefore still search, and the run only
+counts it in `server_tool_uses`.
+
+**Risk class:** read-only enforcement. 0a, 0b and 0d only narrow what may
+run; 0c only corrects what is recorded.
 
 **Approach:**
 1. `personas.combine_bounds(a, b)`. A side that is None or has an empty
@@ -96,11 +105,18 @@ refused is stored as `error`, as if it ran.
    does for `user_id` and `room_id`. `_run_sub_agent` applies
    `combine_bounds(room persona, target)`, and works when the room has no
    persona. A failed lookup of either removes tool reach, like `PERSONA_LOOKUP_FAILED`.
+   The target's `persona_identity_prompt` (with its skills) replaces the room
+   persona's identity block in the handoff's system prompt.
 3. `_execute_scoped_tool_calls` takes the offered tool names as a required
    argument and denies any other call before execution.
 4. Each delegated log entry carries its own `receipt_id` and a `not_run`
    flag; `record_from_event` stores them, so refused calls are `denied`.
-5. Check whether a sub-agent sees `delegate_task` in its own tool list; if
+5. Native search is offered only when the effective scope is unbounded or
+   includes `web_search`. The filter runs on the offered tool list before
+   `_rebuild_search_tool` and before `create_message`, in the main loop and in
+   sub-runs. If a provider still reports a server-side search that was not
+   offered, the run stops and the event is recorded (fail closed).
+6. Check whether a sub-agent sees `delegate_task` in its own tool list; if
    so, remove the meta-tools from it.
 
 **Verification:**
@@ -112,6 +128,11 @@ refused is stored as `error`, as if it ran.
   - the same for an action above the target's ceiling that the room's
     bounds let run without asking;
   - handoffs in a room with no persona apply the target's bounds;
+  - a handoff's system prompt names the target persona and carries its
+    skills, not the room persona's identity (today it keeps the room's);
+  - with a persona scope that excludes `web_search`, the request sent to the
+    provider has no native search tool, in the main loop and in a sub-run
+    (today both offer it);
   - two disjoint scopes deny every call;
   - a scripted sub-agent that emits a tool outside its offered list never
     reaches `_execute_with_timeout` (today it does);

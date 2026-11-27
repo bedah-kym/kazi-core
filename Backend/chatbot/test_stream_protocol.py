@@ -290,7 +290,44 @@ class SinkRoutingTests(TransactionTestCase):
             ("text", "narration", "Hi"),
             ("text", "answer", " there."),
         ])
-        self.assertIn(("chunk", "Hi there.", False), sink.frames)
+        self.assertIn(("chunk", "Hi\n\n there.", False), sink.frames)
+
+    def test_live_text_puts_one_blank_line_between_narration_and_answer(self):
+        sink = RecordingSink()
+        self._run([
+            _text("Let me check.", channel="narration"),
+            _text("The files are here.", channel="answer"),
+            _done(),
+        ], sink, clock=_Clock())
+
+        chunks = [
+            frame[1] for frame in sink.frames if frame[0] == "chunk"
+        ]
+        self.assertEqual(
+            chunks,
+            ["Let me check.", "\n\nThe files are here.", ""],
+        )
+        self.assertNotIn("\n\n\n", "".join(chunks))
+
+    def test_live_text_does_not_stack_blank_lines_before_harness_text(self):
+        sink = RecordingSink()
+        self._run([
+            _text("Let me check.", channel="narration"),
+            _text("The files are here.", channel="answer"),
+            AgentEvent("harness", {"text": "\n\nPlease confirm."}),
+            _done(),
+        ], sink, clock=_Clock())
+
+        chunks = [
+            frame[1] for frame in sink.frames if frame[0] == "chunk"
+        ]
+        self.assertEqual(chunks, [
+            "Let me check.",
+            "\n\nThe files are here.",
+            "\n\nPlease confirm.",
+            "",
+        ])
+        self.assertNotIn("\n\n\n", "".join(chunks))
 
     def test_a_buffered_narration_stays_narration_on_the_final_flush(self):
         sink = RecordingSink()

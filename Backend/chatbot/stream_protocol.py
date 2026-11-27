@@ -96,6 +96,28 @@ class V1Adapter:
         self._step_id = step_id
         self._send_saved = send_saved or _broadcast_saved
         self.correlation_id = correlation_id or uuid.uuid4().hex
+        # The last channel v1 actually sent, so a narration flush and the
+        # answer that follows it a flush later still get their one blank line.
+        self._last_text_channel = ""
+
+    def _render_text(self, event: TurnEvent) -> str:
+        """The v1 chunk text: one blank line after narration, nothing stacked."""
+        if not event.segments:
+            return event.text or ""
+        pieces = []
+        previous = self._last_text_channel
+        for segment in event.segments:
+            text = segment.text
+            if (
+                previous == TEXT_CHANNEL_NARRATION
+                and segment.channel != TEXT_CHANNEL_NARRATION
+                and not text.startswith("\n\n")
+            ):
+                text = "\n\n" + text
+            pieces.append(text)
+            previous = segment.channel
+        self._last_text_channel = previous
+        return "".join(pieces)
 
     async def _progress(self, phase: str, state: str, message: str) -> None:
         await self._send_step_event(
@@ -111,11 +133,8 @@ class V1Adapter:
     async def emit(self, event: TurnEvent) -> None:
         kind = event.kind
         if kind in ("text", "harness"):
-            text = event.text or "".join(
-                segment.text for segment in event.segments
-            )
             await self._send_chunk(
-                self.correlation_id, text, event.is_final,
+                self.correlation_id, self._render_text(event), event.is_final,
             )
             return
         if kind == "progress":

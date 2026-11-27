@@ -579,8 +579,6 @@ def export_chat(request, room_id):
             content = ""
             if _decrypt_message_content:
                 content = _decrypt_message_content(msg, cipher) or ""
-            if not content and msg.voice_transcript:
-                content = msg.voice_transcript
             if not content:
                 content = _extract_plain_content(msg.content)
 

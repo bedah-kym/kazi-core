@@ -10,6 +10,8 @@ from cryptography.exceptions import InvalidKey
 from asgiref.sync import async_to_sync
 from typing import Optional, Dict, Any, Tuple
 from .models import (
+    VOICE_STATUS_MARKER,
+    VOICE_TRANSCRIPTION_FAILED_MARKER,
     Message,
     Chatroom,
     ModerationBatch,
@@ -25,6 +27,7 @@ from .kazi_messages import (
     ORIGIN_REMINDER,
     KaziMessageError,
     encrypt_content_for_room,
+    encrypt_for_room,
     persist_kazi_message,
     room_cipher,
 )
@@ -253,6 +256,10 @@ def transcribe_voice_note(self, message_id):
             logger.warning("Voice note path rejected for message %s", message.id)
             return "Invalid audio path"
 
+        room = message.chatroom_set.first()
+        if room is None:
+            return "No room found"
+
         # OpenAI Whisper
         openai = _get_openai_module()
         if not openai:
@@ -265,15 +272,22 @@ def transcribe_voice_note(self, message_id):
                 file=audio_file
             )
 
-        message.voice_transcript = transcript.text
-        message.content = transcript.text  # Update content so AI can read it
-        message.save()
+        encrypted = encrypt_for_room(room, {
+            "content": transcript.text,
+            "timestamp": str(message.timestamp),
+            "voice": True,
+        })
+        if encrypted is None:
+            raise RuntimeError("voice transcription could not be encrypted")
+
+        message.content = json.dumps(encrypted)
+        message.voice_transcript = VOICE_STATUS_MARKER
+        message.save(update_fields=["content", "voice_transcript"])
 
         # Notify room via WebSocket
         from channels.layers import get_channel_layer
         from asgiref.sync import async_to_sync
         channel_layer = get_channel_layer()
-        room = message.chatroom_set.first()
         if room:
             async_to_sync(channel_layer.group_send)(
                 f"chat_{room.id}",
@@ -287,6 +301,16 @@ def transcribe_voice_note(self, message_id):
         return transcript.text
     except Exception as e:
         logger.error(f"Transcription error: {e}")
+        if (
+            self.max_retries is not None
+            and self.request.retries >= self.max_retries
+        ):
+            try:
+                Message.objects.filter(id=message_id).update(
+                    voice_transcript=VOICE_TRANSCRIPTION_FAILED_MARKER
+                )
+            except Exception:
+                logger.exception("Could not record voice transcription failure")
         raise self.retry(exc=e)
 
 

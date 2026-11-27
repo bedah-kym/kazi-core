@@ -10,9 +10,20 @@ from datetime import datetime, date, timedelta
 from django.conf import settings
 from django.db.models import Q
 from django.utils import timezone
-from .models import RoomContext, RoomNote, DocumentUpload, Contact
+from .models import (
+    PINNED_NOTE_LABEL,
+    Message,
+    RoomContext,
+    RoomNote,
+    DocumentUpload,
+    Contact,
+    is_legacy_pinned_preview,
+)
 
 logger = logging.getLogger(__name__)
+
+PINNED_CONTEXT_MAX_CHARS = 500
+PINNED_CONTEXT_TRUNCATION_MARKER = " [...truncated]"
 
 # Patterns that look like prompt injection attempts embedded in note content.
 _NOTE_INJECTION_RE = re.compile(
@@ -54,11 +65,30 @@ class ContextManager:
             # 2. Get Ranked Local Notes
             local_notes = ContextManager._get_ranked_notes(context_obj)
 
+            # 3. LINKED ROOM CONTEXT (opt-in only)
+            linked_contexts = list(context_obj.related_rooms.all())
+            linked_notes = []
+            if linked_contexts:
+                linked_notes = list(
+                    RoomNote.objects.filter(
+                        room_context__in=linked_contexts,
+                        is_private=False,
+                        is_archived=False,
+                    ).select_related("room_context__chatroom").order_by('-created_at')[:5]
+                )
+
+            # Every pinned message for this build loads in one query.
+            pinned_contents = ContextManager._load_pinned_message_contents(
+                list(local_notes) + linked_notes
+            )
+
             # Format Local Data
             context_data = {
                 "summary": context_obj.summary or "",
                 "active_topics": context_obj.active_topics or [],
-                "recent_notes": [ContextManager._format_note(n) for n in local_notes],
+                "recent_notes": [
+                    ContextManager._format_note(n, pinned_contents) for n in local_notes
+                ],
                 "latest_daily_summary": "",
                 "memory_facts": [],
                 "memory_preferences": [],
@@ -98,16 +128,12 @@ class ContextManager:
                 ),
             })
 
-            # 3. LINKED ROOM CONTEXT (opt-in only)
-            linked_contexts = list(context_obj.related_rooms.all())
+            # 3. LINKED ROOM CONTEXT (continued)
             if linked_contexts:
-                linked_notes = RoomNote.objects.filter(
-                    room_context__in=linked_contexts,
-                    is_private=False,
-                    is_archived=False,
-                ).order_by('-created_at')[:5]
                 if linked_notes:
-                    context_data['linked_notes'] = [ContextManager._format_note(n) for n in linked_notes]
+                    context_data['linked_notes'] = [
+                        ContextManager._format_note(n, pinned_contents) for n in linked_notes
+                    ]
 
                 # Linked room summaries
                 linked_summaries = []
@@ -430,7 +456,7 @@ class ContextManager:
             ).exclude(
                 is_completed=True,
                 completed_at__lt=one_day_ago,
-            ).order_by('-created_at')[:30]
+            ).select_related("room_context__chatroom").order_by('-created_at')[:30]
         )
         if not candidates:
             return []
@@ -497,7 +523,63 @@ class ContextManager:
         return text
 
     @staticmethod
-    def _format_note(note):
+    def _decrypt_stored_content(room, raw_content):
+        try:
+            from types import SimpleNamespace
+
+            from .history import DECRYPT_FAILED, decrypt_stored
+
+            content, _payload = decrypt_stored(
+                room, SimpleNamespace(content=raw_content)
+            )
+            if not content or content == DECRYPT_FAILED:
+                return ""
+            return content
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _load_pinned_message_contents(notes):
+        """Load every pinned message for a context build in one query."""
+        message_ids = {n.source_message_id for n in notes if n.source_message_id}
+        if not message_ids:
+            return {}
+        rows = Message.objects.filter(id__in=message_ids).values_list(
+            "id", "chatroom__id", "content"
+        )
+        contents = {}
+        for message_id, room_id, content in rows:
+            contents.setdefault(message_id, {})[room_id] = content
+        return contents
+
+    @staticmethod
+    def _pinned_message_text(note):
+        """Decrypt the message a pinned note points at, or return "" when it is gone."""
+        if not note.source_message_id:
+            return ""
+        try:
+            room = note.room_context.chatroom
+            raw_content = Message.objects.filter(
+                id=note.source_message_id,
+                chatroom__id=room.id,
+            ).values_list("content", flat=True).first()
+            if raw_content is None:
+                return ""
+            return ContextManager._decrypt_stored_content(room, raw_content)
+        except Exception:
+            logger.warning(
+                "Pinned note %s could not resolve its message", note.id, exc_info=True,
+            )
+            return ""
+
+    @staticmethod
+    def _bound_pinned_text(text):
+        if len(text) <= PINNED_CONTEXT_MAX_CHARS:
+            return text
+        return text[:PINNED_CONTEXT_MAX_CHARS] + PINNED_CONTEXT_TRUNCATION_MARKER
+
+    @staticmethod
+    def _format_note(note, pinned_contents=None):
         now = timezone.now()
         status = ""
         if note.is_completed:
@@ -508,10 +590,38 @@ class ContextManager:
             if untouched_days > 7:
                 status = f" (stale {untouched_days}d)"
 
+        if note.source_message_id:
+            unedited = (
+                note.content == PINNED_NOTE_LABEL
+                or is_legacy_pinned_preview(
+                    note.content, note.source_message_content
+                )
+            )
+            if not unedited:
+                content = note.content
+            else:
+                if pinned_contents is None:
+                    pinned_text = ContextManager._pinned_message_text(note)
+                else:
+                    raw_content = pinned_contents.get(note.source_message_id, {}).get(
+                        note.room_context.chatroom_id
+                    )
+                    pinned_text = (
+                        ContextManager._decrypt_stored_content(
+                            note.room_context.chatroom, raw_content
+                        )
+                        if raw_content is not None else ""
+                    )
+                content = (
+                    ContextManager._bound_pinned_text(pinned_text)
+                    if pinned_text else PINNED_NOTE_LABEL
+                )
+        else:
+            content = note.content
         return {
             "id": note.id,
             "type": note.note_type,
-            "content": ContextManager._sanitize_note_content(note.content),
+            "content": ContextManager._sanitize_note_content(content),
             "priority": note.priority,
             "status": status,
             "is_private": note.is_private,

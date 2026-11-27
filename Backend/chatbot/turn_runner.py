@@ -45,10 +45,12 @@ from .kazi_messages import (
     ORIGIN_TURN,
     ORIGIN_TURN_NOTICE,
     KaziMessageError,
+    _default_frame,
     broadcast_kazi_message,
     persist_kazi_message,
 )
 from .models import Chatroom, Message
+from .stream_protocol import TurnEvent, build_stream_sink
 from .transcript import build_history_messages, has_several_speakers, strip_wake_word
 
 logger = logging.getLogger(__name__)
@@ -87,10 +89,13 @@ def save_turn_reply(room, result, *, user_id):
     """Persist the reply and attach the Turn's rows to this message segment.
 
     This is the one save path: the runner and the tests both call it, so a test
-    cannot re-implement the arguments and miss a change to them.
+    cannot re-implement the arguments and miss a change to them. The runner sets
+    ``result.broadcast_saved = False`` and announces the saved message through
+    the turn's stream sink instead.
     """
     if not (result.persist and (result.full_response or "").strip()):
         return None
+    broadcast = bool(getattr(result, "broadcast_saved", True))
     recorded = result.tool_calls_recorded
     has_range = (
         result.tool_seq_first is not None and result.tool_seq_last is not None
@@ -108,6 +113,7 @@ def save_turn_reply(room, result, *, user_id):
                 harness_text=result.harness,
                 tools=result.tools,
                 by=user_id,
+                broadcast=broadcast,
             )
         except KaziMessageError:
             logger.warning("AI reply not saved: room key unavailable")
@@ -159,11 +165,13 @@ def save_turn_reply(room, result, *, user_id):
                 harness_text=result.harness,
                 tools=result.tools,
                 by=user_id,
+                broadcast=broadcast,
             )
         except KaziMessageError:
             logger.warning("AI reply not saved: room key unavailable")
             return None
-    broadcast_kazi_message(room, message, result.full_response)
+    if broadcast:
+        broadcast_kazi_message(room, message, result.full_response)
     return message
 
 
@@ -988,6 +996,40 @@ class TurnRunner:
                 },
             )
 
+        async def send_saved(event):
+            """Push one already-persisted message as the v1 saved frame.
+
+            This is the runner's terminal emit. It uses the layer directly so a
+            saved reply costs no extra worker hop, and a failed push never kills
+            the turn (the message is already on disk).
+            """
+            if layer is None:
+                return
+            data = event.data
+            try:
+                await layer.group_send(
+                    room_group,
+                    {
+                        "type": "ai_message_saved",
+                        "message": _default_frame(
+                            data["message"],
+                            data.get("content", ""),
+                            bool(data.get("turn_continues", False)),
+                        ),
+                    },
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Kazi message realtime push failed: %s", type(exc).__name__,
+                )
+
+        sink = build_stream_sink(
+            send_chunk,
+            send_step_event,
+            step_id=f"turn_{request.id}",
+            send_saved=send_saved,
+        )
+
         async def get_context_prompt():
             from .context_manager import ContextManager
 
@@ -1049,6 +1091,7 @@ class TurnRunner:
             history_messages=history_messages,
             claimed_turn=turn,
             continue_pause=continue_pause_cb,
+            sink=sink,
         )
         if result.turn_id:
             # Track the turn the coordinator actually ended up holding; a
@@ -1061,11 +1104,20 @@ class TurnRunner:
             )
 
         reply_saved = not (result.persist and result.full_response.strip())
+        result.broadcast_saved = False
         ai_message = await sync_to_async(save_turn_reply)(
             room, result, user_id=turn.user_id,
         )
         if ai_message is not None:
             reply_saved = True
+            await sink.emit(TurnEvent(
+                kind="saved",
+                data={
+                    "room": room,
+                    "message": ai_message,
+                    "content": result.full_response,
+                },
+            ))
             await self._maybe_voice(ai_message, turn.user_id)
             try:
                 from .context_summary import schedule_context_summary

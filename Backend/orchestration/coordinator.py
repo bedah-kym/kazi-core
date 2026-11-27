@@ -47,7 +47,13 @@ from orchestration.turn_leases import (
     turn_live,
     unregister_live_turn,
 )
-from orchestration.contracts import build_step_event
+from chatbot.stream_protocol import (
+    TEXT_CHANNEL_ANSWER,
+    TEXT_CHANNEL_HARNESS,
+    TurnEvent,
+    TurnEventSink,
+    build_stream_sink,
+)
 from orchestration.user_preferences import conservative_default_preferences, get_user_preferences
 from orchestration.action_receipts import (
     fetch_recent_receipts,
@@ -517,10 +523,37 @@ def _room_exists(room_id) -> bool:
     return Chatroom.objects.filter(pk=room_id).exists()
 
 
+@dataclass(frozen=True)
+class _SavedNotice:
+    """A turn notice that was persisted, ready to announce through the sink."""
+
+    room: Any
+    message: Any
+    content: str
+    turn_continues: bool = False
+
+
+def _saved_notice_event(notice: _SavedNotice) -> TurnEvent:
+    return TurnEvent(
+        kind="saved",
+        data={
+            "room": notice.room,
+            "message": notice.message,
+            "content": notice.content,
+            "turn_continues": notice.turn_continues,
+        },
+    )
+
+
 def _persist_turn_notice(
     room_id, text: str, *, turn_continues: bool = False, turn_id=None,
-) -> bool:
-    """Save and broadcast one harness note outside a Turn."""
+) -> Optional[_SavedNotice]:
+    """Save one harness note without broadcasting it.
+
+    The caller announces it through the turn's sink, so the saved frame and the
+    persistence are not two separate decisions. Returning the row (rather than
+    a bool) is what lets the sink carry the real message id.
+    """
     from chatbot.kazi_messages import (
         KaziMessageError,
         ORIGIN_TURN_NOTICE,
@@ -530,19 +563,22 @@ def _persist_turn_notice(
 
     room = Chatroom.objects.filter(pk=room_id).first()
     if room is None:
-        return False
+        return None
     try:
-        persist_kazi_message(
+        message = persist_kazi_message(
             room, content=text, origin=ORIGIN_TURN_NOTICE,
-            turn_continues=turn_continues, turn=turn_id,
+            turn_continues=turn_continues, turn=turn_id, broadcast=False,
         )
     except KaziMessageError:
         logger.warning("Turn notice not saved: the room key is unavailable")
-        return False
+        return None
     except Exception as exc:
         logger.warning("Turn notice not saved: %s", type(exc).__name__)
-        return False
-    return True
+        return None
+    return _SavedNotice(
+        room=room, message=message, content=text,
+        turn_continues=turn_continues,
+    )
 
 
 def _history_replays_untrusted(history_msgs: Optional[List[dict]]) -> bool:
@@ -706,6 +742,9 @@ class OrchestrationResult:
     # has saved the reply.
     turn_version: int = 0
     turn_state: str = ""
+    # The runner saves with broadcast off and emits the saved frame through the
+    # sink. Direct callers keep the old save-and-broadcast behaviour.
+    broadcast_saved: bool = True
 
 
 class OrchestrationCoordinator:
@@ -726,6 +765,7 @@ class OrchestrationCoordinator:
         history_messages: Optional[List[dict]] = None,
         claimed_turn: Optional[Any] = None,
         continue_pause: Optional[Callable[..., Awaitable[Any]]] = None,
+        sink: Optional[TurnEventSink] = None,
     ) -> OrchestrationResult:
         """Route a chat turn, stream its response, and update room/user task state.
 
@@ -757,6 +797,10 @@ class OrchestrationCoordinator:
             "ref": None, "settled": False, "hold": False, "agent_ran": False,
             "claim_status": "",
         }
+        if sink is None:
+            sink = build_stream_sink(
+                send_chunk, send_step_event, step_id=f"turn_{message_id}",
+            )
 
         async def _save_deferred_notice(*, shielded: bool = False) -> None:
             """Save the linked error notice once, best-effort.
@@ -768,9 +812,16 @@ class OrchestrationCoordinator:
             notice_turn = stream_state.get("deferred_notice_turn")
             if not (stream_state.get("deferred_notice") and notice_turn):
                 return
-            write = asyncio.ensure_future(sync_to_async(_persist_turn_notice)(
-                room_id, UNEXPECTED_ERROR_NOTICE, turn_id=notice_turn,
-            ))
+
+            async def _persist_and_announce():
+                notice = await sync_to_async(_persist_turn_notice)(
+                    room_id, UNEXPECTED_ERROR_NOTICE, turn_id=notice_turn,
+                )
+                if isinstance(notice, _SavedNotice):
+                    await sink.emit(_saved_notice_event(notice))
+                return notice
+
+            write = asyncio.ensure_future(_persist_and_announce())
             deadline = (
                 asyncio.get_running_loop().time()
                 + float(shutdown_grace_seconds())
@@ -801,6 +852,7 @@ class OrchestrationCoordinator:
                 history_messages=history_messages,
                 claimed_turn=claimed_turn,
                 continue_pause=continue_pause,
+                sink=sink,
             )
         except asyncio.CancelledError:
             # Shutdown cut this turn off. Do not let the stream-end sends
@@ -861,9 +913,12 @@ class OrchestrationCoordinator:
         history_messages: Optional[List[dict]] = None,
         claimed_turn: Optional[Any] = None,
         continue_pause: Optional[Callable[..., Awaitable[Any]]] = None,
+        sink: Optional[TurnEventSink] = None,
     ) -> OrchestrationResult:
-        turn_step_id = f"turn_{message_id}"
-        correlation_id = uuid.uuid4().hex
+        if sink is None:
+            sink = build_stream_sink(
+                send_chunk, send_step_event, step_id=f"turn_{message_id}",
+            )
 
         def _turn_id() -> str:
             ref = turn_box.get("ref")
@@ -996,7 +1051,7 @@ class OrchestrationCoordinator:
             if turn_box.get("stopped_reply_added"):
                 return
             turn_box["stopped_reply_added"] = True
-            await broadcast_chunk(STOP_ENDED_REPLY_LINE, harness=True)
+            await emit_text(STOP_ENDED_REPLY_LINE, harness=True)
 
         async def _stop_pause_edge() -> bool:
             """End a flagged Turn at a pause edge instead of showing a prompt."""
@@ -1086,7 +1141,7 @@ class OrchestrationCoordinator:
             """The 'elsewhere' line, unless the person's stop was the reason."""
             if turn_box.get("stopped"):
                 return
-            await broadcast_chunk(
+            await emit_text(
                 "This turn was already resumed elsewhere. Nothing further was run.",
                 harness=True,
             )
@@ -1156,7 +1211,7 @@ class OrchestrationCoordinator:
                 active_seconds=float(stream_state.get("active_seconds") or 0),
             )
 
-        async def broadcast_chunk(chunk_text, is_final=False, harness=False):
+        async def emit_text(chunk_text, is_final=False, harness=False, channel=""):
             # Store all chunks to build full response
             if chunk_text:
                 stream_state["full_response"].append(chunk_text)
@@ -1181,7 +1236,15 @@ class OrchestrationCoordinator:
                         stream_state["chunks"] += 1
                         stream_state["chars"] += len(joined_text)
                     try:
-                        await send_chunk(correlation_id, joined_text, is_final)
+                        await sink.emit(TurnEvent(
+                            kind="harness" if harness else "text",
+                            text=joined_text,
+                            is_final=is_final,
+                            channel=(
+                                TEXT_CHANNEL_HARNESS if harness
+                                else (channel or TEXT_CHANNEL_ANSWER)
+                            ),
+                        ))
                     except asyncio.CancelledError:
                         raise
                     except Exception as exc:
@@ -1219,15 +1282,14 @@ class OrchestrationCoordinator:
                     stream_state["last_send"] = current_time
 
         async def emit_progress(phase, state, message_text=""):
-            event_payload = build_step_event(
-                step_id=turn_step_id,
-                phase=phase,
-                state=state,
-                message=message_text,
-            )
             send_ok = True
             try:
-                await send_step_event(correlation_id, event_payload)
+                await sink.emit(TurnEvent(
+                    kind="progress",
+                    phase=phase,
+                    state=state,
+                    message=message_text,
+                ))
             except Exception as exc:
                 send_ok = False
                 logger.warning("Progress frame send failed: %s", exc.__class__.__name__)
@@ -1243,6 +1305,11 @@ class OrchestrationCoordinator:
                         "sent": send_ok,
                     },
                 )
+
+        async def announce_saved(notice) -> None:
+            """Announce a notice that was saved with broadcast off."""
+            if isinstance(notice, _SavedNotice):
+                await sink.emit(_saved_notice_event(notice))
 
         async def _end_stream():
             """Send the one ``done`` step and the one ``is_final`` chunk.
@@ -1269,7 +1336,7 @@ class OrchestrationCoordinator:
                     logger.warning(
                         "Stream end done step was cancelled by the channel layer",
                     )
-                await broadcast_chunk("", is_final=True)
+                await emit_text("", is_final=True)
 
             def _discard(task):
                 if not task.cancelled():
@@ -1613,13 +1680,48 @@ class OrchestrationCoordinator:
             _note_tool_seqs(created)
             stream_state["tool_calls_recorded"] = True
 
+        async def emit_tool_event(turn_event, state):
+            """Emit one tool fact; v1 renders its progress frame in the adapter.
+
+            Telemetry stays here so a failed progress frame is still counted, as
+            it was when the coordinator built the frame itself.
+            """
+            send_ok = True
+            try:
+                await sink.emit(turn_event)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                send_ok = False
+                logger.warning(
+                    "Progress frame send failed: %s", exc.__class__.__name__,
+                )
+            finally:
+                record_event(
+                    "progress_event",
+                    {
+                        "phase": "executing",
+                        "state": state,
+                        "room_id": room_id,
+                        "user_id": user_id,
+                        "turn_id": _turn_id(),
+                        "sent": send_ok,
+                    },
+                )
+
         async def _relay_agent_events(events):
-            """Map AgentEvents to WebSocket frames, shared by every agent run."""
+            """Map AgentEvents to typed stream events, shared by every agent run."""
             async for event in events:
                 if event.kind == "text":
-                    await broadcast_chunk(event.data.get("text", ""))
+                    await emit_text(
+                        event.data.get("text", ""),
+                        channel=event.data.get("channel") or TEXT_CHANNEL_ANSWER,
+                    )
                 elif event.kind == "text_delta":
-                    await broadcast_chunk(event.data.get("text", ""))
+                    await emit_text(
+                        event.data.get("text", ""),
+                        channel=event.data.get("channel") or TEXT_CHANNEL_ANSWER,
+                    )
                 elif event.kind == "harness":
                     text = event.data.get("text", "")
                     turn_id = _turn_id()
@@ -1632,12 +1734,29 @@ class OrchestrationCoordinator:
                         # notice already says what happened; never print the
                         # fence line for it (#216b-3, item 5).
                         continue
-                    await broadcast_chunk(text, harness=True)
+                    await emit_text(text, harness=True)
                 elif event.kind == "thinking":
                     await emit_progress("thinking", "started", "Reasoning…")
+                elif event.kind == "tool_dispatch":
+                    # v1 ignores it; the typed stream keeps the call's id and
+                    # name before the fence check (217a-2a builds on this).
+                    await sink.emit(TurnEvent(
+                        kind="tool_dispatch",
+                        name=event.data.get("name") or "action",
+                        call_id=str(event.data.get("call_id") or ""),
+                        tool_dispatch=True,
+                        data=event.data,
+                    ))
                 elif event.kind == "tool_start":
-                    tool = event.data.get("name", "action")
-                    await emit_progress("executing", "started", f"Running {tool.replace('_', ' ')}…")
+                    await emit_tool_event(
+                        TurnEvent(
+                            kind="tool_start",
+                            name=event.data.get("name") or "action",
+                            call_id=str(event.data.get("id") or ""),
+                            data=event.data,
+                        ),
+                        "started",
+                    )
                 elif event.kind == "tool_result":
                     not_run = bool(event.data.get("not_run"))
                     if not not_run:
@@ -1650,14 +1769,19 @@ class OrchestrationCoordinator:
                         iteration=event.data.get("iteration"),
                         parent_call_id=str(event.data.get("id") or ""),
                     )
-                    tool = event.data.get("name", "action")
                     result = event.data.get("result", {})
-                    status = result.get("status", "")
-                    label = f"{tool.replace('_', ' ')}: {status}"
-                    if not_run:
-                        await emit_progress("executing", "skipped", f"{label} (not run)")
-                    else:
-                        await emit_progress("executing", "completed", label)
+                    await emit_tool_event(
+                        TurnEvent(
+                            kind="tool_result",
+                            name=event.data.get("name") or "action",
+                            call_id=str(event.data.get("id") or ""),
+                            duration_ms=event.data.get("duration_ms"),
+                            status=result.get("status", ""),
+                            not_run=not_run,
+                            data=event.data,
+                        ),
+                        "skipped" if not_run else "completed",
+                    )
                 elif event.kind == "server_tool_use":
                     await _record_provider_search(
                         int(event.data.get("count") or 0),
@@ -1670,6 +1794,11 @@ class OrchestrationCoordinator:
                     if await _stop_pause_edge():
                         continue
                     pause_kind = event.data.get("pause_kind") or "approval"
+                    await sink.emit(TurnEvent(
+                        kind="paused",
+                        pause_kind=pause_kind,
+                        data=event.data,
+                    ))
                     await _advance_turn(
                         "paused",
                         pause_kind=pause_kind,
@@ -1685,12 +1814,23 @@ class OrchestrationCoordinator:
                     if await _stop_pause_edge():
                         continue
                     turn_box["new_pause_shown"] = True
-                    await broadcast_chunk(event.data.get("message", "Please confirm.") + await _autopilot_hint(), harness=True)
+                    await emit_text(event.data.get("message", "Please confirm.") + await _autopilot_hint(), harness=True)
+                    calls = event.data.get("calls") or []
+                    await sink.emit(TurnEvent(
+                        kind="confirmation",
+                        channel=TEXT_CHANNEL_HARNESS,
+                        call_id=(
+                            str(calls[0].get("call_id") or "")
+                            if calls and isinstance(calls[0], dict) else ""
+                        ),
+                        expires_at=event.data.get("expires_at"),
+                        data=event.data,
+                    ))
                     await emit_progress("validating", "completed", "Waiting for confirmation.")
                 elif event.kind == "budget_request":
                     if await _stop_pause_edge():
                         continue
-                    await broadcast_chunk(
+                    await emit_text(
                         "\n\nI've paused this turn because it needs more budget than it "
                         "has left. Reply **more budget** and I'll continue from where I "
                         "stopped.",
@@ -1708,13 +1848,14 @@ class OrchestrationCoordinator:
                         label = "Response cut short by the length limit."
                     else:
                         label = "Error encountered."
-                    await broadcast_chunk(message, harness=True)
+                    await emit_text(message, harness=True)
                     await emit_progress("executing", "completed", label)
                 elif event.kind == "done":
                     stream_state["elapsed"] = event.data.get("elapsed")
                     stream_state["active_seconds"] = event.data.get("active_seconds")
                     turn_box["end_reason"] = event.data.get("end_reason") or "finished"
                     await _finish_turn(turn_box["end_reason"])
+                    await sink.emit(TurnEvent(kind="done", data=event.data))
 
         def _agent_context(extra=None):
             context = {
@@ -1819,10 +1960,12 @@ class OrchestrationCoordinator:
                         "Autopilot arm notice not saved: %s",
                         type(exc).__name__,
                     )
-                if not saved:
-                    await broadcast_chunk(reply, harness=True)
+                if saved:
+                    await announce_saved(saved)
+                else:
+                    await emit_text(reply, harness=True)
             else:
-                await broadcast_chunk(
+                await emit_text(
                     "I couldn't arm autopilot, so nothing has changed. It needs a room on "
                     "the unsandboxed shell profile. Reply yes or no to the pending command.",
                     harness=True,
@@ -1873,15 +2016,15 @@ class OrchestrationCoordinator:
                 logger.warning("Autopilot disarm failed: %s", exc)
             user_preferences["_shell_autopilot_known"] = disarmed is not None
             if disarmed:
-                await broadcast_chunk("Autopilot disarmed for this room.\n\n", harness=True)
+                await emit_text("Autopilot disarmed for this room.\n\n", harness=True)
             elif disarmed is None and (was_armed or explicit_disarm):
-                await broadcast_chunk(
+                await emit_text(
                     "I couldn't confirm autopilot was disarmed. It is off for this message; "
                     "disarm it from the operations inbox to be sure.",
                     harness=True,
                 )
             elif explicit_disarm:
-                await broadcast_chunk("Autopilot was not armed for this room.", harness=True)
+                await emit_text("Autopilot was not armed for this room.", harness=True)
 
         deferred_directive = None
         immediate_directive = bool(explicit_disarm)
@@ -1901,7 +2044,7 @@ class OrchestrationCoordinator:
                 )
             else:
                 reply = _AUTOPILOT_NOT_ARMED_NO_PENDING_REPLY
-            await broadcast_chunk(reply, harness=True)
+            await emit_text(reply, harness=True)
             immediate_directive = True
 
         # Host grants for the sandboxed shell's egress proxy: exact replies only.
@@ -1930,7 +2073,7 @@ class OrchestrationCoordinator:
                         "I couldn't change the host approvals just now. "
                         "Nothing was changed."
                     )
-                await broadcast_chunk(reply, harness=True)
+                await emit_text(reply, harness=True)
                 immediate_directive = True
 
         handled_directive = immediate_directive or bool(host_request)
@@ -1974,7 +2117,7 @@ class OrchestrationCoordinator:
                         "turn_id": _turn_id(),
                     },
                 )
-                await broadcast_chunk(
+                await emit_text(
                     "Okay, starting fresh. What would you like to do?",
                     harness=True,
                 )
@@ -2011,7 +2154,7 @@ class OrchestrationCoordinator:
                         "I couldn't change the host approvals just now. "
                         "Nothing was changed."
                     )
-                await broadcast_chunk(reply, harness=True)
+                await emit_text(reply, harness=True)
             elif kind == "dismiss":
                 last_reason_key = f"proactive:last_reason:{room_id}:{user_id}"
                 dismissed_key = f"proactive:dismissed:{room_id}:{user_id}"
@@ -2021,7 +2164,7 @@ class OrchestrationCoordinator:
                     if last_reason not in dismissed:
                         dismissed.append(last_reason)
                         cache.set(dismissed_key, dismissed, timeout=60 * 60 * 24 * 14)
-                await broadcast_chunk(
+                await emit_text(
                     "Got it. I will stop showing that kind of suggestion here.",
                     harness=True,
                 )
@@ -2031,13 +2174,13 @@ class OrchestrationCoordinator:
                     room_id=room_id,
                     limit=3,
                 )
-                await broadcast_chunk(format_receipt_list(receipts), harness=True)
+                await emit_text(format_receipt_list(receipts), harness=True)
             elif kind == "undo":
                 undo_result = await undo_last_action(
                     user_id=user_id,
                     room_id=room_id,
                 )
-                await broadcast_chunk(
+                await emit_text(
                     undo_result.get("message") or "Okay.", harness=True,
                 )
             return False
@@ -2125,11 +2268,12 @@ class OrchestrationCoordinator:
             # notice; any other refusal keeps the fail-closed line. Acting
             # directives never run without ownership (#216b-1, items 8-9).
             if turn_box.get("claim_status") == BUSY_LIVE:
-                await sync_to_async(_persist_turn_notice)(
+                busy_notice = await sync_to_async(_persist_turn_notice)(
                     room_id, BUSY_TURN_NOTICE,
                 )
+                await announce_saved(busy_notice)
             else:
-                await broadcast_chunk(
+                await emit_text(
                     "This turn could not be recorded, so nothing was run. "
                     "Please try again.",
                     harness=True,
@@ -2234,7 +2378,7 @@ class OrchestrationCoordinator:
                         turn_id=str(paused_turn.pk) if paused_turn is not None else None,
                     )
                     if not await _adopt_paused_turn():
-                        await broadcast_chunk(
+                        await emit_text(
                             "This turn was already resumed elsewhere. "
                             "Nothing further was run.",
                             harness=True,
@@ -2251,7 +2395,7 @@ class OrchestrationCoordinator:
                             int(getattr(held_state, "iteration", 0) or 0),
                         )
                         await _refresh_turn_memory(_turn_id())
-                        await broadcast_chunk(
+                        await emit_text(
                             cancel_msg or "Okay, cancelled.", harness=True,
                         )
                     pending_handled = True
@@ -2338,12 +2482,12 @@ class OrchestrationCoordinator:
                     if still_blocked is not None:
                         if _paused_still_held():
                             turn_box["hold"] = True
-                        await broadcast_chunk(
+                        await emit_text(
                             _quota_resume_blocked_note(still_blocked),
                             harness=True,
                         )
                     elif await _resume_turn(turn_box["ref"]):
-                        await broadcast_chunk(
+                        await emit_text(
                             "The hourly token limit has freed up. Continuing from where it stopped.\n\n",
                             harness=True,
                         )
@@ -2351,7 +2495,7 @@ class OrchestrationCoordinator:
                     else:
                         await _resume_lost()
                 elif await _resume_turn(turn_box["ref"]):
-                    await broadcast_chunk("Continuing with more budget.\n\n", harness=True)
+                    await emit_text("Continuing with more budget.\n\n", harness=True)
                     await _handle_agent_budget_resume(ctx_prompt, mem_sum, env_block)
                 else:
                     await _resume_lost()
@@ -2359,7 +2503,7 @@ class OrchestrationCoordinator:
             elif is_decline_reply(query) or is_cancel_command(query):
                 # A whole-message no/stop ends the paused turn for good.
                 if not await _adopt_paused_turn():
-                    await broadcast_chunk(
+                    await emit_text(
                         "This turn was already resumed elsewhere. "
                         "Nothing further was run.",
                         harness=True,
@@ -2368,7 +2512,7 @@ class OrchestrationCoordinator:
                     clear_loop_state(room_id, user_id)
                     await _advance_turn("cancelled", end_reason="cancelled")
                     await _refresh_turn_memory(_turn_id())
-                    await broadcast_chunk(
+                    await emit_text(
                         "Okay, I've stopped there and dropped the paused work.\n\n",
                         harness=True,
                     )
@@ -2428,7 +2572,7 @@ class OrchestrationCoordinator:
                         "error_class": agent_exc.__class__.__name__,
                     },
                 )
-                await broadcast_chunk(UNEXPECTED_ERROR_NOTICE, harness=True)
+                await emit_text(UNEXPECTED_ERROR_NOTICE, harness=True)
                 await _finish_turn("error")
 
         # The harness shows a still-pending prompt last, so a bare yes answers
@@ -2440,9 +2584,9 @@ class OrchestrationCoordinator:
                 short = str(info.get("short_id") or "")
                 if short and short not in message:
                     message += f" (approval id {short})"
-                await broadcast_chunk("\n\n" + message, harness=True)
+                await emit_text("\n\n" + message, harness=True)
             elif pending_budget:
-                await broadcast_chunk(
+                await emit_text(
                     "\n\nThis turn is still paused waiting for more budget. "
                     "Reply **continue** (or grant more budget) to pick up where it "
                     "stopped, or **no** to drop it.",

@@ -330,6 +330,42 @@ class SinkRoutingTests(TransactionTestCase):
             "",
         ])
 
+    def _shown_text(self, narration, answer):
+        """The joined live text; chunk boundaries are only buffering."""
+        sink = RecordingSink()
+        self._run([
+            _text(narration, channel="narration"),
+            _text(answer, channel="answer"),
+            _done(),
+        ], sink, clock=_Clock())
+        return "".join(frame[1] for frame in sink.frames if frame[0] == "chunk")
+
+    # Newlines the model already wrote on either side of the boundary count
+    # toward the one blank line; only the missing ones are added.
+    def test_a_trailing_newline_on_narration_counts_toward_the_blank_line(self):
+        self.assertEqual(
+            self._shown_text("Checking the files.\n", "Merged them both."),
+            "Checking the files.\n\nMerged them both.",
+        )
+
+    def test_a_leading_newline_on_the_answer_counts_toward_the_blank_line(self):
+        self.assertEqual(
+            self._shown_text("Checking the files.", "\nMerged them both."),
+            "Checking the files.\n\nMerged them both.",
+        )
+
+    def test_one_newline_on_each_side_is_already_the_blank_line(self):
+        self.assertEqual(
+            self._shown_text("Checking the files.\n", "\nMerged them both."),
+            "Checking the files.\n\nMerged them both.",
+        )
+
+    def test_a_blank_line_ending_narration_gets_nothing_more(self):
+        self.assertEqual(
+            self._shown_text("Checking the files.\n\n", "Merged them both."),
+            "Checking the files.\n\nMerged them both.",
+        )
+
     def test_live_text_does_not_stack_blank_lines_before_harness_text(self):
         sink = RecordingSink()
         self._run([

@@ -96,28 +96,38 @@ class V1Adapter:
         self._step_id = step_id
         self._send_saved = send_saved or _broadcast_saved
         self.correlation_id = correlation_id or uuid.uuid4().hex
-        # The last channel v1 actually sent, so a narration flush and the
-        # answer that follows it a flush later still get their one blank line.
+        # The last channel v1 actually sent, and how many newlines its text
+        # ended with, so a narration flush and the answer that follows it a
+        # flush later still get exactly one blank line between them.
         self._last_text_channel = ""
+        self._last_text_tail_newlines = 0
 
     def _render_text(self, event: TurnEvent) -> str:
         """The v1 chunk text: one blank line after narration, nothing stacked.
 
         The loop emits each step's text as one block, so a narration segment
         is a whole part: whatever follows it, another narration part included,
-        starts after one blank line.
+        starts after one blank line. Newlines already on either side of the
+        boundary count toward it; only the missing ones are added.
         """
         if not event.segments:
             return event.text or ""
         pieces = []
         previous = self._last_text_channel
+        tail = self._last_text_tail_newlines
         for segment in event.segments:
             text = segment.text
-            if previous == TEXT_CHANNEL_NARRATION and not text.startswith("\n\n"):
-                text = "\n\n" + text
+            if not text:
+                continue
+            if previous == TEXT_CHANNEL_NARRATION:
+                lead = len(text) - len(text.lstrip("\n"))
+                text = "\n" * max(0, 2 - tail - lead) + text
+            stripped = text.rstrip("\n")
+            tail = tail + len(text) if not stripped else len(text) - len(stripped)
             pieces.append(text)
             previous = segment.channel
         self._last_text_channel = previous
+        self._last_text_tail_newlines = tail
         return "".join(pieces)
 
     async def _progress(self, phase: str, state: str, message: str) -> None:

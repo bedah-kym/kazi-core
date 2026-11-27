@@ -7,6 +7,10 @@ from users.encryption import TokenEncryption
 
 user = get_user_model()
 
+VOICE_STATUS_MARKER = "Transcribing..."
+VOICE_MESSAGE_PLACEHOLDER = "[Voice Message]"
+PINNED_NOTE_LABEL = "Pinned message"
+
 
 class Member(models.Model):
     User = models.ForeignKey(user, on_delete=models.CASCADE)

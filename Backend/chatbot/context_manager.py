@@ -10,7 +10,7 @@ from datetime import datetime, date, timedelta
 from django.conf import settings
 from django.db.models import Q
 from django.utils import timezone
-from .models import RoomContext, RoomNote, DocumentUpload, Contact
+from .models import PINNED_NOTE_LABEL, RoomContext, RoomNote, DocumentUpload, Contact
 
 logger = logging.getLogger(__name__)
 
@@ -497,6 +497,32 @@ class ContextManager:
         return text
 
     @staticmethod
+    def _pinned_message_text(note):
+        """Decrypt the message a pinned note points at, or return "" when it is gone."""
+        if not note.source_message_id:
+            return ""
+        try:
+            from .history import DECRYPT_FAILED, decrypt_stored
+            from .models import Message
+
+            room = note.room_context.chatroom
+            message = Message.objects.filter(
+                id=note.source_message_id,
+                chatroom__id=room.id,
+            ).first()
+            if message is None:
+                return ""
+            content, _payload = decrypt_stored(room, message)
+            if not content or content == DECRYPT_FAILED:
+                return ""
+            return content
+        except Exception:
+            logger.warning(
+                "Pinned note %s could not resolve its message", note.id, exc_info=True,
+            )
+            return ""
+
+    @staticmethod
     def _format_note(note):
         now = timezone.now()
         status = ""
@@ -508,10 +534,15 @@ class ContextManager:
             if untouched_days > 7:
                 status = f" (stale {untouched_days}d)"
 
+        pinned_text = ContextManager._pinned_message_text(note)
+        if note.source_message_id:
+            content = pinned_text or PINNED_NOTE_LABEL
+        else:
+            content = note.content
         return {
             "id": note.id,
             "type": note.note_type,
-            "content": ContextManager._sanitize_note_content(note.content),
+            "content": ContextManager._sanitize_note_content(content),
             "priority": note.priority,
             "status": status,
             "is_private": note.is_private,

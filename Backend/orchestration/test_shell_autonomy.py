@@ -201,7 +201,10 @@ class SubAgentTaintTests(SimpleTestCase):
             "orchestration.agent_loop._execute_with_timeout",
             new=AsyncMock(return_value={"status": "success"}),
         ) as executed:
-            blocks, _ = async_to_sync(_execute_scoped_tool_calls)(calls, {}, prefs, log if log is not None else [])
+            blocks, _ = async_to_sync(_execute_scoped_tool_calls)(
+                calls, {}, prefs, log if log is not None else [],
+                offered={call["name"] for call in calls},
+            )
         return blocks, executed
 
     def test_parent_taint_blocks_open_profile_shell(self):

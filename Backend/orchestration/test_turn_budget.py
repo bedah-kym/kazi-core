@@ -642,7 +642,7 @@ class DelegatedSpendTests(_LoopHarness):
             # The sub-run's first call spends 40 work tokens, then its second
             # call raises before it can finish.
             _make_llm_response(
-                [_tool_use_block("s1", "get_weather", {})],
+                [_tool_use_block("s1", "search_notes", {"query": "a"})],
                 stop_reason="tool_use",
                 usage={"input_tokens": 100, "output_tokens": 40},
             ),
@@ -664,6 +664,7 @@ class DelegatedSpendTests(_LoopHarness):
         # 10 (parent call 1) + 40 (sub call 1, charged despite the crash) +
         # 110 (parent call 2: 100 new input + 10 generated).
         self.assertEqual(done.data["budget_used"], 160)
+        mock_exec.assert_awaited_once()
 
     @override_settings(AGENT_TURN_TOKEN_BUDGET=100000, AGENT_TURN_TOKEN_BUDGET_MAX=500000)
     def test_a_delegated_result_with_no_tokens_charges_the_granted_share(self):

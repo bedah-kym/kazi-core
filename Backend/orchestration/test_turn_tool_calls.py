@@ -465,7 +465,7 @@ class TurnToolCallCoordinatorTests(TestCase):
                 stop_reason="tool_use",
             ),
             _response(
-                [_tool("s2", "web_search", {"query": "nairobi"})],
+                [_tool("s2", "search_notes", {"query": "nairobi"})],
                 stop_reason="tool_use",
             ),
             _response([_text("Found it.")]),
@@ -477,6 +477,7 @@ class TurnToolCallCoordinatorTests(TestCase):
         parent = TurnToolCall.objects.get(turn=self.turn, call_id="p1")
         self.assertEqual(child.provenance, "delegated")
         self.assertEqual(child.parent_call_id, "p1")
+        self.assertEqual(child.status, "ok")
         self.assertEqual(parent.provenance, "main")
 
     def test_the_provider_search_count_is_stored_on_the_turn(self):
@@ -534,7 +535,7 @@ class TurnToolCallCoordinatorTests(TestCase):
                 stop_reason="tool_use",
             ),
             _response(
-                [_tool("s2", "web_search", {"query": "nairobi"})],
+                [_tool("s2", "search_notes", {"query": "nairobi"})],
                 stop_reason="tool_use",
             ),
             _response([_text("Found it.")]),

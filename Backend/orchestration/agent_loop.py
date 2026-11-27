@@ -37,7 +37,7 @@ from orchestration.security_policy import (
 from orchestration.telemetry import record_event
 from orchestration.tool_executor import execute_tool, get_tool_risk_info, preview_tool
 from orchestration.tool_record import tool_record_input
-from orchestration.tool_schemas import get_tool_definitions
+from orchestration.tool_schemas import get_tool_definitions, native_search_allowed
 from orchestration.user_preferences import enforce_agent_caps
 
 logger = logging.getLogger(__name__)
@@ -1246,6 +1246,7 @@ def _non_run_event(
 
 
 NOT_STARTED_REASON = "the turn ended before this call started"
+NOT_OFFERED_REASON = "Refused: {name} is not one of the tools offered for this task, so it was not run."
 
 
 def _dispatch_event(tc: Dict[str, Any], iteration: int) -> AgentEvent:
@@ -2255,12 +2256,17 @@ async def _execute_scoped_tool_calls(
     persona=None,
     fence_check=None,
     lease_lost: Optional[List[bool]] = None,
+    *,
+    offered,
 ) -> Tuple[List[Dict[str, Any]], bool]:
     """Execute one response's tool_use batch under the sub-agent cap.
 
     The cap is enforced mid-batch — a single response can carry many
     tool_use blocks, and only checking between iterations let one batch
     blow far past the limit. Returns (result_blocks, capped).
+
+    ``offered`` is the set of tool names sent to the model for this request;
+    a call to any other name is refused before it can run.
     """
     result_blocks = []
     effective_cap = tool_call_cap or SUB_AGENT_MAX_TOOL_CALLS
@@ -2281,9 +2287,12 @@ async def _execute_scoped_tool_calls(
         # Sub-agents cannot pause for confirmation; block anything that would.
         # Persona scope and receipts are the same as in the main loop.
         run_tainted = tainted
-        auto, _pause, denied = _bucket_tool_calls(
-            [tc], preferences, persona=persona, tainted=run_tainted,
-        )
+        if tc["name"] not in offered:
+            auto, denied = [], [(tc, NOT_OFFERED_REASON.format(name=tc["name"]))]
+        else:
+            auto, _pause, denied = _bucket_tool_calls(
+                [tc], preferences, persona=persona, tainted=run_tainted,
+            )
         if _untrusted_source(tc["name"]):
             tainted = True
         executed = False
@@ -2394,6 +2403,16 @@ async def _run_sub_agent(
             "stopped_reason": "persona_lookup_failed",
             HARNESS_REFUSAL_KEY: True,
         }
+    # Native search runs server-side, so the scope check above every other
+    # call never sees it: drop it here when the room's bounds exclude search.
+    persona_scope = list(persona.tool_scope) if persona is not None and persona.tool_scope else None
+    sub_system = parent_system
+    if not native_search_allowed(preferences or {}, persona_scope):
+        kept = [t for t in scoped_tools if t.get("name") != "web_search"]
+        if len(kept) < len(scoped_tools) and not any(t.get("name") == "search_info" for t in kept):
+            # The parent's prompt was written with search offered; say it is gone.
+            sub_system = parent_system + "\n\n" + NO_SEARCH_TOOL_NOTE
+        scoped_tools = kept
     prev_input_tokens = 0
 
     while iteration < HARD_CAP_ITERATIONS:
@@ -2421,7 +2440,7 @@ async def _run_sub_agent(
         try:
             response = await llm.create_message(
                 messages=sub_messages,
-                system=parent_system,
+                system=sub_system,
                 tools=tools_this_call if tools_this_call else None,
                 temperature=0.3,
                 max_tokens=4096,
@@ -2477,6 +2496,7 @@ async def _run_sub_agent(
                 tool_call_cap=tool_call_cap, persona=persona,
                 fence_check=lambda: _context_lease_live(context),
                 lease_lost=child_lease_lost,
+                offered=frozenset(t.get("name") for t in tools_this_call or []),
             )
             sub_messages.append({"role": "user", "content": result_blocks})
             if child_lease_lost:
@@ -2784,7 +2804,10 @@ async def run_agent_loop(
     if not any(t.get("name") == REQUEST_MORE_BUDGET_TOOL for t in tools):
         tools.append(next(t for t in META_TOOL_DEFINITIONS if t["name"] == REQUEST_MORE_BUDGET_TOOL))
 
-    if not persona_unavailable and native_search:
+    if (
+        not persona_unavailable and native_search
+        and native_search_allowed(user_caps, persona_tool_scope)
+    ):
         if preferences:
             loc = preferences.get("location")
             tz = preferences.get("timezone")

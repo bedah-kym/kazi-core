@@ -38,6 +38,11 @@ def _tool_use_response(count, name="get_weather"):
     }
 
 
+def _offer(*names):
+    """Tool definitions for the names a delegated run is given."""
+    return [{"name": n, "description": n, "input_schema": {"type": "object"}} for n in names]
+
+
 def _end_turn():
     return {"content": [{"type": "text", "text": "done"}], "stop_reason": "end_turn", "usage": {}}
 
@@ -64,6 +69,7 @@ class DelegatedReceiptTests(SimpleTestCase):
         with _Harness() as h:
             async_to_sync(_execute_scoped_tool_calls)(
                 [_call("get_weather", {"city": "Nairobi"})], WHO, None, [],
+                offered={"get_weather"},
             )
         h.executed.assert_awaited_once()
         h.receipt.assert_awaited_once()
@@ -74,6 +80,7 @@ class DelegatedReceiptTests(SimpleTestCase):
         with _Harness() as h:
             async_to_sync(_execute_scoped_tool_calls)(
                 [_call("run_command", {"command": "ls"})], WHO, OPEN_PROFILE, [],
+                offered={"run_command"},
             )
         h.executed.assert_awaited_once()
         self.assertEqual(h.receipt.await_args.kwargs["basis"], "open_profile")
@@ -83,6 +90,7 @@ class DelegatedReceiptTests(SimpleTestCase):
         with _Harness() as h:
             async_to_sync(_execute_scoped_tool_calls)(
                 [_call("run_command", {"command": "ls"})], WHO, prefs, [],
+                offered={"run_command"},
             )
         h.executed.assert_not_called()
         h.receipt.assert_not_called()
@@ -94,6 +102,7 @@ class DelegatedReceiptTests(SimpleTestCase):
                 self.assertLogs("orchestration.agent_loop", level="WARNING") as logs:
             blocks, _ = async_to_sync(_execute_scoped_tool_calls)(
                 [_call("run_command", {"command": "ls"})], WHO, OPEN_PROFILE, [],
+                offered={"run_command"},
             )
         store_down.assert_awaited_once()
         self.assertIn("Action receipt not recorded for run_command", logs.output[0])
@@ -114,6 +123,7 @@ class DelegatedReceiptRowTests(TestCase):
             async_to_sync(_execute_scoped_tool_calls)(
                 [_call("run_command", {"command": "ls"})],
                 {"user_id": self.user.id, "room_id": None}, OPEN_PROFILE, [],
+                offered={"run_command"},
             )
 
         receipt = ActionReceipt.objects.get(user_id=self.user.id)
@@ -132,6 +142,7 @@ class DelegatedPersonaTests(SimpleTestCase):
         with _Harness() as h:
             blocks, _ = async_to_sync(_execute_scoped_tool_calls)(
                 [_call("get_weather", {"city": "Nairobi"})], WHO, None, [],
+                offered={"get_weather"},
                 persona=self._email_only_persona(),
             )
         h.executed.assert_not_called()
@@ -145,7 +156,7 @@ class DelegatedPersonaTests(SimpleTestCase):
         with _Harness() as h, \
                 patch("orchestration.agent_loop.get_llm_client", return_value=llm), \
                 patch("orchestration.agent_loop._resolve_persona", new=AsyncMock(return_value=persona)) as resolve:
-            async_to_sync(_run_sub_agent)({"task": "check the weather"}, dict(WHO), None, "system", [])
+            async_to_sync(_run_sub_agent)({"task": "check the weather"}, dict(WHO), None, "system", _offer("get_weather"))
         return h, resolve
 
     def test_a_delegated_run_resolves_and_applies_the_room_persona(self):
@@ -167,7 +178,7 @@ class DelegatedCapTests(SimpleTestCase):
         with _Harness() as h, \
                 patch("orchestration.agent_loop.get_llm_client", return_value=llm), \
                 patch("orchestration.agent_loop._resolve_persona", new=AsyncMock(return_value=None)):
-            result = async_to_sync(_run_sub_agent)(tool_input, context, None, "system", [])
+            result = async_to_sync(_run_sub_agent)(tool_input, context, None, "system", _offer("get_weather"))
         return result, h
 
     def test_the_model_cannot_raise_its_own_tool_call_cap(self):
@@ -223,7 +234,7 @@ class DelegatedSearchTaintTests(SimpleTestCase):
                 patch("orchestration.agent_loop._resolve_persona", new=AsyncMock(return_value=None)), \
                 patch("orchestration.agent_loop._record_search_usage") as counted:
             async_to_sync(_run_sub_agent)(
-                {"task": "research and email"}, dict(WHO), dict(self.AUTO_EMAIL), "system", [],
+                {"task": "research and email"}, dict(WHO), dict(self.AUTO_EMAIL), "system", _offer("send_email"),
             )
         return h, counted
 
@@ -257,7 +268,7 @@ class DelegatedSearchTaintTests(SimpleTestCase):
                 patch("orchestration.agent_loop._resolve_persona", new=AsyncMock(return_value=None)), \
                 patch("orchestration.agent_loop._record_search_usage"):
             async_to_sync(_run_sub_agent)(
-                {"task": "research and email"}, dict(WHO), dict(self.AUTO_EMAIL), "system", [],
+                {"task": "research and email"}, dict(WHO), dict(self.AUTO_EMAIL), "system", _offer("send_email"),
             )
 
         self.assertEqual(llm.create_message.await_count, 3)
@@ -274,7 +285,7 @@ class DelegatedLengthLimitTests(SimpleTestCase):
                 patch("orchestration.agent_loop.get_llm_client", return_value=llm), \
                 patch("orchestration.agent_loop._resolve_persona", new=AsyncMock(return_value=None)):
             result = async_to_sync(_run_sub_agent)(
-                {"task": "write a long file"}, dict(WHO), None, "system", [],
+                {"task": "write a long file"}, dict(WHO), None, "system", _offer("get_weather"),
             )
         return result, h
 
@@ -428,6 +439,7 @@ class DelegatedScopedSerializationTests(SimpleTestCase):
                 patch("orchestration.agent_loop.record_event"):
             blocks, _ = async_to_sync(_execute_scoped_tool_calls)(
                 [_call("delegate_task", {"task": "write"})], dict(WHO), None, [],
+                offered={"delegate_task"},
             )
 
         content = blocks[0]["content"]

@@ -116,7 +116,7 @@ window.KAZI_ARCH = {
         {"id": "agentloop", "x": 760, "y": 400, "kind": "module", "label": "Agent loop", "sub": "agent_loop.py (protected)", "zoom": "loop",
          "role": "Think, act, observe until the model ends the turn or a bound stops it.",
          "refs": [{"file": "Backend/orchestration/agent_loop.py", "symbol": "run_agent_loop"}],
-          "facts": ["Turn budget 100,000 work tokens (max 500,000)", "Yields AgentEvents: text, text_delta, harness, thinking, tool_start, tool_result, server_tool_use, confirmation, budget_request, paused, error, done", "A call that did not run still yields a tool_result-shaped event with its status and reason"]},
+          "facts": ["Turn budget 100,000 work tokens (max 500,000)", "Yields AgentEvents: text, text_delta (channel narration or answer), harness, thinking, tool_dispatch, tool_start, tool_result, server_tool_use, confirmation, budget_request, paused, error, done", "tool_dispatch announces each call with its id before the fence check; a fenced call gets a not_started result", "A call that did not run still yields a tool_result-shaped event with its status and reason"]},
         {"id": "llmclient", "x": 940, "y": 230, "kind": "module", "label": "LLM client", "sub": "llm_client.py",
          "role": "Provider abstraction; hourly work-token quota; date stamp; prompt cache.",
          "refs": [{"file": "Backend/orchestration/llm_client.py", "symbol": "_check_token_quota"}, {"file": "Backend/orchestration/llm_client.py", "symbol": "_create_with_provider"}],

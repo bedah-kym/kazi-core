@@ -231,6 +231,13 @@ class LoopFactsTests(SimpleTestCase):
                 confirmed_tool=True,
             )
         self.assertEqual(order, [("dispatch", "p1"), ("run", "send_email")])
+        # What runs is exactly the input the person approved.
+        self.executor.assert_awaited_once()
+        name, tool_input, context = self.executor.await_args.args
+        self.assertEqual(
+            (name, tool_input, context.get("user_id")),
+            ("send_email", {"to": "a@example.com", "body": "hi"}, 1),
+        )
 
     def test_an_approved_resume_fenced_on_the_announcement_runs_nothing(self):
         live = {"value": True}

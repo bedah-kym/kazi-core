@@ -16,12 +16,10 @@ from chatbot.models import (
     VOICE_STATUS_MARKER,
     Message,
     RoomNote,
+    is_legacy_pinned_preview,
 )
 
 BATCH_SIZE = 200
-LEGACY_PINNED_NOTE_PREFIX = "Pinned message: "
-LEGACY_PINNED_NOTE_SUFFIX = "..."
-LEGACY_PINNED_NOTE_MAX_TEXT = 100
 
 
 def _is_encrypted(raw):
@@ -30,19 +28,6 @@ def _is_encrypted(raw):
     except (TypeError, ValueError):
         return False
     return isinstance(parsed, dict) and "data" in parsed and "nonce" in parsed
-
-
-def _is_legacy_pinned_content(content):
-    if not isinstance(content, str):
-        return False
-    if not content.startswith(LEGACY_PINNED_NOTE_PREFIX):
-        return False
-    if not content.endswith(LEGACY_PINNED_NOTE_SUFFIX):
-        return False
-    limit = len(LEGACY_PINNED_NOTE_PREFIX) + LEGACY_PINNED_NOTE_MAX_TEXT + len(
-        LEGACY_PINNED_NOTE_SUFFIX
-    )
-    return len(content) <= limit
 
 
 def _voice_plaintext(message):
@@ -123,8 +108,11 @@ class Command(BaseCommand):
                 if not note.source_message_id:
                     continue
                 content = note.content or ""
-                legacy = _is_legacy_pinned_content(content)
-                if content != PINNED_NOTE_LABEL and not legacy:
+                legacy = is_legacy_pinned_preview(
+                    content, note.source_message_content
+                )
+                classified_kept = content != PINNED_NOTE_LABEL and not legacy
+                if classified_kept:
                     note_kept += 1
                 needs_source_clear = bool(note.source_message_content)
                 if not needs_source_clear and not legacy:
@@ -137,8 +125,13 @@ class Command(BaseCommand):
                     updates["source_message_content"] = ""
                 if legacy:
                     updates["content"] = PINNED_NOTE_LABEL
-                RoomNote.objects.filter(pk=note.pk).update(**updates)
-                note_fixed += 1
+                changed = RoomNote.objects.filter(
+                    pk=note.pk, content=content
+                ).update(**updates)
+                if changed:
+                    note_fixed += 1
+                elif not classified_kept:
+                    note_kept += 1
 
         if dry_run:
             self.stdout.write(

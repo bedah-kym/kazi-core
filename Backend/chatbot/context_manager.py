@@ -10,7 +10,15 @@ from datetime import datetime, date, timedelta
 from django.conf import settings
 from django.db.models import Q
 from django.utils import timezone
-from .models import PINNED_NOTE_LABEL, Message, RoomContext, RoomNote, DocumentUpload, Contact
+from .models import (
+    PINNED_NOTE_LABEL,
+    Message,
+    RoomContext,
+    RoomNote,
+    DocumentUpload,
+    Contact,
+    is_legacy_pinned_preview,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -583,22 +591,31 @@ class ContextManager:
                 status = f" (stale {untouched_days}d)"
 
         if note.source_message_id:
-            if pinned_contents is None:
-                pinned_text = ContextManager._pinned_message_text(note)
-            else:
-                raw_content = pinned_contents.get(note.source_message_id, {}).get(
-                    note.room_context.chatroom_id
+            unedited = (
+                note.content == PINNED_NOTE_LABEL
+                or is_legacy_pinned_preview(
+                    note.content, note.source_message_content
                 )
-                pinned_text = (
-                    ContextManager._decrypt_stored_content(
-                        note.room_context.chatroom, raw_content
-                    )
-                    if raw_content is not None else ""
-                )
-            content = (
-                ContextManager._bound_pinned_text(pinned_text)
-                if pinned_text else PINNED_NOTE_LABEL
             )
+            if not unedited:
+                content = note.content
+            else:
+                if pinned_contents is None:
+                    pinned_text = ContextManager._pinned_message_text(note)
+                else:
+                    raw_content = pinned_contents.get(note.source_message_id, {}).get(
+                        note.room_context.chatroom_id
+                    )
+                    pinned_text = (
+                        ContextManager._decrypt_stored_content(
+                            note.room_context.chatroom, raw_content
+                        )
+                        if raw_content is not None else ""
+                    )
+                content = (
+                    ContextManager._bound_pinned_text(pinned_text)
+                    if pinned_text else PINNED_NOTE_LABEL
+                )
         else:
             content = note.content
         return {

@@ -9,7 +9,14 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 from .history import DECRYPT_FAILED, decrypt_stored
-from .models import VOICE_MESSAGE_PLACEHOLDER, VOICE_STATUS_MARKER, Chatroom, Message, Member
+from .models import (
+    VOICE_MESSAGE_PLACEHOLDER,
+    VOICE_STATUS_MARKER,
+    VOICE_TRANSCRIPTION_FAILED_MARKER,
+    Chatroom,
+    Message,
+    Member,
+)
 from .tasks import transcribe_voice_note
 
 logger = logging.getLogger(__name__)
@@ -95,6 +102,8 @@ def get_voice_status(request, message_id):
         content, _payload = decrypt_stored(room, message)
         if content and content != DECRYPT_FAILED and content != VOICE_MESSAGE_PLACEHOLDER:
             transcript = content
+        elif message.voice_transcript == VOICE_TRANSCRIPTION_FAILED_MARKER:
+            transcript = VOICE_TRANSCRIPTION_FAILED_MARKER
         else:
             transcript = VOICE_STATUS_MARKER
 

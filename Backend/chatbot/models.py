@@ -8,8 +8,28 @@ from users.encryption import TokenEncryption
 user = get_user_model()
 
 VOICE_STATUS_MARKER = "Transcribing..."
+VOICE_TRANSCRIPTION_FAILED_MARKER = "Transcription failed"
 VOICE_MESSAGE_PLACEHOLDER = "[Voice Message]"
 PINNED_NOTE_LABEL = "Pinned message"
+
+LEGACY_PINNED_NOTE_PREFIX = "Pinned message: "
+LEGACY_PINNED_NOTE_MAX_TEXT = 100
+LEGACY_PINNED_NOTE_SUFFIX = "..."
+
+
+def legacy_pinned_preview(source_message_content):
+    if not source_message_content:
+        return ""
+    return (
+        f"{LEGACY_PINNED_NOTE_PREFIX}"
+        f"{source_message_content[:LEGACY_PINNED_NOTE_MAX_TEXT]}"
+        f"{LEGACY_PINNED_NOTE_SUFFIX}"
+    )
+
+
+def is_legacy_pinned_preview(content, source_message_content):
+    preview = legacy_pinned_preview(source_message_content)
+    return bool(preview) and content == preview
 
 
 class Member(models.Model):

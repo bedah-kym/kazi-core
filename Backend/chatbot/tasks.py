@@ -11,6 +11,7 @@ from asgiref.sync import async_to_sync
 from typing import Optional, Dict, Any, Tuple
 from .models import (
     VOICE_STATUS_MARKER,
+    VOICE_TRANSCRIPTION_FAILED_MARKER,
     Message,
     Chatroom,
     ModerationBatch,
@@ -277,8 +278,7 @@ def transcribe_voice_note(self, message_id):
             "voice": True,
         })
         if encrypted is None:
-            logger.warning("Voice transcription could not be encrypted for message %s", message.id)
-            return "Encryption unavailable"
+            raise RuntimeError("voice transcription could not be encrypted")
 
         message.content = json.dumps(encrypted)
         message.voice_transcript = VOICE_STATUS_MARKER
@@ -301,6 +301,16 @@ def transcribe_voice_note(self, message_id):
         return transcript.text
     except Exception as e:
         logger.error(f"Transcription error: {e}")
+        if (
+            self.max_retries is not None
+            and self.request.retries >= self.max_retries
+        ):
+            try:
+                Message.objects.filter(id=message_id).update(
+                    voice_transcript=VOICE_TRANSCRIPTION_FAILED_MARKER
+                )
+            except Exception:
+                logger.exception("Could not record voice transcription failure")
         raise self.retry(exc=e)
 
 

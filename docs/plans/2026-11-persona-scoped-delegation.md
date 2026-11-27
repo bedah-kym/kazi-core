@@ -2,6 +2,9 @@
 
 Status: draft for maintainer approval
 
+Phase 0 progress (2026-11-27): 0b and 0d are fixed in #322. 0a was already a known
+item; 0a and 0c land in v0.8 with the work that gives handoffs a governed entry point.
+
 Builds on #203 (personas) and #137 (handoffs). Scheduled after v0.8 (epic
 #227), except Phase 0, which may land alongside v0.8 (see §Working beside v0.8).
 No issue is filed yet; each phase becomes one issue and one PR once approved.
@@ -70,7 +73,7 @@ the persona up by `(room, user)`. The target persona's risk ceiling, approval
 boundary, identity and skills are never applied; only its tool scope reaches
 the run, as the tool list.
 
-**Bug 0b: sub-agent tool scope is checked after execution.**
+**Bug 0b: sub-agent tool scope is checked after execution.** Fixed in #322.
 `_execute_scoped_tool_calls` receives no allowlist. A tool call outside the
 offered tools runs if the room persona (or no persona) allows it, and
 `run_handoff` marks the outcome `denied` only after the run. The same gap
@@ -83,7 +86,7 @@ delegated `TurnToolCall` row gets the parent `delegate_task` call's receipt
 Delegated records also hard-code `not_run: False`, so a call the harness
 refused is stored as `error`, as if it ran.
 
-**Bug 0d: native search ignores persona scope.**
+**Bug 0d: native search ignores persona scope.** Fixed in #322.
 Native (provider-side) `web_search` runs without passing through
 `_bucket_tool_calls`. The main loop adds it to the offered tools without
 checking the room persona's scope (the `web_search_tool` step after
@@ -306,6 +309,7 @@ T-B2 #221, T-B4 #223, T-C1–C3 #224–226. T-B3 #222 and T-A4 #219 are closed.
 ## Open questions for the human
 
 1. Phase 0: a separate issue now, or folded into v0.8 as a hardening item?
+   Answered: folded into v0.8. 0b and 0d shipped in #322; 0a and 0c follow.
 2. Default for `AGENT_MAX_PARALLEL_DELEGATIONS`: 3, or 1 until Phase 2's
    telemetry gives real numbers?
 3. Should Phase 1 ship with example scopes for Researcher (web), Operator

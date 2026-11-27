@@ -1,7 +1,9 @@
 # Encryption at rest: review, small fixes, and the crypto for blind search
 
 **Date:** 2026-11-26
-**Status:** proposal, not filed. No code changed.
+**Status:** proposal, not filed. E1 and E2 are fixed in #321 (2026-11-27). Existing
+installs clean old rows with `python Backend/manage.py fix_chat_text_encryption` (run it with
+`--dry-run` first). The rest is open.
 **Targets:** home labs first, small VPS hosts second.
 **Basis labels:** `[Verified]` = read in this repo at commit `961596e` or measured;
 `[Known]` = from general crypto knowledge, not re-checked here; `[Analysis]` = design judgment.
@@ -60,8 +62,8 @@ The gaps are around the scheme, not in it:
 
 | # | Finding | Where | Severity |
 |---|---|---|---|
-| E1 | Voice messages overwrite the encrypted `Message.content` with the plaintext transcript, and `voice_transcript` is plaintext too. History passes non-JSON content through as legacy plaintext. | `chatbot/tasks.py:268-270`, `chatbot/history.py:43-47` `[Verified]` | High: chat text readable in a dump |
-| E2 | Pinning stores client-supplied message text in plaintext: in full in `RoomNote.source_message_content`, and the first 100 characters in `RoomNote.content`. The text comes from `request.data`. It is never checked against the stored message, and the message is not checked to belong to the room. | `chatbot/message_actions.py:93-123` `[Verified]` | High |
+| E1 | Voice messages overwrite the encrypted `Message.content` with the plaintext transcript, and `voice_transcript` is plaintext too. History passes non-JSON content through as legacy plaintext. | `chatbot/tasks.py:268-270`, `chatbot/history.py:43-47` `[Verified]` | High: chat text readable in a dump. **Fixed in #321.** |
+| E2 | Pinning stores client-supplied message text in plaintext: in full in `RoomNote.source_message_content`, and the first 100 characters in `RoomNote.content`. The text comes from `request.data`. It is never checked against the stored message, and the message is not checked to belong to the room. | `chatbot/message_actions.py:93-123` `[Verified]` | High. **Fixed in #321.** |
 | E3 | Derived data is plaintext: `RoomContext.summary` and `memory_*`, `RoomNote.content`, `DailySummary`, `Reminder.content`, `DocumentUpload.processed_text`, `AIConversation.context`. | `chatbot/models.py` `[Verified]` | Medium: leaks the gist of rooms. Larger job (Phase 3). |
 | E3b | `ActionReceipt.params/result` are plaintext, cut to 160 characters (`action_receipts.py:116-139`). They duplicate what `TurnToolCall.input_enc` encrypts. Receipts are append-only (non-negotiable 4), so any fix is forward-only. | `orchestration/models.py:196-202` | Medium; needs a maintainer decision |
 | E3c | Media on disk is plaintext: voice notes, TTS audio and uploaded documents. | `chatbot/voice_views.py:40-48`, `chatbot/tasks.py:351` (per review; not opened by hand) | Medium; out of scope here, named so it isn't forgotten |
@@ -93,8 +95,8 @@ When each step can land:
 | Step | Files | Can land |
 |---|---|---|
 | Phase 0 | `users/encryption.py`, `users/integrations_views.py`, one fail-closed fix in `chatbot/models.py` (`Chatroom.save`), a new management command, tests, docs | Now: no open v0.8 issue touches these |
-| E1 fix | `chatbot/tasks.py`, `kazi_messages.py` | After T-A2/T-A3 and T-B4 |
-| E2 fix | `message_actions.py`, `RoomNote` | After T-C1/T-C3 |
+| E1 fix | `chatbot/tasks.py`, `kazi_messages.py` | Done in #321 |
+| E2 fix | `message_actions.py`, `RoomNote` | Done in #321 |
 | F-80 index | new table | Not in v0.8: it is Phase 4b of the redesign and needs a migration and a plan |
 
 ## 4. Phased plan (each step one small PR)
@@ -156,7 +158,7 @@ Once `--verify` reports zero legacy rows, the `SECRET_KEY` fallback (E7) can be 
 
 ### Phase 1 — gated as in §3
 
-**5. Close E1.**
+**5. Close E1.** Done in #321.
 
 - Put the transcript in the encrypted payload (`{"content": transcript, "voice": true}`) via
   `encrypt_content_for_room`.
@@ -164,7 +166,7 @@ Once `--verify` reports zero legacy rows, the `SECRET_KEY` fallback (E7) can be 
 - Fix existing rows with a management command, in batches. A data migration also works but
   is a protected path, so it needs a plan.
 
-**6. Close E2.**
+**6. Close E2.** Done in #321, including the cleanup command for old rows.
 
 - Pinning loads the message filtered by both id and the authorised room.
 - It reads the content by decrypting the stored message server-side and ignores the text

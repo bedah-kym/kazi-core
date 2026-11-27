@@ -616,6 +616,8 @@ class StreamEndingFramesTests(TransactionTestCase):
             self._reasoning(),
             self._echo("@kazi stop"),
             self._saved(STOP_NOTICE),
+            # 217a-1a: the announced call is answered "not started".
+            self._step("executing", "skipped", "get weather: not_started (not run)"),
             self._stream(STOP_ENDED_REPLY_LINE.lstrip()),
             self._done(),
             self._stream("", is_final=True),
@@ -1014,6 +1016,8 @@ class StreamEndingFramesTests(TransactionTestCase):
             self._echo("@kazi weather"),
             self._thinking(),
             self._reasoning(),
+            # 217a-1a: the announced call is answered "not started".
+            self._step("executing", "skipped", "get weather: not_started (not run)"),
             self._stream(LEASE_LOST_NOTE),
             self._done(),
             self._stream("", is_final=True),

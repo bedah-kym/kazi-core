@@ -867,7 +867,10 @@ class UnknownStopReasonTests(_AgentLoopTestBase):
         self.assertEqual(mock_llm.create_message.await_count, 1)
         texts = "".join(e.data.get("text", "") for e in events if e.kind == "text_delta")
         self.assertIn("I can't help with that.", texts)
-        self.assertIn("declined", texts)
+        # 217a-1a: the refusal note is the harness's line, not model text.
+        notes = "".join(e.data.get("text", "") for e in events if e.kind == "harness")
+        self.assertIn("declined", notes)
+        self.assertNotIn("declined", texts)
 
     @patch("orchestration.agent_loop.get_llm_client")
     @patch("orchestration.agent_loop.cache")

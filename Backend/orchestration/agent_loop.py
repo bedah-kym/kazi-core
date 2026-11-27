@@ -83,6 +83,8 @@ MIN_DELEGATED_BUDGET = 5000
 # back unchanged so the model can finish. A provider that pauses forever must
 # still end, so cap the run of consecutive pauses.
 MAX_CONSECUTIVE_PAUSES = 3
+# A step that ends in a tool call (or a provider pause) is not the answer yet.
+NARRATION_STOP_REASONS = frozenset({"tool_use", "pause_turn"})
 MAX_RETRIES_PER_TOOL = 2
 TOOL_TIMEOUT_SECONDS = 30
 RETRY_BACKOFF_CAP_SECONDS = 300
@@ -1241,6 +1243,31 @@ def _non_run_event(
         "iteration": iteration,
         "not_run": True,
     })
+
+
+NOT_STARTED_REASON = "the turn ended before this call started"
+
+
+def _dispatch_event(tc: Dict[str, Any], iteration: int) -> AgentEvent:
+    """Announce a call that is about to be dispatched, before the fence (#217a).
+
+    The v1 frames ignore it; the typed stream turns it into ``tool.started``.
+    It is followed by one ``tool_result`` for the same id: the real result, or
+    a not-run result when the fence stops the batch. Two endings leave it
+    unanswered: a harness error inside ``_run_safe`` itself (logged; it has
+    never produced a result), and a shutdown cancelling the run. A stream
+    consumer closes any call still open when the turn ends.
+    """
+    return AgentEvent("tool_dispatch", {
+        "call_id": str(tc.get("id") or ""),
+        "name": tc.get("name", ""),
+        "input": tc.get("input", {}),
+        "iteration": iteration,
+    })
+
+
+def _elapsed_ms(started: float) -> int:
+    return max(0, int(round((time.monotonic() - started) * 1000)))
 
 
 def _dedup_key(name: str, tool_input: Dict[str, Any]) -> str:
@@ -2804,12 +2831,27 @@ async def run_agent_loop(
         held = list(state.pending_tools or [state.pending_tool])
         gated_blocks: Dict[str, Dict[str, Any]] = {}
         for pending in held:
+            call_id = str(pending.get("id") or "")
+            # A call that will really be dispatched is announced before the
+            # fence check (#217a, R-H1). One dispatched before a restart, or
+            # refused for an unavailable persona, never starts again.
+            will_dispatch = not (
+                (call_id and call_id in state.dispatched_calls)
+                or persona_unavailable
+            )
+            if will_dispatch:
+                yield _dispatch_event(pending, state.iteration)
             if not _lease_live():
                 state.end_reason = "lease_lost"
                 lease_lost_before_loop = True
+                if will_dispatch:
+                    yield _non_run_event(
+                        pending, "not_started", NOT_STARTED_REASON,
+                        state.iteration,
+                    )
                 yield AgentEvent("harness", {"text": LEASE_LOST_NOTE})
                 break
-            call_id = str(pending.get("id") or "")
+            duration_ms = None
             if call_id and call_id in state.dispatched_calls:
                 result = {
                     "status": "error",
@@ -2828,15 +2870,19 @@ async def run_agent_loop(
                 state.dispatched_calls.append(call_id)
                 marker_ok = await _refresh_dispatched_marker(context, state)
                 if not marker_ok:
+                    # The marker write lost its version check: in effect a
+                    # fence. The announced call never ran (#217a).
                     state.dispatched_calls.remove(call_id)
                     result = {
-                        "status": "error",
+                        "status": "not_started",
+                        "not_run": True,
                         "message": (
                             "could not record this call as dispatched safely, "
                             "so nothing was run."
                         ),
                     }
                 else:
+                    started = time.monotonic()
                     if pending["name"] in _META_TOOL_NAMES:
                         meta_context = _meta_tool_context(pending["name"], context, state)
                         granted = _granted_sub_budget(meta_context)
@@ -2849,6 +2895,7 @@ async def run_agent_loop(
                         result = await _execute_with_timeout(
                             pending["name"], pending["input"], context,
                         )
+                    duration_ms = _elapsed_ms(started)
                     if pending["name"] == "delegate_task":
                         _apply_delegated_spend(state, result, granted)
                     if _untrusted_source(pending["name"]):
@@ -2879,6 +2926,8 @@ async def run_agent_loop(
                 "delegated_calls": delegated_calls,
                 "server_tool_uses": server_tool_uses,
                 "receipt_id": receipt_id,
+                "duration_ms": duration_ms,
+                "not_run": bool(result.get("not_run")),
             })
             gated_blocks[call_id] = {
                 "type": "tool_result",
@@ -3219,7 +3268,7 @@ async def run_agent_loop(
             and state.tokens_used >= state.token_budget * TURN_TOKEN_WARNING_RATIO
         ):
             state.budget_warning_sent = True
-            yield AgentEvent("text_delta", {
+            yield AgentEvent("harness", {
                 "text": "\n\n*(Running low on this request's budget.)*\n\n",
             })
 
@@ -3249,7 +3298,21 @@ async def run_agent_loop(
         # ---- Emit the model's text as one block ---------------------- #
         text = redact_sensitive_text(_extract_text(content_blocks))
         if text:
-            yield AgentEvent("text_delta", {"text": text})
+            # Text written before a tool step is narration; anything else is
+            # the answer. Only the loop knows the stop reason (#217a, E6). A
+            # step that asks for more budget ends the turn, so its text is the
+            # answer the user reads.
+            narration = (
+                stop_reason in NARRATION_STOP_REASONS
+                and not any(
+                    tc["name"] == REQUEST_MORE_BUDGET_TOOL
+                    for tc in _extract_tool_calls(content_blocks)
+                )
+            )
+            yield AgentEvent("text_delta", {
+                "text": text,
+                "channel": "narration" if narration else "answer",
+            })
 
         # ---- If LLM is done talking, exit the loop ------------------- #
         if stop_reason == "end_turn":
@@ -3357,7 +3420,9 @@ async def run_agent_loop(
                          and tc["input"].get("reason")),
                         "",
                     ) or "I need more budget to finish this."
-                    yield AgentEvent("text_delta", {"text": reason})
+                    yield AgentEvent("text_delta", {
+                        "text": reason, "channel": "answer",
+                    })
                 record_event("agent_budget_requested", {
                     "user_id": user_id,
                     "room_id": room_id,
@@ -3396,10 +3461,20 @@ async def run_agent_loop(
                     denied_tc, "denied", denial_reason, state.iteration,
                 )
 
+            # Announce each call before the fence check, so a slow consumer of
+            # this event can never sit between the check and the dispatch
+            # (#217a, R-H1).
+            for tc in safe_calls:
+                yield _dispatch_event(tc, state.iteration)
+
             # Checked again immediately before dispatch: a reaper may have
             # fenced this owner while the batch was being decided (#216b-1).
             if not _lease_live():
                 state.end_reason = "lease_lost"
+                for tc in safe_calls:
+                    yield _non_run_event(
+                        tc, "not_started", NOT_STARTED_REASON, state.iteration,
+                    )
                 yield AgentEvent("harness", {"text": LEASE_LOST_NOTE})
                 break
 
@@ -3407,6 +3482,10 @@ async def run_agent_loop(
             tool_results: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
 
             if safe_calls:
+                # Each call's own run time, so a parallel batch never reports
+                # the slowest call's time for every call (#217a).
+                durations: Dict[str, int] = {}
+
                 async def _run_safe(
                     tc: Dict[str, Any],
                     delegated_grant: Optional[int] = None,
@@ -3460,6 +3539,7 @@ async def run_agent_loop(
                     seen_calls.add(dedup)
 
                     granted = None
+                    started = time.monotonic()
                     try:
                         # Meta-tools use their own executor
                         if tc["name"] in _META_TOOL_NAMES:
@@ -3476,6 +3556,7 @@ async def run_agent_loop(
                     except Exception as exc:
                         logger.error("Tool %s raised unexpectedly: %s", tc["name"], exc)
                         result = {"status": "error", "message": str(exc)}
+                    durations[str(tc.get("id") or "")] = _elapsed_ms(started)
 
                     # Track retries + circuit breaker state. A harness refusal
                     # (e.g. a budget refusal) is not a service failure and never
@@ -3528,6 +3609,7 @@ async def run_agent_loop(
                         "delegated_calls": delegated_calls,
                         "server_tool_uses": server_tool_uses,
                         "receipt_id": receipt_id,
+                        "duration_ms": durations.get(str(tc.get("id") or "")),
                     })
 
             # ---- Build tool_result blocks (auto + refused) ------------ #
@@ -3615,6 +3697,8 @@ async def run_agent_loop(
                     yield AgentEvent("harness", {"text": LEASE_LOST_NOTE})
                     break
                 row_saved = True
+                # One expiry for the stored row and the approval card (#217a).
+                expires_at = timezone.now() + timedelta(seconds=_pause_ttl_seconds())
                 if room_id and user_id:
                     try:
                         await save_pending_confirmation(
@@ -3622,9 +3706,7 @@ async def run_agent_loop(
                             effects=effects,
                             turn_id=context.get("turn_id"),
                             calls=held_calls,
-                            expires_at=(
-                                timezone.now() + timedelta(seconds=_pause_ttl_seconds())
-                            ),
+                            expires_at=expires_at,
                             short_id=short_id,
                         )
                     except Exception as exc:
@@ -3676,6 +3758,7 @@ async def run_agent_loop(
                     "tool_input": held_calls[0]["input"],
                     "calls": [
                         {
+                            "call_id": str(tc.get("id") or ""),
                             "tool_name": tc["name"],
                             "tool_input": tc["input"],
                             "effects": call_effects[index]
@@ -3686,6 +3769,7 @@ async def run_agent_loop(
                     "effects": effects,
                     "tier": held_tiers[0],
                     "approval_id": short_id,
+                    "expires_at": expires_at.isoformat(),
                 })
                 yield AgentEvent("paused", {
                     "pause_kind": "approval",
@@ -3732,7 +3816,7 @@ async def run_agent_loop(
             # recorded as a completed refusal.
             if stop_reason == "refusal":
                 state.end_reason = "refusal"
-                yield AgentEvent("text_delta", {
+                yield AgentEvent("harness", {
                     "text": "\n\n*(The model declined to answer this request.)*",
                 })
             else:

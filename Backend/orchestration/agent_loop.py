@@ -2406,8 +2406,13 @@ async def _run_sub_agent(
     # Native search runs server-side, so the scope check above every other
     # call never sees it: drop it here when the room's bounds exclude search.
     persona_scope = list(persona.tool_scope) if persona is not None and persona.tool_scope else None
+    sub_system = parent_system
     if not native_search_allowed(preferences or {}, persona_scope):
-        scoped_tools = [t for t in scoped_tools if t.get("name") != "web_search"]
+        kept = [t for t in scoped_tools if t.get("name") != "web_search"]
+        if len(kept) < len(scoped_tools) and not any(t.get("name") == "search_info" for t in kept):
+            # The parent's prompt was written with search offered; say it is gone.
+            sub_system = parent_system + "\n\n" + NO_SEARCH_TOOL_NOTE
+        scoped_tools = kept
     prev_input_tokens = 0
 
     while iteration < HARD_CAP_ITERATIONS:
@@ -2435,7 +2440,7 @@ async def _run_sub_agent(
         try:
             response = await llm.create_message(
                 messages=sub_messages,
-                system=parent_system,
+                system=sub_system,
                 tools=tools_this_call if tools_this_call else None,
                 temperature=0.3,
                 max_tokens=4096,

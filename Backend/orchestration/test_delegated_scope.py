@@ -110,26 +110,39 @@ class DelegatedNativeSearchTests(_Base):
             run_async(_run_sub_agent(
                 {"task": "research"}, dict(WHO), dict(preferences or {}), "system", parent_tools,
             ))
-        return _offered_names(llm.create_message.await_args_list[0])
+        first = llm.create_message.await_args_list[0]
+        return _offered_names(first), first.kwargs.get("system") or ""
 
     def test_a_delegated_run_drops_native_search_the_room_persona_excludes(self):
-        tools = self._sub_run_tools(_persona("get_weather"), [NATIVE_SEARCH, _tool("get_weather")])
+        tools, system = self._sub_run_tools(_persona("get_weather"), [NATIVE_SEARCH, _tool("get_weather")])
 
         self.assertNotIn("web_search", tools)
         self.assertIn("get_weather", tools)
+        # The parent's prompt was written with search; the child is told it is gone.
+        self.assertIn(NO_SEARCH_TOOL_NOTE, system)
 
     def test_a_delegated_run_keeps_native_search_the_room_persona_allows(self):
-        tools = self._sub_run_tools(_persona("get_weather", "search"), [NATIVE_SEARCH, _tool("get_weather")])
+        tools, system = self._sub_run_tools(
+            _persona("get_weather", "search"), [NATIVE_SEARCH, _tool("get_weather")],
+        )
 
         self.assertIn("web_search", tools)
+        self.assertNotIn(NO_SEARCH_TOOL_NOTE, system)
 
     def test_a_delegated_run_drops_native_search_switched_off_in_settings(self):
-        tools = self._sub_run_tools(
+        tools, system = self._sub_run_tools(
             None, [NATIVE_SEARCH, _tool("get_weather")], preferences={"allow_web_search": False},
         )
 
         self.assertNotIn("web_search", tools)
         self.assertIn("get_weather", tools)
+        self.assertIn(NO_SEARCH_TOOL_NOTE, system)
+
+    def test_a_delegated_run_with_no_native_search_to_drop_keeps_the_parent_prompt(self):
+        tools, system = self._sub_run_tools(_persona("get_weather"), [_tool("get_weather")])
+
+        self.assertEqual(tools, {"get_weather"})
+        self.assertEqual(system, "system")
 
 
 class DelegatedOfferedToolsTests(_Base):

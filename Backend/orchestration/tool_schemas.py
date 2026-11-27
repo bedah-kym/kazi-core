@@ -68,6 +68,24 @@ def _normalize_scope(tool_scope: Optional[List[str]]) -> Optional[set]:
     return {resolve_action_alias(str(item)) for item in tool_scope if item}
 
 
+# The provider's own web search is a search like ``search_info``: the same
+# capability gate and a persona scope bound it, although the harness never
+# sees its calls (they run server-side).
+NATIVE_SEARCH_SCOPE_NAMES = frozenset({"search_info", "web_search"})
+
+
+def native_search_allowed(
+    user_capabilities: Optional[Dict[str, Any]],
+    tool_scope: Optional[List[str]],
+) -> bool:
+    """Whether the provider's native web search may be offered at all."""
+    gate = (get_action_definition("search_info") or {}).get("capability_gate")
+    if gate and not _gate_allows(gate, user_capabilities or {}, user_capabilities is not None):
+        return False
+    scope = _normalize_scope(tool_scope)
+    return scope is None or bool(scope & NATIVE_SEARCH_SCOPE_NAMES)
+
+
 def _build_input_schema(action_def: Dict[str, Any]) -> Dict[str, Any]:
     """Convert ACTION_CATALOG params into JSON Schema for Claude tool_use."""
     params = action_def.get("params") or {}

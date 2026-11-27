@@ -892,7 +892,7 @@ class SubAgentFenceTests(SimpleTestCase):
                     "user_id": 1, "room_id": 2, "turn_id": "turn-1",
                     "turn_live": _turn_live,
                 },
-                None, "system", [],
+                None, "system", [{"name": "get_weather", "input_schema": {"type": "object"}}],
             ))
 
         self.assertEqual(calls, ["get_weather"])

@@ -42,6 +42,7 @@ from orchestration.turn_leases import (
     cancel_requested,
     register_live_turn,
     request_cancel,
+    shutdown_grace_seconds,
     turn_fenced,
     turn_live,
     unregister_live_turn,
@@ -113,6 +114,9 @@ _SHOWN_LIMIT = 2000
 BUSY_TURN_NOTICE = (
     "Another reply is still being written for you in this room; send this "
     "again when it finishes."
+)
+UNEXPECTED_ERROR_NOTICE = (
+    "Something went wrong on my side. Nothing further was run."
 )
 
 
@@ -315,7 +319,32 @@ async def _user_cancel_ending(ref: TurnRef) -> bool:
     return bool(row is not None and row.cancel_requested_at is not None)
 
 
-async def _end_unexpected_turn(turn_box: Dict, stream_state: Dict, outcome: str) -> None:
+def _send_task_is_cancelling() -> bool:
+    """Whether this task has a pending cancellation (Python 3.11+)."""
+    task = asyncio.current_task()
+    return bool(task is not None and task.cancelling())
+
+
+async def _bounded_write(write, deadline: float) -> None:
+    """Await ``write`` shielded; a cancel retry gets only the time left."""
+    loop = asyncio.get_running_loop()
+    try:
+        await asyncio.wait_for(
+            asyncio.shield(write), timeout=max(0.0, deadline - loop.time()),
+        )
+    except asyncio.CancelledError:
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(write), timeout=max(0.0, deadline - loop.time()),
+            )
+        except (Exception, asyncio.TimeoutError):
+            pass
+        raise
+
+
+async def _end_unexpected_turn(
+    turn_box: Dict, stream_state: Dict, outcome: str, room_id=None,
+) -> bool:
     """Write the honest terminal state for an exception after the claim.
 
     ``CancelledError`` now means only the runner's shutdown cut this turn off:
@@ -325,10 +354,15 @@ async def _end_unexpected_turn(turn_box: Dict, stream_state: Dict, outcome: str)
     have been dispatched without a visible ``tool_start`` event (E10), so
     "nothing ran" is never a safe guess. The write is shielded so it still
     lands; the caller re-raises the original exception either way.
+
+    For an ``error`` outcome it returns True only when the ``failed(error)``
+    transition really landed. The caller then saves the linked notice *after*
+    the stream end, and this function marks the Turn settled so a second call
+    does nothing.
     """
     ref = turn_box.get("ref")
     if ref is None or turn_box.get("settled"):
-        return
+        return False
     unregister_live_turn(ref.id)
     if outcome == "cancelled":
         # The server cut the turn off. It is not the user's cancel, and the
@@ -343,9 +377,7 @@ async def _end_unexpected_turn(turn_box: Dict, stream_state: Dict, outcome: str)
                     asyncio.shield(
                         sync_to_async(_saved_reply_exists)(ref.id),
                     ),
-                    timeout=float(getattr(
-                        settings, "TURN_SHUTDOWN_GRACE_SECONDS", 20,
-                    )),
+                    timeout=float(shutdown_grace_seconds()),
                 ))
             except (asyncio.TimeoutError, Exception):
                 reply_saved = False
@@ -378,27 +410,29 @@ async def _end_unexpected_turn(turn_box: Dict, stream_state: Dict, outcome: str)
         atransition(ref.id, ref.version, to_state, **updates),
     )
     if outcome != "cancelled":
+        moved = False
         try:
-            await task
+            moved = bool(await task)
         except Exception:
             logger.warning("Could not record the turn's unexpected ending.")
-        return
+        if not moved:
+            # The row already ended (or the write was lost). A notice linked
+            # here would make a terminal Turn look answered; save none.
+            return False
+        turn_box["settled"] = True
+        # The caller saves the notice after the stream end, so the browser's
+        # is_final comes first.
+        stream_state["deferred_notice_turn"] = ref.id
+        return True
     # A shutdown ending is bounded like every other shutdown write: if the
     # database is stalled, the reaper (or the lite boot sweep) ends the row.
-    grace = float(getattr(settings, "TURN_SHUTDOWN_GRACE_SECONDS", 20))
+    grace = float(shutdown_grace_seconds())
+    deadline = asyncio.get_running_loop().time() + grace
     try:
-        await asyncio.wait_for(asyncio.shield(task), timeout=grace)
+        await _bounded_write(task, deadline)
     except asyncio.TimeoutError:
         logger.warning("Shutdown ending write timed out; the reaper will end the turn.")
-    except asyncio.CancelledError:
-        # The inner task keeps running after the shield is cancelled; wait for
-        # it, within the grace, so the row is terminal before this
-        # cancellation finishes.
-        try:
-            await asyncio.wait_for(asyncio.shield(task), timeout=grace)
-        except (Exception, asyncio.TimeoutError):
-            pass
-        raise
+    return False
 
 
 def _tool_record(data: Dict) -> Dict:
@@ -483,7 +517,9 @@ def _room_exists(room_id) -> bool:
     return Chatroom.objects.filter(pk=room_id).exists()
 
 
-def _persist_turn_notice(room_id, text: str, *, turn_continues: bool = False) -> bool:
+def _persist_turn_notice(
+    room_id, text: str, *, turn_continues: bool = False, turn_id=None,
+) -> bool:
     """Save and broadcast one harness note outside a Turn."""
     from chatbot.kazi_messages import (
         KaziMessageError,
@@ -498,7 +534,7 @@ def _persist_turn_notice(room_id, text: str, *, turn_continues: bool = False) ->
     try:
         persist_kazi_message(
             room, content=text, origin=ORIGIN_TURN_NOTICE,
-            turn_continues=turn_continues,
+            turn_continues=turn_continues, turn=turn_id,
         )
     except KaziMessageError:
         logger.warning("Turn notice not saved: the room key is unavailable")
@@ -701,18 +737,54 @@ class OrchestrationCoordinator:
         receives action names after successful intent or workflow execution.
 
         Return the accumulated response with ``persist=False`` for a reset,
-        otherwise ``True``. The caller saves it. A reset returns without
-        sending a final stream chunk.
+        otherwise ``True``. The caller saves it. The final ``done`` step and
+        the ``is_final`` chunk are sent from one ``finally`` on every exit,
+        including a reset, so the browser's stream always ends.
 
         Context-prompt and progress-frame failures are ignored. A failure from
         a fresh agent run ends the turn with one error message and nothing
         further runs; errors during confirmation resume propagate.
         """
-        stream_state = {"buffer": [], "last_send": 0, "first_token_sent": False, "full_response": [], "model": [], "harness": [], "tools": [], "chunks": 0, "chars": 0, "tool_calls_recorded": False, "tool_seq_first": None, "tool_seq_last": None}  # nosec B105 — state keys, not a credential
+        stream_state = {
+            "buffer": [], "last_send": 0, "first_token_sent": False,
+            "full_response": [], "model": [], "harness": [], "tools": [],
+            "chunks": 0, "chars": 0, "tool_calls_recorded": False,
+            "tool_seq_first": None, "tool_seq_last": None,
+            "done_message": "Request complete.", "ended": False,
+            "cancelled": False,
+        }  # nosec B105 — state keys, not a credential
         turn_box = {
             "ref": None, "settled": False, "hold": False, "agent_ran": False,
             "claim_status": "",
         }
+
+        async def _save_deferred_notice(*, shielded: bool = False) -> None:
+            """Save the linked error notice once, best-effort.
+
+            A late shutdown must not lose it after the ``failed(error)`` write
+            landed, but it must not outlive the shutdown grace either: the
+            shielded path bounds the save with the validated grace.
+            """
+            notice_turn = stream_state.get("deferred_notice_turn")
+            if not (stream_state.get("deferred_notice") and notice_turn):
+                return
+            write = asyncio.ensure_future(sync_to_async(_persist_turn_notice)(
+                room_id, UNEXPECTED_ERROR_NOTICE, turn_id=notice_turn,
+            ))
+            deadline = (
+                asyncio.get_running_loop().time()
+                + float(shutdown_grace_seconds())
+            )
+            try:
+                await _bounded_write(write, deadline)
+            except asyncio.CancelledError:
+                raise
+            except (Exception, asyncio.TimeoutError):
+                logger.warning(
+                    "Unexpected-error notice not saved (shielded=%s)",
+                    shielded, exc_info=True,
+                )
+
         try:
             return await self._handle_message_body(
                 stream_state=stream_state,
@@ -731,11 +803,46 @@ class OrchestrationCoordinator:
                 continue_pause=continue_pause,
             )
         except asyncio.CancelledError:
-            await _end_unexpected_turn(turn_box, stream_state, "cancelled")
+            # Shutdown cut this turn off. Do not let the stream-end sends
+            # outlive the shutdown grace: skip them and let the runner write
+            # the honest failed(shutdown) ending.
+            stream_state["cancelled"] = True
+            await _end_unexpected_turn(
+                turn_box, stream_state, "cancelled", room_id=room_id,
+            )
             raise
         except Exception:
-            await _end_unexpected_turn(turn_box, stream_state, "error")
+            stream_state["deferred_notice"] = await _end_unexpected_turn(
+                turn_box, stream_state, "error", room_id=room_id,
+            )
             raise
+        finally:
+            current = asyncio.current_task()
+            cancelling = bool(current is not None and current.cancelling())
+            end_stream = stream_state.get("end_stream")
+            if (
+                end_stream is not None
+                and not stream_state.get("cancelled")
+                and not cancelling
+            ):
+                try:
+                    await end_stream()
+                except asyncio.CancelledError:
+                    # Shutdown cut the turn off while its stream end was being
+                    # sent. Keep the notice the failed(error) write earned,
+                    # bounded by the grace, then let the cancellation continue.
+                    await _save_deferred_notice(shielded=True)
+                    await _end_unexpected_turn(
+                        turn_box, stream_state, "cancelled", room_id=room_id,
+                    )
+                    raise
+                except Exception:
+                    logger.warning("Stream end send failed", exc_info=True)
+                    await _save_deferred_notice()
+                else:
+                    # After the stream end, so the browser never leaves an
+                    # empty reply bubble for the saved notice to replace.
+                    await _save_deferred_notice()
 
     async def _handle_message_body(
         self,
@@ -1075,6 +1182,25 @@ class OrchestrationCoordinator:
                         stream_state["chars"] += len(joined_text)
                     try:
                         await send_chunk(correlation_id, joined_text, is_final)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        # A failed frame send must never abort the turn: the
+                        # reply is still saved and the turn still ends.
+                        logger.warning(
+                            "Stream chunk send failed: %s",
+                            exc.__class__.__name__,
+                        )
+                        record_event(
+                            "stream_send_failed",
+                            {
+                                "room_id": room_id,
+                                "user_id": user_id,
+                                "turn_id": _turn_id(),
+                                "is_final": bool(is_final),
+                                "error_class": exc.__class__.__name__,
+                            },
+                        )
                     finally:
                         if is_final:
                             record_event(
@@ -1117,6 +1243,70 @@ class OrchestrationCoordinator:
                         "sent": send_ok,
                     },
                 )
+
+        async def _end_stream():
+            """Send the one ``done`` step and the one ``is_final`` chunk.
+
+            The sends run in their own task and are awaited for at most the
+            shutdown grace. A channel layer that never returns therefore cannot
+            keep the turn open: cancellation or the timeout releases the turn,
+            and the cancelled send is best-effort.
+            """
+            if stream_state.get("ended"):
+                return
+            stream_state["ended"] = True
+
+            async def _send_end():
+                try:
+                    await emit_progress(
+                        "done", "completed", stream_state.get("done_message"),
+                    )
+                except asyncio.CancelledError:
+                    if _send_task_is_cancelling():
+                        raise
+                    # The channel layer raised it on the done step, not a
+                    # shutdown of this send: still try the final chunk.
+                    logger.warning(
+                        "Stream end done step was cancelled by the channel layer",
+                    )
+                await broadcast_chunk("", is_final=True)
+
+            def _discard(task):
+                if not task.cancelled():
+                    task.exception()
+
+            send = asyncio.ensure_future(_send_end())
+            grace = float(shutdown_grace_seconds())
+            try:
+                done, pending = await asyncio.wait({send}, timeout=grace)
+            except asyncio.CancelledError:
+                send.cancel()
+                send.add_done_callback(_discard)
+                raise
+            if pending:
+                logger.warning(
+                    "Stream end send outlived the shutdown grace; ending anyway.",
+                )
+                for task in pending:
+                    task.cancel()
+                    task.add_done_callback(_discard)
+            for task in done:
+                if task.cancelled():
+                    if _send_task_is_cancelling():
+                        raise asyncio.CancelledError()
+                    # The channel layer raised CancelledError inside the send,
+                    # not a shutdown of this task: log it and end normally.
+                    logger.warning(
+                        "Stream end send was cancelled by the channel layer",
+                    )
+                    continue
+                if task.exception() is not None:
+                    logger.warning(
+                        "Stream end send failed: %s",
+                        task.exception().__class__.__name__,
+                    )
+
+        stream_state["end_stream"] = _end_stream
 
         adaptive_context = {
             "user_id": user_id,
@@ -1525,7 +1715,6 @@ class OrchestrationCoordinator:
                     stream_state["active_seconds"] = event.data.get("active_seconds")
                     turn_box["end_reason"] = event.data.get("end_reason") or "finished"
                     await _finish_turn(turn_box["end_reason"])
-                    await emit_progress("done", "completed", "Request complete.")
 
         def _agent_context(extra=None):
             context = {
@@ -1945,8 +2134,7 @@ class OrchestrationCoordinator:
                     "Please try again.",
                     harness=True,
                 )
-            await emit_progress("done", "completed", "Turn not recorded.")
-            await broadcast_chunk("", is_final=True)
+            stream_state["done_message"] = "Turn not recorded."
             return OrchestrationResult(
                 full_response="".join(stream_state["full_response"]),
                 persist=False,
@@ -1958,7 +2146,7 @@ class OrchestrationCoordinator:
             pending_handled = True
             directive_handled = True
             if reset_ran:
-                await emit_progress("done", "completed", "Context reset.")
+                stream_state["done_message"] = "Context reset."
                 await _finish_turn("finished")
                 return OrchestrationResult(
                     full_response="".join(stream_state["full_response"]),
@@ -2240,7 +2428,7 @@ class OrchestrationCoordinator:
                         "error_class": agent_exc.__class__.__name__,
                     },
                 )
-                await broadcast_chunk("Something went wrong on my side. Nothing further was run.", harness=True)
+                await broadcast_chunk(UNEXPECTED_ERROR_NOTICE, harness=True)
                 await _finish_turn("error")
 
         # The harness shows a still-pending prompt last, so a bare yes answers
@@ -2261,9 +2449,6 @@ class OrchestrationCoordinator:
                     harness=True,
                 )
 
-        # End stream
-        await emit_progress("done", "completed", "Request complete.")
-        await broadcast_chunk("", is_final=True)
         await _finish_turn(turn_box.get("end_reason") or ("error" if turn_box["agent_ran"] else "finished"))
 
         full_response_text = "".join(stream_state["full_response"])

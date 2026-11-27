@@ -94,7 +94,7 @@ class OrchestrationCoordinatorTests(SimpleTestCase):
         finally:
             stack.close()
 
-    def test_reset_request_is_not_persisted_and_never_flushes(self):
+    def test_reset_request_is_not_persisted_but_flushes_the_stream(self):
         with (
             patch("orchestration.coordinator.load_memory_summary", new_callable=AsyncMock) as mem,
             patch("orchestration.coordinator.get_user_preferences", side_effect=_empty_preferences),
@@ -114,10 +114,10 @@ class OrchestrationCoordinatorTests(SimpleTestCase):
             result = self._handle("reset", send_chunk=send_chunk)
 
             self.assertFalse(result.persist)
-            # The reset message is streamed, but the stream is never flushed
-            # with is_final=True (matching the pre-extraction `return`).
+            # The reset message is streamed and the stream is flushed with
+            # is_final=True so the browser is not left thinking forever.
             self.assertTrue(any(call.args[2] is False for call in send_chunk.call_args_list))
-            self.assertFalse(any(call.args[2] is True for call in send_chunk.call_args_list))
+            self.assertTrue(any(call.args[2] is True for call in send_chunk.call_args_list))
 
     def test_sensitive_words_do_not_refuse_the_turn(self):
         """T-E3: a message is routed on its merits, not on a word it contains.

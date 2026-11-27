@@ -309,6 +309,27 @@ class SinkRoutingTests(TransactionTestCase):
         )
         self.assertNotIn("\n\n\n", "".join(chunks))
 
+    def test_live_text_separates_two_narration_parts_too(self):
+        # Each narration part is one whole step's text, so two of them (with a
+        # tool between) are two parts and get the same one blank line.
+        sink = RecordingSink()
+        self._run([
+            _text("Let me list the notes first.", channel="narration"),
+            _text("Found 6 notes, merging two.", channel="narration"),
+            _text("Merged them both.", channel="answer"),
+            _done(),
+        ], sink, clock=_Clock())
+
+        chunks = [
+            frame[1] for frame in sink.frames if frame[0] == "chunk"
+        ]
+        self.assertEqual(chunks, [
+            "Let me list the notes first.",
+            "\n\nFound 6 notes, merging two.",
+            "\n\nMerged them both.",
+            "",
+        ])
+
     def test_live_text_does_not_stack_blank_lines_before_harness_text(self):
         sink = RecordingSink()
         self._run([

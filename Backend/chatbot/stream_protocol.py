@@ -101,18 +101,19 @@ class V1Adapter:
         self._last_text_channel = ""
 
     def _render_text(self, event: TurnEvent) -> str:
-        """The v1 chunk text: one blank line after narration, nothing stacked."""
+        """The v1 chunk text: one blank line after narration, nothing stacked.
+
+        The loop emits each step's text as one block, so a narration segment
+        is a whole part: whatever follows it, another narration part included,
+        starts after one blank line.
+        """
         if not event.segments:
             return event.text or ""
         pieces = []
         previous = self._last_text_channel
         for segment in event.segments:
             text = segment.text
-            if (
-                previous == TEXT_CHANNEL_NARRATION
-                and segment.channel != TEXT_CHANNEL_NARRATION
-                and not text.startswith("\n\n")
-            ):
+            if previous == TEXT_CHANNEL_NARRATION and not text.startswith("\n\n"):
                 text = "\n\n" + text
             pieces.append(text)
             previous = segment.channel

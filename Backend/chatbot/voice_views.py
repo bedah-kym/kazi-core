@@ -1,13 +1,22 @@
 import os
 import logging
 from django.conf import settings
+from django.http import Http404
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
-from .models import Chatroom, Message, Member
+from .history import DECRYPT_FAILED, decrypt_stored
+from .models import (
+    VOICE_MESSAGE_PLACEHOLDER,
+    VOICE_STATUS_MARKER,
+    VOICE_TRANSCRIPTION_FAILED_MARKER,
+    Chatroom,
+    Message,
+    Member,
+)
 from .tasks import transcribe_voice_note
 
 logger = logging.getLogger(__name__)
@@ -51,11 +60,11 @@ def upload_voice_note(request, room_id):
         member, _ = Member.objects.get_or_create(User=request.user)
         message = Message.objects.create(
             member=member,
-            content="[Voice Message]",
+            content=VOICE_MESSAGE_PLACEHOLDER,
             timestamp=timezone.now(),
             is_voice=True,
             audio_url=audio_url,
-            voice_transcript="Transcribing..."
+            voice_transcript=VOICE_STATUS_MARKER
         )
         chatroom.chats.add(message)
 
@@ -66,7 +75,7 @@ def upload_voice_note(request, room_id):
             "success": True,
             "message_id": message.id,
             "audio_url": audio_url,
-            "status": "Transcribing..."
+            "status": VOICE_STATUS_MARKER
         }, status=status.HTTP_201_CREATED)
 
     except Exception as e:
@@ -80,10 +89,27 @@ def get_voice_status(request, message_id):
     """
     Check transcription status of a voice message.
     """
+    room = Chatroom.objects.filter(
+        participants__User=request.user,
+        chats__id=message_id,
+    ).first()
+    if room is None:
+        raise Http404
+
     message = get_object_or_404(Message, id=message_id)
+    transcript = ""
+    if message.is_voice:
+        content, _payload = decrypt_stored(room, message)
+        if content and content != DECRYPT_FAILED and content != VOICE_MESSAGE_PLACEHOLDER:
+            transcript = content
+        elif message.voice_transcript == VOICE_TRANSCRIPTION_FAILED_MARKER:
+            transcript = VOICE_TRANSCRIPTION_FAILED_MARKER
+        else:
+            transcript = VOICE_STATUS_MARKER
+
     return Response({
         "message_id": message.id,
         "is_voice": message.is_voice,
-        "transcript": message.voice_transcript,
+        "transcript": transcript,
         "audio_url": message.audio_url
     })

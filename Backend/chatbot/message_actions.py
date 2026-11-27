@@ -9,11 +9,19 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 from django.shortcuts import get_object_or_404
+from django.http import Http404
 from django.utils import timezone
 from datetime import timedelta
 from django.core.files.storage import default_storage
 from django.core.files.base import ContentFile
-from chatbot.models import Chatroom, Message, RoomContext, RoomNote, DocumentUpload
+from chatbot.models import (
+    PINNED_NOTE_LABEL,
+    Chatroom,
+    Message,
+    RoomContext,
+    RoomNote,
+    DocumentUpload,
+)
 from orchestration.models import ActionReceipt
 from orchestration.action_receipts import format_receipt_summary
 
@@ -89,14 +97,8 @@ def pin_message_to_notes(request, room_id, message_id):
                 status=status.HTTP_403_FORBIDDEN
             )
 
-        # Get the message
-        get_object_or_404(Message, id=message_id)
-
-        # Get decrypted content from request body (frontend sends decrypted content)
-        message_content = request.data.get('message_content', '')
-        # Fallback to a placeholder so we still pin even if the client did not send content
-        if not message_content:
-            message_content = "Pinned message (content not provided by client)"
+        # Get the message, scoped to this room so another room's id is a 404.
+        message = get_object_or_404(Message, id=message_id, chatroom__id=room_id)
 
         # Get or create room context
         room_context, _ = RoomContext.objects.get_or_create(chatroom=chatroom)
@@ -104,7 +106,7 @@ def pin_message_to_notes(request, room_id, message_id):
         # Check if already pinned
         existing_note = RoomNote.objects.filter(
             room_context=room_context,
-            source_message_id=message_id
+            source_message_id=message.id
         ).first()
 
         if existing_note:
@@ -113,13 +115,14 @@ def pin_message_to_notes(request, room_id, message_id):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Create note with decrypted content
+        # The note stores no message text: the room context decrypts the
+        # message when it is built.
         note = RoomNote.objects.create(
             room_context=room_context,
             note_type='reference',
-            content=f"Pinned message: {message_content[:100]}...",
-            source_message_id=message_id,
-            source_message_content=message_content,  # Store decrypted content
+            content=PINNED_NOTE_LABEL,
+            source_message_id=message.id,
+            source_message_content="",
             created_by=request.user,
             is_ai_generated=False,
             priority='medium'
@@ -131,6 +134,8 @@ def pin_message_to_notes(request, room_id, message_id):
             "message": "Message pinned to notes successfully"
         }, status=status.HTTP_201_CREATED)
 
+    except Http404:
+        raise
     except Exception:
         logger.exception("Request failed")
         return Response(

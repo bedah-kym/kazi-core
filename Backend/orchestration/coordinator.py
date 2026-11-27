@@ -50,6 +50,7 @@ from orchestration.turn_leases import (
 from chatbot.stream_protocol import (
     TEXT_CHANNEL_ANSWER,
     TEXT_CHANNEL_HARNESS,
+    TextSegment,
     TurnEvent,
     TurnEventSink,
     build_stream_sink,
@@ -1212,6 +1213,11 @@ class OrchestrationCoordinator:
             )
 
         async def emit_text(chunk_text, is_final=False, harness=False, channel=""):
+            text_kind = "harness" if harness else "text"
+            text_channel = (
+                TEXT_CHANNEL_HARNESS if harness
+                else (channel or TEXT_CHANNEL_ANSWER)
+            )
             # Store all chunks to build full response
             if chunk_text:
                 stream_state["full_response"].append(chunk_text)
@@ -1224,10 +1230,14 @@ class OrchestrationCoordinator:
                 chunk_text = chunk_text.lstrip()  # Trim leading space of first word
                 stream_state["first_token_sent"] = True
 
-            stream_state["buffer"].append(chunk_text)
+            if chunk_text:
+                stream_state["buffer"].append(TextSegment(
+                    kind=text_kind, channel=text_channel, text=chunk_text,
+                ))
 
             current_time = time.time()
-            joined_text = "".join(stream_state["buffer"])
+            segments = list(stream_state["buffer"])
+            joined_text = "".join(segment.text for segment in segments)
 
             # Send if buffer > 6 chars OR > 0.08s passed OR is_final
             if len(joined_text) > 6 or (current_time - stream_state["last_send"]) > 0.08 or is_final:
@@ -1235,15 +1245,26 @@ class OrchestrationCoordinator:
                     if joined_text:
                         stream_state["chunks"] += 1
                         stream_state["chars"] += len(joined_text)
+                    # The flush keeps every fragment's own kind and channel;
+                    # the event-level values are the first fragment's (or this
+                    # call's for the empty final frame).
+                    flush_kind = (
+                        "harness"
+                        if segments and all(
+                            segment.kind == "harness" for segment in segments
+                        )
+                        else text_kind
+                    )
+                    flush_channel = (
+                        segments[0].channel if segments else text_channel
+                    )
                     try:
                         await sink.emit(TurnEvent(
-                            kind="harness" if harness else "text",
+                            kind=flush_kind,
                             text=joined_text,
                             is_final=is_final,
-                            channel=(
-                                TEXT_CHANNEL_HARNESS if harness
-                                else (channel or TEXT_CHANNEL_ANSWER)
-                            ),
+                            channel=flush_channel,
+                            segments=segments,
                         ))
                     except asyncio.CancelledError:
                         raise
@@ -1748,11 +1769,13 @@ class OrchestrationCoordinator:
                         data=event.data,
                     ))
                 elif event.kind == "tool_start":
+                    # ``tool_start`` carries no id. v2 maps ``tool_dispatch``
+                    # for the call id, so do not pretend this one has it.
                     await emit_tool_event(
                         TurnEvent(
                             kind="tool_start",
                             name=event.data.get("name") or "action",
-                            call_id=str(event.data.get("id") or ""),
+                            call_id=None,
                             data=event.data,
                         ),
                         "started",

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from asgiref.sync import sync_to_async
 
@@ -26,6 +26,15 @@ TEXT_CHANNEL_NARRATION = "narration"
 TEXT_CHANNEL_HARNESS = "harness"
 
 
+@dataclass(frozen=True)
+class TextSegment:
+    """One buffered piece of text, keeping the kind and channel it arrived with."""
+
+    kind: str
+    channel: str
+    text: str
+
+
 @dataclass
 class TurnEvent:
     """Every fact one stream event carries, whether or not v1 renders it."""
@@ -34,6 +43,7 @@ class TurnEvent:
     text: str = ""
     channel: str = ""
     is_final: bool = False
+    segments: List[TextSegment] = field(default_factory=list)
     name: str = ""
     call_id: Optional[str] = None
     duration_ms: Optional[int] = None
@@ -101,8 +111,11 @@ class V1Adapter:
     async def emit(self, event: TurnEvent) -> None:
         kind = event.kind
         if kind in ("text", "harness"):
+            text = event.text or "".join(
+                segment.text for segment in event.segments
+            )
             await self._send_chunk(
-                self.correlation_id, event.text, event.is_final,
+                self.correlation_id, text, event.is_final,
             )
             return
         if kind == "progress":

@@ -9,6 +9,7 @@ from __future__ import annotations
 import ast
 from contextlib import ExitStack
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from asgiref.sync import async_to_sync
@@ -75,6 +76,18 @@ def _loop(*events):
     return _events
 
 
+class _Clock:
+    """A monotonic clock that advances 1 ms per read, for buffer windows."""
+
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        value = self.now
+        self.now += 0.001
+        return value
+
+
 class RecordingSink:
     """Records every typed event and renders the same events through v1."""
 
@@ -132,7 +145,7 @@ class SinkRoutingTests(TransactionTestCase):
         self.addCleanup(turn_leases._FENCED_TURNS.clear)
         self.addCleanup(turn_leases._LAST_RENEWAL.clear)
 
-    def _run(self, events, sink):
+    def _run(self, events, sink, *, clock=None):
         patches = {
             "orchestration.coordinator.load_memory_summary": AsyncMock(return_value=None),
             "orchestration.coordinator.get_user_preferences": lambda user_id, profile_obj=None: {},
@@ -145,6 +158,10 @@ class SinkRoutingTests(TransactionTestCase):
             "orchestration.turn_leases.ensure_heartbeat": MagicMock(return_value=None),
             "orchestration.turn_leases.ensure_cancel_poll": MagicMock(return_value=None),
         }
+        if clock is not None:
+            patches["orchestration.coordinator.time"] = SimpleNamespace(
+                time=clock,
+            )
 
         async def run():
             try:
@@ -252,3 +269,71 @@ class SinkRoutingTests(TransactionTestCase):
             ("step", "done", "completed", "Request complete."),
             ("chunk", "", True),
         ])
+
+    @staticmethod
+    def _segments(event):
+        return [
+            (segment.kind, segment.channel, segment.text)
+            for segment in getattr(event, "segments", [])
+        ]
+
+    def test_a_narration_fragment_keeps_its_channel_when_the_answer_flushes_it(self):
+        sink = RecordingSink()
+        self._run([
+            _text("Hi", channel="narration"),
+            _text(" there.", channel="answer"),
+            _done(),
+        ], sink, clock=_Clock())
+
+        flush = sink.of_kind("text")[0]
+        self.assertEqual(self._segments(flush), [
+            ("text", "narration", "Hi"),
+            ("text", "answer", " there."),
+        ])
+        self.assertIn(("chunk", "Hi there.", False), sink.frames)
+
+    def test_a_buffered_narration_stays_narration_on_the_final_flush(self):
+        sink = RecordingSink()
+        self._run([
+            _text("Hi", channel="narration"),
+            _done(),
+        ], sink, clock=_Clock())
+
+        final = [
+            event for event in sink.of_kind("text")
+            if getattr(event, "is_final", False)
+        ][0]
+        self.assertEqual(self._segments(final), [
+            ("text", "narration", "Hi"),
+        ])
+        self.assertEqual(final.channel, "narration")
+        self.assertIn(("chunk", "Hi", True), sink.frames)
+        self.assertNotIn(("chunk", "Hi", False), sink.frames)
+
+    def test_a_buffered_harness_fragment_stays_harness(self):
+        sink = RecordingSink()
+        self._run([
+            AgentEvent("harness", {"text": "H"}),
+            _text("ello!!!"),
+            _done(),
+        ], sink, clock=_Clock())
+
+        flush = sink.of_kind("text")[0]
+        self.assertEqual(self._segments(flush), [
+            ("harness", "harness", "H"),
+            ("text", "answer", "ello!!!"),
+        ])
+        self.assertIn(("chunk", "Hello!!!", False), sink.frames)
+
+    def test_tool_start_does_not_invent_a_call_id(self):
+        sink = RecordingSink()
+        self._run([
+            AgentEvent("tool_start", {
+                "name": "get_weather", "input": {"city": "Paris"},
+            }),
+            _done(),
+        ], sink)
+
+        starts = sink.of_kind("tool_start")
+        self.assertEqual(len(starts), 1)
+        self.assertIsNone(starts[0].call_id)

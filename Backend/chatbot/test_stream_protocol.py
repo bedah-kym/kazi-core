@@ -114,7 +114,7 @@ class SinkRoutingTests(TransactionTestCase):
         super().setUp()
         User = get_user_model()
         self.user = User.objects.create_user(
-            username="sink-router", password="fake-token",  # nosec B106
+            username="sink-router", password="fake-token",  # nosec B106 — test fixture, fake credential
         )
         self.member, _ = Member.objects.get_or_create(User=self.user)
         self.room = Chatroom.objects.create()

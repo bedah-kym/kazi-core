@@ -19,6 +19,9 @@ from chatbot.models import (
 )
 
 BATCH_SIZE = 200
+LEGACY_PINNED_NOTE_PREFIX = "Pinned message: "
+LEGACY_PINNED_NOTE_SUFFIX = "..."
+LEGACY_PINNED_NOTE_MAX_TEXT = 100
 
 
 def _is_encrypted(raw):
@@ -27,6 +30,19 @@ def _is_encrypted(raw):
     except (TypeError, ValueError):
         return False
     return isinstance(parsed, dict) and "data" in parsed and "nonce" in parsed
+
+
+def _is_legacy_pinned_content(content):
+    if not isinstance(content, str):
+        return False
+    if not content.startswith(LEGACY_PINNED_NOTE_PREFIX):
+        return False
+    if not content.endswith(LEGACY_PINNED_NOTE_SUFFIX):
+        return False
+    limit = len(LEGACY_PINNED_NOTE_PREFIX) + LEGACY_PINNED_NOTE_MAX_TEXT + len(
+        LEGACY_PINNED_NOTE_SUFFIX
+    )
+    return len(content) <= limit
 
 
 def _voice_plaintext(message):
@@ -42,13 +58,6 @@ def _voice_plaintext(message):
     ):
         return content
     return ""
-
-
-def _note_needs_fix(note):
-    i = note.source_message_id
-    if not i:
-        return False
-    return bool(note.source_message_content) or note.content != PINNED_NOTE_LABEL
 
 
 def _iter_batches(queryset):
@@ -78,6 +87,7 @@ class Command(BaseCommand):
 
         voice_fixed = 0
         note_fixed = 0
+        note_kept = 0
         failed = 0
 
         for batch in _iter_batches(Message.objects.filter(is_voice=True)):
@@ -110,24 +120,35 @@ class Command(BaseCommand):
             RoomNote.objects.exclude(source_message_id__isnull=True)
         ):
             for note in batch:
-                if not _note_needs_fix(note):
+                if not note.source_message_id:
+                    continue
+                content = note.content or ""
+                legacy = _is_legacy_pinned_content(content)
+                if content != PINNED_NOTE_LABEL and not legacy:
+                    note_kept += 1
+                needs_source_clear = bool(note.source_message_content)
+                if not needs_source_clear and not legacy:
                     continue
                 if dry_run:
                     note_fixed += 1
                     continue
-                RoomNote.objects.filter(pk=note.pk).update(
-                    source_message_content="",
-                    content=PINNED_NOTE_LABEL,
-                )
+                updates = {}
+                if needs_source_clear:
+                    updates["source_message_content"] = ""
+                if legacy:
+                    updates["content"] = PINNED_NOTE_LABEL
+                RoomNote.objects.filter(pk=note.pk).update(**updates)
                 note_fixed += 1
 
         if dry_run:
             self.stdout.write(
                 f"Dry run: would fix {voice_fixed} voice message(s) and "
-                f"{note_fixed} pinned note(s); {failed} row(s) could not be fixed."
+                f"{note_fixed} pinned note(s); {note_kept} edited note(s) kept; "
+                f"{failed} row(s) could not be fixed."
             )
         else:
             self.stdout.write(
                 f"Fixed {voice_fixed} voice message(s) and {note_fixed} pinned "
-                f"note(s); {failed} row(s) could not be fixed."
+                f"note(s); {note_kept} edited note(s) kept; "
+                f"{failed} row(s) could not be fixed."
             )

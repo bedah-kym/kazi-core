@@ -15,7 +15,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -73,7 +75,7 @@ class VoiceTranscriptEncryptionTests(TestCase):
         with open(os.path.join(self.tmp, self.audio_rel), "wb") as handle:
             handle.write(b"audio-bytes")
 
-    def _transcribe(self, transcript=TRANSCRIPT):
+    def _create_voice_message(self):
         message = Message.objects.create(
             member=self.member,
             content="[Voice Message]",
@@ -83,7 +85,9 @@ class VoiceTranscriptEncryptionTests(TestCase):
             voice_transcript=VOICE_STATUS_MARKER,
         )
         self.room.chats.add(message)
+        return message
 
+    def _run_transcription(self, message, transcript=TRANSCRIPT):
         client = MagicMock()
         client.audio.transcriptions.create.return_value = SimpleNamespace(text=transcript)
         module = MagicMock()
@@ -96,6 +100,11 @@ class VoiceTranscriptEncryptionTests(TestCase):
                 patch("channels.layers.get_channel_layer", return_value=layer):
             result = transcribe_voice_note(message.id)
 
+        return result, layer
+
+    def _transcribe(self, transcript=TRANSCRIPT):
+        message = self._create_voice_message()
+        result, layer = self._run_transcription(message, transcript)
         return message, result, layer
 
     def test_no_message_column_holds_the_transcript(self):
@@ -133,6 +142,20 @@ class VoiceTranscriptEncryptionTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["transcript"], TRANSCRIPT)
 
+    def test_status_reports_marker_before_and_text_after_transcription(self):
+        message = self._create_voice_message()
+        client = APIClient()
+        client.force_authenticate(user=self.user)
+        url = reverse("chatbot:voice-status", args=[message.id])
+
+        before = client.get(url)
+        self.assertEqual(before.json()["transcript"], VOICE_STATUS_MARKER)
+
+        self._run_transcription(message)
+
+        after = client.get(url)
+        self.assertEqual(after.json()["transcript"], TRANSCRIPT)
+
     def test_non_member_gets_the_same_404_as_a_missing_id(self):
         message = _encrypted_voice_message(self.room, self.member, TRANSCRIPT)
         User = get_user_model()
@@ -162,6 +185,13 @@ class PinnedMessageEncryptionTests(TestCase):
         self.client = APIClient()
         self.client.force_authenticate(user=self.user)
 
+    def _pin_message(self, message, body=None):
+        return self.client.post(
+            reverse("chatbot:pin-message", args=[self.room.id, message.id]),
+            body if body is not None else {"message_content": CLIENT_TEXT},
+            format="json",
+        )
+
     def _pin(self, room_id=None, message_id=None, body=None):
         room_id = room_id or self.room.id
         message_id = message_id or self.message.id
@@ -170,6 +200,13 @@ class PinnedMessageEncryptionTests(TestCase):
             body if body is not None else {"message_content": CLIENT_TEXT},
             format="json",
         )
+
+    def _new_pinned_message(self, text=REAL_TEXT):
+        message = _encrypted_voice_message(self.room, self.member, text)
+        message.is_voice = False
+        message.audio_url = ""
+        message.save(update_fields=["is_voice", "audio_url"])
+        return message
 
     def test_client_text_is_stored_nowhere_and_absent_from_context(self):
         response = self._pin()
@@ -221,6 +258,35 @@ class PinnedMessageEncryptionTests(TestCase):
 
         self.assertIn(PINNED_NOTE_LABEL, context)
         self.assertNotIn(REAL_TEXT, context)
+
+    def test_pinned_text_is_capped_with_a_visible_marker(self):
+        long_text = "start-of-pinned-" + ("x" * 600) + "end-of-pinned"
+        self.message = self._new_pinned_message(long_text)
+
+        response = self._pin()
+
+        self.assertEqual(response.status_code, 201)
+        context = ContextManager.get_context_prompt(self.room.id)
+        self.assertIn("start-of-pinned-", context)
+        self.assertIn(" [...truncated]", context)
+        self.assertNotIn("end-of-pinned", context)
+
+    def test_context_build_query_count_is_flat_across_pinned_notes(self):
+        RoomContext.objects.get_or_create(chatroom=self.room)
+        self._pin()
+        ContextManager.get_context_for_ai(self.room)
+
+        with CaptureQueriesContext(connection) as one_note:
+            ContextManager.get_context_for_ai(self.room)
+
+        for _ in range(2):
+            message = self._new_pinned_message()
+            self.assertEqual(self._pin_message(message).status_code, 201)
+
+        with CaptureQueriesContext(connection) as three_notes:
+            ContextManager.get_context_for_ai(self.room)
+
+        self.assertEqual(len(one_note.captured_queries), len(three_notes.captured_queries))
 
 
 class FixChatTextEncryptionCommandTests(TestCase):
@@ -275,6 +341,30 @@ class FixChatTextEncryptionCommandTests(TestCase):
         self.assertEqual(raw_note.content, PINNED_NOTE_LABEL)
         self.assertNotIn(self.voice_text, output)
         self.assertNotIn(self.note_text, output)
+
+    def test_edited_note_keeps_its_content_and_clears_source(self):
+        edited_text = "edited note the user wrote 2468"
+        RoomNote.objects.filter(pk=self.note.pk).update(
+            content=edited_text,
+            source_message_content=self.note_text,
+        )
+
+        output = self._run()
+
+        raw_note = RoomNote.objects.get(id=self.note.id)
+        self.assertEqual(raw_note.content, edited_text)
+        self.assertEqual(raw_note.source_message_content, "")
+        self.assertIn("1 edited note(s) kept", output)
+        self.assertNotIn(edited_text, output)
+        self.assertNotIn(self.note_text, output)
+
+        output_second = self._run()
+
+        unchanged = RoomNote.objects.get(id=self.note.id)
+        self.assertEqual(unchanged.content, edited_text)
+        self.assertEqual(unchanged.source_message_content, "")
+        self.assertIn("Fixed 0 voice message(s) and 0 pinned note(s)", output_second)
+        self.assertIn("1 edited note(s) kept", output_second)
 
     def test_second_run_changes_nothing(self):
         self._run()

@@ -95,6 +95,8 @@ def get_voice_status(request, message_id):
         content, _payload = decrypt_stored(room, message)
         if content and content != DECRYPT_FAILED and content != VOICE_MESSAGE_PLACEHOLDER:
             transcript = content
+        else:
+            transcript = VOICE_STATUS_MARKER
 
     return Response({
         "message_id": message.id,

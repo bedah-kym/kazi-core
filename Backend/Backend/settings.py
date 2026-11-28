@@ -547,6 +547,12 @@ TURN_QUEUE_MAX = int(os.environ.get('TURN_QUEUE_MAX', 3))
 # prompt was created. The margin absorbs small clock differences between hosts
 # (all hosts must run NTP); it also makes a skewed clock fail closed.
 CONSENT_SKEW_SECONDS = int(os.environ.get('CONSENT_SKEW_SECONDS', 2))
+# Turn-stream protocol v2 kill switch. Read once at startup; open v2 sockets
+# stay on v2 until they reconnect. With it off, `hello` answers `protocol: 1`
+# and a subprotocol offer gets `kazi.v1`.
+KAZI_STREAM_V2 = os.environ.get('KAZI_STREAM_V2', 'True').lower() in (
+    '1', 'true', 'yes', 'on',
+)
 PROMOTION_MIN_OCCURRENCES = int(os.environ.get('PROMOTION_MIN_OCCURRENCES', 3))
 PROMOTION_MIN_SUCCESS_RATE = float(os.environ.get('PROMOTION_MIN_SUCCESS_RATE', 0.8))
 ROUTINE_ABSENCE_IDLE_DAYS = int(os.environ.get('ROUTINE_ABSENCE_IDLE_DAYS', 14))

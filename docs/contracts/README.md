@@ -21,6 +21,7 @@ Treat each contract as a small API. If you change one, you bump its
 | [Execution detail](execution-detail.md) | What `GET /api/workflows/executions/<id>/` returns | 1.0 | stable |
 | [Replay safety](replay-safety.md) | Per-step `replay_safe` declaration + computed `replay_hints` | 1.0 | stable |
 | [Credential scoping](credential-scoping.md) | What the shell/delegate execution environment may touch | 1.1 | stable |
+| [Turn stream](turn-stream.md) | The v2 chat WebSocket frames a client can opt in to | 2.0 | draft |
 
 Two more contracts (telemetry events, memory updates) remain queued for a
 future release because the underlying code is still settling.
@@ -36,6 +37,10 @@ future release because the underlying code is still settling.
   enums) — bump Major, document under `Breaking changes`, and ship a
   one-cycle deprecation shim per the v0.4 brief's non-goal "no breaking
   API rewrites."
+
+- **Draft contracts** (status `draft`) may change any field without a
+  version bump or deprecation shim until they are marked stable. Each
+  change still goes in the PR that changes the runtime.
 
 A contract change is part of the PR that changes the runtime — never a
 separate doc-only PR. The runtime and the doc move together.

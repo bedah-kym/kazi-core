@@ -45,12 +45,11 @@ from .kazi_messages import (
     ORIGIN_TURN,
     ORIGIN_TURN_NOTICE,
     KaziMessageError,
-    _default_frame,
     broadcast_kazi_message,
     persist_kazi_message,
 )
 from .models import Chatroom, Message
-from .stream_protocol import TurnEvent, build_stream_sink
+from .stream_protocol import GroupStreamTransport, TurnEvent, build_stream_sink
 from .transcript import build_history_messages, has_several_speakers, strip_wake_word
 
 logger = logging.getLogger(__name__)
@@ -828,6 +827,7 @@ class TurnRunner:
             self._shutdown_turns[ref.id] = (turn.room_id, turn.user_id)
             await self._end_still_running(
                 ref, end_reason="shutdown", partial=False,
+                room_id=turn.room_id,
             )
             unregister_live_turn(ref.id)
             if task is not None:
@@ -839,16 +839,23 @@ class TurnRunner:
             self._shutdown_turns[box["ref"].id] = (turn.room_id, turn.user_id)
             await self._end_still_running(
                 box["ref"], end_reason="shutdown", partial=True,
+                sink=box.get("sink"), room_id=box.get("room_id", turn.room_id),
             )
             raise
         except PauseContinuationLost:
             # The other writer won; both of our writes rolled back. The
             # placeholder is still running and is ended below.
             logger.info("Pause continuation lost for turn %s", turn.pk)
-            await self._end_still_running(box["ref"])
+            await self._end_still_running(
+                box["ref"], sink=box.get("sink"),
+                room_id=box.get("room_id", turn.room_id),
+            )
         except Exception:
             logger.exception("Turn runner failed for %s", turn.pk)
-            await self._end_still_running(box["ref"])
+            await self._end_still_running(
+                box["ref"], sink=box.get("sink"),
+                room_id=box.get("room_id", turn.room_id),
+            )
         finally:
             unregister_live_turn(box["ref"].id)
             if task is not None:
@@ -856,11 +863,12 @@ class TurnRunner:
 
     async def _end_still_running(
         self, ref: TurnRef, *, end_reason: str = "error",
-        partial: Optional[bool] = None,
+        partial: Optional[bool] = None, sink=None, room_id=None,
     ) -> bool:
         from orchestration.turns import _saved_reply_exists, afinalize_turn, atransition
 
         timeout = max(0.01, self._remaining_timeout())
+        reply_saved = False
         if ref.state == "committing":
             try:
                 reply_saved = bool(await asyncio.wait_for(
@@ -872,6 +880,8 @@ class TurnRunner:
             except (asyncio.TimeoutError, Exception):
                 reply_saved = False
             if reply_saved:
+                frame_type = "turn.completed"
+                fields = {"end_reason": "finished"}
                 write = asyncio.ensure_future(
                     afinalize_turn(ref.id, ref.version, reply_saved=True)
                 )
@@ -883,6 +893,8 @@ class TurnRunner:
                     "shutdown" if end_reason == "shutdown"
                     else "reply_not_saved"
                 )
+                frame_type = "turn.failed"
+                fields = {"reason_code": reason, "partial": True}
                 write = asyncio.ensure_future(
                     atransition(
                         ref.id, ref.version, "failed",
@@ -897,12 +909,16 @@ class TurnRunner:
             }
             if partial is not None:
                 updates["partial"] = partial
+            frame_type = "turn.failed"
+            fields = {
+                "reason_code": end_reason,
+                "partial": bool(partial),
+            }
             write = asyncio.ensure_future(
                 atransition(ref.id, ref.version, "failed", **updates)
             )
         try:
             result = await asyncio.wait_for(asyncio.shield(write), timeout=timeout)
-            return bool(result)
         except asyncio.TimeoutError:
             logger.warning("Turn ending write timed out; the reaper will end it")
             return False
@@ -915,6 +931,21 @@ class TurnRunner:
         except Exception:
             logger.warning("Turn ending write failed; the reaper will end it")
             return False
+        if not result:
+            return False
+        if sink is not None:
+            await sink.emit(TurnEvent(kind="terminal", data={
+                "turn_id": ref.id,
+                "frame": frame_type,
+                "fields": fields,
+            }))
+        elif room_id is not None:
+            from orchestration.stream_seq import emit_terminal
+
+            await sync_to_async(emit_terminal)(
+                ref.id, room_id, frame_type, **fields,
+            )
+        return True
 
     async def _execute(self, turn: Turn, box: Dict[str, Any]) -> Any:
         from orchestration import coordinator as coordinator_mod
@@ -924,13 +955,25 @@ class TurnRunner:
         if room is None:
             await sync_to_async(_fail_turn)(turn, "room_gone")
             return None
+
+        async def _fail_early(reason: str) -> bool:
+            won = await sync_to_async(_fail_turn)(turn, reason)
+            if won:
+                from orchestration.stream_seq import emit_terminal
+
+                await sync_to_async(emit_terminal)(
+                    turn.pk, room.id, "turn.failed",
+                    reason_code=reason, partial=False,
+                )
+            return won
+
         request = setup.request
         if request is None:
-            await sync_to_async(_fail_turn)(turn, "request_missing")
+            await _fail_early("request_missing")
             return None
         content = setup.content
         if content == DECRYPT_FAILED:
-            await sync_to_async(_fail_turn)(turn, "decrypt_failed")
+            await _fail_early("decrypt_failed")
             return None
 
         participants = setup.participants
@@ -946,7 +989,7 @@ class TurnRunner:
             content.strip() if is_ai_room else None
         )
         if not ai_query:
-            await sync_to_async(_fail_turn)(turn, "empty_query")
+            await _fail_early("empty_query")
             return None
 
         history_rows = await sync_to_async(get_history_rows)(
@@ -974,64 +1017,24 @@ class TurnRunner:
         layer = get_channel_layer()
         room_group = f"chat_{room.id}"
 
-        async def send_chunk(correlation_id, chunk_text, is_final):
-            if layer is None:
-                return
-            await layer.group_send(
-                room_group,
-                {
-                    "type": "ai_stream_chunk",
-                    "chunk": chunk_text,
-                    "is_final": is_final,
-                    "correlation_id": correlation_id,
-                },
-            )
-
-        async def send_step_event(correlation_id, event_payload):
-            if layer is None:
-                return
-            await layer.group_send(
-                room_group,
-                {
-                    "type": "ai_step_event",
-                    "event": event_payload,
-                    "correlation_id": correlation_id,
-                },
-            )
-
-        async def send_saved(event):
-            """Push one already-persisted message as the v1 saved frame.
-
-            This is the runner's terminal emit. It uses the layer directly so a
-            saved reply costs no extra worker hop, and a failed push never kills
-            the turn (the message is already on disk).
-            """
-            if layer is None:
-                return
-            data = event.data
-            try:
-                await layer.group_send(
-                    room_group,
-                    {
-                        "type": "ai_message_saved",
-                        "message": _default_frame(
-                            data["message"],
-                            data.get("content", ""),
-                            bool(data.get("turn_continues", False)),
-                        ),
-                    },
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Kazi message realtime push failed: %s", type(exc).__name__,
-                )
-
+        transport = GroupStreamTransport(layer, room_group)
         sink = build_stream_sink(
-            send_chunk,
-            send_step_event,
+            transport.send_chunk,
+            transport.send_step,
             step_id=f"turn_{request.id}",
-            send_saved=send_saved,
+            send_saved=transport.send_saved,
+            v2_transport=transport,
         )
+        # The claimed turn is the one this run answers with. A paused turn it
+        # later adopts switches the sink to that turn and its stored seq.
+        sink.set_turn(
+            str(turn.pk),
+            next_seq=0,
+            started=False,
+            request_message_id=request.id,
+        )
+        box["sink"] = sink
+        box["room_id"] = room.id
 
         async def get_context_prompt():
             from .context_manager import ContextManager
@@ -1087,8 +1090,8 @@ class TurnRunner:
             room_id=room.id,
             username=request.member.User.username,
             message_id=request.id,
-            send_chunk=send_chunk,
-            send_step_event=send_step_event,
+            send_chunk=transport.send_chunk,
+            send_step_event=transport.send_step,
             get_context_prompt=get_context_prompt,
             bump_signals=bump_signals,
             history_messages=history_messages,
@@ -1132,14 +1135,35 @@ class TurnRunner:
                 logger.warning("Context summary refresh skipped: %s", exc)
 
         if result.turn_state == "committing":
-            await coordinator.finalize_turn(result, reply_saved=reply_saved)
+            won = await coordinator.finalize_turn(result, reply_saved=reply_saved)
+            if won:
+                if reply_saved:
+                    await sink.emit(TurnEvent(kind="terminal", data={
+                        "turn_id": result.turn_id,
+                        "frame": "turn.completed",
+                        "fields": {
+                            "final_message_id": getattr(ai_message, "id", None),
+                            "final_text": result.full_response,
+                            "end_reason": "finished",
+                        },
+                    }))
+                else:
+                    await sink.emit(TurnEvent(kind="terminal", data={
+                        "turn_id": result.turn_id,
+                        "frame": "turn.failed",
+                        "fields": {
+                            "reason_code": "reply_not_saved",
+                            "partial": True,
+                        },
+                    }))
         elif result.turn_state == "running":
             await self._end_still_running(
                 TurnRef(
                     id=result.turn_id,
                     version=result.turn_version,
                     state=result.turn_state,
-                )
+                ),
+                sink=sink,
             )
         return result
 

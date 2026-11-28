@@ -169,8 +169,25 @@ class ChatConsumer(AsyncWebsocketConsumer):
             )
         self._presence_ids = set(online_ids)
 
-        # 6. Accept connection
-        await self.accept()
+        # 6. Accept connection, negotiating the stream protocol (#217a-2a).
+        self._v2_enabled = bool(getattr(settings, "KAZI_STREAM_V2", True))
+        offered = list(self.scope.get("subprotocols") or [])
+        self.stream_protocol = 1
+        chosen_subprotocol = None
+        if "kazi.v2" in offered:
+            if self._v2_enabled:
+                self.stream_protocol = 2
+                chosen_subprotocol = "kazi.v2"
+            else:
+                chosen_subprotocol = "kazi.v1"
+        elif "kazi.v1" in offered:
+            chosen_subprotocol = "kazi.v1"
+        self._ready_sent = False
+        if chosen_subprotocol is not None:
+            await self.accept(subprotocol=chosen_subprotocol)
+            await self._send_session_ready()
+        else:
+            await self.accept()
 
         # 7. Announce online once, on the user's first connection.
         if first_connection:
@@ -543,10 +560,129 @@ class ChatConsumer(AsyncWebsocketConsumer):
         except Exception as e:
             logger.error(f"Disconnect error for {self.channel_name}: {e}")
 
+    async def _send_session_ready(self) -> None:
+        """Answer the socket's protocol negotiation once (contract)."""
+        if getattr(self, "_ready_sent", False):
+            return
+        self._ready_sent = True
+        await self.send(text_data=json.dumps({
+            "v": 2,
+            "type": "session.ready",
+            "protocol": self.stream_protocol,
+            "resumable": False,
+        }))
+
+    async def _send_v2_error(self, code: str, turn_id=None) -> None:
+        """A fixed-text refusal; it never repeats client input."""
+        message = (
+            "That turn cannot be cancelled."
+            if code == "cancel_denied"
+            else "That turn has already ended."
+        )
+        frame = {"v": 2, "type": "error", "code": code, "message": message}
+        if turn_id:
+            frame["turn_id"] = str(turn_id)
+        await self.send(text_data=json.dumps(frame))
+
+    async def _handle_hello(self, data) -> None:
+        """Choose v2 when the client prefers it; a second hello is ignored."""
+        if getattr(self, "_ready_sent", False):
+            return
+        protocols = data.get("protocols") or []
+        if self._v2_enabled and 2 in protocols:
+            self.stream_protocol = 2
+        else:
+            self.stream_protocol = 1
+        await self._send_session_ready()
+
+    async def _handle_turn_cancel(self, data) -> None:
+        """Refuse or run a turn.cancel exactly as the contract states.
+
+        The room check and the owner check run before the already-ended check,
+        so a refusal never reveals whether a turn exists; a lookup error denies.
+        """
+        from orchestration.turns import TERMINAL_STATES
+
+        raw_turn_id = data.get("turn_id")
+        turn_id = str(raw_turn_id) if raw_turn_id else ""
+        room_id = getattr(self, "room_name", None)
+        user_id = self.scope["user"].id
+
+        def _lookup():
+            from orchestration.models import Turn
+
+            return (
+                Turn.objects.filter(pk=turn_id)
+                .values("room_id", "user_id", "state", "version")
+                .first()
+            )
+
+        try:
+            row = await sync_to_async(_lookup)()
+        except Exception:
+            row = None
+        if row is None:
+            await self._send_v2_error("cancel_denied", turn_id)
+            return
+        if (
+            str(row["room_id"]) != str(room_id)
+            or row["user_id"] != user_id
+        ):
+            await self._send_v2_error("cancel_denied", turn_id)
+            return
+        if row["state"] in TERMINAL_STATES:
+            await self._send_v2_error("turn_ended", turn_id)
+            return
+
+        state = row["state"]
+        if state in ("running", "committing"):
+            from .turn_runner import _stop_active_turn
+
+            # The exact stop path: flag the running turn and cancel the owner's
+            # queued turns in this room.
+            await _stop_active_turn(room_id, user_id)
+            return
+        if state == "paused":
+            from orchestration.agent_loop import cancel_pending_action
+            from orchestration.stream_seq import emit_terminal
+            from orchestration.turns import get_paused_turn
+
+            paused = await sync_to_async(get_paused_turn)(room_id, user_id)
+            await cancel_pending_action(room_id, user_id)
+            if paused is not None:
+                await sync_to_async(emit_terminal)(
+                    paused.pk, room_id, "turn.cancelled",
+                    reason="user_cancel", partial=False,
+                )
+            return
+        if state == "queued":
+            from orchestration.stream_seq import emit_terminal
+            from orchestration.turns import transition
+
+            won = await sync_to_async(transition)(
+                turn_id, row["version"], "cancelled",
+                from_state="queued", end_reason="user_cancel",
+            )
+            if won:
+                await sync_to_async(emit_terminal)(
+                    turn_id, room_id, "turn.cancelled",
+                    reason="user_cancel", partial=False,
+                )
+            return
+        # Any other resting state has already ended for this command's purpose.
+        await self._send_v2_error("turn_ended", turn_id)
+
     async def receive(self, text_data):
         try:
             data = json.loads(text_data)
             command = data.get("command", None)
+
+            if data.get("type") == "hello":
+                await self._handle_hello(data)
+                return
+            if data.get("type") == "turn.cancel":
+                await self._handle_turn_cancel(data)
+                return
 
             if command == 'typing':
                 await self.channel_layer.group_send(
@@ -1481,8 +1617,26 @@ class ChatConsumer(AsyncWebsocketConsumer):
         """Helper to send message to group"""
         await self.send(text_data=json.dumps(message))
 
+    async def _send_v2_frames(self, frames) -> None:
+        for frame in frames or []:
+            await self.send(text_data=json.dumps(frame))
+
+    def _v2_rendered(self, event) -> bool:
+        """Whether this group message carried a v2 render for a v2 socket."""
+        return "v2" in event and bool(event.get("v2"))
+
+    def _v2_passes_v1(self, event) -> bool:
+        """A v2 socket gets a v1-shaped frame when no v2 render exists."""
+        return "v2" not in event or bool(event.get("v2_pass"))
+
     async def ai_stream_chunk(self, event):
-        """Handle streaming AI response chunks"""
+        """Handle streaming AI response chunks."""
+        if getattr(self, "stream_protocol", 1) == 2:
+            if self._v2_rendered(event):
+                await self._send_v2_frames(event.get("v2"))
+                return
+            if not self._v2_passes_v1(event):
+                return
         await self.send(text_data=json.dumps({
             "command": "ai_stream",
             "chunk": event.get('chunk'),
@@ -1491,17 +1645,42 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     async def ai_step_event(self, event):
         """Handle structured orchestration progress updates."""
+        if getattr(self, "stream_protocol", 1) == 2:
+            if self._v2_rendered(event):
+                await self._send_v2_frames(event.get("v2"))
+                return
+            if not self._v2_passes_v1(event):
+                return
         await self.send(text_data=json.dumps({
             "command": "orchestration_step",
             "event": event.get("event") or {},
         }))
 
     async def ai_message_saved(self, event):
-        """Send saved AI message to client for proper rendering with dropdown"""
+        """Send saved AI message to client for proper rendering with dropdown."""
+        if getattr(self, "stream_protocol", 1) == 2:
+            if self._v2_rendered(event):
+                await self._send_v2_frames(event.get("v2"))
+                return
+            if not self._v2_passes_v1(event):
+                return
         await self.send(text_data=json.dumps({
             "command": "ai_message_saved",
             "message": event.get('message')
         }))
+
+    async def stream_v2(self, event):
+        """Deliver v2 frames that are the event's whole render.
+
+        Carries either a ``frames`` list (one emit) or a single ``frame`` (a
+        writer outside the run ending a turn).
+        """
+        if getattr(self, "stream_protocol", 1) != 2:
+            return
+        frames = event.get("frames")
+        if frames is None and event.get("frame") is not None:
+            frames = [event["frame"]]
+        await self._send_v2_frames(frames)
 
     @classmethod
     async def get_paginated_messages(cls, chatid, before_id=None, limit=20):

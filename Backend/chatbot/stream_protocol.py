@@ -6,9 +6,16 @@ for byte what they were (217a-1b). The v2 adapter (217a-2a) builds on the same
 events, which is why they carry facts v1 drops: the text ``channel``, a call's
 ``call_id`` and ``duration_ms``, ``tool_dispatch`` and the approval ``call_id``
 and ``expires_at``.
+
+A sink renders each event once per protocol. When it is built with a
+:class:`GroupStreamTransport` it puts both renders in one group message (the
+v2 frames ride along under ``v2``), so a mixed room costs one broadcast per
+event and each socket reads only its own protocol.
 """
 from __future__ import annotations
 
+import asyncio
+import logging
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
@@ -16,6 +23,9 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 from asgiref.sync import sync_to_async
 
 from orchestration.contracts import build_step_event
+from orchestration.stream_seq import set_run_seq
+
+logger = logging.getLogger(__name__)
 
 SendChunk = Callable[[str, str, bool], Awaitable[None]]
 SendStepEvent = Callable[[str, dict], Awaitable[None]]
@@ -147,21 +157,21 @@ class V1Adapter:
             ),
         )
 
-    async def emit(self, event: TurnEvent) -> None:
+    async def emit(self, event: TurnEvent) -> bool:
         kind = event.kind
         if kind in ("text", "harness"):
             text, channel, tail = self._render_text(event)
             await self._send_chunk(self.correlation_id, text, event.is_final)
             self._last_text_channel = channel
             self._last_text_tail_newlines = tail
-            return
+            return True
         if kind == "progress":
             await self._progress(event.phase, event.state, event.message)
-            return
+            return True
         if kind == "tool_start":
             tool = (event.name or "action").replace("_", " ")
             await self._progress("executing", "started", f"Running {tool}\u2026")
-            return
+            return True
         if kind == "tool_result":
             tool = (event.name or "action").replace("_", " ")
             label = f"{tool}: {event.status}"
@@ -171,28 +181,327 @@ class V1Adapter:
                 )
             else:
                 await self._progress("executing", "completed", label)
-            return
+            return True
         if kind == "saved":
             await self._send_saved(event)
-            return
+            return True
         # tool_dispatch, confirmation, done and anything newer are facts the
         # v1 stream does not render. Dropping them here is what keeps the v1
         # frames in their old order.
-        return
+        return False
+
+
+class V2Adapter:
+    """Render the same :class:`TurnEvent` objects as the v2 contract's frames.
+
+    One turn can change id during a run (the "yes" placeholder is superseded by
+    the paused turn it answers), so the adapter keys its state by ``turn_id``
+    and the coordinator tells it which turn is current.
+    """
+
+    _IDLE = object()
+
+    def __init__(self) -> None:
+        self._turns: Dict[str, Dict[str, Any]] = {}
+        self._current: str = ""
+
+    def _state(self, turn_id: str) -> Dict[str, Any]:
+        state = self._turns.get(turn_id)
+        if state is None:
+            state = {
+                "seq": 0,
+                "started": False,
+                "ended": False,
+                "part": None,
+                "part_count": 0,
+                "expires_at": None,
+                "request_message_id": None,
+                "model": "",
+            }
+            self._turns[turn_id] = state
+        return state
+
+    def set_turn(
+        self,
+        turn_id: Any,
+        *,
+        next_seq: int = 0,
+        started: bool = False,
+        request_message_id: Any = None,
+        model: str = "",
+    ) -> None:
+        if not turn_id:
+            return
+        tid = str(turn_id)
+        state = self._state(tid)
+        state["seq"] = max(int(state["seq"]), int(next_seq))
+        state["started"] = bool(state["started"] or started)
+        state["ended"] = False
+        state["part"] = None
+        if request_message_id is not None:
+            state["request_message_id"] = request_message_id
+        if model:
+            state["model"] = model
+        self._current = tid
+        set_run_seq(tid, max(0, state["seq"] - 1))
+
+    def last_seq(self, turn_id: Any = None) -> int:
+        tid = str(turn_id or self._current or "")
+        state = self._turns.get(tid)
+        if state is None:
+            return 0
+        return max(0, int(state["seq"]) - 1)
+
+    def _frame(self, state: Dict[str, Any], frame_type: str, **fields) -> Dict:
+        tid = self._current
+        frame = {
+            "v": 2,
+            "type": frame_type,
+            "turn_id": tid,
+            "seq": int(state["seq"]),
+        }
+        state["seq"] += 1
+        frame.update(fields)
+        set_run_seq(tid, state["seq"] - 1)
+        return frame
+
+    def _ensure_started(self, state: Dict[str, Any]) -> List[Dict]:
+        if state["started"] or state["ended"]:
+            return []
+        state["started"] = True
+        return [self._frame(
+            state,
+            "turn.started",
+            request_message_id=state["request_message_id"],
+            model=state["model"] or "",
+        )]
+
+    def _close_part(self, state: Dict[str, Any]) -> List[Dict]:
+        part = state["part"]
+        if part is None:
+            return []
+        state["part"] = None
+        return [self._frame(state, "part.ended", part_id=part["id"])]
+
+    @staticmethod
+    def _segments(event: TurnEvent) -> List[TextSegment]:
+        if event.segments:
+            return list(event.segments)
+        if event.text:
+            channel = event.channel or TEXT_CHANNEL_ANSWER
+            kind = "harness" if event.kind == "harness" else "text"
+            return [TextSegment(kind, channel, event.text)]
+        return []
+
+    def _text_frames(self, state: Dict[str, Any], event: TurnEvent) -> List[Dict]:
+        frames: List[Dict] = []
+        for segment in self._segments(event):
+            channel = segment.channel or TEXT_CHANNEL_ANSWER
+            if segment.kind == "harness" or channel == TEXT_CHANNEL_HARNESS:
+                frames.extend(self._close_part(state))
+                frames.append(self._frame(
+                    state, "notice", kind="info", text=segment.text,
+                ))
+                continue
+            part = state["part"]
+            if part is None or part["channel"] != channel:
+                frames.extend(self._close_part(state))
+                part = {
+                    "id": f"p{state['part_count']}",
+                    "channel": channel,
+                }
+                state["part_count"] += 1
+                state["part"] = part
+                frames.append(self._frame(
+                    state, "part.started",
+                    part_id=part["id"], channel=channel,
+                ))
+            frames.append(self._frame(
+                state, "text.delta", part_id=part["id"], text=segment.text,
+            ))
+        if event.is_final:
+            frames.extend(self._close_part(state))
+        return frames
+
+    def _terminal(self, state: Dict[str, Any], data: Dict[str, Any]) -> List[Dict]:
+        frame_type = data.get("frame") or data.get("type") or ""
+        fields = dict(data.get("fields") or {})
+        frames = self._close_part(state)
+        state["ended"] = True
+        if frame_type:
+            state["started"] = True
+            frames.append(self._frame(state, frame_type, **fields))
+        return frames
+
+    def render(self, event: TurnEvent) -> List[Dict]:
+        data = event.data or {}
+        turn_id = str(data.get("turn_id") or self._current or "")
+        if not turn_id:
+            return []
+        state = self._state(turn_id)
+        self._current = turn_id
+        kind = event.kind
+        if kind == "started":
+            state["started"] = False
+            if data.get("request_message_id") is not None:
+                state["request_message_id"] = data.get("request_message_id")
+            if data.get("model"):
+                state["model"] = data.get("model")
+            return self._ensure_started(state)
+        if kind == "resumed":
+            state["started"] = True
+            if data.get("request_message_id") is not None:
+                state["request_message_id"] = data.get("request_message_id")
+            return [self._frame(
+                state, "turn.resumed",
+                request_message_id=state["request_message_id"],
+            )]
+        if kind == "terminal":
+            return self._terminal(state, data)
+        if kind in ("text", "harness"):
+            frames = self._ensure_started(state)
+            frames.extend(self._text_frames(state, event))
+            return frames
+        if kind == "paused":
+            frames = self._ensure_started(state)
+            frames.extend(self._close_part(state))
+            expires_at = event.expires_at or state.get("expires_at")
+            frames.append(self._frame(
+                state, "turn.paused",
+                pause_kind=event.pause_kind or "approval",
+                expires_at=expires_at,
+            ))
+            return frames
+        if kind == "confirmation":
+            if event.expires_at:
+                state["expires_at"] = event.expires_at
+            return []
+        # progress, tool facts, done and saved have no v2-core frame. The
+        # transport passes their v1 frame through to a v2 socket unchanged.
+        return []
+
+
+class GroupStreamTransport:
+    """The one place the turn path group-sends, carrying both renders.
+
+    The v1 frame keeps its old group ``type`` (and thus its old consumer
+    handler); the v2 frames ride under ``v2``. ``v2_pass`` marks a v1-only
+    frame that a v2 socket should receive in its v1 shape (the contract's
+    pass-through rule).
+    """
+
+    def __init__(self, layer, room_group: str) -> None:
+        self._layer = layer
+        self._room_group = room_group
+        self.v2: List[Dict] = []
+        self.v2_pass = False
+
+    async def _send(self, message_type: str, payload: Dict[str, Any]) -> None:
+        if self._layer is None:
+            return
+        payload["v2"] = self.v2
+        payload["v2_pass"] = self.v2_pass
+        await self._layer.group_send(
+            self._room_group, {"type": message_type, **payload},
+        )
+
+    async def send_chunk(self, correlation_id, chunk_text, is_final):
+        await self._send("ai_stream_chunk", {
+            "chunk": chunk_text,
+            "is_final": is_final,
+            "correlation_id": correlation_id,
+        })
+
+    async def send_step(self, correlation_id, event_payload):
+        await self._send("ai_step_event", {
+            "event": event_payload,
+            "correlation_id": correlation_id,
+        })
+
+    async def send_saved(self, event: TurnEvent):
+        from chatbot.kazi_messages import _default_frame
+
+        data = event.data
+        if "message" not in data:
+            return
+        await self._send("ai_message_saved", {
+            "message": _default_frame(
+                data["message"],
+                data.get("content", ""),
+                bool(data.get("turn_continues", False)),
+            ),
+        })
+
+    async def send_v2(self, frames: List[Dict]) -> None:
+        if self._layer is None or not frames:
+            return
+        await self._layer.group_send(
+            self._room_group, {"type": "stream_v2", "frames": frames},
+        )
 
 
 class TurnEventSink:
-    """The one emit entry point the coordinator and runner use."""
+    """The one emit entry point the coordinator and runner use.
 
-    def __init__(self, adapter: V1Adapter) -> None:
+    Fail-soft by design: a frame the transport cannot send is counted and
+    dropped, never raised into the turn. ``CancelledError`` still propagates so
+    a shutdown can stop the stream.
+    """
+
+    def __init__(
+        self,
+        adapter: Optional[V1Adapter],
+        *,
+        v2: Optional[V2Adapter] = None,
+        transport: Optional[GroupStreamTransport] = None,
+    ) -> None:
         self._adapter = adapter
+        self._v2 = v2
+        self._transport = transport
 
     @property
     def correlation_id(self) -> str:
-        return self._adapter.correlation_id
+        return self._adapter.correlation_id if self._adapter else ""
 
-    async def emit(self, event: TurnEvent) -> None:
-        await self._adapter.emit(event)
+    def set_turn(self, turn_id: Any, **kwargs: Any) -> None:
+        if self._v2 is not None:
+            self._v2.set_turn(turn_id, **kwargs)
+
+    def last_seq(self, turn_id: Any = None) -> int:
+        return self._v2.last_seq(turn_id) if self._v2 is not None else 0
+
+    async def emit(self, event: TurnEvent) -> bool:
+        v2_frames: List[Dict] = []
+        try:
+            if self._v2 is not None:
+                v2_frames = self._v2.render(event)
+            if self._transport is not None:
+                self._transport.v2 = v2_frames
+                self._transport.v2_pass = not v2_frames
+            sent_v1 = False
+            if self._adapter is not None:
+                sent_v1 = bool(await self._adapter.emit(event))
+            if self._transport is not None and v2_frames and not sent_v1:
+                await self._transport.send_v2(v2_frames)
+            return True
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - a lost frame must not end a turn
+            logger.warning(
+                "Stream frame send failed: %s", exc.__class__.__name__,
+            )
+            try:
+                from orchestration.telemetry import record_event
+
+                record_event("stream_send_failed", {
+                    "kind": event.kind,
+                    "turn_id": str((event.data or {}).get("turn_id") or ""),
+                    "error_class": exc.__class__.__name__,
+                    "is_final": bool(event.is_final),
+                })
+            except Exception:  # pragma: no cover - telemetry is best effort
+                pass
+            return False
 
 
 def build_stream_sink(
@@ -202,12 +511,20 @@ def build_stream_sink(
     step_id: str = "",
     correlation_id: Optional[str] = None,
     send_saved: Optional[SendSaved] = None,
+    v2_transport: Optional[GroupStreamTransport] = None,
 ) -> TurnEventSink:
-    """Build the v1 sink the coordinator and runner share for one turn."""
-    return TurnEventSink(V1Adapter(
+    """Build the sink the coordinator and runner share for one turn.
+
+    With ``v2_transport`` the sink renders v2 too and sends both protocols in
+    that transport's one group message. Without it the sink is v1 only, which
+    keeps direct coordinator callers and the existing tests unchanged.
+    """
+    adapter = V1Adapter(
         send_chunk,
         send_step_event,
         step_id=step_id,
         correlation_id=correlation_id,
         send_saved=send_saved,
-    ))
+    )
+    v2 = V2Adapter() if v2_transport is not None else None
+    return TurnEventSink(adapter, v2=v2, transport=v2_transport)

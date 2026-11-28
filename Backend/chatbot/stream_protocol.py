@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from asgiref.sync import sync_to_async
 
@@ -102,16 +102,24 @@ class V1Adapter:
         self._last_text_channel = ""
         self._last_text_tail_newlines = 0
 
-    def _render_text(self, event: TurnEvent) -> str:
+    def _render_text(self, event: TurnEvent) -> Tuple[str, str, int]:
         """The v1 chunk text: one blank line after narration, nothing stacked.
 
         The loop emits each step's text as one block, so a narration segment
         is a whole part: whatever follows it, another narration part included,
         starts after one blank line. Newlines already on either side of the
         boundary count toward it; only the missing ones are added.
+
+        Returns the text plus the boundary state it leaves; the caller keeps
+        that state only once the chunk is sent, so a failed send never shapes
+        the next separator.
         """
         if not event.segments:
-            return event.text or ""
+            return (
+                event.text or "",
+                self._last_text_channel,
+                self._last_text_tail_newlines,
+            )
         pieces = []
         previous = self._last_text_channel
         tail = self._last_text_tail_newlines
@@ -126,9 +134,7 @@ class V1Adapter:
             tail = tail + len(text) if not stripped else len(text) - len(stripped)
             pieces.append(text)
             previous = segment.channel
-        self._last_text_channel = previous
-        self._last_text_tail_newlines = tail
-        return "".join(pieces)
+        return "".join(pieces), previous, tail
 
     async def _progress(self, phase: str, state: str, message: str) -> None:
         await self._send_step_event(
@@ -144,9 +150,10 @@ class V1Adapter:
     async def emit(self, event: TurnEvent) -> None:
         kind = event.kind
         if kind in ("text", "harness"):
-            await self._send_chunk(
-                self.correlation_id, self._render_text(event), event.is_final,
-            )
+            text, channel, tail = self._render_text(event)
+            await self._send_chunk(self.correlation_id, text, event.is_final)
+            self._last_text_channel = channel
+            self._last_text_tail_newlines = tail
             return
         if kind == "progress":
             await self._progress(event.phase, event.state, event.message)

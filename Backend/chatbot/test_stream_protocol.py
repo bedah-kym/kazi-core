@@ -431,3 +431,39 @@ class SinkRoutingTests(TransactionTestCase):
         starts = sink.of_kind("tool_start")
         self.assertEqual(len(starts), 1)
         self.assertIsNone(starts[0].call_id)
+
+
+class FailedChunkSendTests(SimpleTestCase):
+    """A chunk the client never got must not shape the next chunk's separator."""
+
+    def test_a_failed_narration_send_still_leaves_one_blank_line_before_the_answer(self):
+        from chatbot.stream_protocol import TextSegment, TurnEvent
+
+        delivered = []
+        attempts = {"n": 0}
+
+        async def send_chunk(correlation_id, text, is_final):
+            attempts["n"] += 1
+            if attempts["n"] == 2:
+                raise ConnectionError("socket closed")
+            delivered.append(text)
+
+        adapter = V1Adapter(send_chunk, AsyncMock(), correlation_id="c1")
+
+        def narration_then(text, channel):
+            return TurnEvent(
+                kind="text",
+                text=text,
+                channel=channel,
+                segments=[TextSegment("text", channel, text)],
+            )
+
+        async def scenario():
+            await adapter.emit(narration_then("First.", "narration"))
+            with self.assertRaises(ConnectionError):
+                await adapter.emit(narration_then("Second.\n\n", "narration"))
+            await adapter.emit(narration_then("Done.", "answer"))
+
+        async_to_sync(scenario)()
+
+        self.assertEqual("".join(delivered), "First.\n\nDone.")

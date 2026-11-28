@@ -27,6 +27,7 @@ from django.db.models.functions import Now
 from django.utils import timezone
 
 from orchestration.models import Turn
+from orchestration.stream_seq import emit_terminal, get_run_seq
 from orchestration.telemetry import record_event
 from orchestration.turn_leases import (
     PROCESS_OWNER_ID,
@@ -130,10 +131,14 @@ class TurnRef:
     id: str
     version: int
     state: str
+    stream_seq: int = 0
 
 
 def _ref(turn: Turn) -> TurnRef:
-    return TurnRef(id=str(turn.pk), version=turn.version, state=turn.state)
+    return TurnRef(
+        id=str(turn.pk), version=turn.version, state=turn.state,
+        stream_seq=int(getattr(turn, "stream_seq", 0) or 0),
+    )
 
 
 def create_turn(
@@ -401,6 +406,7 @@ def request_stop_for_key(room_id: Any, user_id: Any) -> StopResult:
                         pk=running.pk, state="committing",
                     ).exists()
 
+        cancelled_ids = list(queued.values_list("pk", flat=True))
         cancelled = queued.update(
             state="cancelled",
             end_reason=USER_CANCEL,
@@ -408,6 +414,18 @@ def request_stop_for_key(room_id: Any, user_id: Any) -> StopResult:
             ended_at=Now(),
             owner_id=None,
             lease_expires_at=None,
+        )
+    for turn_pk in cancelled_ids:
+        # A queued turn never ran, so it has no frames to collide with: its
+        # terminal uses seq 0 and costs no write.
+        from orchestration.stream_seq import broadcast_terminal, build_terminal_frame
+
+        broadcast_terminal(
+            room_id,
+            build_terminal_frame(
+                turn_pk, "turn.cancelled", 0,
+                reason=USER_CANCEL, partial=False,
+            ),
         )
     return StopResult(
         active=True,
@@ -668,10 +686,28 @@ def continue_pause(
         "end_reason": "continued_pause",
         "version": paused_turn.version + 1,
     })
+    if placeholder.room_id is not None:
+        # The placeholder ran in this same task, so its counter is here; the
+        # resume path must not pay an extra write to number the terminal.
+        from orchestration.stream_seq import (
+            broadcast_terminal,
+            build_terminal_frame,
+            get_run_seq,
+        )
+
+        seq = max(0, int(get_run_seq(placeholder.pk) or 0)) + 1
+        broadcast_terminal(
+            placeholder.room_id,
+            build_terminal_frame(
+                placeholder.pk, "turn.superseded", seq,
+                by_turn_id=str(paused_turn.pk),
+            ),
+        )
     return TurnRef(
         id=str(paused_turn.pk),
         version=paused_turn.version + 1,
         state="running",
+        stream_seq=paused_turn.stream_seq,
     )
 
 
@@ -913,17 +949,22 @@ def clear_paused_state(turn_id: Any) -> bool:
 
 def expire_pause(turn: Turn) -> bool:
     """Move a stale pause to ``expired`` once, keeping its state for a reply."""
-    return transition(
+    moved = transition(
         str(turn.pk),
         turn.version,
         "expired",
         from_state="paused",
         end_reason="pause_expired",
     )
+    if moved:
+        emit_terminal(
+            turn.pk, turn.room_id, "turn.expired", reason="pause_expired",
+        )
+    return moved
 
 
 def supersede_pause(turn: Turn, by_turn_id: Any) -> bool:
-    return transition(
+    moved = transition(
         str(turn.pk),
         turn.version,
         "superseded",
@@ -931,6 +972,12 @@ def supersede_pause(turn: Turn, by_turn_id: Any) -> bool:
         end_reason="superseded",
         superseded_by_id=by_turn_id,
     )
+    if moved:
+        emit_terminal(
+            turn.pk, turn.room_id, "turn.superseded",
+            by_turn_id=str(by_turn_id) if by_turn_id else None,
+        )
+    return moved
 
 
 def transition(
@@ -952,6 +999,7 @@ def transition(
     paused_state_enc: Any = _UNSET,
     paused_at: Any = _UNSET,
     superseded_by_id: Any = _UNSET,
+    stream_seq: Any = _UNSET,
 ) -> bool:
     """Move a turn with one compare-and-set write.
 
@@ -983,10 +1031,19 @@ def transition(
         "paused_state_enc": paused_state_enc,
         "paused_at": paused_at,
         "superseded_by_id": superseded_by_id,
+        "stream_seq": stream_seq,
     }
     for field, value in optional.items():
         if value is not _UNSET:
             updates[field] = value
+
+    # The run's in-memory high-water mark rides the pause or commit CAS rather
+    # than a second write. A writer outside the run has no counter here and
+    # takes its own number with an atomic increment when it emits.
+    if "stream_seq" not in updates:
+        run_seq = get_run_seq(turn_id)
+        if run_seq is not None and to_state in ("paused", "committing", "completed"):
+            updates["stream_seq"] = int(run_seq)
 
     # Every pause edge stamps when it happened, and a resume clears the stamp.
     # The stamp is the app host's clock, the same clock as a message timestamp,
@@ -1126,21 +1183,29 @@ def expire_queued_for_key(
     """Expire one key's queued rows created before ``cutoff`` (one UPDATE)."""
     if room_id is None:
         return 0
-    return (
-        Turn.objects.filter(
-            room_id=room_id,
-            user_id=user_id,
-            state="queued",
-            created_at__lt=cutoff,
-        ).update(
-            state="expired",
-            end_reason=reason,
-            version=F("version") + 1,
-            ended_at=Now(),
-            owner_id=None,
-            lease_expires_at=None,
-        )
+    query = Turn.objects.filter(
+        room_id=room_id,
+        user_id=user_id,
+        state="queued",
+        created_at__lt=cutoff,
     )
+    expired_ids = list(query.values_list("pk", flat=True))
+    count = query.update(
+        state="expired",
+        end_reason=reason,
+        version=F("version") + 1,
+        ended_at=Now(),
+        owner_id=None,
+        lease_expires_at=None,
+    )
+    for turn_pk in expired_ids:
+        from orchestration.stream_seq import broadcast_terminal, build_terminal_frame
+
+        broadcast_terminal(
+            room_id,
+            build_terminal_frame(turn_pk, "turn.expired", 0, reason=reason),
+        )
+    return count
 
 
 def expire_all_queued_for_key(
@@ -1158,7 +1223,8 @@ def expire_all_queued_for_key(
     queued = Turn.objects.filter(
         room_id=room_id, user_id=user_id, state="queued",
     )
-    count = queued.count()
+    queued_ids = list(queued.values_list("pk", flat=True))
+    count = len(queued_ids)
     if count == 0:
         return 0
     representative = queued.first()
@@ -1172,6 +1238,13 @@ def expire_all_queued_for_key(
     )
     if notify:
         _save_reap_notice(representative, count)
+    for turn_pk in queued_ids:
+        from orchestration.stream_seq import broadcast_terminal, build_terminal_frame
+
+        broadcast_terminal(
+            room_id,
+            build_terminal_frame(turn_pk, "turn.expired", 0, reason=reason),
+        )
     return count
 
 
@@ -1314,6 +1387,17 @@ def reap_turn(
     # false. It is still needed when queued messages were dropped.
     if target != "completed" or expired:
         _save_reap_notice(turn, expired, completed=target == "completed")
+    if turn.room_id is not None:
+        if target == "completed":
+            emit_terminal(
+                turn.pk, turn.room_id, "turn.completed",
+                end_reason="finished",
+            )
+        else:
+            emit_terminal(
+                turn.pk, turn.room_id, "turn.failed",
+                reason_code="lease_lost", partial=bool(updates.get("partial")),
+            )
     return True
 
 

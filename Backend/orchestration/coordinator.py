@@ -351,7 +351,7 @@ async def _bounded_write(write, deadline: float) -> None:
 
 
 async def _end_unexpected_turn(
-    turn_box: Dict, stream_state: Dict, outcome: str, room_id=None,
+    turn_box: Dict, stream_state: Dict, outcome: str, room_id=None, sink=None,
 ) -> bool:
     """Write the honest terminal state for an exception after the claim.
 
@@ -428,6 +428,15 @@ async def _end_unexpected_turn(
             # here would make a terminal Turn look answered; save none.
             return False
         turn_box["settled"] = True
+        if sink is not None:
+            await sink.emit(TurnEvent(kind="terminal", data={
+                "turn_id": ref.id,
+                "frame": "turn.failed",
+                "fields": {
+                    "reason_code": updates.get("end_reason") or "error",
+                    "partial": bool(updates.get("partial")),
+                },
+            }))
         # The caller saves the notice after the stream end, so the browser's
         # is_final comes first.
         stream_state["deferred_notice_turn"] = ref.id
@@ -867,11 +876,12 @@ class OrchestrationCoordinator:
             stream_state["cancelled"] = True
             await _end_unexpected_turn(
                 turn_box, stream_state, "cancelled", room_id=room_id,
+                sink=sink,
             )
             raise
         except Exception:
             stream_state["deferred_notice"] = await _end_unexpected_turn(
-                turn_box, stream_state, "error", room_id=room_id,
+                turn_box, stream_state, "error", room_id=room_id, sink=sink,
             )
             raise
         finally:
@@ -892,6 +902,7 @@ class OrchestrationCoordinator:
                     await _save_deferred_notice(shielded=True)
                     await _end_unexpected_turn(
                         turn_box, stream_state, "cancelled", room_id=room_id,
+                        sink=sink,
                     )
                     raise
                 except Exception:
@@ -952,6 +963,76 @@ class OrchestrationCoordinator:
             _register_turn(ref.id)
             return ref
 
+        def _sync_sink_turn(
+            ref: Optional[TurnRef], *, resumed: bool = False,
+            request_message_id: Any = None,
+        ) -> None:
+            """Point the v2 adapter at the turn this run is now emitting for.
+
+            A paused turn keeps its id and its stored high-water mark, so its
+            first frame after resume is the next number. The placeholder turn
+            the "yes" created is superseded and never borrows that number.
+            """
+            setter = getattr(sink, "set_turn", None)
+            if setter is None or ref is None:
+                return
+            base = int(getattr(ref, "stream_seq", 0) or 0)
+            if resumed:
+                setter(
+                    ref.id, next_seq=base + 1, started=True,
+                    request_message_id=request_message_id,
+                )
+            else:
+                setter(
+                    ref.id, next_seq=0, started=False,
+                    request_message_id=request_message_id,
+                )
+
+        async def _emit_resumed(request_message_id: Any = None) -> None:
+            tid = _turn_id()
+            if not tid or sink is None:
+                return
+            await sink.emit(TurnEvent(kind="resumed", data={
+                "turn_id": tid,
+                "request_message_id": request_message_id,
+            }))
+
+        async def _emit_terminal(frame_type: str, **fields: Any) -> None:
+            tid = _turn_id()
+            if not tid or sink is None:
+                return
+            await sink.emit(TurnEvent(kind="terminal", data={
+                "turn_id": tid,
+                "frame": frame_type,
+                "fields": fields,
+            }))
+            from orchestration.stream_seq import clear_run_seq
+
+            clear_run_seq(tid)
+
+        async def _emit_terminal_for(
+            turn_id: Any, frame_type: str, **fields: Any,
+        ) -> None:
+            if not turn_id or sink is None:
+                return
+            await sink.emit(TurnEvent(kind="terminal", data={
+                "turn_id": str(turn_id),
+                "frame": frame_type,
+                "fields": fields,
+            }))
+            from orchestration.stream_seq import clear_run_seq
+
+            clear_run_seq(turn_id)
+
+        async def _persist_pause_seq() -> None:
+            tid = _turn_id()
+            last_seq = getattr(sink, "last_seq", None)
+            if not tid or last_seq is None or getattr(sink, "_v2", None) is None:
+                return
+            from orchestration.stream_seq import persist_run_seq
+
+            await sync_to_async(persist_run_seq)(tid, last_seq(tid))
+
         async def _adopt_paused_turn() -> bool:
             """Swap the runner's placeholder for the paused Turn (an ending path).
 
@@ -971,6 +1052,7 @@ class OrchestrationCoordinator:
                 return False
             turn_box["ref"] = new_ref
             turn_box["paused_turn"] = None
+            _sync_sink_turn(new_ref, resumed=True)
             return True
 
         async def _resume_turn(ref: TurnRef) -> bool:
@@ -992,6 +1074,10 @@ class OrchestrationCoordinator:
                     return False
                 turn_box["ref"] = new_ref
                 turn_box["paused_turn"] = None
+                _sync_sink_turn(
+                    new_ref, resumed=True, request_message_id=message_id,
+                )
+                await _emit_resumed(message_id)
                 return True
             if ref.state == "running":
                 # A paused Turn was missing (an older turn or a test double);
@@ -1018,6 +1104,11 @@ class OrchestrationCoordinator:
             turn_box["ref"] = ref
             _register_turn(ref.id)
             await alink_message(ref.id, message_id)
+            _sync_sink_turn(
+                ref, resumed=True,
+                request_message_id=message_id,
+            )
+            await _emit_resumed(message_id)
             return True
 
         async def _advance_turn(to_state: str, **kwargs) -> bool:
@@ -1124,6 +1215,10 @@ class OrchestrationCoordinator:
                 # Only a cancel this owner really wrote earns the stop line; a
                 # lost write means another writer (the reaper) ended the row.
                 await _add_stopped_reply_line()
+                await _emit_terminal_for(
+                    str(row.pk), "turn.cancelled",
+                    reason=USER_CANCEL, partial=partial,
+                )
             return True
 
         async def _end_resume_stopped() -> None:
@@ -1132,10 +1227,18 @@ class OrchestrationCoordinator:
             ref = turn_box.get("ref")
             if ref is not None and ref.state in ("running", "paused"):
                 await _add_stopped_reply_line()
-                await _advance_turn(
-                    "cancelled", end_reason=USER_CANCEL,
-                    partial=bool(stream_state["tools"] or stream_state["model"]),
+                stopped_partial = bool(
+                    stream_state["tools"] or stream_state["model"]
                 )
+                moved = await _advance_turn(
+                    "cancelled", end_reason=USER_CANCEL,
+                    partial=stopped_partial,
+                )
+                if moved:
+                    await _emit_terminal(
+                        "turn.cancelled", reason=USER_CANCEL,
+                        partial=stopped_partial,
+                    )
             try:
                 # The stop path normally did this. It is idempotent and keeps
                 # the invariant when the swap lost before the stop handler ran.
@@ -1153,10 +1256,15 @@ class OrchestrationCoordinator:
             )
 
         async def _cancel_other_turn(turn, reason: str) -> None:
-            await atransition(
+            moved = await atransition(
                 str(turn.pk), turn.version, "cancelled",
                 from_state=turn.state, end_reason=reason,
             )
+            if moved:
+                await _emit_terminal_for(
+                    str(turn.pk), "turn.cancelled",
+                    reason=reason, partial=bool(turn.partial),
+                )
 
         async def _finish_turn(reason: str) -> None:
             """Record the loop's ending honestly (mapping table in #216a)."""
@@ -1175,19 +1283,27 @@ class OrchestrationCoordinator:
                 # results and receipts; end honestly as the person's cancel.
                 partial = bool(stream_state["tools"] or stream_state["model"])
                 await _add_stopped_reply_line()
-                await _advance_turn(
+                moved = await _advance_turn(
                     "cancelled", end_reason=USER_CANCEL, partial=partial,
                 )
+                if moved:
+                    await _emit_terminal(
+                        "turn.cancelled", reason=USER_CANCEL, partial=partial,
+                    )
                 return
             if reason in ("budget", "asked_for_more"):
                 # At the configured ceiling the loop keeps no state to resume,
                 # so a pause here would strand the turn. End it for good.
                 if reason == "budget" and not await has_pending_budget_state(room_id, user_id):
                     partial = bool(stream_state["tools"] or stream_state["model"])
-                    await _advance_turn(
+                    moved = await _advance_turn(
                         "failed", end_reason="budget", partial=partial,
                         active_seconds=float(stream_state.get("active_seconds") or 0),
                     )
+                    if moved:
+                        await _emit_terminal(
+                            "turn.failed", reason_code="budget", partial=partial,
+                        )
                     return
                 await _advance_turn(
                     "paused", pause_kind="budget", end_reason=reason,
@@ -1212,10 +1328,14 @@ class OrchestrationCoordinator:
             # Every other ending is a failure; partial says whether anything
             # the user can see had already happened.
             partial = bool(stream_state["tools"] or stream_state["model"])
-            await _advance_turn(
+            moved = await _advance_turn(
                 "failed", end_reason=reason, partial=partial,
                 active_seconds=float(stream_state.get("active_seconds") or 0),
             )
+            if moved and reason != "room_gone":
+                await _emit_terminal(
+                    "turn.failed", reason_code=reason, partial=partial,
+                )
 
         async def emit_text(chunk_text, is_final=False, harness=False, channel=""):
             text_kind = "harness" if harness else "text"
@@ -1271,23 +1391,14 @@ class OrchestrationCoordinator:
                     flush_channel = (
                         segments[0].channel if segments else text_channel
                     )
-                    try:
-                        await sink.emit(TurnEvent(
-                            kind=flush_kind,
-                            text=joined_text,
-                            is_final=is_final,
-                            channel=flush_channel,
-                            segments=segments,
-                        ))
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as exc:
-                        # A failed frame send must never abort the turn: the
-                        # reply is still saved and the turn still ends.
-                        logger.warning(
-                            "Stream chunk send failed: %s",
-                            exc.__class__.__name__,
-                        )
+                    sent = await sink.emit(TurnEvent(
+                        kind=flush_kind,
+                        text=joined_text,
+                        is_final=is_final,
+                        channel=flush_channel,
+                        segments=segments,
+                    ))
+                    if not sent:
                         record_event(
                             "stream_send_failed",
                             {
@@ -1295,50 +1406,42 @@ class OrchestrationCoordinator:
                                 "user_id": user_id,
                                 "turn_id": _turn_id(),
                                 "is_final": bool(is_final),
-                                "error_class": exc.__class__.__name__,
                             },
                         )
-                    finally:
-                        if is_final:
-                            record_event(
-                                "progress_event",
-                                {
-                                    "phase": "stream",
-                                    "state": "completed",
-                                    "chunks": stream_state["chunks"],
-                                    "chars": stream_state["chars"],
-                                    "room_id": room_id,
-                                    "user_id": user_id,
-                                    "turn_id": _turn_id(),
-                                },
-                            )
+                    if is_final:
+                        record_event(
+                            "progress_event",
+                            {
+                                "phase": "stream",
+                                "state": "completed",
+                                "chunks": stream_state["chunks"],
+                                "chars": stream_state["chars"],
+                                "room_id": room_id,
+                                "user_id": user_id,
+                                "turn_id": _turn_id(),
+                            },
+                        )
                     stream_state["buffer"] = []
                     stream_state["last_send"] = current_time
 
         async def emit_progress(phase, state, message_text=""):
-            send_ok = True
-            try:
-                await sink.emit(TurnEvent(
-                    kind="progress",
-                    phase=phase,
-                    state=state,
-                    message=message_text,
-                ))
-            except Exception as exc:
-                send_ok = False
-                logger.warning("Progress frame send failed: %s", exc.__class__.__name__)
-            finally:
-                record_event(
-                    "progress_event",
-                    {
-                        "phase": phase,
-                        "state": state,
-                        "room_id": room_id,
-                        "user_id": user_id,
-                        "turn_id": _turn_id(),
-                        "sent": send_ok,
-                    },
-                )
+            send_ok = await sink.emit(TurnEvent(
+                kind="progress",
+                phase=phase,
+                state=state,
+                message=message_text,
+            ))
+            record_event(
+                "progress_event",
+                {
+                    "phase": phase,
+                    "state": state,
+                    "room_id": room_id,
+                    "user_id": user_id,
+                    "turn_id": _turn_id(),
+                    "sent": send_ok,
+                },
+            )
 
         async def announce_saved(notice) -> None:
             """Announce a notice that was saved with broadcast off."""
@@ -1720,28 +1823,18 @@ class OrchestrationCoordinator:
             Telemetry stays here so a failed progress frame is still counted, as
             it was when the coordinator built the frame itself.
             """
-            send_ok = True
-            try:
-                await sink.emit(turn_event)
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                send_ok = False
-                logger.warning(
-                    "Progress frame send failed: %s", exc.__class__.__name__,
-                )
-            finally:
-                record_event(
-                    "progress_event",
-                    {
-                        "phase": "executing",
-                        "state": state,
-                        "room_id": room_id,
-                        "user_id": user_id,
-                        "turn_id": _turn_id(),
-                        "sent": send_ok,
-                    },
-                )
+            send_ok = await sink.emit(turn_event)
+            record_event(
+                "progress_event",
+                {
+                    "phase": "executing",
+                    "state": state,
+                    "room_id": room_id,
+                    "user_id": user_id,
+                    "turn_id": _turn_id(),
+                    "sent": send_ok,
+                },
+            )
 
         async def _relay_agent_events(events):
             """Map AgentEvents to typed stream events, shared by every agent run."""
@@ -1833,6 +1926,7 @@ class OrchestrationCoordinator:
                     await sink.emit(TurnEvent(
                         kind="paused",
                         pause_kind=pause_kind,
+                        expires_at=event.data.get("expires_at"),
                         data=event.data,
                     ))
                     await _advance_turn(
@@ -1846,6 +1940,9 @@ class OrchestrationCoordinator:
                             event.data.get("active_seconds") or 0,
                         ),
                     )
+                    # The loop's pause CAS ran before this frame existed; save
+                    # the frame's number so the resumed run continues from it.
+                    await _persist_pause_seq()
                 elif event.kind == "confirmation":
                     if await _stop_pause_edge():
                         continue
@@ -2297,6 +2394,10 @@ class OrchestrationCoordinator:
             turn_box["ref"] = ref_from_turn(claimed_turn)
         else:
             await _start_turn()
+        if turn_box["ref"] is not None:
+            _sync_sink_turn(
+                turn_box["ref"], request_message_id=message_id,
+            )
         if turn_box["ref"] is None and (
             deferred_directive is not None or not pending_handled
         ):
@@ -2434,6 +2535,12 @@ class OrchestrationCoordinator:
                         await emit_text(
                             cancel_msg or "Okay, cancelled.", harness=True,
                         )
+                        await _emit_terminal(
+                            "turn.cancelled", reason=USER_CANCEL,
+                            partial=bool(
+                                stream_state["tools"] or stream_state["model"]
+                            ),
+                        )
                     pending_handled = True
                 elif autopilot_request:
                     if armable_shell:
@@ -2482,7 +2589,13 @@ class OrchestrationCoordinator:
                         # be confirmed. Do not tell the user an action waits.
                         held_state = await load_pending_state(room_id, user_id)
                         current_id = _turn_id()
+                        paused_row = paused_turn
                         await cancel_pending_action(room_id, user_id)
+                        if paused_row is not None:
+                            await _emit_terminal_for(
+                                str(paused_row.pk), "turn.cancelled",
+                                reason="cancelled", partial=False,
+                            )
                         held = list(
                             getattr(held_state, "pending_tools", None)
                             or ([held_state.pending_tool] if held_state and held_state.pending_tool else [])

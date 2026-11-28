@@ -50,6 +50,7 @@ from orchestration.turn_leases import (
 from chatbot.stream_protocol import (
     TEXT_CHANNEL_ANSWER,
     TEXT_CHANNEL_HARNESS,
+    TEXT_CHANNEL_NARRATION,
     TextSegment,
     TurnEvent,
     TurnEventSink,
@@ -725,9 +726,12 @@ class OrchestrationResult:
     full_response: str = ""
     persist: bool = True
     tools: List[Dict] = field(default_factory=list)
-    # The reply in two parts: what the model wrote and what the harness wrote.
+    # The reply in three parts: the answer the model wrote, what the harness
+    # wrote, and narration the model wrote before a tool step. Only the answer
+    # is replayed; narration is kept encrypted but never replayed.
     model_text: str = ""
     harness: str = ""
+    narration: str = ""
     # True when the Turn's typed rows hold this turn's calls, so the reply
     # payload must not also carry the legacy ``tools`` list (D11).
     tool_calls_recorded: bool = False
@@ -789,6 +793,7 @@ class OrchestrationCoordinator:
         stream_state = {
             "buffer": [], "last_send": 0, "first_token_sent": False,
             "full_response": [], "model": [], "harness": [], "tools": [],
+            "answers": [], "narrations": [],
             "chunks": 0, "chars": 0, "tool_calls_recorded": False,
             "tool_seq_first": None, "tool_seq_last": None,
             "done_message": "Request complete.", "ended": False,
@@ -1218,10 +1223,18 @@ class OrchestrationCoordinator:
                 TEXT_CHANNEL_HARNESS if harness
                 else (channel or TEXT_CHANNEL_ANSWER)
             )
-            # Store all chunks to build full response
+            # The saved reply is the answer plus harness notices; narration is
+            # kept aside. ``model`` stays every non-harness part so ``partial``
+            # keeps its meaning (narration plus answer).
             if chunk_text:
-                stream_state["full_response"].append(chunk_text)
                 stream_state["harness" if harness else "model"].append(chunk_text)
+                if harness:
+                    stream_state["full_response"].append(chunk_text)
+                elif text_channel == TEXT_CHANNEL_NARRATION:
+                    stream_state["narrations"].append(chunk_text)
+                else:
+                    stream_state["answers"].append(chunk_text)
+                    stream_state["full_response"].append(chunk_text)
 
             # Filter leading whitespace if first token hasn't been sent
             if not stream_state["first_token_sent"] and not is_final:
@@ -2618,13 +2631,26 @@ class OrchestrationCoordinator:
 
         await _finish_turn(turn_box.get("end_reason") or ("error" if turn_box["agent_ran"] else "finished"))
 
-        full_response_text = "".join(stream_state["full_response"])
+        answers_text = "".join(stream_state["answers"])
+        harness_text = "".join(stream_state["harness"])
+        narration_text = "".join(stream_state["narrations"])
+        content_text = "".join(stream_state["full_response"])
+        if (
+            not answers_text.strip()
+            and not harness_text.strip()
+            and stream_state["narrations"]
+        ):
+            # Nothing else would be saved, so the last narration part becomes
+            # the answer. An approval pause already has its harness prompt.
+            content_text = stream_state["narrations"][-1]
+            answers_text = content_text
 
         return OrchestrationResult(
-            full_response=full_response_text,
+            full_response=content_text,
             tools=_cap_tool_records(stream_state["tools"]),
-            model_text="".join(stream_state["model"]),
-            harness="".join(stream_state["harness"]),
+            model_text=answers_text,
+            harness=harness_text,
+            narration=narration_text,
             tool_calls_recorded=bool(stream_state.get("tool_calls_recorded")),
             tool_seq_first=stream_state.get("tool_seq_first"),
             tool_seq_last=stream_state.get("tool_seq_last"),

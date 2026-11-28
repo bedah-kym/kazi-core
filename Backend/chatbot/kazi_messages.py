@@ -45,6 +45,10 @@ ORIGINS = frozenset({
     ORIGIN_TURN_NOTICE,
 })
 
+# Narration is kept for the record but never replayed to the model, so its
+# stored copy is capped. The end is what the reader needs when it is cut.
+NARRATION_MAX_CHARS = 4000
+
 _KAZI_DEFAULTS = {
     "first_name": "Kazi",
     "last_name": "AI",
@@ -154,6 +158,7 @@ def persist_kazi_message(
     turn: Any = None,
     model_text: str = "",
     harness_text: str = "",
+    narration_text: str = "",
     tools: Any = None,
     by: Optional[int] = None,
     broadcast: bool = True,
@@ -181,6 +186,8 @@ def persist_kazi_message(
         payload["model"] = model_text or ""
         if harness_text:
             payload["harness"] = harness_text
+        if narration_text:
+            payload["narration"] = narration_text[-NARRATION_MAX_CHARS:]
         if tools is not None:
             payload["tools"] = tools
         if by is not None:

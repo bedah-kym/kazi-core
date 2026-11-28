@@ -143,7 +143,9 @@ class CoordinatorHistoryTests(SimpleTestCase):
 
     def test_a_tool_turn_carries_its_records_and_splits_harness_text(self):
         events = [
-            AgentEvent("text", {"text": "Running it now. "}),
+            AgentEvent("text_delta", {
+                "text": "Running it now. ", "channel": "narration",
+            }),
             AgentEvent("tool_result", {
                 "name": "run_command",
                 "result": {"status": "success", "stdout": "hi"},
@@ -161,9 +163,11 @@ class CoordinatorHistoryTests(SimpleTestCase):
             "status": "success",
             "shown": '{"status": "success", "stdout": "hi"}',
         }])
-        self.assertEqual(result.model_text, "Running it now. ")
+        # 217a-1c: text before a tool step is narration, so it is neither the
+        # replayed model text nor part of the saved reply.
+        self.assertEqual(result.model_text, "")
         self.assertEqual(result.harness, "Should I go ahead? (yes / no)")
-        self.assertEqual(result.full_response, "Running it now. Should I go ahead? (yes / no)")
+        self.assertEqual(result.full_response, "Should I go ahead? (yes / no)")
 
     def test_history_that_replays_untrusted_output_starts_the_turn_tainted(self):
         history = [

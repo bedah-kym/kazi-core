@@ -290,7 +290,101 @@ class SinkRoutingTests(TransactionTestCase):
             ("text", "narration", "Hi"),
             ("text", "answer", " there."),
         ])
-        self.assertIn(("chunk", "Hi there.", False), sink.frames)
+        self.assertIn(("chunk", "Hi\n\n there.", False), sink.frames)
+
+    def test_live_text_puts_one_blank_line_between_narration_and_answer(self):
+        sink = RecordingSink()
+        self._run([
+            _text("Let me check.", channel="narration"),
+            _text("The files are here.", channel="answer"),
+            _done(),
+        ], sink, clock=_Clock())
+
+        chunks = [
+            frame[1] for frame in sink.frames if frame[0] == "chunk"
+        ]
+        self.assertEqual(
+            chunks,
+            ["Let me check.", "\n\nThe files are here.", ""],
+        )
+        self.assertNotIn("\n\n\n", "".join(chunks))
+
+    def test_live_text_separates_two_narration_parts_too(self):
+        # Each narration part is one whole step's text, so two of them (with a
+        # tool between) are two parts and get the same one blank line.
+        sink = RecordingSink()
+        self._run([
+            _text("Let me list the notes first.", channel="narration"),
+            _text("Found 6 notes, merging two.", channel="narration"),
+            _text("Merged them both.", channel="answer"),
+            _done(),
+        ], sink, clock=_Clock())
+
+        chunks = [
+            frame[1] for frame in sink.frames if frame[0] == "chunk"
+        ]
+        self.assertEqual(chunks, [
+            "Let me list the notes first.",
+            "\n\nFound 6 notes, merging two.",
+            "\n\nMerged them both.",
+            "",
+        ])
+
+    def _shown_text(self, narration, answer):
+        """The joined live text; chunk boundaries are only buffering."""
+        sink = RecordingSink()
+        self._run([
+            _text(narration, channel="narration"),
+            _text(answer, channel="answer"),
+            _done(),
+        ], sink, clock=_Clock())
+        return "".join(frame[1] for frame in sink.frames if frame[0] == "chunk")
+
+    # Newlines the model already wrote on either side of the boundary count
+    # toward the one blank line; only the missing ones are added.
+    def test_a_trailing_newline_on_narration_counts_toward_the_blank_line(self):
+        self.assertEqual(
+            self._shown_text("Checking the files.\n", "Merged them both."),
+            "Checking the files.\n\nMerged them both.",
+        )
+
+    def test_a_leading_newline_on_the_answer_counts_toward_the_blank_line(self):
+        self.assertEqual(
+            self._shown_text("Checking the files.", "\nMerged them both."),
+            "Checking the files.\n\nMerged them both.",
+        )
+
+    def test_one_newline_on_each_side_is_already_the_blank_line(self):
+        self.assertEqual(
+            self._shown_text("Checking the files.\n", "\nMerged them both."),
+            "Checking the files.\n\nMerged them both.",
+        )
+
+    def test_a_blank_line_ending_narration_gets_nothing_more(self):
+        self.assertEqual(
+            self._shown_text("Checking the files.\n\n", "Merged them both."),
+            "Checking the files.\n\nMerged them both.",
+        )
+
+    def test_live_text_does_not_stack_blank_lines_before_harness_text(self):
+        sink = RecordingSink()
+        self._run([
+            _text("Let me check.", channel="narration"),
+            _text("The files are here.", channel="answer"),
+            AgentEvent("harness", {"text": "\n\nPlease confirm."}),
+            _done(),
+        ], sink, clock=_Clock())
+
+        chunks = [
+            frame[1] for frame in sink.frames if frame[0] == "chunk"
+        ]
+        self.assertEqual(chunks, [
+            "Let me check.",
+            "\n\nThe files are here.",
+            "\n\nPlease confirm.",
+            "",
+        ])
+        self.assertNotIn("\n\n\n", "".join(chunks))
 
     def test_a_buffered_narration_stays_narration_on_the_final_flush(self):
         sink = RecordingSink()
@@ -337,3 +431,39 @@ class SinkRoutingTests(TransactionTestCase):
         starts = sink.of_kind("tool_start")
         self.assertEqual(len(starts), 1)
         self.assertIsNone(starts[0].call_id)
+
+
+class FailedChunkSendTests(SimpleTestCase):
+    """A chunk the client never got must not shape the next chunk's separator."""
+
+    def test_a_failed_narration_send_still_leaves_one_blank_line_before_the_answer(self):
+        from chatbot.stream_protocol import TextSegment, TurnEvent
+
+        delivered = []
+        attempts = {"n": 0}
+
+        async def send_chunk(correlation_id, text, is_final):
+            attempts["n"] += 1
+            if attempts["n"] == 2:
+                raise ConnectionError("socket closed")
+            delivered.append(text)
+
+        adapter = V1Adapter(send_chunk, AsyncMock(), correlation_id="c1")
+
+        def narration_then(text, channel):
+            return TurnEvent(
+                kind="text",
+                text=text,
+                channel=channel,
+                segments=[TextSegment("text", channel, text)],
+            )
+
+        async def scenario():
+            await adapter.emit(narration_then("First.", "narration"))
+            with self.assertRaises(ConnectionError):
+                await adapter.emit(narration_then("Second.\n\n", "narration"))
+            await adapter.emit(narration_then("Done.", "answer"))
+
+        async_to_sync(scenario)()
+
+        self.assertEqual("".join(delivered), "First.\n\nDone.")

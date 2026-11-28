@@ -495,7 +495,13 @@ class InProcessSchedulerTests(TestCase):
 
 
 class SchedulerThreadPathTests(SimpleTestCase):
-    def test_tick_runs_the_job_through_the_connection_cleaning_path(self):
+    def _tick_on_the_job_thread(self, during_job=None):
+        """What the thread that ran the job did, in order.
+
+        ``close_old_connections`` is patched process-wide, so a thread left
+        over from an earlier test can call it during the tick. Only the calls
+        on the job's own thread are the tick's.
+        """
         from orchestration.in_process_scheduler import InProcessScheduler
 
         scheduler = InProcessScheduler(
@@ -503,11 +509,42 @@ class SchedulerThreadPathTests(SimpleTestCase):
             runner=lambda entry: None,
             now=timezone.now,
         )
+        events = []
+        real_run_due = scheduler.run_due
 
-        with patch("channels.db.close_old_connections") as recycle:
+        def run_due(*args, **kwargs):
+            events.append((threading.get_ident(), "job"))
+            if during_job is not None:
+                during_job()
+            return real_run_due(*args, **kwargs)
+
+        def recycle(*args, **kwargs):
+            events.append((threading.get_ident(), "close"))
+
+        scheduler.run_due = run_due
+        with patch("channels.db.close_old_connections", side_effect=recycle):
             asyncio.run(scheduler.tick())
 
-        self.assertEqual(recycle.call_count, 2)
+        job_threads = [ident for ident, what in events if what == "job"]
+        self.assertEqual(len(job_threads), 1)
+        return [what for ident, what in events if ident == job_threads[0]]
+
+    def test_tick_runs_the_job_through_the_connection_cleaning_path(self):
+        self.assertEqual(self._tick_on_the_job_thread(), ["close", "job", "close"])
+
+    def test_a_stray_call_from_another_thread_is_not_the_ticks(self):
+        import channels.db
+
+        def stray_call():
+            other = threading.Thread(target=channels.db.close_old_connections)
+            other.start()
+            other.join(timeout=5)
+            self.assertFalse(other.is_alive())
+
+        self.assertEqual(
+            self._tick_on_the_job_thread(during_job=stray_call),
+            ["close", "job", "close"],
+        )
 
     def test_stop_bounds_the_wait_for_a_running_job(self):
         from orchestration.in_process_scheduler import InProcessScheduler

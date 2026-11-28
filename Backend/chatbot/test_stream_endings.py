@@ -729,6 +729,7 @@ class StreamEndingFramesTests(TransactionTestCase):
     def test_a_resume_path_error(self):
         async def failing_resume(**kwargs):
             raise RuntimeError("resume boom")
+            yield  # noqa: unreachable — keeps this an async generator
 
         async def scenario():
             comm = await self._connect()
@@ -1148,6 +1149,7 @@ class StreamEndingFramesTests(TransactionTestCase):
     def _resume_error_frames(self, name="yes"):
         async def failing_resume(**kwargs):
             raise RuntimeError("resume boom")
+            yield  # noqa: unreachable — keeps this an async generator
 
         async def scenario():
             comm = await self._connect()

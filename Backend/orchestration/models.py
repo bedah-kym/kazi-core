@@ -44,6 +44,10 @@ class Turn(models.Model):
     end_reason = models.CharField(max_length=64, null=True, blank=True)
     partial = models.BooleanField(default=False)
     version = models.IntegerField(default=0)
+    # High-water mark of the turn's v2 stream `seq`. The running task writes it
+    # inside its pause or commit CAS; a writer outside the run takes the next
+    # number with one atomic increment (217a-2a).
+    stream_seq = models.IntegerField(default=0)
     # Ownership and leasing arrive in P3-4; both stay null here.
     owner_id = models.CharField(max_length=128, null=True, blank=True)
     lease_expires_at = models.DateTimeField(null=True, blank=True)
